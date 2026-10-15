@@ -802,10 +802,22 @@ published anyway.
 
 | package | workflow | published |
 | --- | --- | --- |
-| rust-sandogasa-config | 1461764 | 0.25.4-1, amd64 + arm64 |
-| rust-sandogasa-build | 1461782 | 0.25.4-1, amd64 + arm64 |
-| rust-sandogasa-cli | 1462605 | 0.25.4-1, amd64 + arm64 |
-| rust-dbranch | 1462645 | uploaded 2026-10-14 |
+| rust-sandogasa-config | 1461764 / 1467126 | 0.25.4-1, then 0.26.0-1 |
+| rust-sandogasa-build | 1461782 / 1467117 | 0.25.4-1, then 0.26.0-1 |
+| rust-sandogasa-cli | 1462605 / 1467272 | 0.25.4-1, then 0.26.0-1 |
+| rust-dbranch | 1462645 / 1467303 | 0.25.4-1, then 0.26.0-1 |
+
+**The pre-0.26.0 goal is met.** All four are published at 0.26.0-1,
+confirmed in the suite's own `Sources.xz` (the honest check, since a
+workflow can report failure and have published anyway) on 2026-10-15.
+Both of the 0.25.4 patches were dropped on the way: 0.26.0 ships the
+anstream range and the dev-dependencies upstream. What remains below
+is the standing reference for doing it again, not outstanding work.
+
+One note for the next upload: amd64 sat *pending* for about 90
+minutes before building in 207s, against arm64's 237s. That is queue
+depth, not a slow builder, so do not read a long wall-clock as a
+packaging problem.
 
 The dbranch package is generated from the overlay at
 `~/src/debian/pkgs/dbranch-overlay/` and lints clean (no tags at all).
@@ -1027,16 +1039,17 @@ us — from carrying that patch.
   `rust_version` (crates.io exposes it) against the target's rustc and
   flag chains that are blocked on the toolchain before any branch
   requests/builds are attempted.
-- Second-level branch-request escalation: when a `needinfo?` ping
-  (the level-1 escalation `escalate` already does) goes unanswered
-  for another N days, file a releng ticket on Forgejo (releng's
-  tracker moved from Pagure to Forgejo). The `sandogasa-forgejo`
-  crate now exists (added 2026-06-25) with `create_issue` /
-  `search_issues`, so this is unblocked on the client side. Still
-  needs: the releng Forgejo repo coordinates, growing the report's
-  per-request escalation state from `pinged: bool` to a level
-  (none → needinfo'd → releng-filed) so `escalate` knows which step
-  each request is on, and the releng-filing branch in `escalate`.
+- ~~Second-level branch-request escalation~~ — **done 2026-10-15**
+  (#50). One departure from the plan above: the per-request state did
+  not grow into a level. `pinged: bool` stayed, a `releng:
+  Option<u64>` was added for the ticket, and the *timing* is read from
+  the `needinfo?` flag's own `creation_date` rather than from anything
+  the report stores — which also fixed a second-order bug, since a
+  request adopted into a fresh report has `pinged = false` however
+  many times it was pinged.
+  First live opportunity: 2026-10-29, `simpleini` rhbz#2543942 and
+  `python-sqlparse` rhbz#2482252. No ticket has been filed yet, so
+  the filing path is still unexercised against the real tracker.
 
 ## Consolidate the RPM Fusion CHANGELOG entries before release (2026-10-12)
 
