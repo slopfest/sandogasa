@@ -638,6 +638,8 @@ enum Command {
     CheckUpdate(CheckUpdateArgs),
     /// Track packages on their way into the distro.
     CheckWip(CheckWipArgs),
+    /// Close branch requests whose package has landed.
+    Close(CloseArgs),
     /// Set up Bugzilla API key and other settings.
     Config,
     /// Prune a staging COPR of what its target releases caught up on.
@@ -786,6 +788,20 @@ struct FileRequestsArgs {
     /// CSV of bugs/aliases each filed request blocks.
     #[arg(long, value_delimiter = ',')]
     blocked: Vec<String>,
+}
+
+#[derive(clap::Args, Clone)]
+struct CloseArgs {
+    /// check-crate or resolve report TOML with recorded branch requests.
+    toml: String,
+
+    /// Also take the bugs being closed (assigned_to = your Bugzilla
+    /// account), without asking.
+    #[arg(long)]
+    claim: bool,
+
+    #[command(flatten)]
+    common: BranchRequestCommon,
 }
 
 #[derive(clap::Args, Clone)]
@@ -1177,6 +1193,8 @@ fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
         }),
         Command::FileRequests(a) => branch_request_options(&a.common)
             .and_then(|opts| branch_request::run_file_requests(&a.toml, &a.blocked, &opts)),
+        Command::Close(a) => branch_request_options(&a.common)
+            .and_then(|opts| branch_request::run_close(&a.toml, &opts, a.claim)),
         Command::Escalate(a) => branch_request_options(&a.common)
             .and_then(|opts| branch_request::run_escalate(&a.toml, &opts)),
         _ => return None,
@@ -1827,6 +1845,7 @@ fn main() -> ExitCode {
         | Command::CheckPkgReviews(_)
         | Command::CheckUpdate(_)
         | Command::CheckWip(_)
+        | Command::Close(_)
         | Command::Config
         | Command::CoprPrune(_)
         | Command::Escalate(_)

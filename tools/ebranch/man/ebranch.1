@@ -370,6 +370,67 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fILEDGER\fR>
 Ledger file tracking the effort (created if absent)
+.SS ebranch close
+\fBebranch close\fR [\fB\-\-claim\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
+.PP
+Close branch requests whose package has landed
+.TP
+\fB\-\-claim\fR
+Also take the bugs being closed (assigned_to = your Bugzilla account), without asking
+.TP
+\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
+Bugzilla base URL
+.TP
+\fB\-\-api\-key\fR \fI<API_KEY>\fR
+Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
+.RS
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+.RE
+.TP
+\fB\-\-fas\fR [\fI<FAS>\fR]
+Volunteer as co\-maintainer of the package.
+
+  (omitted)     file without volunteering
+  \-\-fas         the FAS from `ebranch config`
+  \-\-fas NAME    that FAS
+
+A bare \-\-fas takes the next word as the name,
+so put it last or separate the positionals
+with \-\-:
+
+  ebranch file\-requests \-\-fas \-\- pkgs.toml epel10
+.TP
+\fB\-\-sig\fR \fI<SIG>\fR
+Packaging SIG to offer as co\-maintainer (requires \-\-fas)
+.TP
+\fB\-\-base\-branch\fR \fI<BRANCH>\fR
+Base\-distro branch behind the EPEL branch,
+checked before filing: a package present in
+the base distro is skipped (EPEL must not
+replace it; the request would be CANTFIX).
+
+Inferred from the branch: epel10 uses c10s,
+epel9 uses al9. Pass this to override the
+mapping or to enable the check for branches
+it can\*(Aqt infer (e.g. epel8).
+.TP
+\fB\-\-dry\-run\fR
+Show what would happen without contacting Bugzilla
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+File releng tickets without confirming each one
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fITOML\fR>
+check\-crate or resolve report TOML with recorded branch requests
+.TP
+<\fIBRANCH\fR>
+EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch config
 \fBebranch config\fR [\fB\-h\fR|\fB\-\-help\fR] 
 .PP

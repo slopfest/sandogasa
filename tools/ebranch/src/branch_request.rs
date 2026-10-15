@@ -1467,6 +1467,232 @@ fn preview_links(
     }
 }
 
+// ---- closing a fulfilled request ----
+
+/// What to do about a request that was filed before the work landed.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CloseDecision {
+    /// The package is in the branch at this `version-release`, so the
+    /// request has been fulfilled and the bug can be closed.
+    Landed(String),
+    /// Nothing in the branch yet: the request still stands.
+    Pending,
+    /// Already closed; nothing to do.
+    Closed,
+}
+
+/// Decide whether a filed request has been overtaken by the work.
+///
+/// `present` is the package's `version-release` in the target branch
+/// when it is there ([`target_probe`]), `None` when it is not. Pure,
+/// like [`ping_decision`]: the probe belongs to the caller.
+///
+/// Only a build counts. A branch with nothing built from it does not
+/// fulfil a request -- the bug asked for the package to be *in* the
+/// branch, and an empty branch is the halfway state `RequestKind::Build`
+/// exists to describe.
+pub fn close_decision(status: &str, present: Option<&str>) -> CloseDecision {
+    if status == "CLOSED" {
+        return CloseDecision::Closed;
+    }
+    match present {
+        Some(vr) => CloseDecision::Landed(vr.to_string()),
+        None => CloseDecision::Pending,
+    }
+}
+
+/// The ids of the `needinfo?` flags still outstanding on a bug.
+///
+/// Closing answers the question for everyone, and Red Hat's Bugzilla
+/// does not clear them on close by itself -- rhbz#2482238 was closed
+/// with one still pointed at `epel-packagers-sig`, where it would have
+/// sat in their request queue indefinitely.
+pub fn outstanding_needinfo(flags: &[sandogasa_bugzilla::models::Flag]) -> Vec<u64> {
+    flags
+        .iter()
+        .filter(|f| f.name == "needinfo" && f.status == "?")
+        .map(|f| f.id)
+        .filter(|id| *id != 0)
+        .collect()
+}
+
+/// A Bugzilla `flags` update that clears each of `ids`.
+fn clear_flags(ids: &[u64]) -> serde_json::Value {
+    ids.iter()
+        .map(|id| serde_json::json!({ "id": id, "status": "X" }))
+        .collect()
+}
+
+/// The comment a close leaves behind, naming what was found.
+///
+/// The evidence goes in the bug rather than a bare "fixed": the next
+/// reader should be able to check the claim without rerunning
+/// anything, and a request closed months after it was satisfied is
+/// exactly the case where "how do you know" is worth answering.
+pub fn close_body(pkg: &str, branch: &str, vr: &str) -> String {
+    format!(
+        "{pkg}-{vr} is in {branch}, so this request has been fulfilled.\n\n\
+         Closing; please reopen if the build is missing for a branch\n\
+         you still need it in.\n"
+    )
+}
+
+/// Close every request in `report` whose package has landed in the
+/// target branch. Returns whether the report changed.
+///
+/// One probe for the whole report, not one per request: the presence
+/// question is answered in bulk by the same call `file_batch` makes
+/// before filing, and asking it per package would turn a report into
+/// as many repository queries.
+pub(crate) async fn close_batch(
+    report: &mut ResolveReport,
+    opts: &Options,
+    claim: bool,
+    probe: &dyn SourceProbe,
+) -> Result<bool, String> {
+    let bz = BzClient::new(&opts.bugzilla_url)
+        .with_api_key(opts.api_key.clone())
+        .map_err(|e| e.to_string())?;
+    let packages: Vec<String> = report.branch_requests.keys().cloned().collect();
+    let present = target_probe(probe, &opts.branch, &packages)?;
+
+    // Decide everything first, so the claim question is asked once
+    // about a known set rather than per bug as they go by.
+    let mut landed: Vec<(String, u64, String, Vec<u64>)> = Vec::new();
+    // Already-closed requests whose `needinfo?` was never cleared.
+    let mut dangling: Vec<(String, u64, Vec<u64>)> = Vec::new();
+    for (pkg, req) in report.branch_requests.iter() {
+        let bug = bz
+            .bug(req.rhbz)
+            .await
+            .map_err(|e| format!("failed to fetch rhbz#{} for {pkg}: {e}", req.rhbz))?;
+        match close_decision(&bug.status, present.get(pkg).map(String::as_str)) {
+            CloseDecision::Landed(vr) => {
+                landed.push((pkg.clone(), req.rhbz, vr, outstanding_needinfo(&bug.flags)))
+            }
+            CloseDecision::Pending => {
+                if opts.verbose {
+                    eprintln!("[close] {pkg} rhbz#{} not in {} yet", req.rhbz, opts.branch);
+                }
+            }
+            CloseDecision::Closed => {
+                // A closed request can still carry the `needinfo?` our
+                // own ping set, and nothing else will ever clear it.
+                // Tidying it here costs one write and saves the
+                // requestee a dead entry in their queue forever.
+                let stale = outstanding_needinfo(&bug.flags);
+                match stale.is_empty() {
+                    true => {
+                        if opts.verbose {
+                            eprintln!("[close] {pkg} rhbz#{} already closed", req.rhbz);
+                        }
+                    }
+                    false => dangling.push((pkg.clone(), req.rhbz, stale)),
+                }
+            }
+        }
+    }
+    for (pkg, rhbz, stale) in &dangling {
+        println!(
+            "{} stale needinfo on {pkg} rhbz#{rhbz} (already closed)",
+            if opts.dry_run {
+                "would clear"
+            } else {
+                "clearing"
+            }
+        );
+        if opts.dry_run {
+            continue;
+        }
+        let update = serde_json::json!({ "flags": clear_flags(stale) });
+        let out = bz.update_verified(*rhbz, &update, 3).await;
+        if !out.complete() {
+            eprintln!(
+                "warning: could not clear needinfo on rhbz#{rhbz}: {}",
+                out.last_error.unwrap_or_default()
+            );
+        }
+    }
+    if landed.is_empty() {
+        if dangling.is_empty() {
+            println!(
+                "nothing to close: no request's package is in {} yet",
+                opts.branch
+            );
+        }
+        return Ok(false);
+    }
+    for (pkg, rhbz, vr, _) in &landed {
+        println!(
+            "{} {pkg} rhbz#{rhbz} — {pkg}-{vr} is in {}",
+            if opts.dry_run {
+                "would close"
+            } else {
+                "closing"
+            },
+            opts.branch
+        );
+    }
+    if opts.dry_run {
+        return Ok(false);
+    }
+    // Project rule: a tool that closes bugs offers to reassign them.
+    let assign = sandogasa_bugzilla::claim::resolve_claim(
+        claim,
+        opts.assume_yes,
+        opts.email.as_deref(),
+        &sandogasa_bugzilla::claim::close_claim_prompt(
+            landed.len(),
+            opts.email.as_deref().unwrap_or_default(),
+        ),
+        |prompt| sandogasa_cli::confirm(prompt, false).map_err(|e| e.to_string()),
+    )?;
+
+    let mut changed = false;
+    for (pkg, rhbz, vr, needinfo) in &landed {
+        let mut update = serde_json::json!({
+            "status": "CLOSED",
+            "resolution": "CURRENTRELEASE",
+            "comment": { "body": close_body(pkg, &opts.branch, vr) },
+        });
+        if !needinfo.is_empty() {
+            // Cleared in the same write as the close: a separate one
+            // could leave the flag behind if it failed, which is the
+            // state being fixed.
+            update["flags"] = clear_flags(needinfo);
+        }
+        sandogasa_bugzilla::claim::apply_claim(&mut update, assign.as_deref());
+        let out = bz.update_verified(*rhbz, &update, 3).await;
+        if let Some(note) = out.note() {
+            eprintln!("note: rhbz#{rhbz}: {note}");
+        }
+        if !out.complete() {
+            return Err(format!(
+                "failed to close rhbz#{rhbz}: {}",
+                out.last_error.unwrap_or_default()
+            ));
+        }
+        println!("closed {pkg} rhbz#{rhbz}");
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// `close` — retire the requests a report records that have landed.
+pub fn run_close(report_path: &str, opts: &Options, claim: bool) -> Result<(), String> {
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| format!("failed to create async runtime: {e}"))?;
+    rt.block_on(async {
+        let mut file = ReportFile::load(report_path)?;
+        let mut report = file.view();
+        let changed = close_batch(&mut report, opts, claim, &FedrqProbe).await?;
+        if changed && !opts.dry_run {
+            file.save(&report, report_path)?;
+        }
+        Ok(())
+    })
+}
+
 // ---- escalation ----
 
 /// Escalate stale requests recorded in `report`. Pings each NEW
@@ -1489,7 +1715,19 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
             branch_standing(&distgit, pkg, &opts.branch, opts.identity.as_deref()).await,
         );
     }
-    escalate_with(report, opts, &standings).await
+    // Whether anything was *built* there, which `branched` does not
+    // answer: a branch can sit empty for months. Only used to word the
+    // skip, so a probe failure is not fatal -- it degrades to the
+    // weaker "branched" claim.
+    let packages: Vec<String> = report.branch_requests.keys().cloned().collect();
+    let present = target_probe(&FedrqProbe, &opts.branch, &packages).unwrap_or_else(|e| {
+        eprintln!(
+            "warning: could not read {} ({e}); reporting branches, not builds",
+            opts.branch
+        );
+        BTreeMap::new()
+    });
+    escalate_with(report, opts, &standings, &present).await
 }
 
 /// File the releng ticket for a request whose ping went unanswered.
@@ -1585,6 +1823,7 @@ pub(crate) async fn escalate_with(
     report: &mut ResolveReport,
     opts: &Options,
     standings: &BTreeMap<String, BranchStanding>,
+    present: &BTreeMap<String, String>,
 ) -> Result<bool, String> {
     let bz = BzClient::new(&opts.bugzilla_url)
         .with_api_key(opts.api_key.clone())
@@ -1649,12 +1888,18 @@ pub(crate) async fn escalate_with(
                 });
             }
             PingDecision::NothingOwed { branched } => {
-                // Say which, because the follow-up differs: one bug
-                // wants closing, the other wants the asker to act.
-                let why = if branched {
-                    "branched — build it, then close the bug".to_string()
-                } else {
-                    format!("you can branch {} yourself", opts.branch)
+                // Say which, because the follow-up differs, and a
+                // branch is not a build: saying "build it" about a
+                // package that shipped months ago is how rhbz#2482238
+                // stayed open long enough to be pinged for.
+                let why = match (present.get(pkg), branched) {
+                    (Some(vr), _) => {
+                        format!("{pkg}-{vr} is in {} — ebranch close", opts.branch)
+                    }
+                    (None, true) => {
+                        "branched, nothing built — build it, then close the bug".to_string()
+                    }
+                    (None, false) => format!("you can branch {} yourself", opts.branch),
                 };
                 unblocked_by_people.push(Skipped {
                     pkg: pkg.clone(),
@@ -2375,6 +2620,64 @@ mod tests {
     }
 
     #[test]
+    fn a_request_is_closed_only_once_the_build_is_there() {
+        // A branch with nothing built in it does not fulfil the
+        // request: the bug asked for the package to be *in* epel10.
+        assert_eq!(close_decision("NEW", None), CloseDecision::Pending);
+        assert_eq!(
+            close_decision("NEW", Some("1.4.4.post2-18.el10_2")),
+            CloseDecision::Landed("1.4.4.post2-18.el10_2".to_string())
+        );
+        // An already-closed bug is left alone whatever the branch says.
+        assert_eq!(
+            close_decision("CLOSED", Some("1.4.4.post2-18.el10_2")),
+            CloseDecision::Closed
+        );
+    }
+
+    #[test]
+    fn a_close_clears_the_needinfo_it_answers() {
+        let now = chrono::Utc::now();
+        let mut answered = needinfo("maint@example.com", "+", 3, now);
+        answered.id = 2;
+        let mut open = needinfo("maint@example.com", "?", 3, now);
+        open.id = 1;
+        let mut other = needinfo("someone@example.com", "?", 3, now);
+        other.id = 3;
+        // Every outstanding one, not only ours: closing answers the
+        // question for whoever was asked, and a flag left on a closed
+        // bug sits in their queue forever.
+        assert_eq!(outstanding_needinfo(&[answered, open, other]), vec![1, 3]);
+    }
+
+    #[test]
+    fn a_flag_without_an_id_is_left_alone() {
+        // Clearing needs the id -- needinfo is multiplicable, so the
+        // type alone does not say which flag is meant. A response
+        // that omitted it would otherwise be sent as `"id": 0`.
+        let now = chrono::Utc::now();
+        assert!(outstanding_needinfo(&[needinfo("m@example.com", "?", 1, now)]).is_empty());
+    }
+
+    #[test]
+    fn a_close_records_what_it_found() {
+        // The evidence goes in the bug: a request closed months after
+        // it was satisfied is exactly where "how do you know" is worth
+        // answering without rerunning anything.
+        let body = close_body("python-aiosmtpd", "epel10", "1.4.4.post2-18.el10_2");
+        assert!(
+            body.starts_with("python-aiosmtpd-1.4.4.post2-18.el10_2 is in epel10,"),
+            "{body}"
+        );
+        assert!(body.contains("reopen"), "{body}");
+        // No trailing whitespace: this text is posted to a public bug.
+        assert!(
+            body.lines().all(|l| l == l.trim_end()),
+            "trailing space in {body:?}"
+        );
+    }
+
+    #[test]
     fn the_closing_report_is_silent_when_nothing_was_skipped() {
         assert_eq!(skipped_report(&[], &BTreeMap::new()), None);
     }
@@ -2795,6 +3098,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
+            &BTreeMap::new(),
         )
         .await
         .expect("the ping goes through");
@@ -2838,6 +3142,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
+            &BTreeMap::new(),
         )
         .await
         .expect("the run completes without pinging");
@@ -2872,6 +3177,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
+            &BTreeMap::new(),
         )
         .await
         .expect("waiting is not an error");
@@ -2908,6 +3214,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
+            &BTreeMap::new(),
         )
         .await
         .expect("following a duplicate is not an error");

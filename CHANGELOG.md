@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### ebranch: close a branch request once the package has landed
+
+`ebranch` could chase a request and escalate it, but never retire one.
+So a request stayed open after the work was done, and the tool went on
+reasoning about it as if it were outstanding: `python-aiosmtpd` was
+requested for epel10 in May, `python-aiosmtpd-1.4.4.post2-18.el10_2`
+shipped there at some point in the 141 days the bug sat open, and
+`escalate` then pinged its maintainers asking for work long finished.
+
+A new `close` subcommand takes a report and a branch and closes every
+request whose package is now in the branch, as `CURRENTRELEASE` with a
+comment naming the build it found — the evidence belongs in the bug,
+since a request closed months after it was satisfied is exactly where
+"how do you know" is worth answering. The presence check is the one
+`file-requests` already makes before filing, asked once for the whole
+report rather than per package.
+
+Closing also clears any `needinfo?` still outstanding, in the same
+write, since closing answers the question for whoever was asked. Red
+Hat's Bugzilla does not do this itself — rhbz#2482238 was closed with
+one still pointed at `epel-packagers-sig`, where it would have sat in
+their request queue indefinitely — so a run also clears flags left on
+requests that were already closed, rather than reporting them for
+someone to go and fix.
+
+Per the project rule for anything that closes bugs, it offers to
+reassign them: `--claim` takes them without asking, `-y` without the
+flag declines, no configured Bugzilla email skips the question, and
+otherwise it asks once for the whole set.
+
+`escalate` also stops saying "build it" about packages that are built.
+`BranchStanding.branched` only asks dist-git whether the branch exists,
+never whether anything was built from it, so a shipped package was
+being described as work still to do. The skip now names the build and
+the command that retires the bug:
+
+    1 request(s) now actionable — nobody else is holding these up:
+      python-aiosmtpd  rhbz#2482238  python-aiosmtpd-1.4.4.post2-18.el10_2 is in epel10 — ebranch close
+
+A branch with nothing built in it still reads as "branched, nothing
+built", and a probe failure degrades to that weaker claim rather than
+failing the run.
+
+#### Added
+
+- `close` subcommand, with `--claim`.
+
 ### sandogasa-forgejo: issues can be filed with labels (breaking)
 
 `create_issue` filed every issue unlabelled, with no way to say

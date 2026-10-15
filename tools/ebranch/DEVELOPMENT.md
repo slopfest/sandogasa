@@ -273,6 +273,49 @@ is filed. The branch gets made, the access gets granted, and the bug
 says nothing about either. `file_batch` asked these questions once, at
 filing time; `escalate` has to ask them again every run.
 
+## A branch is not a build, and only one of them closes a request
+
+`BranchStanding.branched` asks dist-git whether the branch exists. That
+is all it asks. A branch can sit empty for months — `et` was branched
+for epel10 long before anything was built there, which is why
+`RequestKind::Build` exists — so `branched` must never be read as "the
+request is satisfied".
+
+Two places get this wrong if it is forgotten. `close_decision` closes
+only on a *build* in the branch, because the bug asked for the package
+to be in epel10 and an empty branch does not deliver that. And
+`escalate`'s skip line used to say "branched — build it, then close the
+bug" for any branched package, which told the reader to build something
+that had shipped months earlier; rhbz#2482238 stayed open long enough
+to be pinged for partly because nothing said otherwise. It now reports
+the build it found, falling back to "branched, nothing built" and then
+to the branch question, and a probe failure degrades to the weaker
+claim rather than failing the run — the wording is advisory, and
+`close` is where the decision is actually made.
+
+## Closing answers the needinfo, so the flag has to go with it
+
+Red Hat's Bugzilla does not clear `needinfo?` when a bug closes.
+rhbz#2482238 proved it: closed as CURRENTRELEASE with a flag still
+pointed at `epel-packagers-sig`, which would have stayed in their
+request queue for good. `escalate` is what sets those flags, so
+leaving them behind is our mess to clear.
+
+Two details. The clear goes in the *same* write as the close, because
+a second write could fail and leave exactly the state being fixed. And
+it needs the flag's `id` rather than its name: `needinfo` is
+multiplicable, so a bug can carry several and the type alone does not
+say which is meant — which is why `sandogasa_bugzilla::models::Flag`
+grew an `id`, and why `outstanding_needinfo` drops a flag whose id did
+not come back rather than sending `"id": 0`.
+
+`close` also clears flags on requests that were *already* closed. That
+looks like scope creep for a command named `close`, and it is
+deliberate: the alternative is printing "this bug has a stale
+needinfo, go and fix it", which is the pattern the project rules
+reject. The bugs in question are ones the tool's own report records
+and whose flags the tool itself set.
+
 ## The releng ticket is timed from the flag, not from our own record
 
 The EPEL stalled-request policy has two clocks, and they measure

@@ -1272,9 +1272,32 @@ ebranch escalate django.toml epel9
 ebranch escalate django.toml epel9 --yes
 ```
 
-All three accept `--dry-run` and `--verbose`; `--dry-run`
-previews without contacting Bugzilla (escalate still reads bug
-state to decide what it would ping).
+Once a request has been fulfilled, `close` retires it. It closes
+every request in the report whose package is now in the branch, as
+`CURRENTRELEASE`, with a comment naming the build it found so the
+bug carries the evidence:
+
+```sh
+ebranch close django.toml epel9 --dry-run
+ebranch close django.toml epel9
+ebranch close django.toml epel9 --claim
+```
+
+Closing clears any `needinfo?` left outstanding, since closing
+answers the question for whoever was asked — Bugzilla does not do
+that on its own. Requests that were already closed with a flag
+still on them are tidied the same way.
+
+Only a build closes a request — a branch with nothing built in it
+does not, since the bug asked for the package to be *in* the
+branch. Closing also offers to take the bugs
+(`assigned_to` = your Bugzilla account): `--claim` takes them
+without asking, `-y` without it declines, and otherwise it asks
+once for the whole set.
+
+All four accept `--dry-run` and `--verbose`; `--dry-run`
+previews without contacting Bugzilla (escalate and close still
+read bug state to decide what they would do).
 
 ## System-wide configuration
 

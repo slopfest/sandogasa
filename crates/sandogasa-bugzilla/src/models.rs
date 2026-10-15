@@ -73,6 +73,11 @@ pub struct Bug {
 #[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
 pub struct Flag {
+    /// The flag's own id. Needed to change it: `needinfo` is
+    /// multiplicable, so a bug can carry several and naming the type
+    /// alone does not say which one is meant.
+    #[serde(default)]
+    pub id: u64,
     pub name: String,
     pub status: String,
     #[serde(default)]
