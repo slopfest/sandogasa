@@ -1,6 +1,6 @@
 [package]
 name = "sandogasa-build"
-description = "Build-script helper: the git describe of the checkout a sandogasa tool is built from, for its --version"
+description = "Build-script helper: the checkout's git describe, for a tool's --version"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

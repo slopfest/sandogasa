@@ -1,7 +1,7 @@
 [package]
 name = "koji-diff"
 version.workspace = true
-description = "Koji build log differ — compare buildroot and build logs between two Koji builds"
+description = "Koji build log differ: compare buildroot and build logs of two builds"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

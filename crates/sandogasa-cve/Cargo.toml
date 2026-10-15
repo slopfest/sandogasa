@@ -1,6 +1,6 @@
 [package]
 name = "sandogasa-cve"
-description = "Where a CVE is fixed: NVD and GitHub advisory data, and judging a build against it"
+description = "Where a CVE is fixed: NVD and GitHub advisories, judging a build against it"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

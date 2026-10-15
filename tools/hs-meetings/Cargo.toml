@@ -1,6 +1,6 @@
 [package]
 name = "hs-meetings"
-description = "Chair CentOS Hyperscale SIG meetings: day-of script, meetbot archive list and sync"
+description = "Chair CentOS Hyperscale SIG meetings: day-of script and meetbot archive sync"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

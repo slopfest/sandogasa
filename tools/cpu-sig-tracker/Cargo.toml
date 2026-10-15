@@ -1,6 +1,6 @@
 [package]
 name = "cpu-sig-tracker"
-description = "Track CentOS Proposed Updates (CPU) SIG package state across Koji, GitLab, and JIRA"
+description = "Track CentOS Proposed Updates SIG package state across Koji, GitLab and JIRA"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
