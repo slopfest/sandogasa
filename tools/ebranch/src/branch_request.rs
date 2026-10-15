@@ -3688,6 +3688,299 @@ mod tests {
         );
     }
 
+    /// A `needinfo?` flag Bugzilla gave an id to, which is what
+    /// `clear_flags` needs to turn it off again.
+    fn needinfo_with_id(id: u64, requestee: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "name": "needinfo",
+            "status": "?",
+            "requestee": requestee,
+            "creation_date": "2026-10-01T09:00:00Z",
+        })
+    }
+
+    /// Bugzilla's reads for one bug plus the read-before-write that
+    /// `update_verified` does, answering with `bug` throughout.
+    async fn close_server(rhbz: u64, bug: serde_json::Value) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/rest/bug/{rhbz}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"bugs": [bug.clone()]})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [bug]})),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn a_landed_request_is_closed_as_currentrelease_with_its_evidence() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let mut bug = bug_json(2482238, "NEW", None);
+        bug["flags"] = serde_json::json!([needinfo_with_id(77, "epel-packagers-sig")]);
+        let server = close_server(2482238, bug).await;
+        // The close and the needinfo clearing are one write: a second
+        // write could fail and leave behind exactly the flag being
+        // tidied up.
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/2482238"))
+            .and(body_partial_json(serde_json::json!({
+                "status": "CLOSED",
+                "resolution": "CURRENTRELEASE",
+                "flags": [{"id": 77, "status": "X"}],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{"id": 2482238, "changes": {"status": {"added": "CLOSED"}}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let probe = FakeProbe::default().has(
+            "epel10",
+            None,
+            "cxxopts",
+            "python-aiosmtpd-1.4.4.post2-18.el10_2",
+        );
+        let mut report = report_with("cxxopts", 2482238, true);
+        let changed = close_batch(&mut report, &mock_opts(&server.uri(), false), false, &probe)
+            .await
+            .expect("the close goes through");
+        assert!(changed, "a closed request changes the report");
+    }
+
+    #[tokio::test]
+    async fn a_request_whose_package_is_not_there_yet_is_left_open() {
+        let server = close_server(2482241, bug_json(2482241, "NEW", None)).await;
+        // No PUT is mounted, so any write would fail the test.
+        let mut report = report_with("python-django6", 2482241, true);
+        let changed = close_batch(
+            &mut report,
+            &mock_opts(&server.uri(), false),
+            false,
+            &FakeProbe::default(),
+        )
+        .await
+        .expect("a report with nothing to close is not an error");
+        assert!(!changed, "nothing landed, so nothing changed");
+    }
+
+    #[tokio::test]
+    async fn a_needinfo_left_on_an_already_closed_request_is_cleared() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, ResponseTemplate};
+
+        // rhbz#2482238 was closed by hand with a `needinfo?` still
+        // pointed at epel-packagers-sig, where nothing would ever
+        // clear it. Tidying it costs one write and takes a dead entry
+        // out of somebody's queue.
+        let mut bug = bug_json(2482238, "CLOSED", None);
+        bug["flags"] = serde_json::json!([needinfo_with_id(77, "epel-packagers-sig")]);
+        let server = close_server(2482238, bug).await;
+        Mock::given(method("PUT"))
+            .and(path("/rest/bug/2482238"))
+            .and(body_partial_json(
+                serde_json::json!({"flags": [{"id": 77, "status": "X"}]}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{"id": 2482238, "changes": {}}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut report = report_with("cxxopts", 2482238, true);
+        let changed = close_batch(
+            &mut report,
+            &mock_opts(&server.uri(), false),
+            false,
+            &FakeProbe::default(),
+        )
+        .await
+        .expect("clearing a stale flag is not an error");
+        // The request was already closed, so the report itself has
+        // nothing new to record -- only Bugzilla was tidied.
+        assert!(!changed);
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_close_writes_nothing() {
+        let mut bug = bug_json(2482238, "NEW", None);
+        bug["flags"] = serde_json::json!([needinfo_with_id(77, "epel-packagers-sig")]);
+        let server = close_server(2482238, bug).await;
+        // No PUT mounted: a dry run that wrote anything would 404.
+        let probe = FakeProbe::default().has("epel10", None, "cxxopts", "4.22-1.el10_3");
+        let mut report = report_with("cxxopts", 2482238, true);
+        let changed = close_batch(&mut report, &mock_opts(&server.uri(), true), false, &probe)
+            .await
+            .expect("a dry run reports rather than writes");
+        assert!(!changed, "a dry run leaves the report alone");
+    }
+
+    #[tokio::test]
+    async fn filing_a_releng_ticket_needs_an_identity_and_a_token() {
+        // Both are the operator's to supply, and neither can be
+        // guessed: the ticket has to name a FAS, and filing it at all
+        // needs a Forgejo token. Saying which one is missing beats
+        // failing at the API.
+        let standing = BranchStanding::default();
+        let mut opts = mock_opts("http://127.0.0.1:1", false);
+
+        opts.identity = None;
+        opts.forge_token = "t".into();
+        let filed = file_releng(2543942, "simpleini", 21, &standing, &opts)
+            .await
+            .expect("a missing FAS is reported, not an error");
+        assert_eq!(filed, None);
+
+        // An empty FAS is the same as none: `packager.fas` unset in
+        // the config file reads as a String, not a missing key.
+        opts.identity = Some(String::new());
+        let filed = file_releng(2543942, "simpleini", 21, &standing, &opts)
+            .await
+            .expect("an empty FAS is reported, not an error");
+        assert_eq!(filed, None);
+
+        opts.identity = Some("alice".into());
+        opts.forge_token = String::new();
+        let filed = file_releng(2543942, "simpleini", 21, &standing, &opts)
+            .await
+            .expect("a missing token is reported, not an error");
+        assert_eq!(filed, None);
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_does_not_file_a_releng_ticket() {
+        // The dry run stops before the forge is contacted at all, so
+        // the unroutable URL below is never dialled.
+        let standing = BranchStanding::default();
+        let mut opts = mock_opts("http://127.0.0.1:1", true);
+        opts.identity = Some("alice".into());
+        opts.forge_token = "t".into();
+        opts.forge_url = "http://127.0.0.1:1".into();
+        let filed = file_releng(2543942, "simpleini", 21, &standing, &opts)
+            .await
+            .expect("a dry run says what it would file");
+        assert_eq!(filed, None);
+    }
+
+    /// `file_releng` with everything configured, pointed at `url`.
+    fn releng_opts(url: &str) -> Options {
+        let mut opts = mock_opts("http://127.0.0.1:1", false);
+        opts.identity = Some("alice".into());
+        opts.forge_token = "tok".into();
+        opts.forge_url = url.to_string();
+        opts.assume_yes = true;
+        opts
+    }
+
+    #[tokio::test]
+    async fn an_open_releng_ticket_is_reported_rather_than_filed_again() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // The duplicate search is the reason the ticket's checklist
+        // can be filed ticked, so it has to actually stop a second
+        // filing -- matching on the exact title, open only.
+        let server = MockServer::start().await;
+        let (title, _) = releng_ticket(
+            "simpleini",
+            "epel10",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2543942",
+            "alice",
+            &[],
+        );
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/releng/tickets/issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"number": 9001, "title": title, "state": "open",
+                 "html_url": "https://forge.example/releng/tickets/issues/9001"}
+            ])))
+            .mount(&server)
+            .await;
+        // No POST mounted: filing a second ticket would 404.
+        let filed = file_releng(
+            2543942,
+            "simpleini",
+            21,
+            &BranchStanding::default(),
+            &releng_opts(&server.uri()),
+        )
+        .await
+        .expect("an existing ticket is an answer, not an error");
+        assert_eq!(filed, Some(9001), "the open ticket is recorded as ours");
+    }
+
+    #[tokio::test]
+    async fn a_stalled_request_is_filed_on_the_releng_tracker() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Nothing open yet.
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/releng/tickets/issues"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&server)
+            .await;
+        // The labels the tracker wants span two scopes: `ops` belongs
+        // to the repo, the other two to the org. Resolving names to
+        // ids has to look in both.
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/releng/tickets/labels"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": 982, "name": "ops"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/orgs/releng/labels"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": 1417, "name": "points/01"},
+                {"id": 1432, "name": "Priority/Low"}
+            ])))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/repos/releng/tickets/issues"))
+            .and(body_partial_json(
+                serde_json::json!({"labels": [982, 1417, 1432]}),
+            ))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "number": 13600, "title": "Stalled EPEL package: simpleini",
+                "state": "open",
+                "html_url": "https://forge.example/releng/tickets/issues/13600"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let filed = file_releng(
+            2543942,
+            "simpleini",
+            21,
+            &BranchStanding::default(),
+            &releng_opts(&server.uri()),
+        )
+        .await
+        .expect("the ticket is filed");
+        assert_eq!(filed, Some(13600));
+    }
+
     #[tokio::test]
     async fn a_dry_run_writes_nothing_anywhere() {
         use wiremock::matchers::{method, path};
