@@ -652,6 +652,43 @@ rather than `debcargo` directly, and how the team expects an MR for a
 crate nobody has packaged before (new `src/` directory vs some
 intake).
 
+## dbranch is untested in Debian, and debcargo cannot fix it (2026-10-15)
+
+The four crates are packaged in a fork of debcargo-conf (branch
+`sandogasa` in `~/src/debian/rust-team/debcargo-conf`). dbranch is
+`lib = false` there: its `src/lib.rs` exists so the binary and its
+tests can share code, upstream promises it no stability, and shipping
+`librust-dbranch-dev` would publish an API nobody supports. It also
+gives the single binary package CONTRIBUTING.rst asks for.
+
+The cost is that **nothing tests dbranch in Debian**, because two
+independent debcargo rules intersect:
+
+- No `cargo test` at build time for a crate with dev-dependencies.
+  `debian/mod.rs:510`: *"don't run any tests, we don't want extra B-D
+  on dev-depends / this could potentially cause B-D cycles so we avoid
+  it"*. dbranch dev-depends on sandogasa-cli and tempfile.
+- No autopkgtests without a library. The whole `tests/control` block
+  is inside `if lib {` (`debian/mod.rs:918`), because the tests are
+  generated per library *feature* — every entry is
+  `test-name=librust-<crate>-dev:<feature>`. A binary-only package has
+  no feature set to enumerate.
+
+Neither is a judgement that binaries need less testing; the code path
+simply does not exist. Which means a hand-written
+`src/dbranch/debian/tests/control` is filling a structural gap rather
+than overriding a policy: it would call the same
+`/usr/share/cargo/bin/cargo-auto-test` the generated tests use, which
+takes the crate and version rather than a feature. The catch is that
+the version is in the command, so it needs touching every release.
+
+Not done, because these go to Debusine rather than the archive and
+nothing is lost yet. Settle it when seeking a sponsor — a reviewer
+asking "why no autopkgtest?" deserves better than a shrug, and the
+answer that matters is that Debian would otherwise never test dbranch
+against *Debian's* dependency versions, which is the one thing our own
+CI and Fedora's `%check` cannot do.
+
 ## Package the dbranch chain for Debian before 0.26.0 (2026-10-13)
 
 Upload them to Debusine (`r-michelin-*`), which is what makes them
