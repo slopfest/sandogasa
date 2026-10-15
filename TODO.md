@@ -531,12 +531,21 @@ has to reach EPEL before then, rewrite that one guard as a nested
 ## dbranch: restate the Debusine workflow URL after an upload (2026-10-14)
 
 dput prints the work request it created -- "Created workflow:
-https://debusine.debian.net/debian/<ws>/work-request/<id>/" -- and
-that URL is the only durable handle on the build. The instance-wide
-`debusine list-work-requests` has no workspace filter and ages entries
-out within the hour; `debusine artifact` only takes ids; and the
-workspace page does not index its builds. Lose the URL and the build
-is genuinely hard to find again, which cost an hour on 2026-10-14.
+https://debusine.debian.net/debian/<ws>/work-request/<id>/" -- and it
+is worth keeping, because the *command line* has no good way back to
+it: the instance-wide `debusine list-work-requests` has no workspace
+filter and ages entries out within the hour, and `debusine artifact`
+only takes ids.
+
+Corrected 2026-10-15: the **authenticated web UI does list a
+workspace's workflows**, so a lost URL is a nuisance rather than the
+dead end recorded here on 2026-10-14. That earlier reading came from
+browsing the workspace unauthenticated, where the builds are not
+indexed. The archive itself stays the honest check that something
+*published* --
+`https://deb.debusine.debian.net/debian/<ws>/dists/<suite>/` and its
+`Sources` -- since a workflow can report failure and have published
+anyway.
 
 dbranch's upload stage already runs the dput that prints it, so it can
 restate it at the end of the run, as the push stage restates the CI
