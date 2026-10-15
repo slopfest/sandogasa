@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-10-14 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH ebranch 1 2026-10-15 "sandogasa 0.26.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -397,7 +397,7 @@ Print help
 <\fICOPR\fR>
 COPR project: owner/project, @group/project, or its URL
 .SS ebranch escalate
-\fBebranch escalate\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
+\fBebranch escalate\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
 .PP
 Escalate (needinfo) stale branch requests in a report
 .TP
@@ -440,6 +440,9 @@ it can\*(Aqt infer (e.g. epel8).
 \fB\-\-dry\-run\fR
 Show what would happen without contacting Bugzilla
 .TP
+\fB\-y\fR, \fB\-\-yes\fR
+File releng tickets without confirming each one
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
 .TP
@@ -452,7 +455,7 @@ check\-crate or resolve report TOML with recorded branch requests
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch file-request
-\fBebranch file\-request\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-toml\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR> 
+\fBebranch file\-request\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-toml\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR> 
 .PP
 File a branch request for one package
 .TP
@@ -495,6 +498,9 @@ it can\*(Aqt infer (e.g. epel8).
 \fB\-\-dry\-run\fR
 Show what would happen without contacting Bugzilla
 .TP
+\fB\-y\fR, \fB\-\-yes\fR
+File releng tickets without confirming each one
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
 .TP
@@ -516,7 +522,7 @@ Source package to request a branch for
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch file-requests
-\fBebranch file\-requests\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
+\fBebranch file\-requests\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
 .PP
 File branch requests for all missing packages in a report
 .TP
@@ -558,6 +564,9 @@ it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-\-dry\-run\fR
 Show what would happen without contacting Bugzilla
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+File releng tickets without confirming each one
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr

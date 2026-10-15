@@ -134,6 +134,12 @@ pub struct BranchRequest {
     /// same request twice.
     #[serde(default)]
     pub pinged: bool,
+    /// Releng ticket filed for this request, once the `needinfo?` has
+    /// gone unanswered long enough for the EPEL stalled-request
+    /// policy. Recorded so a later run reports it rather than filing
+    /// a second one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub releng: Option<u64>,
 }
 
 impl ResolveReport {
@@ -1871,6 +1877,7 @@ mod tests {
             BranchRequest {
                 rhbz: 42,
                 pinged: true,
+                releng: None,
             },
         );
         let mut blocked = BTreeMap::new();

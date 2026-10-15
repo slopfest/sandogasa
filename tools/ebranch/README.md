@@ -1244,9 +1244,32 @@ up now and the other is only work nobody else has to be chased about:
   et         rhbz#2368920  assigned to you — blocked by simpleini (rhbz#2543942)
 ```
 
+Two weeks after a ping has gone unanswered, the EPEL policy allows
+one more step, and `escalate` takes it: a releng ticket on
+[`releng/tickets`](https://forge.fedoraproject.org/releng/tickets)
+asking for commit access, following that tracker's own issue
+template. The two weeks are counted from the `needinfo?` flag
+itself, so a ping somebody else set counts too. The ticket names
+your FAS and the package's dist-git owner, and its number is
+recorded in the report, so a later run reports the ticket rather
+than filing a second one.
+
+It asks before filing; `--yes` skips the question, and a run with
+no terminal says what it would file instead of filing it. Without
+a `[forgejo]` token or a `packager.fas` the step is reported, not
+taken. A `needinfo?` that has been answered or cleared is never
+escalated automatically — it is printed for you to read, because
+the policy counts some replies as no action and some as action,
+and only a person can tell which:
+
+```
+et rhbz#2368920: the needinfo is gone — read the bug and decide whether it has stalled
+```
+
 ```sh
 ebranch escalate django.toml epel9 --dry-run
 ebranch escalate django.toml epel9
+ebranch escalate django.toml epel9 --yes
 ```
 
 All three accept `--dry-run` and `--verbose`; `--dry-run`
@@ -1275,6 +1298,20 @@ co-maintainer offer carries. `provenpackager` adds the emergency note
 to a build request, as above. `ebranch config` asks for the FAS, then
 looks the name up in dist-git's copy of the provenpackager group and
 offers what it found as the answer to confirm.
+
+A `[forgejo]` table holds the token `escalate` files a releng ticket
+with, on Fedora's Forgejo:
+
+```toml
+[forgejo]
+token = "..."
+url = "https://forge.fedoraproject.org"
+```
+
+`url` defaults to that value and only needs setting to point at
+another instance. Without a token `escalate` reports the requests
+that have earned a ticket instead of filing them, so the rest of the
+run is unaffected.
 
 A `[check-crate]` table lists crates to ignore in every run, direct
 or transitive, as if they were not dependencies — Fedora almost

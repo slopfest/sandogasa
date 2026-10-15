@@ -745,6 +745,10 @@ it can't infer (e.g. epel8)."
     #[arg(long)]
     dry_run: bool,
 
+    /// File releng tickets without confirming each one.
+    #[arg(short = 'y', long)]
+    yes: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
@@ -1129,17 +1133,31 @@ fn fas_to_offer(flag: Option<&str>, configured: Option<String>) -> Option<String
 /// resolving the API key (CLI flag → env → config file).
 fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Options, String> {
     let api_key = config::resolve_api_key(c.api_key.as_deref())?;
+    let forge = config::forgejo();
     Ok(branch_request::Options {
         bugzilla_url: c.bugzilla_url.clone(),
         api_key,
         branch: c.branch.clone(),
         fas: fas_to_offer(c.fas.as_deref(), config::packager_fas()),
+        // Not `fas_to_offer`: who you are is true whether or not you
+        // are volunteering. Without this, a run with no `--fas` can
+        // not ask dist-git what you may do, so it pings maintainers
+        // about work you could have done yourself.
+        identity: c
+            .fas
+            .as_deref()
+            .filter(|f| !f.is_empty())
+            .map(str::to_string)
+            .or_else(config::packager_fas),
         sig: c.sig.clone(),
         dry_run: c.dry_run,
         verbose: c.verbose,
         base_branch: resolve::base_branch_for(c.base_branch.as_deref(), Some(&c.branch), None),
         email: config::bugzilla_email(),
         provenpackager: config::is_provenpackager(),
+        forge_url: forge.url,
+        forge_token: forge.token,
+        assume_yes: c.yes,
     })
 }
 

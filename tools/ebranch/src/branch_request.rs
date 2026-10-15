@@ -33,7 +33,16 @@ pub struct Options {
     pub bugzilla_url: String,
     pub api_key: String,
     pub branch: String,
+    /// FAS to volunteer as co-maintainer in the bug text, when the
+    /// asker is volunteering. Distinct from [`Options::identity`]:
+    /// this one is a offer, not a statement of who is running the
+    /// tool.
     pub fas: Option<String>,
+    /// Who is running the tool, for asking dist-git what access they
+    /// hold and for naming them in a releng ticket. True whether or
+    /// not they are volunteering, so it comes from `packager.fas`
+    /// even when `--fas` is absent.
+    pub identity: Option<String>,
     pub sig: Option<String>,
     pub dry_run: bool,
     pub verbose: bool,
@@ -50,6 +59,14 @@ pub struct Options {
     /// Only ever adds a note to a build request; see
     /// [`note_provenpackager`].
     pub provenpackager: bool,
+    /// Fedora's Forgejo, where a stalled request's releng ticket goes.
+    pub forge_url: String,
+    /// Token for [`Options::forge_url`]. Empty means `escalate`
+    /// reports that a request has earned its ticket rather than
+    /// filing one -- the work is still shown, never discarded.
+    pub forge_token: String,
+    /// Skip the per-ticket confirmation (`--yes`).
+    pub assume_yes: bool,
 }
 
 // ---- request / ping body templates (ported) ----
@@ -272,6 +289,168 @@ pub fn ping_decision(
         "NEW" => PingDecision::Ping,
         other => PingDecision::NotNew(other.to_string()),
     }
+}
+
+/// Days a `needinfo?` must go unanswered before the EPEL policy
+/// allows a releng ticket. Counted from the ping, not from the bug.
+pub const RELENG_MIN_DAYS: i64 = 14;
+
+/// Labels Fedora's releng tracker expects on a stalled-EPEL ticket.
+/// From its own issue template, which triage reads.
+pub const RELENG_LABELS: [&str; 3] = ["ops", "points/01", "Priority/Low"];
+
+/// The releng tracker: `releng/tickets` on Fedora's Forgejo.
+pub const RELENG_REPO: (&str, &str) = ("releng", "tickets");
+
+/// What to do about a request whose ping has already gone out.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RelengDecision {
+    /// The needinfo has gone unanswered long enough: file the ticket.
+    File(i64),
+    /// A ticket is already recorded for this request.
+    Filed(u64),
+    /// Inside the two weeks still.
+    TooSoon(i64),
+    /// No outstanding `needinfo?` to time from: answered, cleared by
+    /// hand, or never set. Needs a person, not a rule -- see
+    /// [`releng_decision`].
+    NoNeedinfo,
+    /// The bug moved out of NEW, which is action by the policy's own
+    /// definition.
+    Progressed(String),
+}
+
+/// Decide whether a pinged request has earned a releng ticket.
+///
+/// `days_since_needinfo` is how long an outstanding `needinfo?` has
+/// waited ([`needinfo_age`]), `None` when there is none. Pure, like
+/// [`ping_decision`], and only ever called for a request that reached
+/// [`PingDecision::AlreadyPinged`] -- which already establishes that
+/// the asker has no access and the bug is not theirs, because
+/// `ping_decision` returns those cases first.
+///
+/// A cleared needinfo deliberately does **not** escalate, even though
+/// the policy would often allow it. The policy counts a reply of "I do
+/// not want to do epel" followed by nothing as *no action*, so a
+/// response is not in itself a reason to stop -- but telling that
+/// apart from a real answer means reading prose, and getting it wrong
+/// files a public ticket about a maintainer who did reply. So it is
+/// surfaced for a person to read instead.
+pub fn releng_decision(
+    status: &str,
+    days_since_needinfo: Option<i64>,
+    ticket: Option<u64>,
+) -> RelengDecision {
+    if let Some(n) = ticket {
+        return RelengDecision::Filed(n);
+    }
+    if status != "NEW" {
+        return RelengDecision::Progressed(status.to_string());
+    }
+    match days_since_needinfo {
+        None => RelengDecision::NoNeedinfo,
+        Some(d) if d < RELENG_MIN_DAYS => RelengDecision::TooSoon(d),
+        Some(d) => RelengDecision::File(d),
+    }
+}
+
+/// How many days the oldest outstanding `needinfo?` on `requestee`
+/// has waited, or `None` when there is none.
+///
+/// The flag is the clock, not a timestamp of our own: it is right even
+/// when the ping was set by hand or by somebody else, it survives a
+/// report that was regenerated, and Bugzilla clears it when the
+/// requestee answers -- which is the cheapest available reading of
+/// "did they respond". Only the flag on the maintainer counts; a
+/// `needinfo?` pointed at anyone else is a different conversation.
+///
+/// `requestee` is a Bugzilla login, so `assigned_to` must be one too.
+/// It is, for an authenticated read -- which `escalate` always is,
+/// since pinging needs the key. Read anonymously the same bug returns
+/// `assigned_to` as a real name ("Felix Wang" against a requestee of
+/// `topazus`) and nothing would match.
+pub fn needinfo_age(
+    flags: &[sandogasa_bugzilla::models::Flag],
+    requestee: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<i64> {
+    flags
+        .iter()
+        .filter(|f| f.name == "needinfo" && f.status == "?")
+        .filter(|f| {
+            f.requestee
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case(requestee))
+        })
+        .filter_map(|f| f.creation_date)
+        .map(|set| (now - set).num_days())
+        .max()
+}
+
+/// The open ticket among `hits` that is this exact request, if any.
+///
+/// On the title exactly, not on whatever the search returned: Forgejo
+/// matches `q` as a substring, so a search for `Stalled EPEL package:
+/// et` also finds `Stalled EPEL package: etcd`, and adopting that one
+/// would record somebody else's request as this one's -- and then
+/// never file the ticket this request needs. A *closed* ticket of the
+/// same name is not a duplicate either: that request was dealt with,
+/// and this is a new stall.
+fn open_duplicate(hits: &[sandogasa_forgejo::Issue], title: &str) -> Option<u64> {
+    hits.iter()
+        .find(|i| i.title == title && i.state == "open")
+        .map(|i| i.number)
+}
+
+/// Title and body of the releng ticket for a stalled request.
+///
+/// Follows `releng/tickets`'s own issue template rather than the prose
+/// form in the EPEL docs: triage reads the template's headings, and a
+/// ticket that skips them lands as free text. The checklist is ticked
+/// because the caller files nothing until it has done each of those
+/// things -- notably the duplicate search.
+pub fn releng_ticket(
+    pkg: &str,
+    branch: &str,
+    bug_url: &str,
+    fas: &str,
+    maintainers: &[String],
+) -> (String, String) {
+    let cc = match maintainers.is_empty() {
+        // The policy requires naming the maintainer's FAS. When
+        // dist-git lists no owner there is nobody to name, and saying
+        // so is better than omitting the line silently.
+        true => "cc: (no owner listed in dist-git)".to_string(),
+        false => format!(
+            "cc: {}",
+            maintainers
+                .iter()
+                .map(|m| format!("@{m}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    };
+    let body = format!(
+        "## Describe the issue\n\n\
+         {pkg} has a stalled EPEL branch request.\n\n\
+         {bug_url}\n\n\
+         Since this has met the time requirements as outlined in the stalled EPEL\n\
+         request policy, please grant my FAS (@{fas}) commit access to the package.\n\n\
+         {cc}\n\n\
+         ## When do you need this? (YYYY/MM/DD)\n\n\
+         ASAP\n\n\
+         ## When is this no longer needed or useful? (YYYY/MM/DD)\n\n\
+         N/A\n\n\
+         ## If we cannot complete your request, what is the impact?\n\n\
+         {pkg} stays unavailable in {branch}, along with anything that depends on\n\
+         it.\n\n\
+         ---\n\n\
+         ## Checklist\n\n\
+         - [x] I have checked existing issues for duplicates\n\
+         - [x] I have filled out all the fields above\n\
+         - [x] I have provided relevant Bugzilla or reference links (if applicable)\n"
+    );
+    (format!("Stalled EPEL package: {pkg}"), body)
 }
 
 // ---- single file-request ----
@@ -813,6 +992,10 @@ pub(crate) struct BranchStanding {
     /// branch being asked for. `None` when the question does not
     /// arise, or when dist-git could not be asked.
     pub scope: Option<bool>,
+    /// The package's owners, as FAS names. A releng ticket has to name
+    /// the maintainer's FAS, and dist-git is where that lives --
+    /// Bugzilla only ever has an email address.
+    pub owners: Vec<String>,
 }
 
 impl BranchStanding {
@@ -912,9 +1095,11 @@ pub(crate) async fn branch_standing(
             false
         }
     };
-    let access = match fas {
-        Some(user) => match client.get_acls(package).await {
-            Ok(acls) => acls.user_level(user),
+    // One read answers both questions: what the asker may do, and who
+    // owns the package -- the FAS a releng ticket has to name.
+    let acls = match fas {
+        Some(_) => match client.get_acls(package).await {
+            Ok(acls) => Some(acls),
             Err(e) => {
                 eprintln!("warning: could not read {package}'s access list ({e})");
                 None
@@ -922,6 +1107,8 @@ pub(crate) async fn branch_standing(
         },
         None => None,
     };
+    let access = fas.and_then(|user| acls.as_ref().and_then(|a| a.user_level(user)));
+    let owners = acls.map(|a| a.access_users.owner).unwrap_or_default();
     let scope = match (access, fas) {
         (Some(sandogasa_distgit::AccessLevel::Collaborator), Some(user)) => {
             collaborator_scope(client, package, user, branch).await
@@ -932,6 +1119,7 @@ pub(crate) async fn branch_standing(
         branched,
         access,
         scope,
+        owners,
     }
 }
 
@@ -1061,6 +1249,7 @@ pub async fn file_batch(
             BranchRequest {
                 rhbz,
                 pinged: false,
+                releng: None,
             },
         );
         adopted.insert(pkg);
@@ -1097,7 +1286,7 @@ pub async fn file_batch(
     for pkg in &candidates {
         standing.insert(
             pkg.clone(),
-            branch_standing(&distgit, pkg, &opts.branch, opts.fas.as_deref()).await,
+            branch_standing(&distgit, pkg, &opts.branch, opts.identity.as_deref()).await,
         );
     }
     let (to_file, skipped) = partition_filable(
@@ -1183,6 +1372,7 @@ pub async fn file_batch(
             BranchRequest {
                 rhbz,
                 pinged: false,
+                releng: None,
             },
         );
         changed = true;
@@ -1296,10 +1486,98 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
     for pkg in report.branch_requests.keys() {
         standings.insert(
             pkg.clone(),
-            branch_standing(&distgit, pkg, &opts.branch, opts.fas.as_deref()).await,
+            branch_standing(&distgit, pkg, &opts.branch, opts.identity.as_deref()).await,
         );
     }
     escalate_with(report, opts, &standings).await
+}
+
+/// File the releng ticket for a request whose ping went unanswered.
+///
+/// Returns the ticket number when one was filed, `None` when the run
+/// could only report that the step is due -- no token, no FAS, or an
+/// answer of no at the prompt. Reporting rather than failing is the
+/// point: the rest of the run is still worth having.
+///
+/// The duplicate search is not optional. The tracker's checklist
+/// claims it was done, so it is done before the body that claims it is
+/// written, and a search that fails stops this package rather than
+/// filing a ticket that asserts something untrue.
+async fn file_releng(
+    rhbz: u64,
+    pkg: &str,
+    waited: i64,
+    standing: &BranchStanding,
+    opts: &Options,
+) -> Result<Option<u64>, String> {
+    let due = format!("{pkg} rhbz#{rhbz}: needinfo unanswered for {waited} days");
+    let Some(fas) = opts.identity.clone().filter(|f| !f.is_empty()) else {
+        println!("{due} — set packager.fas to file the releng ticket");
+        return Ok(None);
+    };
+    if opts.forge_token.is_empty() {
+        println!("{due} — set [forgejo] token to file the releng ticket");
+        return Ok(None);
+    }
+    let (title, body) = releng_ticket(
+        pkg,
+        &opts.branch,
+        &format!("{}/show_bug.cgi?id={rhbz}", opts.bugzilla_url),
+        &fas,
+        &standing.owners,
+    );
+    if opts.dry_run {
+        println!("would file releng ticket: {title}");
+        return Ok(None);
+    }
+    let (url, token, title2) = (
+        opts.forge_url.clone(),
+        opts.forge_token.clone(),
+        title.clone(),
+    );
+    let (owner, repo) = RELENG_REPO;
+    // reqwest's blocking client off the async worker, the way
+    // sandogasa-hattrack drives the same client.
+    let open_dupe = tokio::task::spawn_blocking(move || -> Result<Option<u64>, String> {
+        let c = sandogasa_forgejo::Client::new(&url, &token).map_err(|e| e.to_string())?;
+        let hits = c
+            .search_repo_issues(owner, repo, &title2, "all")
+            .map_err(|e| e.to_string())?;
+        Ok(open_duplicate(&hits, &title2))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{pkg}: could not search {owner}/{repo} for duplicates: {e}"))?;
+    if let Some(n) = open_dupe {
+        println!("{due} — {owner}/{repo}#{n} is already open");
+        return Ok(Some(n));
+    }
+    if !opts.assume_yes {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            println!("{due} — rerun with --yes to file the releng ticket");
+            return Ok(None);
+        }
+        println!("\n{due}.\n{title}\n\n{body}");
+        if !sandogasa_cli::confirm(&format!("File this on {owner}/{repo}?"), true)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(None);
+        }
+    }
+    let (url, token) = (opts.forge_url.clone(), opts.forge_token.clone());
+    let issue = tokio::task::spawn_blocking(move || -> Result<sandogasa_forgejo::Issue, String> {
+        let c = sandogasa_forgejo::Client::new(&url, &token).map_err(|e| e.to_string())?;
+        let labels = c
+            .label_ids(owner, repo, &RELENG_LABELS)
+            .map_err(|e| e.to_string())?;
+        c.create_issue(owner, repo, &title, &body, &labels)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{pkg}: could not file on {owner}/{repo}: {e}"))?;
+    println!("filed {owner}/{repo}#{} for {pkg}", issue.number);
+    Ok(Some(issue.number))
 }
 
 /// [`escalate`] with the dist-git answers already in hand.
@@ -1344,6 +1622,16 @@ pub(crate) async fn escalate_with(
             .email
             .as_deref()
             .is_some_and(|me| !me.is_empty() && bug.assigned_to.eq_ignore_ascii_case(me));
+        // Bugzilla's own flag, not just the report's bool: a request
+        // adopted into a fresh report has `pinged = false` however
+        // many times it was pinged, and pinging again would put a
+        // second `needinfo?` on the same person. The flag is the
+        // truth; the bool is a local cache of it.
+        let waited = needinfo_age(&bug.flags, &bug.assigned_to, now);
+        if waited.is_some() && !req.pinged {
+            req.pinged = true;
+            changed = true;
+        }
         match ping_decision(
             &bug.status,
             days,
@@ -1376,8 +1664,49 @@ pub(crate) async fn escalate_with(
                 });
             }
             PingDecision::AlreadyPinged => {
-                if opts.verbose {
-                    eprintln!("[escalate] {pkg} rhbz#{} already pinged", req.rhbz);
+                // The ping is step 3 of the EPEL stalled-request
+                // policy; step 5 is a releng ticket once it has gone
+                // unanswered for two weeks. Reaching this arm already
+                // establishes the rest of the policy's premise --
+                // `ping_decision` returns `Yours` and `NothingOwed`
+                // before it, so the asker has no access and the bug is
+                // not theirs.
+                match releng_decision(&bug.status, waited, req.releng) {
+                    RelengDecision::File(d) => {
+                        let standing = standings.get(pkg).cloned().unwrap_or_default();
+                        if let Some(n) = file_releng(req.rhbz, pkg, d, &standing, opts).await? {
+                            req.releng = Some(n);
+                            changed = true;
+                        }
+                    }
+                    RelengDecision::Filed(n) => {
+                        if opts.verbose {
+                            eprintln!("[escalate] {pkg} rhbz#{}: releng ticket #{n}", req.rhbz);
+                        }
+                    }
+                    RelengDecision::TooSoon(d) => {
+                        if opts.verbose {
+                            eprintln!(
+                                "[escalate] {pkg} rhbz#{}: pinged {d} day(s) ago, \
+                                 waiting until {RELENG_MIN_DAYS}",
+                                req.rhbz
+                            );
+                        }
+                    }
+                    RelengDecision::NoNeedinfo => {
+                        // Deliberately not escalated on a rule: see
+                        // `releng_decision`.
+                        println!(
+                            "{pkg} rhbz#{}: the needinfo is gone — read the bug and \
+                             decide whether it has stalled",
+                            req.rhbz
+                        );
+                    }
+                    RelengDecision::Progressed(status) => {
+                        if opts.verbose {
+                            eprintln!("[escalate] {pkg} rhbz#{} moved to {status}", req.rhbz);
+                        }
+                    }
                 }
             }
             PingDecision::Closed => {
@@ -1603,6 +1932,7 @@ pub fn run_file_request(
                 BranchRequest {
                     rhbz,
                     pinged: false,
+                    releng: None,
                 },
             );
             file.save(&report, path)?;
@@ -1907,6 +2237,143 @@ mod tests {
         }
     }
 
+    /// A flag set `days_ago` before `now`. Both come from the same
+    /// instant, so the age is exact rather than a hair under.
+    fn needinfo(
+        requestee: &str,
+        status: &str,
+        days_ago: i64,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> sandogasa_bugzilla::models::Flag {
+        serde_json::from_value(serde_json::json!({
+            "name": "needinfo",
+            "status": status,
+            "requestee": requestee,
+            "creation_date": (now - chrono::Duration::days(days_ago)).to_rfc3339(),
+        }))
+        .expect("a needinfo flag")
+    }
+
+    #[test]
+    fn the_clock_runs_from_the_ping_not_the_bug() {
+        let now = chrono::Utc::now();
+        let flags = vec![needinfo("maint@example.com", "?", 20, now)];
+        assert_eq!(needinfo_age(&flags, "maint@example.com", now), Some(20));
+        // The comparison is on the address, case aside.
+        assert_eq!(needinfo_age(&flags, "MAINT@example.com", now), Some(20));
+        // A needinfo pointed at somebody else is a different
+        // conversation and does not start this clock.
+        assert_eq!(needinfo_age(&flags, "other@example.com", now), None);
+        // An answered flag is cleared by Bugzilla, which is how we
+        // read "they responded" without parsing prose.
+        let answered = vec![needinfo("maint@example.com", "+", 20, now)];
+        assert_eq!(needinfo_age(&answered, "maint@example.com", now), None);
+        // Two pings: the oldest is the one the policy counts from.
+        let both = vec![
+            needinfo("maint@example.com", "?", 3, now),
+            needinfo("maint@example.com", "?", 30, now),
+        ];
+        assert_eq!(needinfo_age(&both, "maint@example.com", now), Some(30));
+    }
+
+    #[test]
+    fn releng_rules() {
+        // Two weeks of silence is the policy's bar, and the boundary
+        // files rather than waiting one more day.
+        assert_eq!(
+            releng_decision("NEW", Some(RELENG_MIN_DAYS), None),
+            RelengDecision::File(RELENG_MIN_DAYS)
+        );
+        assert_eq!(
+            releng_decision("NEW", Some(13), None),
+            RelengDecision::TooSoon(13)
+        );
+        // A recorded ticket settles it before anything else is asked,
+        // so a rerun reports rather than files a second one.
+        assert_eq!(
+            releng_decision("NEW", Some(90), Some(13536)),
+            RelengDecision::Filed(13536)
+        );
+        // Out of NEW is action by the policy's own definition.
+        assert_eq!(
+            releng_decision("ASSIGNED", Some(90), None),
+            RelengDecision::Progressed("ASSIGNED".to_string())
+        );
+    }
+
+    #[test]
+    fn a_cleared_needinfo_is_handed_to_a_person_not_escalated() {
+        // The policy would often allow escalating anyway -- a reply of
+        // "I do not want to do epel" and nothing else is *no action*
+        // by its own wording. Telling that apart from a real answer
+        // means reading prose, and being wrong files a public ticket
+        // about a maintainer who did reply.
+        assert_eq!(
+            releng_decision("NEW", None, None),
+            RelengDecision::NoNeedinfo
+        );
+    }
+
+    #[test]
+    fn the_ticket_follows_the_trackers_template() {
+        let (title, body) = releng_ticket(
+            "et",
+            "epel10",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2368920",
+            "michel",
+            &["kkeithle".to_string()],
+        );
+        assert_eq!(title, "Stalled EPEL package: et");
+        // Every heading the template asks for, because triage reads
+        // them and free text lands unparsed.
+        for heading in [
+            "## Describe the issue",
+            "## When do you need this? (YYYY/MM/DD)",
+            "## When is this no longer needed or useful? (YYYY/MM/DD)",
+            "## If we cannot complete your request, what is the impact?",
+            "## Checklist",
+        ] {
+            assert!(body.contains(heading), "missing {heading}:\n{body}");
+        }
+        assert!(body.contains("https://bugzilla.redhat.com/show_bug.cgi?id=2368920"));
+        // The policy requires both FAS mentions: the requester's, and
+        // the maintainer's.
+        assert!(body.contains("my FAS (@michel)"), "{body}");
+        assert!(body.contains("cc: @kkeithle"), "{body}");
+    }
+
+    #[test]
+    fn a_package_with_no_listed_owner_says_so() {
+        // Silently dropping the cc line would leave the ticket missing
+        // something the policy names as required, with nothing to say
+        // why.
+        let (_, body) = releng_ticket("et", "epel10", "url", "michel", &[]);
+        assert!(body.contains("cc: (no owner listed in dist-git)"), "{body}");
+    }
+
+    #[test]
+    fn a_duplicate_is_the_same_title_open_and_nothing_else() {
+        let issue = |n: u64, title: &str, state: &str| -> sandogasa_forgejo::Issue {
+            serde_json::from_value(serde_json::json!({
+                "number": n, "title": title, "state": state,
+            }))
+            .expect("an issue")
+        };
+        let title = "Stalled EPEL package: et";
+        // The search returns substring matches, so the longer name
+        // comes back too; adopting it would file nothing for `et` and
+        // record etcd's ticket against it.
+        let hits = vec![
+            issue(1, "Stalled EPEL package: etcd", "open"),
+            issue(2, title, "open"),
+        ];
+        assert_eq!(open_duplicate(&hits, title), Some(2));
+        assert_eq!(open_duplicate(&hits[..1], title), None);
+        // A closed ticket of the same name was dealt with; this is a
+        // new stall and wants its own.
+        assert_eq!(open_duplicate(&[issue(3, title, "closed")], title), None);
+    }
+
     #[test]
     fn the_closing_report_is_silent_when_nothing_was_skipped() {
         assert_eq!(skipped_report(&[], &BTreeMap::new()), None);
@@ -2077,6 +2544,7 @@ mod tests {
             BranchRequest {
                 rhbz: 42,
                 pinged: false,
+                releng: None,
             },
         );
         crate_file.save(&view, crate_path).unwrap();
@@ -2262,6 +2730,10 @@ mod tests {
             base_branch: None,
             email: None,
             provenpackager: false,
+            identity: None,
+            forge_url: String::new(),
+            forge_token: String::new(),
+            assume_yes: false,
         }
     }
 
@@ -2272,7 +2744,14 @@ mod tests {
             target_branch: "epel10".into(),
             packages: vec![pkg.to_string()],
             edges: BTreeMap::new(),
-            branch_requests: BTreeMap::from([(pkg.to_string(), BranchRequest { rhbz, pinged })]),
+            branch_requests: BTreeMap::from([(
+                pkg.to_string(),
+                BranchRequest {
+                    rhbz,
+                    pinged,
+                    releng: None,
+                },
+            )]),
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::new(),
         }
@@ -2324,6 +2803,49 @@ mod tests {
             report.branch_requests["et"].pinged,
             "a pinged request is marked so it is not pinged twice"
         );
+    }
+
+    #[tokio::test]
+    async fn a_live_needinfo_counts_as_a_ping_the_report_never_saw() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Adopting an existing request into a fresh report gives it
+        // `pinged = false` however many times it was pinged, so the
+        // bool alone would put a second `needinfo?` on the same
+        // person. Found on a real run: simpleini had been pinged
+        // hours earlier and a new report offered to ping it again.
+        let server = MockServer::start().await;
+        let now = chrono::Utc::now();
+        let mut bug = bug_json(2543942, "NEW", None);
+        bug["creation_time"] = serde_json::json!((now - chrono::Duration::days(30)).to_rfc3339());
+        bug["flags"] = serde_json::json!([{
+            "name": "needinfo",
+            "status": "?",
+            "requestee": "maintainer@example.com",
+            "creation_date": (now - chrono::Duration::days(2)).to_rfc3339(),
+        }]);
+        Mock::given(method("GET"))
+            .and(path("/rest/bug/2543942"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": [bug]})),
+            )
+            .mount(&server)
+            .await;
+        // No PUT is mounted: a write would fail the test outright.
+        let mut report = report_with("simpleini", 2543942, false);
+        let changed = escalate_with(
+            &mut report,
+            &mock_opts(&server.uri(), false),
+            &no_standing(),
+        )
+        .await
+        .expect("the run completes without pinging");
+        assert!(
+            report.branch_requests["simpleini"].pinged,
+            "the live flag is written back, so the report stops lying"
+        );
+        assert!(changed, "learning that it was pinged is a change to save");
     }
 
     #[tokio::test]
@@ -2475,6 +2997,7 @@ mod tests {
                 BranchRequest {
                     rhbz: 2368920,
                     pinged: false,
+                    releng: None,
                 },
             ),
             (
@@ -2482,6 +3005,7 @@ mod tests {
                 BranchRequest {
                     rhbz: 2531397,
                     pinged: false,
+                    releng: None,
                 },
             ),
         ]);
@@ -2533,6 +3057,7 @@ mod tests {
                 BranchRequest {
                     rhbz: 1,
                     pinged: false,
+                    releng: None,
                 },
             ),
             (
@@ -2540,6 +3065,7 @@ mod tests {
                 BranchRequest {
                     rhbz: 2,
                     pinged: false,
+                    releng: None,
                 },
             ),
             (
@@ -2547,6 +3073,7 @@ mod tests {
                 BranchRequest {
                     rhbz: 3,
                     pinged: false,
+                    releng: None,
                 },
             ),
         ]);
@@ -2671,6 +3198,7 @@ mod tests {
                 BranchRequest {
                     rhbz: 2368920,
                     pinged: false,
+                    releng: None,
                 },
             ),
             (
@@ -2678,6 +3206,7 @@ mod tests {
                 BranchRequest {
                     rhbz: 2531397,
                     pinged: false,
+                    releng: None,
                 },
             ),
         ]);
@@ -2851,6 +3380,7 @@ mod tests {
             branched: true,
             access: None,
             scope: None,
+            owners: Vec::new(),
         };
         assert_eq!(request_kind(Some(&branched)), RequestKind::Build);
         assert_eq!(request_kind(None), RequestKind::Branch);
@@ -2878,6 +3408,7 @@ mod tests {
             branched: false,
             access: Some(access),
             scope: None,
+            owners: Vec::new(),
         };
         // salimma is an admin on et, so the request was asking for work
         // they could do.
@@ -2894,6 +3425,7 @@ mod tests {
                 branched: false,
                 access: Some(Collaborator),
                 scope: Some(true),
+                owners: Vec::new(),
             }
             .may_branch()
         );
@@ -2902,6 +3434,7 @@ mod tests {
                 branched: false,
                 access: Some(Collaborator),
                 scope: Some(false),
+                owners: Vec::new(),
             }
             .may_branch()
         );
@@ -2932,11 +3465,13 @@ mod tests {
             branched: false,
             access: Some(sandogasa_distgit::AccessLevel::Commit),
             scope: None,
+            owners: Vec::new(),
         };
         let cannot = BranchStanding {
             branched: false,
             access: Some(sandogasa_distgit::AccessLevel::Ticket),
             scope: None,
+            owners: Vec::new(),
         };
         assert_eq!(claim_for(Some(&can), &opts), Some("me@example.com"));
         // Somebody else's package: the bug is a question for them, and

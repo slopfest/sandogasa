@@ -44,6 +44,7 @@
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use sandogasa_cli::http;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Gitea/Forgejo cap the page size on most list endpoints at 50.
 const PAGE_LIMIT: u32 = 50;
@@ -260,6 +261,16 @@ pub struct IssueComment {
     /// as `created_at` when it never was).
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+/// A label as the label endpoints return it. Carries the `id`,
+/// because that is what the issue API accepts: `CreateIssueOption`
+/// takes `labels` as a list of integers, never names.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct Label {
+    pub id: i64,
+    pub name: String,
 }
 
 /// A label as embedded in a timeline event.
@@ -657,19 +668,73 @@ impl Client {
         Ok(cmp.total_commits == 0)
     }
 
+    /// Resolve label `names` to the ids [`Client::create_issue`] wants.
+    ///
+    /// Labels live in two scopes and an issue may carry either, so both
+    /// are searched: the repository's own labels first, then those of
+    /// the owning organisation, a repository label of the same name
+    /// winning. Fedora's `releng/tickets` needs exactly this -- its
+    /// stalled-EPEL template asks for `ops`, which is a repository
+    /// label, alongside `points/01` and `Priority/Low`, which belong to
+    /// the `releng` organisation.
+    ///
+    /// An unknown name is an error naming it rather than a label
+    /// quietly dropped: the API accepts a short list without
+    /// complaint, so a silent miss would file a ticket that the
+    /// tracker's triage never sees.
+    pub fn label_ids(
+        &self,
+        owner: &str,
+        repo: &str,
+        names: &[&str],
+    ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut known: BTreeMap<String, i64> = BTreeMap::new();
+        let url = format!("{}/api/v1/repos/{owner}/{repo}/labels", self.base_url);
+        for l in self.get_paged::<Label>(&url, &[], "Forgejo repo labels")? {
+            known.insert(l.name, l.id);
+        }
+        if names.iter().any(|n| !known.contains_key(*n)) {
+            // A user-owned repository has no organisation to fall back
+            // to, which is not a failure -- it just means everything
+            // that exists has already been seen.
+            let url = format!("{}/api/v1/orgs/{owner}/labels", self.base_url);
+            if let Ok(labels) = self.get_paged::<Label>(&url, &[], "Forgejo org labels") {
+                for l in labels {
+                    known.entry(l.name).or_insert(l.id);
+                }
+            }
+        }
+        let missing: Vec<&str> = names
+            .iter()
+            .copied()
+            .filter(|n| !known.contains_key(*n))
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!("{owner}/{repo}: no such label(s): {}", missing.join(", ")).into());
+        }
+        Ok(names.iter().map(|n| known[*n]).collect())
+    }
+
     /// File a new issue on `owner/repo` and return it.
+    ///
+    /// `labels` are ids, as the API requires; [`Client::label_ids`]
+    /// turns names into them. Pass an empty slice for none.
     pub fn create_issue(
         &self,
         owner: &str,
         repo: &str,
         title: &str,
         body: &str,
+        labels: &[i64],
     ) -> Result<Issue, Box<dyn std::error::Error>> {
         let url = format!("{}/api/v1/repos/{owner}/{repo}/issues", self.base_url);
         let resp = self
             .http
             .post(&url)
-            .json(&serde_json::json!({ "title": title, "body": body }))
+            .json(&serde_json::json!({ "title": title, "body": body, "labels": labels }))
             .send()?;
         Ok(http::blocking_json_ok(resp, "Forgejo create issue")?)
     }
@@ -1052,6 +1117,7 @@ mod tests {
             .match_body(mockito::Matcher::Json(serde_json::json!({
                 "title": "Branch epel9 for foo stalled",
                 "body": "See rhbz#123",
+                "labels": [982, 1417],
             })))
             .with_status(201)
             .with_body(
@@ -1066,11 +1132,115 @@ mod tests {
                 "tickets",
                 "Branch epel9 for foo stalled",
                 "See rhbz#123",
+                &[982, 1417],
             )
             .unwrap();
         mock.assert();
         assert_eq!(issue.number, 7);
         assert_eq!(issue.state, "open");
+    }
+
+    /// Mount a repo label list and an org label list on one server.
+    fn label_server(repo: &str, org: Option<&str>) -> mockito::ServerGuard {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v1/repos/releng/tickets/labels")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(repo)
+            .create();
+        match org {
+            Some(body) => server
+                .mock("GET", "/api/v1/orgs/releng/labels")
+                .match_query(mockito::Matcher::Any)
+                .with_status(200)
+                .with_body(body),
+            None => server
+                .mock("GET", "/api/v1/orgs/releng/labels")
+                .match_query(mockito::Matcher::Any)
+                .with_status(404)
+                .with_body(r#"{"message":"Not Found"}"#),
+        }
+        .create();
+        server
+    }
+
+    #[test]
+    fn label_ids_searches_the_repo_then_the_organisation() {
+        // Fedora's releng/tickets is exactly this shape: `ops` is a
+        // repository label, the other two belong to the org, and the
+        // stalled-EPEL template asks for all three at once.
+        let server = label_server(
+            r#"[{"id": 982, "name": "ops"}]"#,
+            Some(r#"[{"id": 1417, "name": "points/01"}, {"id": 1432, "name": "Priority/Low"}]"#),
+        );
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let ids = client
+            .label_ids("releng", "tickets", &["ops", "points/01", "Priority/Low"])
+            .unwrap();
+        // Returned in the order asked for, not the order found.
+        assert_eq!(ids, vec![982, 1417, 1432]);
+    }
+
+    #[test]
+    fn a_repo_label_wins_over_the_organisations() {
+        let server = label_server(
+            r#"[{"id": 982, "name": "ops"}]"#,
+            Some(r#"[{"id": 1, "name": "ops"}, {"id": 1417, "name": "points/01"}]"#),
+        );
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let ids = client
+            .label_ids("releng", "tickets", &["ops", "points/01"])
+            .unwrap();
+        assert_eq!(ids, vec![982, 1417]);
+    }
+
+    #[test]
+    fn an_unknown_label_is_an_error_not_a_silent_drop() {
+        // The issue API takes a short list without complaining, so a
+        // dropped label would file a ticket the tracker's triage never
+        // sees -- and nothing would say so.
+        let server = label_server(r#"[{"id": 982, "name": "ops"}]"#, Some("[]"));
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let err = client
+            .label_ids("releng", "tickets", &["ops", "Priority/Low", "nope"])
+            .expect_err("unknown labels must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("Priority/Low"), "{msg}");
+        assert!(msg.contains("nope"), "{msg}");
+        assert!(
+            !msg.contains("ops"),
+            "the resolved label is not reported: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_user_owned_repo_has_no_organisation_to_fall_back_to() {
+        // The org lookup 404s and that is not a failure in itself --
+        // only an unresolved name is.
+        let server = label_server(r#"[{"id": 7, "name": "bug"}]"#, None);
+        let client = Client::new(&server.url(), "tok").unwrap();
+        assert_eq!(
+            client.label_ids("releng", "tickets", &["bug"]).unwrap(),
+            vec![7]
+        );
+        assert!(
+            client.label_ids("releng", "tickets", &["ops"]).is_err(),
+            "a name that is nowhere must still be an error"
+        );
+    }
+
+    #[test]
+    fn no_labels_asks_the_server_nothing() {
+        // No mounts: a request of any kind would fail the test.
+        let server = mockito::Server::new();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        assert!(
+            client
+                .label_ids("releng", "tickets", &[])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

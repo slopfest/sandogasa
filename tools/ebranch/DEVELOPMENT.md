@@ -273,6 +273,87 @@ is filed. The branch gets made, the access gets granted, and the bug
 says nothing about either. `file_batch` asked these questions once, at
 filing time; `escalate` has to ask them again every run.
 
+## The releng ticket is timed from the flag, not from our own record
+
+The EPEL stalled-request policy has two clocks, and they measure
+different things: a week from the bug being filed before the ping, then
+**two weeks from the ping** before a releng ticket. `PING_MIN_DAYS`
+covers the first. The second cannot be read from the report, because
+`BranchRequest.pinged` is a bool — it says *that* we pinged, never
+when, and only ever about our own ping.
+
+So `needinfo_age` reads the `needinfo?` flag's `creation_date` from
+Bugzilla. It is the better source on its own merits: it is right when
+the ping was set by hand or by another packager, it survives a report
+that was regenerated or lost, and Bugzilla clears the flag when the
+requestee answers, which is the cheapest reading of "did they respond"
+that does not involve parsing prose.
+
+One trap in that comparison. The flag's `requestee` is a Bugzilla
+*login*, so `assigned_to` has to be one too. It is on an authenticated
+read, which `escalate` always does since pinging needs the key — but
+the same bug read anonymously returns `assigned_to` as a display name
+(`Felix Wang` against a requestee of `topazus`) and nothing would
+match. The failure would be silent and in the safe direction, which is
+precisely why it is worth writing down.
+
+The same flag settles whether the *ping* has happened, which the
+report cannot. `BranchRequest.pinged` is per report, so a request
+adopted into a new one comes back with `pinged = false` however many
+times it has been pinged — and `file-requests` adopts existing bugs
+routinely, which is the normal way a long-running request enters a
+report. Pinging on the bool alone puts a second `needinfo?` on the
+same person. So an outstanding flag counts as a ping and is written
+back to the report.
+
+## A reply is not automatically action, and we still do not escalate on it
+
+The policy defines its own terms, and not the obvious way: *"'No
+Action' could be no response at all, or it could be a response of 'I do
+not want to do epel' and then they do nothing else."* A maintainer who
+declines and does nothing further has not reset the clock, so the
+policy permits a releng ticket.
+
+`releng_decision` nevertheless returns `NoNeedinfo` for a cleared flag
+and leaves it to a person. Distinguishing a decline from a real answer
+means reading prose, and the cost of being wrong is asymmetric: filing
+a public ticket about a maintainer who *did* respond is a far worse
+error than a request sitting one run longer. What the rule can settle
+on its own — silence, and the bug still in NEW — it settles.
+
+By the same reasoning the bug leaving NEW is treated as action
+(`Progressed`), since that is a state change the policy would call
+progress whoever made it.
+
+## What a releng ticket must contain, and where it comes from
+
+The ticket has to name the maintainer's FAS account. Bugzilla has only
+an email address, so it comes from dist-git's owner list instead —
+`ProjectAcls.access_users.owner`, which `branch_standing` already
+fetches to decide `may_branch`, so it costs no extra request. Mapping
+the Bugzilla email to a FAS would be a second and worse mapping of the
+same fact. Where dist-git lists no owner the ticket says so rather than
+dropping the line, because a silently missing `cc:` looks like an
+oversight in something the policy requires.
+
+The body follows `releng/tickets`'s **own issue template**, not the
+prose form in the EPEL docs: triage reads those four headings, and free
+text lands unparsed. Its checklist is ticked, which obliges us to have
+done the things it claims — so the duplicate search runs first, and a
+search that fails stops that package instead of filing a ticket whose
+first checkbox is untrue. Note that a template's `labels:` are applied
+by the web UI and not by the API, which is why the labels are resolved
+and passed explicitly.
+
+The guard on filing is the one `ping_decision` already applies, which
+is why `releng_decision` does not re-check access: `AlreadyPinged` is
+only reached after `Yours` and `NothingOwed` have been returned, so by
+construction the asker has no access and the bug is not theirs. Filing
+is strictly more consequential than pinging — it asks a human to hand
+over ACLs on someone else's package — so it also confirms per ticket,
+honours `--yes`, and does nothing but report when stdin is not a
+terminal.
+
 ## Drawing the request graph must not be able to lose a filed bug
 
 `file_batch` writes the bug IDs it filed back to the report only after

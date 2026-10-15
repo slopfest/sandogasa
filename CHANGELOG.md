@@ -2,6 +2,81 @@
 
 ## Unreleased
 
+### sandogasa-forgejo: issues can be filed with labels (breaking)
+
+`create_issue` filed every issue unlabelled, with no way to say
+otherwise. On a tracker that triages by label — Fedora's releng is one
+— that lands a ticket where nobody is looking for it.
+
+It now takes a `labels: &[i64]` argument; pass `&[]` for the previous
+behaviour. That is the whole breaking change: no other signature moved,
+and nothing else was renamed or removed.
+
+The ids come from the new `Client::label_ids`, which resolves label
+names and exists because the obvious implementation is wrong twice
+over. Forgejo's `CreateIssueOption` takes `labels` as a list of
+integers, never names; and labels live in two scopes, so a lookup that
+searched only the repository would miss the rest. Fedora's
+`releng/tickets` needs exactly that: its stalled-EPEL template asks for
+`ops`, a repository label, alongside `points/01` and `Priority/Low`,
+which belong to the `releng` organisation. A name that is in neither is
+an error rather than a label quietly dropped, because the API accepts a
+short list without complaint.
+
+Also new: `Label`, carrying the `id` the issue API wants.
+
+### ebranch: escalate carries a stalled request as far as releng
+
+`escalate` stopped after the `needinfo?` ping. The EPEL policy has one
+more step — a releng ticket once that ping has gone unanswered for two
+weeks — and it was left to be done by hand, which is the step with the
+most bookkeeping and the one where a wrong date is visible in public.
+
+The clock is the `needinfo?` flag's own `creation_date`, not a
+timestamp of ours. The flag is right even when the ping was set by hand
+or by somebody else, it survives a report that was regenerated, and
+Bugzilla clears it when the requestee answers — which is the cheapest
+reading available of "did they respond". The report only ever recorded
+`pinged: true`, which has no date and only ever meant *our* ping.
+
+A request that has waited out the two weeks is filed on
+`releng/tickets` at Fedora's Forgejo, following that tracker's own
+issue template rather than the prose form in the EPEL docs, since
+triage reads the headings. The maintainer's FAS, which the policy
+requires the ticket to name, comes from dist-git's owner list — the
+ACLs `escalate` already reads — because Bugzilla has only an email
+address. The ticket number is recorded in the report, so a later run
+reports it instead of filing a second one.
+
+Deliberately not automatic: a `needinfo?` that has been answered or
+cleared. The policy would often allow escalating anyway — a reply of
+"I do not want to do epel" followed by nothing is *no action* by its
+own wording — but telling that apart from a real answer means reading
+prose, and being wrong files a public ticket about a maintainer who did
+reply. Those are surfaced for a person to read.
+
+Nothing is filed without a duplicate search, because the template's
+checklist claims one was done; a search that fails stops that package
+rather than ticking a box untruthfully. Filing asks first, `--yes`
+skips the question, and a run with no terminal says what it would have
+filed instead of filing it. With no `[forgejo]` token or no
+`packager.fas` the step is reported rather than taken — the rest of the
+run is still worth having.
+
+An outstanding `needinfo?` now also counts as having been pinged,
+whatever the report says. A request adopted into a fresh report starts
+with `pinged = false` however many times it has been pinged, so the
+bool alone would have put a second needinfo on the same person; the
+flag is the truth and the bool a local cache of it, which a run now
+writes back.
+
+#### Added
+
+- `--yes` on the branch-request commands, to file without confirming.
+- `[forgejo]` config table: `token`, and `url` defaulting to
+  `https://forge.fedoraproject.org`.
+- `releng` field on a report's branch requests, recording the ticket.
+
 ### ebranch: escalate no longer pings about work nobody else owes
 
 `escalate` sent a maintainer a needinfo about a branch that already

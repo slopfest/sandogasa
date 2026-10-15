@@ -27,6 +27,34 @@ pub struct EbranchConfig {
     /// Bugzilla, so coordinating with them needs its own account.
     #[serde(default, rename = "rpmfusion-bugzilla")]
     pub rpmfusion_bugzilla: RpmfusionBugzillaConfig,
+    /// `[forgejo]` table: Fedora's releng tracker moved to Forgejo,
+    /// and a stalled branch request ends there.
+    #[serde(default)]
+    pub forgejo: ForgejoConfig,
+}
+
+/// Fedora's Forgejo, where the releng ticket for a stalled request
+/// goes. The URL is configurable so the same code works against a
+/// test instance, but it defaults to the real one.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ForgejoConfig {
+    #[serde(default)]
+    pub token: String,
+    #[serde(default = "default_forge_url")]
+    pub url: String,
+}
+
+fn default_forge_url() -> String {
+    "https://forge.fedoraproject.org".to_string()
+}
+
+impl Default for ForgejoConfig {
+    fn default() -> Self {
+        Self {
+            token: String::new(),
+            url: default_forge_url(),
+        }
+    }
 }
 
 /// RPM Fusion's Bugzilla, where counterpart rebuild requests go.
@@ -230,6 +258,17 @@ pub struct BugzillaConfig {
     /// maintainer.
     #[serde(default)]
     pub email: String,
+}
+
+/// Fedora's Forgejo, for the releng ticket a stalled request ends in.
+/// An absent config is not an error: the token is only needed for the
+/// last step of the escalation, and `escalate` reports that step
+/// rather than failing when it cannot take it.
+pub fn forgejo() -> ForgejoConfig {
+    sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .map(|c| c.forgejo)
+        .unwrap_or_default()
 }
 
 /// The Bugzilla account to claim bookkeeping requests as, if set.

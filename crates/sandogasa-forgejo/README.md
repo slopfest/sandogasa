@@ -37,8 +37,30 @@ Forgejo tokens are scoped by category (read/write). Per operation:
 - `validate_token` — `read:user` (it calls `/api/v1/user`).
 - `create_issue` / `search_issues` — `write:issue` (create) /
   `read:issue` (search), plus `read:repository`.
+- `label_ids` — `read:issue` + `read:repository`, and
+  `read:organization` when a name is an organisation label.
 - `repo_issues` / `issue` / `issue_comments` / `issue_timeline` —
   `read:issue` + `read:repository`.
+
+## Labels
+
+`create_issue` takes label **ids**, because that is what the API
+accepts — `CreateIssueOption.labels` is a list of integers and never
+names. `label_ids` turns names into them, searching the repository's
+own labels and then the owning organisation's, a repository label of
+the same name winning. Both scopes are searched because an issue may
+carry either: Fedora's `releng/tickets` has `ops` on the repository and
+`points/01` and `Priority/Low` on the `releng` organisation, and a
+ticket wants all three.
+
+A name found in neither scope is an error naming it, rather than a
+label silently dropped — the issue API accepts a short list without
+complaint, so a quiet miss would file a ticket the tracker's triage
+never sees.
+
+Note that a repository's issue template may declare `labels:`, but
+those are applied by the web UI, not by the API: an issue filed through
+this client carries only the labels it passes.
 
 ## Usage
 

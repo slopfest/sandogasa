@@ -25,6 +25,7 @@ sandogasa-copr = { workspace = true }
 sandogasa-cve = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-distgit = { workspace = true }
+sandogasa-forgejo = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-inventory = { workspace = true }
 sandogasa-koji = { workspace = true }
