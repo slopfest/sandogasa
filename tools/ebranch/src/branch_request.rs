@@ -217,15 +217,57 @@ pub enum PingDecision {
     NotNew(String),
     /// Bug is too recent; wait longer.
     TooNew(i64),
+    /// The asker can do whatever is left, so no one else is owed
+    /// anything. `branched` says which follow-up applies: the branch
+    /// exists and the bug wants closing, or it does not and the asker
+    /// should make it.
+    NothingOwed { branched: bool },
+    /// The request is assigned to the person running ebranch, so the
+    /// ball is already in their court.
+    Yours,
 }
 
 /// Decide whether to escalate a request given its current state.
-pub fn ping_decision(status: &str, days_since_created: i64, already_pinged: bool) -> PingDecision {
+///
+/// `may_branch` is the asker's standing from dist-git (see
+/// [`BranchStanding::may_branch`]) and `branched` whether the branch
+/// is already there. They are passed as plain booleans to keep this
+/// pure: the lookup belongs to the caller, which already has a client.
+///
+/// A ping asks a package maintainer for something. So it is only
+/// warranted when there is something they can do that the asker
+/// cannot -- branching, or building. Commit-equivalent access carries
+/// both, which is why `may_branch` alone settles it. An existing
+/// branch does not: a branch the asker cannot commit to still needs
+/// its maintainer to build there, and skipping on that would silence
+/// exactly the request that still needs a person.
+pub fn ping_decision(
+    status: &str,
+    days_since_created: i64,
+    already_pinged: bool,
+    may_branch: bool,
+    branched: bool,
+    assigned_to_asker: bool,
+) -> PingDecision {
+    // A closed bug is settled whoever can act on it.
+    if status == "CLOSED" {
+        return PingDecision::Closed;
+    }
+    // Handing the bug to the person chasing it is how a maintainer
+    // says they are done with it -- it usually arrives with the branch
+    // and the ACL. Pinging anyway would set `needinfo?` on
+    // `assigned_to`, which is now that same person: ebranch asking its
+    // own user for information about their own request.
+    if assigned_to_asker {
+        return PingDecision::Yours;
+    }
+    if may_branch {
+        return PingDecision::NothingOwed { branched };
+    }
     if already_pinged {
         return PingDecision::AlreadyPinged;
     }
     match status {
-        "CLOSED" => PingDecision::Closed,
         "NEW" if days_since_created < PING_MIN_DAYS => PingDecision::TooNew(days_since_created),
         "NEW" => PingDecision::Ping,
         other => PingDecision::NotNew(other.to_string()),
@@ -1241,11 +1283,41 @@ fn preview_links(
 /// request older than [`PING_MIN_DAYS`] that hasn't been pinged,
 /// marking it pinged. Returns whether the report changed.
 pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool, String> {
+    // A ping is a request for someone else's work, so ask dist-git
+    // what is left for them before making one. The answer can change
+    // after a bug is filed -- a branch gets made, access gets granted
+    // -- and nothing else here re-reads it.
+    //
+    // Gathered here rather than inside the loop so the decision flow
+    // below can be tested without a dist-git client, the way the rest
+    // of this tool keeps an external query out of the flow around it.
+    let distgit = sandogasa_distgit::DistGitClient::new();
+    let mut standings: BTreeMap<String, BranchStanding> = BTreeMap::new();
+    for pkg in report.branch_requests.keys() {
+        standings.insert(
+            pkg.clone(),
+            branch_standing(&distgit, pkg, &opts.branch, opts.fas.as_deref()).await,
+        );
+    }
+    escalate_with(report, opts, &standings).await
+}
+
+/// [`escalate`] with the dist-git answers already in hand.
+pub(crate) async fn escalate_with(
+    report: &mut ResolveReport,
+    opts: &Options,
+    standings: &BTreeMap<String, BranchStanding>,
+) -> Result<bool, String> {
     let bz = BzClient::new(&opts.bugzilla_url)
         .with_api_key(opts.api_key.clone())
         .map_err(|e| e.to_string())?;
     let now = chrono::Utc::now();
     let mut changed = false;
+    // Requests no maintainer is holding up. Collected rather than
+    // printed in place: scattered through the run they read as noise,
+    // and the whole point of the skip is that these are the ones to
+    // go and do something about -- once their dependencies are in.
+    let mut unblocked_by_people: Vec<Skipped> = Vec::new();
 
     for (pkg, req) in report.branch_requests.iter_mut() {
         let bug = bz
@@ -1261,7 +1333,48 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
             changed = true;
         }
         let days = (now - bug.creation_time).num_days();
-        match ping_decision(&bug.status, days, req.pinged) {
+        let standing = standings.get(pkg).cloned().unwrap_or_default();
+        // Against the configured Bugzilla identity, not the bug's
+        // creator: `escalate` chases requests other people filed and
+        // this one adopted (rhbz#2368920 was Kristian's), so the
+        // reporter is often somebody else entirely. No configured
+        // email means no claim to compare, so the question does not
+        // arise and the bug's own state decides.
+        let assigned_to_asker = opts
+            .email
+            .as_deref()
+            .is_some_and(|me| !me.is_empty() && bug.assigned_to.eq_ignore_ascii_case(me));
+        match ping_decision(
+            &bug.status,
+            days,
+            req.pinged,
+            standing.may_branch(),
+            standing.branched,
+            assigned_to_asker,
+        ) {
+            PingDecision::Yours => {
+                unblocked_by_people.push(Skipped {
+                    pkg: pkg.clone(),
+                    rhbz: req.rhbz,
+                    why: "assigned to you".to_string(),
+                    depends_on: bug.depends_on.clone(),
+                });
+            }
+            PingDecision::NothingOwed { branched } => {
+                // Say which, because the follow-up differs: one bug
+                // wants closing, the other wants the asker to act.
+                let why = if branched {
+                    "branched — build it, then close the bug".to_string()
+                } else {
+                    format!("you can branch {} yourself", opts.branch)
+                };
+                unblocked_by_people.push(Skipped {
+                    pkg: pkg.clone(),
+                    rhbz: req.rhbz,
+                    why,
+                    depends_on: bug.depends_on.clone(),
+                });
+            }
             PingDecision::AlreadyPinged => {
                 if opts.verbose {
                     eprintln!("[escalate] {pkg} rhbz#{} already pinged", req.rhbz);
@@ -1312,7 +1425,112 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
             }
         }
     }
+    // "Nobody is waiting on a person" is not the same as "you can do
+    // this now": a request can be assigned to you and still be stuck
+    // behind its own dependencies. One batched read settles which.
+    let dep_ids: Vec<u64> = unblocked_by_people
+        .iter()
+        .flat_map(|s| s.depends_on.iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let still_open: BTreeMap<u64, String> = match bz.bugs(&dep_ids).await {
+        Ok(bugs) => bugs
+            .iter()
+            .filter(|b| b.status != "CLOSED")
+            .map(|b| (b.id, b.component.first().cloned().unwrap_or_default()))
+            .collect(),
+        Err(e) => {
+            // Treating unknown as unblocked would promise work that
+            // cannot be done; say so and report nothing as ready. The
+            // names came from the read that just failed, so these
+            // blockers are named by bug alone.
+            eprintln!("warning: could not read request dependencies ({e}); not judging readiness");
+            dep_ids.iter().map(|id| (*id, String::new())).collect()
+        }
+    };
+    if let Some(report) = skipped_report(&unblocked_by_people, &still_open) {
+        println!("{report}");
+    }
     Ok(changed)
+}
+
+/// A request that needs no maintainer, and what it is still waiting on.
+struct Skipped {
+    pkg: String,
+    rhbz: u64,
+    why: String,
+    depends_on: Vec<u64>,
+}
+
+/// What an escalate run says about the requests it did not ping.
+///
+/// Split by whether anything is still in the way, because the two
+/// read completely differently: one list is work to pick up now, the
+/// other is work that is merely nobody else's to chase. Printed as
+/// one block at the end rather than per package: a run whose requests
+/// were all skipped would otherwise say nothing at all. Pure so the
+/// wording and the split are tested without Bugzilla.
+///
+/// `still_open` maps each unresolved dependency to its package, so a
+/// blocker is named by the thing that has to happen rather than by a
+/// bug number the reader would have to go and look up.
+fn skipped_report(skipped: &[Skipped], still_open: &BTreeMap<u64, String>) -> Option<String> {
+    use std::fmt::Write as _;
+    if skipped.is_empty() {
+        return None;
+    }
+    let blockers = |s: &Skipped| -> Vec<(String, u64)> {
+        let mut b: Vec<(String, u64)> = s
+            .depends_on
+            .iter()
+            .filter_map(|d| still_open.get(d).map(|pkg| (pkg.clone(), *d)))
+            .collect();
+        b.sort_unstable();
+        b
+    };
+    let (ready, waiting): (Vec<_>, Vec<_>) = skipped.iter().partition(|s| blockers(s).is_empty());
+
+    let width = skipped.iter().map(|s| s.pkg.len()).max().unwrap_or(0);
+    let mut out = String::new();
+    if !ready.is_empty() {
+        let _ = write!(
+            out,
+            "\n{} request(s) now actionable — nobody else is holding these up:\n",
+            ready.len()
+        );
+        for s in &ready {
+            let _ = writeln!(out, "  {:width$}  rhbz#{}  {}", s.pkg, s.rhbz, s.why);
+        }
+    }
+    if !waiting.is_empty() {
+        let _ = write!(
+            out,
+            "\n{} request(s) waiting on dependencies, not on a maintainer:\n",
+            waiting.len()
+        );
+        for s in &waiting {
+            let list: Vec<String> = blockers(s)
+                .iter()
+                .map(|(pkg, b)| {
+                    if pkg.is_empty() {
+                        format!("rhbz#{b}")
+                    } else {
+                        format!("{pkg} (rhbz#{b})")
+                    }
+                })
+                .collect();
+            let _ = writeln!(
+                out,
+                "  {:width$}  rhbz#{}  {} — blocked by {}",
+                s.pkg,
+                s.rhbz,
+                s.why,
+                list.join(", ")
+            );
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 // ---- sync entry points (own runtime, like review_deps) ----
@@ -1630,18 +1848,166 @@ mod tests {
 
     #[test]
     fn ping_decision_rules() {
-        assert_eq!(ping_decision("NEW", 10, true), PingDecision::AlreadyPinged);
-        assert_eq!(ping_decision("CLOSED", 30, false), PingDecision::Closed);
-        assert_eq!(ping_decision("NEW", 10, false), PingDecision::Ping);
-        assert_eq!(ping_decision("NEW", 3, false), PingDecision::TooNew(3));
+        // Nothing the asker can do about the branch: the maintainer is
+        // the only one who can act, so the bug's own state decides.
+        let ask =
+            |status: &str, days, pinged| ping_decision(status, days, pinged, false, false, false);
+        assert_eq!(ask("NEW", 10, true), PingDecision::AlreadyPinged);
+        assert_eq!(ask("CLOSED", 30, false), PingDecision::Closed);
+        assert_eq!(ask("NEW", 10, false), PingDecision::Ping);
+        assert_eq!(ask("NEW", 3, false), PingDecision::TooNew(3));
         assert_eq!(
-            ping_decision("ASSIGNED", 30, false),
+            ask("ASSIGNED", 30, false),
             PingDecision::NotNew("ASSIGNED".to_string())
         );
         // Exactly at the threshold pings.
+        assert_eq!(ask("NEW", PING_MIN_DAYS, false), PingDecision::Ping);
+    }
+
+    #[test]
+    fn a_branch_the_asker_cannot_commit_to_still_needs_its_maintainer() {
+        // The trap: an existing branch looks like finished work, but
+        // without access the asker still cannot build there, so the
+        // maintainer is still owed the request.
         assert_eq!(
-            ping_decision("NEW", PING_MIN_DAYS, false),
+            ping_decision("NEW", 30, false, false, true, false),
             PingDecision::Ping
+        );
+    }
+
+    #[test]
+    fn a_bug_handed_to_the_person_chasing_it_is_not_escalated() {
+        // Reassigning the request to whoever is chasing it is how a
+        // maintainer signs off; it usually arrives with the branch and
+        // the ACL. Pinging would put `needinfo?` on the assignee, who
+        // is now that same person.
+        assert_eq!(
+            ping_decision("NEW", 30, false, false, false, true),
+            PingDecision::Yours
+        );
+        // It holds even with no access and no branch: the maintainer
+        // has said they are done, whatever dist-git shows.
+        assert_eq!(
+            ping_decision("ASSIGNED", 90, true, false, false, true),
+            PingDecision::Yours
+        );
+        // A closed bug still reports as closed.
+        assert_eq!(
+            ping_decision("CLOSED", 30, false, false, false, true),
+            PingDecision::Closed
+        );
+    }
+
+    fn skipped(pkg: &str, rhbz: u64, why: &str, depends_on: &[u64]) -> Skipped {
+        Skipped {
+            pkg: pkg.to_string(),
+            rhbz,
+            why: why.to_string(),
+            depends_on: depends_on.to_vec(),
+        }
+    }
+
+    #[test]
+    fn the_closing_report_is_silent_when_nothing_was_skipped() {
+        assert_eq!(skipped_report(&[], &BTreeMap::new()), None);
+    }
+
+    #[test]
+    fn a_request_with_no_open_dependency_is_ready_to_pick_up() {
+        let rows = vec![
+            skipped("et", 2368920, "assigned to you", &[]),
+            // A dependency that has since closed is not in the way.
+            skipped(
+                "simpleini",
+                2543942,
+                "you can branch epel10 yourself",
+                &[2531397],
+            ),
+        ];
+        let out = skipped_report(&rows, &BTreeMap::new()).expect("two rows report");
+        assert!(out.contains("2 request(s) now actionable"), "{out}");
+        assert!(!out.contains("waiting on dependencies"), "{out}");
+        assert!(out.contains("rhbz#2368920  assigned to you"), "{out}");
+        // Package names line up, so the reasons read as a column.
+        assert!(out.contains("  et         rhbz#2368920"), "{out}");
+        assert!(out.contains("  simpleini  rhbz#2543942"), "{out}");
+    }
+
+    #[test]
+    fn a_request_waiting_on_its_dependencies_is_not_called_actionable() {
+        // The distinction the two lists draw: nobody is sitting on
+        // either request, but only one of them can be acted on, and a
+        // run that lumped them together told the reader to go and
+        // build something that cannot be built yet.
+        let rows = vec![
+            skipped("et", 2368920, "assigned to you", &[2543942, 2531397]),
+            skipped("simpleini", 2543942, "branched — build it", &[]),
+        ];
+        let still_open = BTreeMap::from([
+            (2543942, "simpleini".to_string()),
+            (2531397, "cxxopts".to_string()),
+        ]);
+        let out = skipped_report(&rows, &still_open).expect("a split report");
+        assert!(out.contains("1 request(s) now actionable"), "{out}");
+        assert!(out.contains("simpleini  rhbz#2543942  branched"), "{out}");
+        assert!(
+            out.contains("1 request(s) waiting on dependencies, not on a maintainer"),
+            "{out}"
+        );
+        // A blocker is named by its package and listed in package
+        // order, whatever order Bugzilla returned the dependencies
+        // in -- the bug number alone says nothing about what has to
+        // happen first.
+        assert!(
+            out.contains(
+                "rhbz#2368920  assigned to you — blocked by cxxopts (rhbz#2531397), \
+                 simpleini (rhbz#2543942)"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn someone_elses_bug_assigned_back_to_them_is_still_worth_raising() {
+        // Only an assignment to the person *running* ebranch settles
+        // anything. A reporter who assigned their own bug to
+        // themselves may simply have forgotten it, so the usual rules
+        // apply -- and ASSIGNED surfaces for review rather than being
+        // pinged blind or dropped.
+        assert_eq!(
+            ping_decision("ASSIGNED", 90, false, false, false, false),
+            PingDecision::NotNew("ASSIGNED".to_string())
+        );
+        // Still pings a plain NEW request that has sat long enough.
+        assert_eq!(
+            ping_decision("NEW", 90, false, false, false, false),
+            PingDecision::Ping
+        );
+    }
+
+    #[test]
+    fn access_settles_it_whether_or_not_the_branch_exists() {
+        // Commit-equivalent access carries both branching and
+        // building, so no one else is owed anything either way -- but
+        // the follow-up differs, which is what `branched` reports.
+        assert_eq!(
+            ping_decision("NEW", 30, false, true, true, false),
+            PingDecision::NothingOwed { branched: true }
+        );
+        assert_eq!(
+            ping_decision("NEW", 30, false, true, false, false),
+            PingDecision::NothingOwed { branched: false }
+        );
+        // It outranks age and a previous ping, which only say when to
+        // ask again, not whether asking is warranted at all.
+        assert_eq!(
+            ping_decision("NEW", 1, true, true, false, false),
+            PingDecision::NothingOwed { branched: false }
+        );
+        // A closed bug is settled first: there is nothing to report.
+        assert_eq!(
+            ping_decision("CLOSED", 30, false, true, true, false),
+            PingDecision::Closed
         );
     }
 
@@ -1803,6 +2169,12 @@ mod tests {
 
     /// A bug as Bugzilla's REST API returns it, with only the fields
     /// this module reads set to anything interesting.
+    /// No dist-git answers: the asker holds nothing and the branch is
+    /// absent, which is the case where the bug's own state decides.
+    fn no_standing() -> BTreeMap<String, BranchStanding> {
+        BTreeMap::new()
+    }
+
     fn bug_json(id: u64, status: &str, dupe_of: Option<u64>) -> serde_json::Value {
         serde_json::json!({
             "id": id,
@@ -1814,8 +2186,8 @@ mod tests {
             "component": ["cxxopts"],
             "severity": "unspecified",
             "priority": "unspecified",
-            "assigned_to": "someone",
-            "creator": "someone",
+            "assigned_to": "maintainer@example.com",
+            "creator": "asker@example.com",
             "creation_time": "2026-09-10T10:56:39Z",
             "last_change_time": "2026-09-30T14:25:03Z",
         })
@@ -1940,9 +2312,13 @@ mod tests {
             .await;
 
         let mut report = report_with("et", 2368920, false);
-        let changed = escalate(&mut report, &mock_opts(&server.uri(), false))
-            .await
-            .expect("the ping goes through");
+        let changed = escalate_with(
+            &mut report,
+            &mock_opts(&server.uri(), false),
+            &no_standing(),
+        )
+        .await
+        .expect("the ping goes through");
         assert!(changed);
         assert!(
             report.branch_requests["et"].pinged,
@@ -1970,9 +2346,13 @@ mod tests {
         // request outright.
 
         let mut report = report_with("simpleini", 2543942, false);
-        let changed = escalate(&mut report, &mock_opts(&server.uri(), false))
-            .await
-            .expect("waiting is not an error");
+        let changed = escalate_with(
+            &mut report,
+            &mock_opts(&server.uri(), false),
+            &no_standing(),
+        )
+        .await
+        .expect("waiting is not an error");
         assert!(!changed);
         assert!(!report.branch_requests["simpleini"].pinged);
     }
@@ -2002,9 +2382,13 @@ mod tests {
             .await;
 
         let mut report = report_with("cxxopts", 2543941, true);
-        let changed = escalate(&mut report, &mock_opts(&server.uri(), false))
-            .await
-            .expect("following a duplicate is not an error");
+        let changed = escalate_with(
+            &mut report,
+            &mock_opts(&server.uri(), false),
+            &no_standing(),
+        )
+        .await
+        .expect("following a duplicate is not an error");
         assert!(changed);
         let req = &report.branch_requests["cxxopts"];
         assert_eq!(req.rhbz, 2531397);

@@ -1215,7 +1215,34 @@ pre-guard reports can't slip one through.
 
 Escalate requests that have sat in NEW for at least a week —
 adds a `needinfo?` ping and marks them so they're not pinged
-again:
+again. A ping asks a package maintainer for something, so it is
+only sent when there is something they can do that you cannot:
+`escalate` re-reads dist-git first and skips a request when you
+hold commit-equivalent access, which carries both branching and
+building. It says which follow-up applies — a branch that exists
+means the bug wants closing, one that does not means you can make
+it yourself. An existing branch alone is **not** a reason to skip:
+without access you still cannot build there, so the maintainer is
+still owed the request. A blocking bug is not a reason either,
+since getting the branch and the access in place ahead of the
+blocker is what avoids branching a stack one layer at a time. A
+request already assigned to you (your configured Bugzilla email) is
+skipped too — that is how a maintainer signs off, and it usually
+arrives with the branch and the ACL.
+
+Skipped requests are not silent: the run ends with the ones waiting
+on nobody but you, so a report where everything was skipped says what
+to go and do rather than printing nothing. They are split by whether
+the request's own dependencies are in, since one list is work to pick
+up now and the other is only work nobody else has to be chased about:
+
+```
+1 request(s) now actionable — nobody else is holding these up:
+  simpleini  rhbz#2543942  branched — build it, then close the bug
+
+1 request(s) waiting on dependencies, not on a maintainer:
+  et         rhbz#2368920  assigned to you — blocked by simpleini (rhbz#2543942)
+```
 
 ```sh
 ebranch escalate django.toml epel9 --dry-run

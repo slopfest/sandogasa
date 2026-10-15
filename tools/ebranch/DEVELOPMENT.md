@@ -205,6 +205,74 @@ afterwards: a second write would mail everybody watching the package
 to say the asker had claimed their own bookkeeping. Same reason the
 `depends_on` links are sent with `minor_update`.
 
+## A ping is warranted only by what the maintainer can do and the asker cannot
+
+`escalate` adds a `needinfo?` to a maintainer's bug, so the question it
+has to answer is not "is this request old" but "is anyone else still
+owed something here". `may_branch()` settles it: owner, admin, commit
+or a scoped collaborator can branch *and* build, so nothing is owed and
+the ping is noise.
+
+The trap is reading an existing branch as finished work. It is not. A
+branch the asker cannot commit to still needs its maintainer to build
+there, so `branched` alone must never skip a ping — doing so would
+silence precisely the request that still needs a person. `branched`
+only picks the wording of the skip: with access and a branch, the bug
+wants closing; with access and no branch, the asker should go and make
+it.
+
+A blocking bug is not a reason to skip either, however much it looks
+like one. Getting the branch and the access in place ahead of the
+blocker is what stops a dependency stack being branched one layer at a
+time, so a blocked request is still worth escalating.
+
+A third case settles it without dist-git at all: a request **assigned
+to the person running ebranch**. Handing the bug over is how a
+maintainer signs off, and it usually arrives with the branch and the
+ACL. The ping sets `needinfo?` on `assigned_to`, so pinging then asks
+that same person for information about the request they are chasing.
+
+Compare the assignee against the configured Bugzilla email, **not the
+bug's creator**. The tempting shortcut — ebranch filed these, so the
+reporter is the asker — is wrong, and quietly: `escalate` exists partly
+to chase requests *other people* filed and this one adopted, which the
+README calls out. rhbz#2368920 was filed by Kristian and assigned to
+Michel; against the creator the check never fires, and it fails silent,
+which is the worst way for a skip to be wrong. No configured email
+means no claim to compare, so the question does not arise and the bug's
+own state decides.
+
+`ping_decision` stays pure and takes the facts as booleans rather
+than the `pub(crate)` `BranchStanding`, so the whole rule is unit
+tested without a dist-git client; the lookup belongs to `escalate`,
+which has one. `escalate` gathers them up front and hands them to
+`escalate_with`, so the decision flow is testable with no client at
+all — `cargo test` must stay offline for a packaging sandbox, and an
+earlier draft of this change quietly put a dist-git call inside the
+loop. Note the cost: that is a dist-git call per request, two for a
+collaborator, because `/contributors` is where the scope lives.
+
+Skipping is not the same as being ready, and the closing summary must
+not blur them. A request can be assigned to the asker, on a branch
+they own, and still be stuck behind its own `depends_on` — frequently
+behind *another request in the same report*, which is what a
+dependency-ordered branching run looks like from the inside. So
+`skipped_report` takes the set of dependencies still open and splits
+on it: "nobody else is holding this up" is a claim about people,
+"actionable" is a claim about the work. One batched `bugs()` call at
+the end of the run resolves them all; a failed read reports nothing as
+ready, because the honest failure is to under-promise. It takes the
+open dependencies as a map to their packages rather than a set of
+ids: a blocker named `rhbz#2543942` makes the reader go and look up
+what it is, and the answer is usually a package sitting a few lines
+further up the same report.
+
+**Why this is not computable from the bug alone**, which is how it was
+missed: everything the decision rests on can change *after* the request
+is filed. The branch gets made, the access gets granted, and the bug
+says nothing about either. `file_batch` asked these questions once, at
+filing time; `escalate` has to ask them again every run.
+
 ## Drawing the request graph must not be able to lose a filed bug
 
 `file_batch` writes the bug IDs it filed back to the report only after

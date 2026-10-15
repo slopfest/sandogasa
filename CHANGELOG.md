@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+### ebranch: escalate no longer pings about work nobody else owes
+
+`escalate` sent a maintainer a needinfo about a branch that already
+existed, for a package the asker could have branched themselves:
+
+    $ ebranch escalate scratch/et-epel10.toml epel10
+    pinged et rhbz#2368920
+
+It only ever looked at the bug — status, age, whether it had been
+pinged before. The things a request actually depends on change after
+it is filed: a branch gets made, access gets granted. Nothing re-read
+them, so a request that was correct to file in March became a request
+to chase someone about finished work.
+
+It reads dist-git before pinging now, and skips when the asker holds
+commit-equivalent access — owner, admin, commit, or a collaborator
+whose scope reaches the branch. That access carries both branching and
+building, so it is the one condition under which no one else is owed
+anything. The skip says which follow-up applies, since they differ: a
+branch that exists means the bug wants closing, a branch that does not
+means go and make it.
+
+A request already assigned to the person running ebranch is skipped as
+well. Handing the bug over is how a maintainer signs off, and it
+usually arrives with the branch and the ACL — and since the ping sets
+`needinfo?` on the assignee, sending one would have asked that person
+for information about the request they are chasing. The assignee is
+compared against the configured Bugzilla email rather than the bug's
+reporter, because `escalate` also chases requests other people filed
+and this one adopted.
+
+Skipping quietly would have traded one unhelpful run for another, so
+the run now ends with the requests waiting on nobody else — split by
+whether they can actually be acted on, because "no one is sitting on
+this" and "you can do this now" are different claims and reading them
+as one sent the reader off to build something that cannot be built:
+
+    1 request(s) now actionable — nobody else is holding these up:
+      simpleini  rhbz#2543942  branched — build it, then close the bug
+
+    1 request(s) waiting on dependencies, not on a maintainer:
+      et         rhbz#2368920  assigned to you — blocked by simpleini (rhbz#2543942)
+
+A request's own `depends_on` settles which list it lands in, read in
+one batched query at the end of the run; a dependency that has since
+closed is no longer in the way. Blockers are named by package, since
+a bug number on its own does not say what has to happen first — and
+often, as above, it is another request in the same report. If that read fails the run says so and
+claims nothing is ready, rather than promising work that cannot be
+done.
+
+Two things deliberately do **not** skip a ping. An existing branch on
+its own does not: a branch the asker cannot commit to still needs its
+maintainer to build there, and treating it as finished work would
+silence exactly the request that still needs a person. Nor does a
+blocking bug — getting the branch and the access in place ahead of the
+blocker is what avoids branching a stack one layer at a time.
+
 ### ebranch: compare Provides for builds that are not in Bodhi yet
 
 Checking builds by NVR before submitting them gave up on the part of
