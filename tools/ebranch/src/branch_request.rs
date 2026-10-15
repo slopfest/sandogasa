@@ -964,17 +964,30 @@ fn provenpackager_note(pkg: &str, kind: RequestKind, provenpackager: bool) -> Op
 /// `escalate` will ping it once it is old enough, counting from the
 /// day it was filed rather than the day it was adopted. So the prompt
 /// says that, and a run with nobody watching takes the default.
-fn adopt_request(pkg: &str, rhbz: u64) -> bool {
+/// What adopting a request is for, given whether its package has
+/// already landed in the target branch.
+///
+/// A request whose package is there wants closing, not chasing -- and
+/// adopting it is how `close` gets to see it at all, so the offer
+/// stands and only the reason changes. Without this the two cases read
+/// identically, which is how rhbz#2482238 was offered for adoption
+/// months after the build it asked for had shipped.
+pub fn adoption_reason(pkg: &str, branch: &str, landed: Option<&str>) -> String {
+    match landed {
+        Some(vr) => format!("{pkg}-{vr} is already in {branch}; ebranch close will retire it"),
+        None => "escalate may ping it once it is old enough".to_string(),
+    }
+}
+
+fn adopt_request(pkg: &str, rhbz: u64, branch: &str, landed: Option<&str>) -> bool {
     println!("{pkg} already has an open branch request: rhbz#{rhbz}");
+    let why = adoption_reason(pkg, branch, landed);
     if !std::io::stdin().is_terminal() {
-        println!("  adopting it; escalate may ping it once it is old enough");
+        println!("  adopting it; {why}");
         return true;
     }
-    sandogasa_cli::confirm(
-        &format!("  adopt rhbz#{rhbz} (escalate may then ping it)?"),
-        true,
-    )
-    .unwrap_or(true)
+    println!("  {why}");
+    sandogasa_cli::confirm(&format!("  adopt rhbz#{rhbz}?"), true).unwrap_or(true)
 }
 
 /// What dist-git says about branching a package: whether the branch is
@@ -1231,17 +1244,32 @@ pub async fn file_batch(
     // pointing at a dead bug.
     let mut changed = refresh_recorded(&bz, report).await?;
 
+    // Target pre-flight, run before the adoption below rather than
+    // after it: `still_to_file` drops an adopted package from the
+    // candidates, so a request that had already been filed used to
+    // skip this check entirely and be offered for adoption with no
+    // hint that its package had shipped. It serves both purposes --
+    // a package already branched needs no request, however old the
+    // version there is. It reaches that point when the closure wanted
+    // a capability that branch's older build does not provide -- a
+    // soname from the source branch's build, say.
+    let target_present = target_probe(probe, &opts.branch, &candidates)?;
+
     // A request filed by hand, from another report, or by another
     // maintainer is invisible to the report's own record. Adopt it
     // rather than opening a second bug for the same package.
     let mut adopted: BTreeSet<String> = BTreeSet::new();
     for (pkg, rhbz) in search_existing(&bz, &candidates, &opts.branch).await {
+        let landed = target_present.get(&pkg).map(String::as_str);
         if opts.dry_run {
-            println!("would adopt existing request for {pkg}: rhbz#{rhbz}");
+            println!(
+                "would adopt existing request for {pkg}: rhbz#{rhbz} ({})",
+                adoption_reason(&pkg, &opts.branch, landed)
+            );
             adopted.insert(pkg);
             continue;
         }
-        if !adopt_request(&pkg, rhbz) {
+        if !adopt_request(&pkg, rhbz, &opts.branch, landed) {
             continue;
         }
         report.branch_requests.insert(
@@ -1274,11 +1302,6 @@ pub async fn file_batch(
         }
     };
     let base_label = opts.base_branch.as_deref().unwrap_or("base");
-    // Target pre-flight: a package already branched needs no request,
-    // however old the version there is. It reaches this point when the
-    // closure wanted a capability that branch's older build does not
-    // provide -- a soname from the source branch's build, say.
-    let target_present = target_probe(probe, &opts.branch, &candidates)?;
     // What dist-git says: a branch that exists needs no request, and an
     // asker with access can make one rather than ask for it.
     let distgit = sandogasa_distgit::DistGitClient::new();
@@ -2617,6 +2640,26 @@ mod tests {
         // A closed ticket of the same name was dealt with; this is a
         // new stall and wants its own.
         assert_eq!(open_duplicate(&[issue(3, title, "closed")], title), None);
+    }
+
+    #[test]
+    fn adopting_says_whether_the_package_already_landed() {
+        // The two cases used to read identically, which is how
+        // rhbz#2482238 was offered for adoption months after the
+        // build it asked for had shipped.
+        assert_eq!(
+            adoption_reason("python-aiosmtpd", "epel10", None),
+            "escalate may ping it once it is old enough"
+        );
+        let landed = adoption_reason("python-aiosmtpd", "epel10", Some("1.4.4.post2-18.el10_2"));
+        assert_eq!(
+            landed,
+            "python-aiosmtpd-1.4.4.post2-18.el10_2 is already in epel10; \
+             ebranch close will retire it"
+        );
+        // The offer still stands: adopting is what lets `close` see
+        // the bug at all, so this must not read as a refusal.
+        assert!(!landed.contains("skip"), "{landed}");
     }
 
     #[test]

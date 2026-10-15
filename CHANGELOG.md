@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### ebranch: say when the request being adopted is already finished
+
+`file-requests` offered to adopt an existing branch request without
+checking whether the package had since landed, so a request that was
+finished read exactly like one that still needed chasing. Both of these
+packages were already built in epel10; only the one without a bug was
+told so:
+
+    python-aiosmtpd already has an open branch request: rhbz#2482238
+      adopt rhbz#2482238 (escalate may then ping it)? [Y/n]
+    skipping python-asgiref: already branched to epel10 (3.8.1-1.el10_0) — nothing to request
+
+The target pre-flight ran *after* the adoption, and the adopted
+packages had just been removed from the list it checks, so a package
+with a request already on file skipped it entirely. It runs before the
+adoption now. The offer itself is unchanged — adopting is what lets
+`ebranch close` see the bug at all — but it says which case it is:
+
+    python-aiosmtpd already has an open branch request: rhbz#2482238
+      python-aiosmtpd-1.4.4.post2-18.el10_2 is already in epel10; ebranch close will retire it
+      adopt rhbz#2482238? [Y/n]
+
 ### ebranch: close a branch request once the package has landed
 
 `ebranch` could chase a request and escalate it, but never retire one.
