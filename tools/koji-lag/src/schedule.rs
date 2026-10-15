@@ -160,7 +160,7 @@ fn tasks(xml: &str) -> Result<Vec<(String, NaiveDate, NaiveDate)>, String> {
             Ok(Xml::Start(e)) => {
                 // The element names are namespaced in the file itself, so
                 // compare on the local name only.
-                let local = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
+                let local = e.local_name().as_ref().to_string();
                 if local == "Task" {
                     in_task = true;
                     (name, start, end) = (String::new(), None, None);
@@ -169,9 +169,9 @@ fn tasks(xml: &str) -> Result<Vec<(String, NaiveDate, NaiveDate)>, String> {
             }
             Ok(Xml::Text(t)) if in_task => {
                 // quick-xml 0.40 made decoding and entity-unescaping
-                // explicit for text nodes.
-                let decoded = t.decode().map_err(|e| e.to_string())?;
-                let text = quick_xml::escape::unescape(&decoded)
+                // explicit for text nodes; 0.42 made the reader
+                // `str`-based, so only the unescaping is left.
+                let text = quick_xml::escape::unescape(&t)
                     .map_err(|e| e.to_string())?
                     .into_owned();
                 match field.as_str() {
@@ -184,7 +184,7 @@ fn tasks(xml: &str) -> Result<Vec<(String, NaiveDate, NaiveDate)>, String> {
                 }
             }
             Ok(Xml::End(e)) => {
-                if String::from_utf8_lossy(e.local_name().as_ref()) == "Task" {
+                if e.local_name().as_ref() == "Task" {
                     if let (Some(s), Some(f)) = (start, end)
                         && !name.is_empty()
                     {

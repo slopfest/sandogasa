@@ -446,6 +446,81 @@ Re-check at the next breaking release:
   Re-checked 2026-09-24 for 0.25.0: the same four, none packaged in
   rawhide, f45 or epel10 at the new major, so all deferred again.
 
+  Re-checked 2026-10-15, for the 0.27.0 breaking release that
+  `sandogasa-forgejo`'s `create_issue` forces. Still all four, but
+  quick-xml has moved and is worth watching:
+
+  - **dirs 7.0.0** — Fedora 6.0.0 on rawhide/f45/epel10/epel9, Debian
+    6.0.0-2 in testing and unstable. Blocked on both archives.
+  - ~~**quick-xml 0.42.0**~~ — **taken 2026-10-15.** Stable in rawhide, F43,
+    F44, F46, EPEL-9 and EPEL-10.4, in testing for F45. 0.41 survives
+    beside it only as the `rust-quick-xml0.41` compat package, added
+    2026-10-02 for that transition, so depending on 0.41 meant
+    depending on a compat package rather than the primary one.
+
+    Fedora's Rust SIG runs both halves of this in the open, in
+    `rust/backlog` on its Forgejo, and **we are a tracked participant
+    rather than a bystander**:
+
+    - [#34](https://forge.fedoraproject.org/rust/backlog/issues/34)
+      (`coordination`, `rebuild`) drove the move *to* 0.41 for
+      RUSTSEC-2026-0194 and -0195, listing every affected package.
+      `sandogasa` is on that list, ticked — that is our own
+      RUSTSEC work, seen from Fedora's side.
+    - [#26](https://forge.fedoraproject.org/rust/backlog/issues/26)
+      (`compat-cleanup`) retires the *old* package afterwards; it is
+      quick-xml v0.31's, with its remaining dependents listed. There
+      are 19 such issues and several are already closed (nix v0.26,
+      dirs v4, system-deps v6), so they do complete.
+
+    There is no cleanup issue for **0.41** yet, which is unsurprising
+    for a compat package two weeks old, and the bump does not rest on
+    one appearing — it rests on 0.42 being the primary package. But
+    the shape of what follows is not in doubt, and moving now means
+    not being a checkbox on it.
+
+    The one branch without it is **epel10.3**, at 0.41.0, and that is
+    not a blocker: Fedora does not update Rust packages in non-leading
+    EPEL 10 branches, so 0.42.0 will never arrive there. The
+    consequence is accepted rather than worked around — **sandogasa
+    stops being updatable in EPEL 10.3** from this bump onward, and
+    EPEL 10.4 becomes the EPEL 10 target.
+
+    The other laggards never mattered. epel10.2 and epel9 also lack
+    it, but ship rust 1.92 against our 1.95 MSRV, so they cannot build
+    sandogasa at all. epel10.3's buildroot is rust 1.97.1
+    (`fedrq pkgs -b c10-snapshot -F nev rust`), which is what made it
+    the only one worth checking.
+
+    Two traps for whoever re-checks a crate this way. Bodhi's
+    "EPEL-10.4" and fedrq's `-b epel10` are different things, and
+    reading the first as the second makes a crate look available when
+    it is not. And Debian has only 0.38.4 — which does not matter,
+    because no Debian-packaged crate uses quick-xml: only `koji-lag`
+    and `sandogasa-kojihub` do, and neither is in the dbranch chain.
+  - **rusqlite 0.40.2** — Fedora 0.38.0 everywhere, so blocked, even
+    though Debian testing/unstable already has exactly 0.40.2-2.
+  - **serial_test 4.0.1** — Fedora and Debian both 3.4.0. Blocked.
+
+## Watch `rust/backlog` for compat-cleanup issues naming our crates
+
+[`rust/backlog`](https://forge.fedoraproject.org/rust/backlog/issues?labels=compat-cleanup)
+is where Fedora's Rust SIG tracks retiring a compat package, listing
+every dependent package that still has to migrate. That makes it the
+earliest warning that a major we pin is on its way to becoming a
+compat package — and, once sandogasa is in more of those dependency
+lists, the place our own name will appear with a checkbox beside it.
+
+We already appear there: `sandogasa` is a ticked dependent on #34,
+the coordination issue for quick-xml v0.41. So this is not a
+hypothetical — it is where someone will ask us to move next, and
+where we can see it coming.
+
+Two of our deferred bumps have history there too: `dirs v4` cleanup is
+closed, and `serial_test v0.5` is open. Neither touches the majors we
+are on (dirs 6, serial_test 3), so there is nothing to do today beyond
+knowing where to look.
+
 ## pkg-health after kondo: reuse the graph, score dependencies too (2026-09-06)
 
 Kondo left behind observations pkg-health should report over time, not

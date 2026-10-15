@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### quick-xml 0.42 (breaking for EPEL 10.3)
+
+0.42 is now the primary `rust-quick-xml` in Fedora — stable in
+rawhide, F43, F44, F46, EPEL-9 and EPEL-10.4, in testing for F45 —
+and 0.41 is carried beside it only as a `rust-quick-xml0.41` compat
+package, added on 2026-10-02 for that transition. Depending on the
+primary package rather than a compat one is the more durable place to
+be, whatever becomes of the compat package.
+
+0.42 makes the reader `str`-based throughout — `QName` wraps a `&str`,
+`BytesText` dereferences to one, and `BytesText::decode` is gone, since
+there is nothing left to decode. `sandogasa-kojihub`'s XML-RPC parser
+and `koji-lag`'s schedule parser move with it: byte-string tag
+literals become plain strings, and unescaping is all that remains of
+what used to be decode-then-unescape. No behaviour changes.
+
+What this costs: **sandogasa can no longer be updated in EPEL 10.3**,
+which has 0.41.0 and will keep it — Fedora does not update Rust
+packages in non-leading EPEL 10 branches. EPEL 10.4 becomes the EPEL
+10 target. EPEL 9 and EPEL 10.2 are unaffected by the choice, having
+already been out of reach on rust 1.92 against our 1.95 MSRV.
+
 ### ebranch: say when the request being adopted is already finished
 
 `file-requests` offered to adopt an existing branch request without

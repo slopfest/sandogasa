@@ -219,7 +219,7 @@ impl Client {
         Self {
             http: builder.build().expect("build reqwest client"),
             // Normalised, so a hub given as ".../kojihub/" is the same
-            // client as one given as ".../kojihub" — the difference is a
+            // client as one given as ".../kojihu" — the difference is a
             // typo, not a different hub.
             hub_url: hub_url.trim_end_matches('/').to_string(),
         }
@@ -316,8 +316,8 @@ pub fn parse_response(xml: &str) -> Result<Value, Error> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"params" => return parse_params(&mut reader),
-                b"fault" => return parse_fault(&mut reader),
+                "params" => return parse_params(&mut reader),
+                "fault" => return parse_fault(&mut reader),
                 _ => {}
             },
             Ok(Event::Eof) => {
@@ -332,10 +332,10 @@ pub fn parse_response(xml: &str) -> Result<Value, Error> {
 fn parse_params(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) if e.name().as_ref() == b"value" => {
+            Ok(Event::Start(e)) if e.name().as_ref() == "value" => {
                 return parse_value_content(reader);
             }
-            Ok(Event::End(e)) if e.name().as_ref() == b"params" => {
+            Ok(Event::End(e)) if e.name().as_ref() == "params" => {
                 return Ok(Value::Nil);
             }
             Ok(Event::Eof) => {
@@ -350,7 +350,7 @@ fn parse_params(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
 fn parse_fault(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) if e.name().as_ref() == b"value" => {
+            Ok(Event::Start(e)) if e.name().as_ref() == "value" => {
                 let value = parse_value_content(reader)?;
                 let code = value
                     .get("faultCode")
@@ -377,63 +377,63 @@ fn parse_value_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let tag = e.name().as_ref().to_vec();
-                match tag.as_slice() {
-                    b"int" | b"i4" | b"i8" => {
+                let tag = e.name().as_ref().to_string();
+                match tag.as_str() {
+                    "int" | "i4" | "i8" => {
                         let text = read_text_content(reader)?;
-                        skip_to_end(reader, b"value")?;
+                        skip_to_end(reader, "value")?;
                         return Ok(Value::Int(text.parse::<i64>().map_err(|e| {
                             Error::Parse(format!("invalid int '{text}': {e}"))
                         })?));
                     }
-                    b"string" => {
+                    "string" => {
                         let text = read_text_content(reader)?;
-                        skip_to_end(reader, b"value")?;
+                        skip_to_end(reader, "value")?;
                         return Ok(Value::String(text));
                     }
-                    b"boolean" => {
+                    "boolean" => {
                         let text = read_text_content(reader)?;
-                        skip_to_end(reader, b"value")?;
+                        skip_to_end(reader, "value")?;
                         return Ok(Value::Boolean(text == "1" || text == "true"));
                     }
-                    b"double" => {
+                    "double" => {
                         let text = read_text_content(reader)?;
-                        skip_to_end(reader, b"value")?;
+                        skip_to_end(reader, "value")?;
                         return Ok(Value::Double(text.parse::<f64>().map_err(|e| {
                             Error::Parse(format!("invalid double '{text}': {e}"))
                         })?));
                     }
-                    b"struct" => {
+                    "struct" => {
                         let s = parse_struct_content(reader)?;
-                        skip_to_end(reader, b"value")?;
+                        skip_to_end(reader, "value")?;
                         return Ok(s);
                     }
-                    b"array" => {
+                    "array" => {
                         let a = parse_array_content(reader)?;
-                        skip_to_end(reader, b"value")?;
+                        skip_to_end(reader, "value")?;
                         return Ok(a);
                     }
                     _ => {
                         // Unknown type tag — treat content as string.
                         let text = read_text_content(reader)?;
-                        skip_to_end(reader, b"value")?;
+                        skip_to_end(reader, "value")?;
                         return Ok(Value::String(text));
                     }
                 }
             }
-            Ok(Event::Empty(e)) if e.name().as_ref() == b"nil" => {
-                skip_to_end(reader, b"value")?;
+            Ok(Event::Empty(e)) if e.name().as_ref() == "nil" => {
+                skip_to_end(reader, "value")?;
                 return Ok(Value::Nil);
             }
             Ok(Event::Text(t)) => {
                 let text = decode_text(&t)?;
                 if !text.trim().is_empty() {
                     // Bare text in <value> is implicitly a string.
-                    skip_to_end(reader, b"value")?;
+                    skip_to_end(reader, "value")?;
                     return Ok(Value::String(text));
                 }
             }
-            Ok(Event::End(e)) if e.name().as_ref() == b"value" => {
+            Ok(Event::End(e)) if e.name().as_ref() == "value" => {
                 return Ok(Value::String(String::new()));
             }
             Ok(Event::Eof) => {
@@ -449,11 +449,11 @@ fn parse_struct_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
     let mut map = HashMap::new();
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) if e.name().as_ref() == b"member" => {
+            Ok(Event::Start(e)) if e.name().as_ref() == "member" => {
                 let (name, value) = parse_member(reader)?;
                 map.insert(name, value);
             }
-            Ok(Event::End(e)) if e.name().as_ref() == b"struct" => {
+            Ok(Event::End(e)) if e.name().as_ref() == "struct" => {
                 return Ok(Value::Struct(map));
             }
             Ok(Event::Eof) => {
@@ -471,15 +471,15 @@ fn parse_member(reader: &mut Reader<&[u8]>) -> Result<(String, Value), Error> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => match e.name().as_ref() {
-                b"name" => {
+                "name" => {
                     name = read_text_content(reader)?;
                 }
-                b"value" => {
+                "value" => {
                     value = parse_value_content(reader)?;
                 }
                 _ => {}
             },
-            Ok(Event::End(e)) if e.name().as_ref() == b"member" => {
+            Ok(Event::End(e)) if e.name().as_ref() == "member" => {
                 return Ok((name, value));
             }
             Ok(Event::Eof) => {
@@ -496,13 +496,13 @@ fn parse_array_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"data" {
+                if e.name().as_ref() == "data" {
                     loop {
                         match reader.read_event() {
-                            Ok(Event::Start(e2)) if e2.name().as_ref() == b"value" => {
+                            Ok(Event::Start(e2)) if e2.name().as_ref() == "value" => {
                                 items.push(parse_value_content(reader)?);
                             }
-                            Ok(Event::End(e2)) if e2.name().as_ref() == b"data" => break,
+                            Ok(Event::End(e2)) if e2.name().as_ref() == "data" => break,
                             Ok(Event::Eof) => {
                                 return Err(Error::Parse("unexpected EOF in array data".into()));
                             }
@@ -512,7 +512,7 @@ fn parse_array_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
                     }
                 }
             }
-            Ok(Event::End(e)) if e.name().as_ref() == b"array" => {
+            Ok(Event::End(e)) if e.name().as_ref() == "array" => {
                 return Ok(Value::Array(items));
             }
             Ok(Event::Eof) => {
@@ -527,11 +527,11 @@ fn parse_array_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
 /// Read text content until the matching end tag.
 /// Decode and unescape a quick-xml text node to an owned String.
 ///
-/// quick-xml 0.40 dropped `BytesText::unescape`; decoding and
-/// entity-unescaping are now separate explicit steps.
+/// quick-xml 0.40 dropped `BytesText::unescape`, and 0.42 made the
+/// reader `str`-based throughout, so the decode step went with it:
+/// what is left is the entity-unescaping.
 fn decode_text(t: &BytesText) -> Result<String, Error> {
-    let decoded = t.decode().map_err(|e| Error::Xml(e.to_string()))?;
-    Ok(quick_xml::escape::unescape(&decoded)
+    Ok(quick_xml::escape::unescape(t)
         .map_err(|e| Error::Xml(e.to_string()))?
         .into_owned())
 }
@@ -554,7 +554,7 @@ fn read_text_content(reader: &mut Reader<&[u8]>) -> Result<String, Error> {
 }
 
 /// Skip events until we find an end tag matching the given name at depth 0.
-fn skip_to_end(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<(), Error> {
+fn skip_to_end(reader: &mut Reader<&[u8]>, end_tag: &str) -> Result<(), Error> {
     let mut depth: u32 = 0;
     loop {
         match reader.read_event() {
