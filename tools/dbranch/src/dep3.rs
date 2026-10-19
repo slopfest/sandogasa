@@ -46,8 +46,11 @@ pub fn is_quilt(repo: &Path) -> bool {
 /// uncommented below it ends up after it. By the amend those fields
 /// are real text, so the trailer follows them, which is both the
 /// readable order and git's own convention of trailers last.
-/// Cosmetic rather than load-bearing -- lintian reads DEP-3 fields
-/// wherever they sit -- but a sponsor skims these.
+/// It also keeps the amend idempotent. `-s` reads the last
+/// paragraph, so a sign-off sitting above the DEP-3 fields is not
+/// seen and a second one is appended -- measured, and the reason a
+/// real patch carried two. A blank line before the sign-off makes
+/// no difference either way.
 pub fn workflow(template: Option<&str>) -> Vec<String> {
     let commit = match template {
         Some(path) => format!("    git commit -t {path}"),
@@ -59,6 +62,10 @@ pub fn workflow(template: Option<&str>) -> Vec<String> {
         commit,
         "    git commit --amend --no-edit -s".to_string(),
         "    gbp pq export".to_string(),
+        String::new(),
+        "  Put the sign-off after the DEP-3 fields: git reads the last".to_string(),
+        "  paragraph, so one above them is not seen and the amend adds".to_string(),
+        "  a second. A blank line before it is fine.".to_string(),
     ]
 }
 
@@ -184,6 +191,12 @@ mod tests {
         assert_eq!(with.len(), without.len());
         assert_eq!(with[0].trim(), "gbp pq import");
         assert_eq!(with[4].trim(), "gbp pq export");
+        // The advice that keeps the amend idempotent travels with
+        // the route, since the route is what causes the problem.
+        assert!(
+            with.iter().any(|l| l.contains("after the DEP-3 fields")),
+            "{with:?}"
+        );
         // The sign-off comes after the message is written, so it
         // lands below the DEP-3 fields rather than above them.
         assert_eq!(with[3].trim(), "git commit --amend --no-edit -s");

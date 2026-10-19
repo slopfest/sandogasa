@@ -362,6 +362,7 @@ pub fn dep3_findings(patch: &str, text: &str) -> Vec<Finding> {
             "says nowhere where it came from (Origin, Author or From)",
         ));
     }
+    found.extend(trailer_findings(patch, header));
     // Deliberately not checked: blank lines in the header. DEP-3 is
     // RFC822-shaped, so in principle a blank line ends the field
     // block -- but lintian reads the fields below one anyway (a
@@ -371,6 +372,87 @@ pub fn dep3_findings(patch: &str, text: &str) -> Vec<Finding> {
     // so the blank after Subject is structural. Flagging it would
     // disagree with lintian and with git's own trailer convention,
     // which puts a blank line before Signed-off-by.
+    found
+}
+
+/// The DEP-3 fields that sit below a patch's description.
+const DEP3_FIELDS: [&str; 8] = [
+    "Origin",
+    "Bug",
+    "Bug-Debian",
+    "Forwarded",
+    "Applied-Upstream",
+    "Reviewed-by",
+    "Last-Update",
+    "Author",
+];
+
+/// The field a `Field: value` line names, if it is one.
+fn header_field(line: &str) -> Option<&str> {
+    let (name, _) = line.split_once(": ")?;
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then_some(name)
+}
+
+/// Complaints about the block of fields below a patch's description.
+///
+/// Everything here is about that block holding together. `git commit
+/// --amend -s` declines to add a second sign-off only when it can
+/// see one in an unbroken trailer block at the end, so a blank line
+/// among the fields is what turns an idempotent amend into a
+/// duplicated sign-off -- which is how a real patch came to carry
+/// two of them.
+///
+/// Deliberately not checked: whether `Forwarded:` is there at all.
+/// Lintian's `patch-not-forwarded-upstream` says that already, and
+/// duplicating it would leave two tools to keep in agreement.
+fn trailer_findings(patch: &str, header: &str) -> Vec<Finding> {
+    // Skip git's own From/Date/Subject block: the blank line after
+    // it is structural, not a break in anything.
+    let lines: Vec<&str> = header.lines().collect();
+    let body_from = lines
+        .iter()
+        .position(|l| l.trim().is_empty())
+        .map_or(lines.len(), |at| at + 1);
+    let rest = &lines[body_from.min(lines.len())..];
+
+    let mut found = Vec::new();
+    if rest
+        .iter()
+        .filter(|l| l.starts_with("Signed-off-by:"))
+        .count()
+        > 1
+    {
+        found.push(dep3(
+            patch,
+            "signs off twice — an amended sign-off adds another \
+             whenever the one already there is not in the last paragraph",
+        ));
+    }
+
+    let fields: Vec<(usize, &str)> = rest
+        .iter()
+        .enumerate()
+        .filter_map(|(at, l)| header_field(l).map(|f| (at, f)))
+        .collect();
+
+    // Deliberately not checked: a blank line before the sign-off.
+    // It looks like it should matter and does not -- measured, an
+    // amend over `fields, blank, sign-off` adds nothing, because git
+    // reads the last paragraph and finds the sign-off there. About
+    // half the patches in the archive are written that way.
+    if let Some((sign, _)) = fields.iter().find(|(_, f)| *f == "Signed-off-by")
+        && fields
+            .iter()
+            .any(|(at, f)| at > sign && DEP3_FIELDS.contains(f))
+    {
+        found.push(dep3(
+            patch,
+            "signs off above its DEP-3 fields, so the sign-off is not \
+             in the last paragraph — an amended sign-off then adds a \
+             second one, which is how a patch comes to carry two",
+        ));
+    }
     found
 }
 
@@ -2349,6 +2431,60 @@ mod tests {
             Some("QUILT_PATCHES=debian/patches quilt applied"),
             "the command shows the claim rather than acting on it"
         );
+    }
+
+    #[test]
+    fn a_patch_that_signs_off_twice_is_reported() {
+        // A real patch carried two, from an amended sign-off that
+        // could not see the one already there.
+        let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
+                    Forwarded: https://example/1\nLast-Update: 2026-10-19\n\n\
+                    Signed-off-by: A <a@b.c>\n\nSigned-off-by: A <a@b.c>\n--- a/f\n";
+        let found = dep3_findings("0001-x.patch", text);
+        assert!(
+            found.iter().any(|f| f.message.contains("signs off twice")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_blank_line_before_the_sign_off_is_not_a_fault() {
+        // It looks like it should matter and does not: an amend over
+        // this adds nothing, because git reads the last paragraph
+        // and finds the sign-off there. Roughly half the patches in
+        // the archive are written this way.
+        let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
+                    Forwarded: not-needed\nLast-Update: 2026-10-19\n\n\
+                    Signed-off-by: A <a@b.c>\n--- a/f\n";
+        assert!(dep3_findings("0002-x.patch", text).is_empty(), "{text}");
+    }
+
+    #[test]
+    fn one_unbroken_block_is_what_keeps_an_amend_idempotent() {
+        let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
+                    Forwarded: not-needed\nLast-Update: 2026-10-19\n\
+                    Signed-off-by: A <a@b.c>\n--- a/f\n";
+        assert!(dep3_findings("0002-x.patch", text).is_empty(), "{text}");
+    }
+
+    #[test]
+    fn a_sign_off_above_the_dep3_fields_is_the_wrong_way_round() {
+        let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
+                    Signed-off-by: A <a@b.c>\nForwarded: not-needed\n--- a/f\n";
+        let found = dep3_findings("0003-x.patch", text);
+        assert!(
+            found.iter().any(|f| f.message.contains("signs off above")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn git_s_own_header_block_is_not_a_broken_trailer() {
+        // From/Date/Subject then a blank line is how every patch
+        // gbp exports begins; flagging it would fire on all of them.
+        let text = "From: A <a@b.c>\nDate: Mon, 19 Oct 2026 10:00:00 +0100\n\
+                    Subject: Fix it\n\nProse only, no fields.\n--- a/f\n";
+        assert!(dep3_findings("0004-x.patch", text).is_empty(), "{text}");
     }
 
     #[test]

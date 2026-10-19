@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### dbranch: check reads a patch's trailer block
+
+`patch-header-not-dep3` gains two complaints, both about where a
+sign-off sits.
+
+A patch that **signs off twice**, which one real patch did.
+
+A **sign-off above the DEP-3 fields**, which is the cause: `git
+commit --amend -s` reads the *last paragraph*, so a sign-off with
+fields after it is not seen and a second is appended.
+
+Both of those were measured rather than reasoned about, after the
+first attempt got the cause wrong. A blank line before a trailing
+sign-off looks like it should matter and does not — an amend over
+`fields, blank, sign-off` adds nothing — so the rule that flagged it
+is gone. It would have fired on about half the patches in the
+archive: of 86 found carrying a sign-off, 46 sit adjacent to a field
+and 40 after a blank line, and neither is wrong.
+
+Also not checked, for the same reason: ` .` separators in a
+description. That is deb822 continuation syntax, meaningful only
+inside a folded `Description:` field, and a patch written in
+git-format-patch style has no continuation lines for it to govern.
+Of 94 patches surveyed, none used it.
+
+Still left to lintian: whether `Forwarded:` is present at all.
+
+`dbranch dep3-template` prints the matching advice with its route —
+put the sign-off after the DEP-3 fields — since the route is what
+walks into the problem.
+
 ### dbranch: check knows which branch it is standing on
 
 Two findings came out of walking into the same trap twice.
