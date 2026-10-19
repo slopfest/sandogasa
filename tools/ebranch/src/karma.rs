@@ -387,6 +387,48 @@ fn fti_verdict(component: Option<&str>, update: &UpdateFacts<'_>) -> Verdict {
     }
 }
 
+/// The Fedora release a bot-filed FTBFS or FailsToInstall summary
+/// names, as a branch token.
+///
+/// `F46FailsToInstall: a, b, c` and `pkg: FTBFS in f46` each say
+/// which release they are about. A human-filed bug follows no fixed
+/// wording and names none, so it yields `None` and nothing is
+/// claimed about it.
+///
+/// Deliberately limited to Fedora's numbered releases. EPEL writes
+/// `EPEL10FailsToInstall` while the branch it belongs to is
+/// `epel10.4`, so the two differ without disagreeing, and saying so
+/// would be wrong rather than merely unhelpful.
+fn bot_release(summary: &str) -> Option<String> {
+    let numbered = |tok: &str| {
+        let rest = tok.strip_prefix('f').or_else(|| tok.strip_prefix('F'))?;
+        (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())).then(|| format!("f{rest}"))
+    };
+    if let Some((head, _)) = summary.trim().split_once("FailsToInstall")
+        && let Some(branch) = numbered(head.trim())
+    {
+        return Some(branch);
+    }
+    let tail = summary.split_once(": FTBFS in ")?.1;
+    tail.split(|c: char| !c.is_ascii_alphanumeric())
+        .find_map(numbered)
+}
+
+/// Why a bug was left to the user, when that is knowable.
+///
+/// The case worth naming is the bot-filed FTBFS or FailsToInstall
+/// bug for *another* release. It looks exactly like the one the
+/// check just decided -- same wording, same package, often the same
+/// four binaries -- so without being told, the reader has to open
+/// Bugzilla to find out why this one got no verdict. The bug is
+/// genuinely not this update's to answer, and that is the whole
+/// explanation.
+fn unknown_reason(bug: Option<&BugFacts>, update: &UpdateFacts<'_>) -> Option<String> {
+    let release = bot_release(&bug?.summary)?;
+    (release != update.branch)
+        .then(|| format!("an {release} bug; this update is for {}", update.branch))
+}
+
 /// Interpret a karma answer: `+1`/`1`/`+`, `-1`/`-`, `0`, or
 /// empty (the caller-chosen default). `None` means unrecognized —
 /// ask again.
@@ -881,7 +923,9 @@ async fn run_async(
                 karma: 0,
                 note: "no automatic verdict; skipped under --yes".to_string(),
             }),
-            Verdict::Unknown => manual.push((bug, 0, None)),
+            Verdict::Unknown => {
+                manual.push((bug, 0, unknown_reason(bugzilla.get(&bug.bug_id), &facts)))
+            }
         }
     }
     if !manual.is_empty() {
@@ -1453,6 +1497,49 @@ mod tests {
             ),
             &update(&builds(), &trackers(), &[]),
         )));
+    }
+
+    #[test]
+    fn a_bots_summary_names_the_release_it_is_about() {
+        assert_eq!(
+            bot_release("F46FailsToInstall: a, b, c").as_deref(),
+            Some("f46")
+        );
+        assert_eq!(bot_release("zsh: FTBFS in f45").as_deref(), Some("f45"));
+        // EPEL's token is not a branch: EPEL10FailsToInstall belongs
+        // to epel10.4, so the two differ without disagreeing.
+        assert_eq!(bot_release("EPEL10FailsToInstall: a"), None);
+        // A human-filed bug follows no wording and names no release.
+        assert_eq!(bot_release("gnome-shell crashes on login"), None);
+    }
+
+    #[test]
+    fn an_undecided_bug_says_which_release_it_belongs_to() {
+        // The real one: an F46 FailsToInstall listed on an F45
+        // update, beside the F45 bug the check had just decided from
+        // the same four binaries. Told nothing, the reader had to
+        // open Bugzilla to see why only one of them got a verdict.
+        let other = bug(
+            "F46FailsToInstall: gnome-shell-extension-frippery-applications-menu",
+            Some("gnome-shell-frippery"),
+        );
+        let reason = unknown_reason(Some(&other), &update(&builds(), &trackers(), &[]))
+            .expect("a cross-release bug explains itself");
+        assert!(reason.contains("f46"), "{reason}");
+        assert!(reason.contains("f44"), "{reason}");
+
+        // A bug for this very release is not explained away: it
+        // would have been decided, and this would be wrong of it.
+        let same = bug("F44FailsToInstall: x", Some("fish"));
+        assert_eq!(
+            unknown_reason(Some(&same), &update(&builds(), &trackers(), &[])),
+            None
+        );
+        // Nothing known about the bug, nothing to say about it.
+        assert_eq!(
+            unknown_reason(None, &update(&builds(), &trackers(), &[])),
+            None
+        );
     }
 
     #[test]

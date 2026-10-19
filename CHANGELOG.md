@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### ebranch: give-karma says why it cannot judge a bug
+
+A Bodhi update can list the same FailsToInstall report twice, once
+per release, and the two read identically — same bot wording, same
+package, the same four binaries named in the title. `--give-karma`
+decided one of them and asked about the other with nothing but the
+title and a default of 0, so the only way to find out why was to open
+Bugzilla and compare which tracker each blocked.
+
+Seen on gnome-shell-frippery 51.0-1.fc45, which lists an
+F45FailsToInstall and an F46FailsToInstall. The F45 one blocks the
+Fedora 45 tracker, so the installability check answered it outright;
+the F46 one is not this update's to fix, and that is the whole
+reason it was passed to the user.
+
+The prompt now says so:
+
+```console
+bug #2537470: F46FailsToInstall: gnome-shell-extension-frippery-...
+  https://bugzilla.redhat.com/2537470
+  an f46 bug; this update is for f45
+  feedback? [+1/-1/0, default 0]:
+```
+
+Only the bots' own wording is read, and only where it names a
+numbered Fedora release. EPEL writes `EPEL10FailsToInstall` for a bug
+belonging to `epel10.4`, so the two differ without disagreeing and
+nothing is claimed; a human-filed bug follows no wording and is left
+unexplained rather than guessed at.
+
 ### dbranch: check stops repeating lintian
 
 `check` reported four things lintian already reports, so a package
