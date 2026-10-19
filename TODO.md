@@ -819,8 +819,14 @@ minutes before building in 207s, against arm64's 237s. That is queue
 depth, not a slow builder, so do not read a long wall-clock as a
 packaging problem.
 
-The dbranch package is generated from the overlay at
-`~/src/debian/pkgs/dbranch-overlay/` and lints clean (no tags at all).
+The packaging now lives in debcargo-conf itself, at
+`src/dbranch/debian/` with `overlay = "."`, on the `sandogasa` branch
+of the fork at `salsa.debian.org:michel/debcargo-conf`. That is the
+copy to edit. The standalone overlay at
+`~/src/debian/pkgs/dbranch-overlay/` predates it and is not version
+controlled; it has been synced to match, but anything generated from
+it should be checked against debcargo-conf first. It lints clean (no
+tags at all).
 What it took, beyond the anstream patch that was already there:
 
 - `[packages.lib] test_depends = ["git"]`, because the tests spawn git
