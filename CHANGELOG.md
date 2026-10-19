@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+### dbranch: work through the rest of a sponsor's checklist
+
+An application manager's review of a package turned into a list of
+things a tool could have found first. `check` gains the remaining
+items that are checkable:
+
+- **`unscoped-lintian-override`** — an override naming a tag and
+  nothing else silences it everywhere, for ever, including the
+  occurrence nobody has introduced yet. A note rather than a
+  warning, since a bare tag is right for a tag that carries no file
+  of its own, and knowing which is which is lintian's job.
+- **`patch-header-not-dep3`** — a patch saying nowhere what it does
+  or where it came from, and a blank line in the header, which ends
+  it so every field below is read as prose. The fix is ` .`
+  continuation, as `debian/copyright` already does.
+- **`patches-left-applied-after-build`** and
+  **`pc-directory-not-ignored`** — `dpkg-source` applies patches in
+  its `--before-build` hook and only puts them back when
+  `unapply-patches` is set in `debian/source/local-options`, so
+  without it every build leaves the tree patched with an untracked
+  `.pc` beside it. That file never ships in a source package, so
+  setting it affects nobody else's build.
+- **`stale-build`** — with a `.deb` in hand its version can be
+  compared against `debian/changelog`, catching a check run against
+  yesterday's build. That also retires a note that fired on every
+  non-Rust package: an unpacked VCS tree records its upstream
+  version nowhere, so with a build to compare against,
+  `source-version-unknown` is suppressed.
+- **`installed-copy-differs`** — compares *contents*, not versions,
+  with `md5sum -c` against dpkg's own record from the extraction
+  root. Iterating on packaging rebuilds the same version over and
+  over, so comparing versions would call an hours-old installed copy
+  a match and quietly exercise it instead.
+
+Two corrections to shipped behaviour. `--deb` now takes several
+values, because the command this tool itself printed — `dbranch
+autopkgtest --deb ../*.deb` — failed as soon as the glob matched
+more than one file. And `patches-applied-in-tree` reads quilt's own
+stack before advising: patches on the stack were left by a build and
+popping them puts it right, while an empty stack means the change is
+committed on the packaging branch *as well as* carried as a patch,
+where popping would do nothing.
+
+Findings are now coloured by severity — the word alone, with the
+command dimmed. The message text stays plain so a finding pastes
+into a bug report without escape codes, and anstream strips the
+colour when output is piped or `NO_COLOR` is set.
+
 ### dbranch: check says whose fault a program not running is
 
 `check --deb` extracts a package and runs what it installs, and two

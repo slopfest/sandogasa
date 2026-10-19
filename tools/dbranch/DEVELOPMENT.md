@@ -810,6 +810,36 @@ somebody's file, and the one thing a generator must never do is
 destroy work it did not create. Any future generated file follows the
 same rule, which is why there is no `--force` to argue about.
 
+## What gbp expects of a packaging branch
+
+Checks in this area rest on facts worth writing down, because they
+are easy to get backwards and `check` gave wrong advice on each of
+them before they were looked up.
+
+- **Patches stay unapplied on the packaging branch, in both gbp
+  workflows.** The source format decides it, not where upstream's
+  code came from: `debian/latest` holds patch *files*, and
+  `patch-queue/debian/latest` holds them as commits. The documented
+  order is `gbp pq import`, *then* edit and commit, then
+  `gbp pq export`. Editing an upstream file on the packaging branch
+  first and importing afterwards leaves the change committed there
+  **and** re-exported as a patch.
+- **A patched working tree has two quite different causes.**
+  `dpkg-source` applies patches before a build and only unapplies
+  them when `debian/source/local-options` sets `unapply-patches`, so
+  a patched tree is usually a build leftover that `quilt pop -a`
+  clears. But quilt's stack (`.pc/applied-patches`) can be *empty*
+  while the content is still patched, and then the change is
+  committed on the branch and popping does nothing. Read the stack
+  before advising.
+- **`debian/source/local-options` never ships.** dpkg-source
+  excludes it from the generated source package by design, so
+  recommending `unapply-patches` cannot affect anyone else's build.
+- **An unpacked VCS tree records its upstream version nowhere.**
+  There is no file to read it from, which is why the version check
+  needs a `.deb` to compare the changelog against, and why the
+  "could not establish" note is suppressed once there is one.
+
 ## A check is only as good as the command it hands back
 
 `check` reports findings, and every finding carries the command that

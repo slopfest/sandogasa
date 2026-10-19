@@ -48,6 +48,23 @@ impl Severity {
             Severity::Note => "note",
         }
     }
+
+    /// How the label is coloured, so a blocker is findable in a long
+    /// report without reading it. Rendered through `anstream`, which
+    /// drops the codes when output is not a terminal or `NO_COLOR`
+    /// is set.
+    pub fn style(self) -> anstyle::Style {
+        let colour = match self {
+            Severity::Blocker => anstyle::AnsiColor::Red,
+            Severity::Warning => anstyle::AnsiColor::Yellow,
+            Severity::Note => anstyle::AnsiColor::BrightBlack,
+        };
+        let style = anstyle::Style::new().fg_color(Some(colour.into()));
+        match self {
+            Severity::Blocker => style.bold(),
+            _ => style,
+        }
+    }
 }
 
 /// One thing worth saying about a package.
@@ -127,6 +144,7 @@ pub fn version_findings(
     changelog_version: &str,
     distribution: &str,
     source_version: Option<&str>,
+    checked_against_a_build: bool,
 ) -> Vec<Finding> {
     let mut found = Vec::new();
     let packaged = upstream_version(changelog_version);
@@ -144,6 +162,12 @@ pub fn version_findings(
             .with_command("head -1 debian/changelog".into()),
         ),
         Some(_) => {}
+        // With a .deb in hand the version question is answered a
+        // better way -- changelog against what was actually built --
+        // so this note would only be noise. Without one, an unpacked
+        // VCS tree records its upstream version nowhere, and saying
+        // so beats implying the check passed.
+        None if checked_against_a_build => {}
         None => found.push(Finding::new(
             "source-version-unknown",
             Severity::Note,
@@ -237,7 +261,7 @@ pub enum PatchState {
 /// exists: this is the state where staleness hides. It is also why
 /// the check matters most before a build, on a tree whose patches
 /// are not yet applied.
-pub fn patch_findings(states: &[(String, PatchState)]) -> Vec<Finding> {
+pub fn patch_findings(states: &[(String, PatchState)], quilt_applied: bool) -> Vec<Finding> {
     let mut found: Vec<Finding> = states
         .iter()
         .filter_map(|(patch, state)| match state {
@@ -257,17 +281,204 @@ pub fn patch_findings(states: &[(String, PatchState)]) -> Vec<Finding> {
         .filter(|(_, state)| *state == PatchState::AlreadyApplied)
         .count();
     if applied > 0 {
-        found.push(Finding::new(
-            "patches-already-applied",
+        // Two different states look alike from the content alone,
+        // and they need different fixes. Quilt recording the patches
+        // as applied means a build left them that way and popping
+        // them puts it right. Quilt recording nothing means the
+        // change is committed on the packaging branch *as well as*
+        // carried as a patch -- popping would do nothing at all,
+        // which is worse than useless advice.
+        let (why, command) = match quilt_applied {
+            true => (
+                "most likely left so by a build",
+                "QUILT_PATCHES=debian/patches quilt pop -a",
+            ),
+            false => (
+                "though quilt records none applied, so the change is \
+                 committed on this branch as well as carried as a patch",
+                "QUILT_PATCHES=debian/patches quilt applied",
+            ),
+        };
+        found.push(
+            Finding::new(
+                "patches-applied-in-tree",
+                Severity::Note,
+                format!(
+                    "{applied} of {} patches are applied in this tree, \
+                     {why}. Whether any is stale cannot be told here: \
+                     once applied, a patch you carry and a fix upstream \
+                     has taken look alike.",
+                    states.len()
+                ),
+            )
+            .with_command(command.to_string()),
+        );
+    }
+    found
+}
+
+/// Where a patch's DEP-3 header stops and its diff begins.
+fn patch_header(text: &str) -> &str {
+    let end = text
+        .lines()
+        .scan(0usize, |at, line| {
+            let start = *at;
+            *at += line.len() + 1;
+            Some((start, line))
+        })
+        .find(|(_, line)| {
+            line.starts_with("--- ")
+                || line.starts_with("diff --git ")
+                || line.starts_with("Index: ")
+                || *line == "---"
+        })
+        .map_or(text.len(), |(at, _)| at);
+    &text[..end]
+}
+
+/// Whether a patch's header is readable as DEP-3.
+///
+/// DEP-3 is RFC822-shaped, so a blank line ends the header: anything
+/// below it is no longer a field, which is how a description written
+/// as a git commit message stops being machine-readable halfway
+/// down. A continued paragraph keeps going with ` .` for its blank
+/// lines, the way `debian/copyright` does.
+///
+/// Only two fields are insisted on, since those are what DEP-3 calls
+/// required: what the patch does, and where it came from.
+pub fn dep3_findings(patch: &str, text: &str) -> Vec<Finding> {
+    let header = patch_header(text);
+    let has = |keys: &[&str]| {
+        header
+            .lines()
+            .any(|l| keys.iter().any(|k| l.starts_with(k)))
+    };
+    let mut found = Vec::new();
+    if !has(&["Description:", "Subject:"]) {
+        found.push(dep3(
+            patch,
+            "says nowhere what it does (Description or Subject)",
+        ));
+    }
+    if !has(&["Origin:", "Author:", "From:"]) {
+        found.push(dep3(
+            patch,
+            "says nowhere where it came from (Origin, Author or From)",
+        ));
+    }
+    // A blank line before the diff ends the header early, so every
+    // field below it is read as prose rather than as a field.
+    if header.lines().skip(1).any(|l| l.trim().is_empty()) {
+        found.push(dep3(
+            patch,
+            "has a blank line in its header, which ends it — continue \
+             the description with ` .` instead, as debian/copyright does",
+        ));
+    }
+    found
+}
+
+/// One DEP-3 complaint about a patch.
+fn dep3(patch: &str, what: &str) -> Finding {
+    Finding::new(
+        "patch-header-not-dep3",
+        Severity::Note,
+        format!("debian/patches/{patch} {what}"),
+    )
+    .with_command(format!("head -20 debian/patches/{patch}"))
+}
+
+/// Lintian overrides that name a tag and nothing else.
+///
+/// An override carrying no pattern silences that tag everywhere, for
+/// ever -- including the occurrence nobody has introduced yet. The
+/// one that prompted this silenced `very-long-line-length-in-source-
+/// file` across a whole package to excuse two vendored files.
+///
+/// Reported as a note rather than a warning, because a bare tag is
+/// right for tags that carry no file of their own: whether a given
+/// one does is lintian's knowledge, not ours, so this points at the
+/// question instead of answering it.
+pub fn override_findings(path: &str, text: &str) -> Vec<Finding> {
+    let bare: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        // An override may be scoped to a binary package first.
+        .map(|l| l.rsplit(']').next().unwrap_or(l).trim())
+        .filter(|l| !l.is_empty() && l.split_whitespace().count() == 1)
+        .collect();
+    if bare.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        Finding::new(
+            "unscoped-lintian-override",
             Severity::Note,
             format!(
-                "{applied} of {} patches are already applied in this tree, \
-                 so whether any is stale could not be told — a patch you \
-                 carry and a fix upstream has taken look the same here. \
-                 Run this on an unpatched tree to find out.",
-                states.len()
+                "{path} silences {} with no pattern, so it applies to \
+                 every occurrence including ones not there yet — give \
+                 a pattern to any that names a file",
+                bare.join(", ")
             ),
-        ));
+        )
+        .with_command(format!("lintian-explain-tags {}", bare[0])),
+    ]
+}
+
+/// Whether a build will leave this tree with its patches applied.
+///
+/// `dpkg-source` applies the patches in its `--before-build` hook
+/// and only puts them back if `unapply-patches` is set in
+/// `debian/source/local-options`. Without it every build leaves the
+/// working tree patched: `git status` and `git diff` then describe a
+/// state nobody chose, `gbp pq` round-trips get confusing, and a
+/// `.pc` directory sits untracked for ever.
+///
+/// gbp ships the fix as an example script, which is what the command
+/// points at rather than two hand-typed lines.
+pub fn unapply_findings(
+    format: Option<&str>,
+    has_patches: bool,
+    local_options: Option<&str>,
+    pc_ignored: bool,
+) -> Vec<Finding> {
+    if !has_patches || !format.is_some_and(|f| f.contains("3.0 (quilt)")) {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    let configured = local_options.is_some_and(|o| {
+        o.lines()
+            .any(|l| matches!(l.trim(), "unapply-patches" | "--unapply-patches"))
+    });
+    if !configured {
+        found.push(
+            Finding::new(
+                "patches-left-applied-after-build",
+                Severity::Warning,
+                "debian/source/local-options does not set unapply-patches, \
+                 so every build leaves this tree with its patches applied \
+                 — which is not the state a packaging branch is meant to \
+                 be in. The file never ships in the source package, so \
+                 setting it affects nobody else's build."
+                    .into(),
+            )
+            .with_command(
+                "/usr/share/doc/git-buildpackage/examples/gbp-configure-unpatched-source".into(),
+            ),
+        );
+    }
+    if !pc_ignored {
+        found.push(
+            Finding::new(
+                "pc-directory-not-ignored",
+                Severity::Note,
+                "quilt's .pc directory is not ignored, so it shows up as \
+                 untracked after every build"
+                    .into(),
+            )
+            .with_command("echo '.pc/' >> .git/info/exclude".into()),
+        );
     }
     found
 }
@@ -349,6 +560,31 @@ pub fn source_mismatch(tree_source: &str, deb_source: Option<&str>, deb: &str) -
         )),
         None => Some(format!("{deb} names no package — is it a .deb?")),
     }
+}
+
+/// Packages built from a different changelog entry than this tree's.
+///
+/// Only possible once a .deb is in hand, and worth saying because
+/// the alternative is checking yesterday's build and believing the
+/// answer. The version is the packaging's own, so this compares
+/// like with like -- unlike the source version, which an unpacked
+/// VCS tree does not record anywhere.
+pub fn stale_build_findings(changelog_version: &str, debs: &[(String, String)]) -> Vec<Finding> {
+    debs.iter()
+        .filter(|(_, version)| version != changelog_version)
+        .map(|(deb, version)| {
+            Finding::new(
+                "stale-build",
+                Severity::Warning,
+                format!(
+                    "{deb} was built as {version}, but debian/changelog \
+                     is at {changelog_version} — this checks the older \
+                     build, not what the packaging now says"
+                ),
+            )
+            .with_command("head -1 debian/changelog".into())
+        })
+        .collect()
 }
 
 /// Whether anything runs the programs this package installs.
@@ -492,6 +728,82 @@ pub fn missing_dependency_note(output: &str, missing: &[String]) -> String {
     }
 }
 
+/// How the installed copy of a package compares with the one being
+/// checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Installed {
+    /// Not installed here at all.
+    Absent,
+    /// Installed, and holding this package's own files.
+    Same,
+    /// Installed, but not this package.
+    Differs(String),
+}
+
+/// Decide what is installed from what could be observed.
+///
+/// `checksums_match` is the real answer when dpkg recorded the
+/// installed files' hashes: it compares *contents*, which is the
+/// only thing that catches a rebuild. Iterating on packaging
+/// produces the same version over and over, so a version comparison
+/// would call an hours-old installed copy a match and quietly test
+/// that instead of the package just built. Versions are the fallback
+/// for a package shipping no `md5sums`.
+///
+/// Those really are MD5: it is the only digest dpkg records, and it
+/// is enough here. The question is "did I rebuild this since
+/// installing it", not "is this package forged" — nobody is crafting
+/// a colliding .deb against their own build tree — so MD5's
+/// collision weakness does not bear on the answer. Nothing in this
+/// check should be read as verifying a package's integrity.
+pub fn installed_state(
+    installed_version: Option<&str>,
+    deb_version: &str,
+    checksums_match: Option<bool>,
+) -> Installed {
+    let Some(installed) = installed_version else {
+        return Installed::Absent;
+    };
+    let versions_differ = format!("{installed} is installed, and this package is {deb_version}");
+    match checksums_match {
+        Some(true) => Installed::Same,
+        Some(false) if installed == deb_version => Installed::Differs(format!(
+            "the installed {installed} holds different files from the \
+             package being checked, which only their contents reveal \
+             because a rebuild keeps the version"
+        )),
+        Some(false) | None if installed != deb_version => Installed::Differs(versions_differ),
+        Some(false) => Installed::Differs(versions_differ),
+        None => Installed::Same,
+    }
+}
+
+/// What to say when the installed copy is not the one being checked.
+///
+/// A warning rather than a blocker: nothing is wrong with the
+/// package, but every answer the smoke test gives is about the other
+/// copy, so it must not pass silently.
+pub fn install_findings(state: &Installed, install: &str) -> Vec<Finding> {
+    match state {
+        Installed::Differs(why) => vec![
+            Finding::new(
+                "installed-copy-differs",
+                Severity::Warning,
+                format!(
+                    "{why}. Running a program here exercises the \
+                     installed copy's files, not this package's."
+                ),
+            )
+            .with_command(install.to_string()),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// What the smoke test found: each program's outcome, and how the
+/// installed copy compared with the package it ran from.
+type SmokeReport = (Vec<(String, Smoke)>, Vec<Installed>);
+
 /// What one attempt at asking a program for help amounts to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attempt {
@@ -622,6 +934,7 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         &header.version,
         &header.distribution,
         source.as_deref(),
+        !opts.debs.is_empty(),
     ));
 
     // Before anything else looks at them: a .deb from another package
@@ -658,8 +971,35 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         let series = read(&series_path)?;
         let present = patch_files(&debian.join("patches"));
         findings.extend(series_findings(&series, &present));
-        findings.extend(patch_findings(&patch_states(&series, ui, &opts.repo)));
+        findings.extend(patch_findings(
+            &patch_states(&series, ui, &opts.repo),
+            quilt_records_applied(&opts.repo),
+        ));
     }
+
+    ui.step("Read each patch's header as DEP-3");
+    for patch in patch_files(&debian.join("patches")) {
+        if let Ok(text) = std::fs::read_to_string(debian.join("patches").join(&patch)) {
+            findings.extend(dep3_findings(&patch, &text));
+        }
+    }
+
+    ui.step("Look for lintian overrides with nothing to narrow them");
+    for (path, text) in override_files(&debian) {
+        findings.extend(override_findings(&path, &text));
+    }
+
+    ui.step("Check a build will not leave the tree patched");
+    findings.extend(unapply_findings(
+        std::fs::read_to_string(debian.join("source/format"))
+            .ok()
+            .as_deref(),
+        debian.join("patches/series").is_file(),
+        std::fs::read_to_string(debian.join("source/local-options"))
+            .ok()
+            .as_deref(),
+        pc_is_ignored(&opts.repo),
+    ));
 
     ui.step("Check that something runs the installed programs");
     findings.extend(autopkgtest_findings(
@@ -688,6 +1028,17 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
                 .into(),
         ));
     } else {
+        ui.step("Check the packages were built from this packaging");
+        let built: Vec<(String, String)> = opts
+            .debs
+            .iter()
+            .filter_map(|deb| {
+                let version = deb_field(deb, "Version", ui)?.trim().to_string();
+                Some((deb.display().to_string(), version))
+            })
+            .collect();
+        findings.extend(stale_build_findings(&header.version, &built));
+
         ui.step("Compare what the source ships against what the packages install");
         let mut packaged = BTreeSet::new();
         for deb in &opts.debs {
@@ -711,14 +1062,67 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        findings.extend(smoke_findings(
-            &smoke_test(&opts.debs, &packaged, ui)?,
-            &install,
-        ));
+        let (results, states) = smoke_test(&opts.debs, &packaged, ui)?;
+        for state in &states {
+            findings.extend(install_findings(state, &install));
+        }
+        findings.extend(smoke_findings(&results, &install));
     }
 
     report(&findings, opts.json);
     Ok(findings)
+}
+
+/// Every lintian override file under `debian/`, with its text.
+fn override_files(debian: &std::path::Path) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut take = |path: std::path::PathBuf, shown: String| {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            found.push((shown, text));
+        }
+    };
+    take(
+        debian.join("source/lintian-overrides"),
+        "debian/source/lintian-overrides".to_string(),
+    );
+    if let Ok(entries) = std::fs::read_dir(debian) {
+        for entry in entries.flatten() {
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if name.ends_with(".lintian-overrides") {
+                take(entry.path(), format!("debian/{name}"));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Whether quilt records any patch as currently applied.
+///
+/// `.pc/applied-patches` is quilt's own stack. A `.pc` directory can
+/// exist with an empty or absent stack, which means the patched
+/// content in the tree did not get there by quilt.
+fn quilt_records_applied(repo: &std::path::Path) -> bool {
+    std::fs::read_to_string(repo.join(".pc/applied-patches"))
+        .is_ok_and(|text| text.lines().any(|l| !l.trim().is_empty()))
+}
+
+/// Whether quilt's `.pc` is kept out of git, or is not there to
+/// matter. Both `.gitignore` and the repository's own exclude file
+/// count, which is where gbp's example script puts it.
+fn pc_is_ignored(repo: &std::path::Path) -> bool {
+    if !repo.join(".pc").exists() {
+        return true;
+    }
+    [repo.join(".gitignore"), repo.join(".git/info/exclude")]
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .any(|text| {
+            text.lines()
+                .any(|l| matches!(l.trim().trim_end_matches('/'), ".pc"))
+        })
 }
 
 /// Read a file, naming it when that fails.
@@ -991,22 +1395,6 @@ fn uninstalled_dependencies(debs: &[std::path::PathBuf], ui: &crate::ui::Ui) -> 
     not_installed(&names, ui)
 }
 
-/// Whether every package being checked is itself installed here.
-///
-/// It decides whether a failing script means anything. A script
-/// finds its own modules through absolute paths, so an extracted one
-/// only works when its package is installed -- and when it is not,
-/// the failure says nothing about the package.
-fn packages_installed(debs: &[std::path::PathBuf], ui: &crate::ui::Ui) -> bool {
-    let names: Vec<String> = debs
-        .iter()
-        .filter_map(|deb| deb_field(deb, "Package", ui))
-        .map(|f| f.trim().to_string())
-        .filter(|f| !f.is_empty())
-        .collect();
-    !names.is_empty() && not_installed(&names, ui).is_empty()
-}
-
 /// Whether these packages ship anything a program might need while
 /// running: anything outside `/usr/bin`, `/usr/sbin`, and the
 /// documentation a program never loads.
@@ -1032,7 +1420,71 @@ pub fn ships_runtime_files(packaged: &BTreeSet<String>) -> bool {
     })
 }
 
-/// Extract each package and run the programs it installs./// Extract each package and run the programs it installs./// Extract each package and run the programs it installs.
+/// dpkg's record of a package's installed file hashes, if it kept
+/// one. The name carries the architecture for a multi-arch package.
+fn md5sums_record(package: &str) -> Option<std::path::PathBuf> {
+    let info = std::path::Path::new("/var/lib/dpkg/info");
+    let plain = info.join(format!("{package}.md5sums"));
+    if plain.is_file() {
+        return Some(plain);
+    }
+    std::fs::read_dir(info).ok()?.flatten().find_map(|entry| {
+        let name = entry.file_name().to_str()?.to_string();
+        let matches = name.starts_with(&format!("{package}:")) && name.ends_with(".md5sums");
+        matches.then(|| entry.path())
+    })
+}
+
+/// Whether the extracted package's files are the installed ones.
+///
+/// `md5sums` lists paths relative to `/`, so checking it from the
+/// extraction root compares this package's contents against what
+/// dpkg recorded when the installed copy went in. `None` when there
+/// is no record to compare against.
+fn checksums_match(package: &str, root: &std::path::Path, ui: &crate::ui::Ui) -> Option<bool> {
+    let record = md5sums_record(package)?;
+    let argv: Vec<String> = ["md5sum", "-c", "--quiet", &record.display().to_string()]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    match ui.run_capture(&argv, root) {
+        Ok((0, _)) => Some(true),
+        Ok(_) => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// How each package being checked compares with what is installed.
+fn installed_states(
+    debs: &[std::path::PathBuf],
+    root: &std::path::Path,
+    ui: &crate::ui::Ui,
+) -> Vec<Installed> {
+    debs.iter()
+        .filter_map(|deb| {
+            let package = deb_field(deb, "Package", ui)?.trim().to_string();
+            let deb_version = deb_field(deb, "Version", ui)?.trim().to_string();
+            let argv: Vec<String> = ["dpkg-query", "-W", "-f=${Status}|${Version}", &package]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let installed = match ui.run_capture(&argv, std::path::Path::new(".")) {
+                Ok((0, out)) => out
+                    .split_once('|')
+                    .filter(|(status, _)| dpkg_reports_installed(status))
+                    .map(|(_, version)| version.trim().to_string()),
+                _ => None,
+            };
+            Some(installed_state(
+                installed.as_deref(),
+                &deb_version,
+                checksums_match(&package, root, ui),
+            ))
+        })
+        .collect()
+}
+
+/// Extract each package and run the programs it installs.
 ///
 /// Running from an extraction rather than an installation is the
 /// point: a program that needs a file at an absolute path only finds
@@ -1081,18 +1533,21 @@ fn smoke_test(
     debs: &[std::path::PathBuf],
     packaged: &BTreeSet<String>,
     ui: &crate::ui::Ui,
-) -> Result<Vec<(String, Smoke)>, String> {
+) -> Result<SmokeReport, String> {
     let programs = installed_programs(packaged);
     if programs.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let missing = uninstalled_dependencies(debs, ui);
     let missing = &missing;
-    // Whether a failure here can be believed: either the package is
-    // installed, so absolute paths resolve to its own files, or it
-    // ships nothing a program could have been looking for.
-    let conclusive = packages_installed(debs, ui) || !ships_runtime_files(packaged);
     let root = extract_all(debs, ui)?;
+    // Whether a failure here can be believed. The installed copy has
+    // to be *this* package, compared by contents rather than by
+    // version, since rebuilding while iterating leaves the version
+    // alone. Failing that, it is believable only if the package
+    // ships nothing a program could have been looking for.
+    let states = installed_states(debs, root.path(), ui);
+    let conclusive = states.iter().all(|s| *s == Installed::Same) || !ships_runtime_files(packaged);
     let mut results = Vec::new();
     for program in programs {
         let path = root.path().join(program.trim_start_matches('/'));
@@ -1137,29 +1592,53 @@ fn smoke_test(
             outcome.unwrap_or_else(|| Smoke::NotRun("no way to ask it for help".into())),
         ));
     }
-    Ok(results)
+    Ok((results, states))
 }
 
 /// The findings as a person reads them: worst first, each followed by
 /// the command that shows the same thing.
-pub fn render(findings: &[Finding]) -> String {
+///
+/// `colour` styles the severity word and dims the command. Only
+/// those: the message itself stays plain so it can be quoted into a
+/// bug report without carrying escape codes along.
+pub fn render_styled(findings: &[Finding], colour: bool) -> String {
     if findings.is_empty() {
         return "nothing to report\n".to_string();
     }
     let mut sorted: Vec<&Finding> = findings.iter().collect();
     sorted.sort_by_key(|f| f.severity);
+    let dim = anstyle::Style::new().fg_color(Some(anstyle::AnsiColor::BrightBlack.into()));
     let mut out = String::new();
     for finding in sorted {
-        out.push_str(&format!(
-            "{}: {}\n",
-            finding.severity.label(),
-            finding.message
-        ));
+        let (label, message) = (finding.severity.label(), &finding.message);
+        match colour {
+            true => {
+                let s = finding.severity.style();
+                out.push_str(&format!(
+                    "{}{label}{}: {message}\n",
+                    s.render(),
+                    s.render_reset()
+                ));
+            }
+            false => out.push_str(&format!("{label}: {message}\n")),
+        }
         if let Some(command) = &finding.command {
-            out.push_str(&format!("    {command}\n"));
+            match colour {
+                true => out.push_str(&format!(
+                    "    {}{command}{}\n",
+                    dim.render(),
+                    dim.render_reset()
+                )),
+                false => out.push_str(&format!("    {command}\n")),
+            }
         }
     }
     out
+}
+
+/// [`render_styled`] without colour, which is what a test reads.
+pub fn render(findings: &[Finding]) -> String {
+    render_styled(findings, false)
 }
 
 /// The findings as a document for another tool to read.
@@ -1176,7 +1655,9 @@ fn report(findings: &[Finding], json: bool) {
         }
         return;
     }
-    print!("{}", render(findings));
+    // anstream drops the codes when stdout is not a terminal or
+    // NO_COLOR is set, so this stays safe to pipe.
+    anstream::print!("{}", render_styled(findings, true));
 }
 
 /// The first line of a tool's output, for quoting in a message.
@@ -1217,7 +1698,7 @@ mod tests {
     fn packaging_adopted_from_another_release_is_a_blocker() {
         // The overlay this check was written for: a changelog left at
         // 0.25.4 while 0.26.0 was what got packaged.
-        let found = version_findings("0.25.4-1", "unstable", Some("0.26.0"));
+        let found = version_findings("0.25.4-1", "unstable", Some("0.26.0"), false);
         assert_eq!(names(&found), ["stale-changelog-version"]);
         assert_eq!(found[0].severity, Severity::Blocker);
         assert!(found[0].command.is_some(), "a finding names its command");
@@ -1225,16 +1706,16 @@ mod tests {
 
     #[test]
     fn a_changelog_that_matches_its_source_says_nothing() {
-        assert!(version_findings("0.26.0-1", "unstable", Some("0.26.0")).is_empty());
+        assert!(version_findings("0.26.0-1", "unstable", Some("0.26.0"), false).is_empty());
         // The epoch and revision are not the source's business.
-        assert!(version_findings("1:0.26.0-3", "unstable", Some("0.26.0")).is_empty());
+        assert!(version_findings("1:0.26.0-3", "unstable", Some("0.26.0"), false).is_empty());
     }
 
     #[test]
     fn an_unknown_source_version_is_reported_rather_than_passed_over() {
         // A check that skips silently cannot be told from one that
         // passed, which is the whole failure mode here.
-        let found = version_findings("0.26.0-1", "unstable", None);
+        let found = version_findings("0.26.0-1", "unstable", None, false);
         assert_eq!(names(&found), ["source-version-unknown"]);
         assert_eq!(found[0].severity, Severity::Note);
     }
@@ -1245,11 +1726,12 @@ mod tests {
             "0.26.0-1",
             "UNRELEASED-FIXME-AUTOGENERATED-DEBCARGO",
             Some("0.26.0"),
+            false,
         );
         assert_eq!(names(&found), ["changelog-distribution-placeholder"]);
         // A plain UNRELEASED is the normal state while preparing an
         // upload, so it must not be noise.
-        assert!(version_findings("0.26.0-1", "UNRELEASED", Some("0.26.0")).is_empty());
+        assert!(version_findings("0.26.0-1", "UNRELEASED", Some("0.26.0"), false).is_empty());
     }
 
     #[test]
@@ -1397,6 +1879,228 @@ mod tests {
             source_mismatch("fnlfmt", None, "../junk.deb")
                 .is_some_and(|w| w.contains("names no package"))
         );
+    }
+
+    #[test]
+    fn an_override_with_no_pattern_silences_a_tag_everywhere() {
+        // fnlfmt's: two vendored files excused by silencing the tag
+        // for the whole package, future files included.
+        let text = "# bundled from fennel\nvery-long-line-length-in-source-file\n";
+        let found = override_findings("debian/source/lintian-overrides", text);
+        assert_eq!(names(&found), ["unscoped-lintian-override"]);
+        assert_eq!(found[0].severity, Severity::Note);
+        assert!(
+            found[0]
+                .message
+                .contains("very-long-line-length-in-source-file")
+        );
+        assert_eq!(
+            found[0].command.as_deref(),
+            Some("lintian-explain-tags very-long-line-length-in-source-file")
+        );
+    }
+
+    #[test]
+    fn an_override_carrying_a_pattern_is_already_narrow() {
+        let text = "very-long-line-length-in-source-file [fennel/fennel.lua]\n                    package-contains-thing *.pyc\n";
+        assert!(override_findings("x", text).is_empty());
+        // Comments and blank lines are not overrides.
+        assert!(override_findings("x", "# just a note\n\n").is_empty());
+    }
+
+    #[test]
+    fn a_binary_package_scope_is_not_mistaken_for_a_pattern() {
+        // `[pkg] tag` is still a bare tag: the brackets scope it to a
+        // binary package, not to a file within one.
+        let found = override_findings("debian/foo.lintian-overrides", "[foo] some-tag\n");
+        assert_eq!(names(&found), ["unscoped-lintian-override"]);
+        assert!(
+            found[0].message.contains("some-tag"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn quilt_knowing_it_applied_them_gets_different_advice() {
+        let states = [("0001-x.patch".to_string(), PatchState::AlreadyApplied)];
+        // Quilt has them on its stack: popping puts it right.
+        let popped = patch_findings(&states, true);
+        assert!(popped[0].message.contains("left so by a build"));
+        assert_eq!(
+            popped[0].command.as_deref(),
+            Some("QUILT_PATCHES=debian/patches quilt pop -a")
+        );
+        // Quilt records nothing, so the content is committed on the
+        // branch as well as carried as a patch. Popping would do
+        // nothing at all, and advising it would be worse than silence.
+        let committed = patch_findings(&states, false);
+        assert!(
+            committed[0].message.contains("committed on this branch"),
+            "{}",
+            committed[0].message
+        );
+        assert_eq!(
+            committed[0].command.as_deref(),
+            Some("QUILT_PATCHES=debian/patches quilt applied"),
+            "the command shows the claim rather than acting on it"
+        );
+    }
+
+    #[test]
+    fn a_patch_header_needs_to_say_what_and_whence() {
+        let bare = "--- a/x\n+++ b/x\n";
+        let found = dep3_findings("0001-x.patch", bare);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().all(|f| f.check == "patch-header-not-dep3"));
+        assert!(found[0].message.contains("what it does"));
+        assert!(found[1].message.contains("where it came from"));
+    }
+
+    #[test]
+    fn a_blank_line_ends_a_dep3_header_early() {
+        // git format-patch's shape: a blank line between the subject
+        // and the body, after which nothing is a field any more.
+        let text = "From: A <a@b.c>\nSubject: Fix it\n\nSome prose\n--- a/x\n";
+        let found = dep3_findings("0001-x.patch", text);
+        assert_eq!(names(&found), ["patch-header-not-dep3"]);
+        assert!(found[0].message.contains("` .`"), "{}", found[0].message);
+    }
+
+    #[test]
+    fn a_header_that_keeps_going_with_dots_is_fine() {
+        let text = "Description: Fix it\n .\n More prose\nOrigin: upstream\n--- a/x\n";
+        assert!(dep3_findings("0001-x.patch", text).is_empty());
+    }
+
+    #[test]
+    fn a_package_built_from_another_changelog_entry_is_flagged() {
+        let debs = [("../foo_0.3.2-1_all.deb".to_string(), "0.3.2-1".to_string())];
+        let found = stale_build_findings("0.4.0-1", &debs);
+        assert_eq!(names(&found), ["stale-build"]);
+        assert!(found[0].message.contains("built as 0.3.2-1"));
+        assert!(found[0].message.contains("is at 0.4.0-1"));
+        // The matching build says nothing.
+        let same = [("../foo_0.4.0-1_all.deb".to_string(), "0.4.0-1".to_string())];
+        assert!(stale_build_findings("0.4.0-1", &same).is_empty());
+    }
+
+    #[test]
+    fn quilts_stack_is_read_rather_than_the_directorys_existence() {
+        let dir = fixture("1.2.3-1");
+        std::fs::create_dir_all(dir.path().join(".pc")).unwrap();
+        // A .pc directory with no stack: quilt has nothing applied,
+        // which is the state that made `quilt pop -a` useless advice.
+        assert!(!quilt_records_applied(dir.path()));
+        std::fs::write(dir.path().join(".pc/applied-patches"), "\n").unwrap();
+        assert!(!quilt_records_applied(dir.path()), "blank is still none");
+        std::fs::write(dir.path().join(".pc/applied-patches"), "0001-x.patch\n").unwrap();
+        assert!(quilt_records_applied(dir.path()));
+    }
+
+    #[test]
+    fn a_pc_directory_counts_as_ignored_when_it_is_not_there() {
+        let dir = fixture("1.2.3-1");
+        // Nothing to ignore, so nothing to say.
+        assert!(pc_is_ignored(dir.path()));
+        std::fs::create_dir_all(dir.path().join(".pc")).unwrap();
+        assert!(!pc_is_ignored(dir.path()));
+        // Either file counts; gbp's script writes the git one.
+        std::fs::create_dir_all(dir.path().join(".git/info")).unwrap();
+        std::fs::write(dir.path().join(".git/info/exclude"), "# stuff\n.pc/\n").unwrap();
+        assert!(pc_is_ignored(dir.path()));
+    }
+
+    #[test]
+    fn override_files_are_found_by_both_the_names_they_take() {
+        let dir = fixture("1.2.3-1");
+        let debian = dir.path().join("debian");
+        std::fs::create_dir_all(debian.join("source")).unwrap();
+        std::fs::write(debian.join("source/lintian-overrides"), "tag-a\n").unwrap();
+        std::fs::write(debian.join("foo.lintian-overrides"), "tag-b\n").unwrap();
+        std::fs::write(debian.join("control"), "Source: foo\n").unwrap();
+        let found = override_files(&debian);
+        let names: Vec<&str> = found.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "debian/foo.lintian-overrides",
+                "debian/source/lintian-overrides"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dep3_header_stops_at_the_diff_however_it_starts() {
+        assert_eq!(
+            patch_header("Subject: x\n--- a/f\n+++ b/f\n"),
+            "Subject: x\n"
+        );
+        assert_eq!(
+            patch_header("Subject: x\ndiff --git a/f b/f\n"),
+            "Subject: x\n"
+        );
+        // git format-patch's bare three dashes before the diffstat.
+        assert_eq!(patch_header("Subject: x\n---\n f | 2 +-\n"), "Subject: x\n");
+        // No diff at all: the whole thing is header.
+        assert_eq!(patch_header("Subject: x\n"), "Subject: x\n");
+    }
+
+    #[test]
+    fn a_quilt_package_without_unapply_patches_is_flagged() {
+        // fnlfmt's state: 3.0 (quilt) with patches and no
+        // local-options, so dpkg-source applies them at build and
+        // never puts them back.
+        let found = unapply_findings(Some("3.0 (quilt)\n"), true, None, true);
+        assert_eq!(names(&found), ["patches-left-applied-after-build"]);
+        assert_eq!(found[0].severity, Severity::Warning);
+        // gbp ships the fix, so point at it rather than dictating
+        // two lines to type.
+        assert!(
+            found[0]
+                .command
+                .as_deref()
+                .is_some_and(|c| c.ends_with("gbp-configure-unpatched-source")),
+            "{:?}",
+            found[0].command
+        );
+    }
+
+    #[test]
+    fn a_package_that_already_sets_it_is_quiet() {
+        let opts = "unapply-patches\nabort-on-upstream-changes\n";
+        assert!(unapply_findings(Some("3.0 (quilt)\n"), true, Some(opts), true).is_empty());
+        // dpkg's own long spelling counts too.
+        assert!(
+            unapply_findings(
+                Some("3.0 (quilt)\n"),
+                true,
+                Some("--unapply-patches\n"),
+                true
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_question_only_arises_for_a_quilt_package_with_patches() {
+        // Nothing to apply, so nothing is left applied.
+        assert!(unapply_findings(Some("3.0 (quilt)\n"), false, None, true).is_empty());
+        // A native package has no patch system at all.
+        assert!(unapply_findings(Some("3.0 (native)\n"), true, None, true).is_empty());
+        assert!(unapply_findings(None, true, None, true).is_empty());
+    }
+
+    #[test]
+    fn an_unignored_pc_directory_is_its_own_note() {
+        let found = unapply_findings(
+            Some("3.0 (quilt)\n"),
+            true,
+            Some("unapply-patches\n"),
+            false,
+        );
+        assert_eq!(names(&found), ["pc-directory-not-ignored"]);
+        assert_eq!(found[0].severity, Severity::Note);
     }
 
     #[test]
@@ -1668,8 +2372,8 @@ mod tests {
             ("0001-one.patch".to_string(), PatchState::AlreadyApplied),
             ("0002-two.patch".to_string(), PatchState::AlreadyApplied),
         ];
-        let found = patch_findings(&states);
-        assert_eq!(names(&found), ["patches-already-applied"]);
+        let found = patch_findings(&states, true);
+        assert_eq!(names(&found), ["patches-applied-in-tree"]);
         assert_eq!(found[0].severity, Severity::Note);
         assert!(!has_blocker(&found));
         assert!(
@@ -1678,11 +2382,7 @@ mod tests {
             found[0].message
         );
         // It must admit what it could not settle.
-        assert!(
-            found[0]
-                .message
-                .contains("upstream has taken look the same")
-        );
+        assert!(found[0].message.contains("look alike"));
     }
 
     #[test]
@@ -1694,7 +2394,7 @@ mod tests {
                 PatchState::Broken("1 out of 1 hunk FAILED".into()),
             ),
         ];
-        let found = patch_findings(&states);
+        let found = patch_findings(&states, true);
         assert_eq!(names(&found), ["patch-does-not-apply"]);
         assert!(has_blocker(&found));
         assert_eq!(
@@ -1827,6 +2527,48 @@ mod tests {
         // Absolute, because the path was read against the current
         // directory and not against -C, which is the whole trap.
         assert!(err.starts_with('/'), "it says where it looked: {err}");
+    }
+
+    #[test]
+    fn a_rebuild_of_the_same_version_is_caught_by_contents_alone() {
+        // The trap this exists for: iterating on packaging produces
+        // 0.4.0-1 again and again, so versions match while the files
+        // do not, and the smoke test would quietly exercise the copy
+        // installed hours ago.
+        let state = installed_state(Some("0.4.0-1"), "0.4.0-1", Some(false));
+        let Installed::Differs(why) = &state else {
+            panic!("differing contents must be noticed: {state:?}");
+        };
+        assert!(why.contains("only their contents reveal"), "{why}");
+        let found = install_findings(&state, "sudo apt install ./x.deb");
+        assert_eq!(names(&found), ["installed-copy-differs"]);
+        assert_eq!(found[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn matching_contents_are_the_package_being_checked() {
+        assert_eq!(
+            installed_state(Some("0.4.0-1"), "0.4.0-1", Some(true)),
+            Installed::Same
+        );
+        assert!(install_findings(&Installed::Same, "x").is_empty());
+        assert_eq!(installed_state(None, "0.4.0-1", None), Installed::Absent);
+        assert!(install_findings(&Installed::Absent, "x").is_empty());
+    }
+
+    #[test]
+    fn without_a_checksum_record_the_versions_are_the_fallback() {
+        // A package shipping no md5sums can still be told apart by
+        // version, which is weaker but better than nothing.
+        assert_eq!(
+            installed_state(Some("0.4.0-1"), "0.4.0-1", None),
+            Installed::Same
+        );
+        let Installed::Differs(why) = installed_state(Some("0.3.2-1"), "0.4.0-1", None) else {
+            panic!("a different version is a different package");
+        };
+        assert!(why.contains("0.3.2-1 is installed"), "{why}");
+        assert!(why.contains("this package is 0.4.0-1"), "{why}");
     }
 
     #[test]

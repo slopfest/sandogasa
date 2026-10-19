@@ -46,7 +46,13 @@ them, so a crate's cargo tests keep running too.")]
         repo: PathBuf,
 
         /// Built package(s) whose programs to probe (repeatable/CSV).
-        #[arg(long, required = true, value_delimiter = ',', value_name = "DEB")]
+        #[arg(
+            long,
+            required = true,
+            num_args = 1..,
+            value_delimiter = ',',
+            value_name = "DEB"
+        )]
         deb: Vec<PathBuf>,
 
         /// Print the commands without running anything (a tutorial).
@@ -77,7 +83,7 @@ Writes nothing. Exits non-zero when something would block a sponsor.")]
         repo: PathBuf,
 
         /// Built package(s) to check against (repeatable or CSV).
-        #[arg(long, value_delimiter = ',', value_name = "DEB")]
+        #[arg(long, num_args = 1.., value_delimiter = ',', value_name = "DEB")]
         deb: Vec<PathBuf>,
 
         /// Print findings as JSON.
