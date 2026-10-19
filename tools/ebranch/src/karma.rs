@@ -399,7 +399,7 @@ fn fti_verdict(component: Option<&str>, update: &UpdateFacts<'_>) -> Verdict {
 /// `EPEL10FailsToInstall` while the branch it belongs to is
 /// `epel10.4`, so the two differ without disagreeing, and saying so
 /// would be wrong rather than merely unhelpful.
-fn bot_release(summary: &str) -> Option<String> {
+pub(crate) fn bot_release(summary: &str) -> Option<String> {
     let numbered = |tok: &str| {
         let rest = tok.strip_prefix('f').or_else(|| tok.strip_prefix('F'))?;
         (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())).then(|| format!("f{rest}"))
@@ -424,9 +424,18 @@ fn bot_release(summary: &str) -> Option<String> {
 /// genuinely not this update's to answer, and that is the whole
 /// explanation.
 fn unknown_reason(bug: Option<&BugFacts>, update: &UpdateFacts<'_>) -> Option<String> {
-    let release = bot_release(&bug?.summary)?;
-    (release != update.branch)
-        .then(|| format!("an {release} bug; this update is for {}", update.branch))
+    other_release_note(&bug?.summary, update.branch)
+}
+
+/// How a bug belonging to another release is described, when the
+/// bots' own wording says which release it is.
+///
+/// Shared with `submit`, which has the same question to ask before
+/// the update exists: there, a bug for another release is one the
+/// submission would close on a branch that does not fix it.
+pub(crate) fn other_release_note(summary: &str, branch: &str) -> Option<String> {
+    let release = bot_release(summary)?;
+    (release != branch).then(|| format!("an {release} bug; this update is for {branch}"))
 }
 
 /// Interpret a karma answer: `+1`/`1`/`+`, `-1`/`-`, `0`, or

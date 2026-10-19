@@ -799,14 +799,18 @@ both come from one verdict:
         not failing to build)
 ```
 
-Listed bugs are then screened: a bug whose package the update builds
-nothing for would be closed by an update that never touched it, so it
-is reported and you are offered the chance to leave it off. Only
-update requests and review requests are screened, since they name
-their package; a CVE or FTBFS bug is never dropped. `--yes`
-skips proposing entirely and keeps whatever you listed: attaching a bug
-closes it when the update goes stable, and dropping one you asked for
-is equally not something to do unprompted.
+Listed bugs are then screened for two ways of not belonging: a bug
+whose package the update builds nothing for, and a bot-filed
+FailsToInstall or FTBFS report for another release, which the package
+check cannot catch because the package is built. Either would be
+closed by an update that never fixed it, so it is reported and you
+are offered the chance to leave it off. The package check considers
+only update requests and review requests, since they name their
+package; the release check reads the bots' own wording, which names
+the release outright. `--yes` skips proposing entirely and keeps
+whatever you listed: attaching a bug closes it when the update goes
+stable, and dropping one you asked for is equally not something to do
+unprompted.
 
 The pass gate reuses the karma derivation: a clean `+1` check submits
 after showing the plan (packages, type, bugs, thresholds, notes

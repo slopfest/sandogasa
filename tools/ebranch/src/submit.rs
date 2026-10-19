@@ -70,28 +70,55 @@ pub fn resolve_notes(inline: Option<&str>, file: Option<&Path>) -> Result<String
     Ok(notes)
 }
 
+/// Why a bug does not belong on this update, if it does not.
+///
+/// The package check is first because it is the stronger claim: the
+/// update ships nothing that bug is about. The release check catches
+/// what it cannot — a bug for a package the update *does* build, but
+/// for a different release.
+fn misfiled_reason(
+    bug: &crate::karma::BugFacts,
+    packages: &[String],
+    branch: &str,
+) -> Option<String> {
+    if let Some(package) = crate::karma::bug_package(&bug.summary, bug.component.as_deref())
+        && !packages.contains(&package)
+    {
+        return Some(format!("no {package} among the update's packages"));
+    }
+    crate::karma::other_release_note(&bug.summary, branch)
+}
+
 /// A bug the update cannot be fixing, and why.
 struct Misfiled {
     bug_id: u64,
     summary: String,
-    package: String,
+    reason: String,
 }
 
-/// Drop bugs whose package the update does not build.
+/// Drop bugs this update cannot be fixing.
 ///
-/// A bug listed on an update that ships nothing for it will be
-/// closed when the update goes stable, against a package the update
-/// never touched. Catching it here is better than voting -1 on it
-/// afterwards: nothing has been published yet, so correcting the
-/// list costs nothing.
+/// A bug listed on an update that does not fix it will be closed
+/// when the update goes stable. Catching it here is better than
+/// voting -1 on it afterwards: nothing has been published yet, so
+/// correcting the list costs nothing.
 ///
-/// Only bugs that name their package outright are considered (see
-/// `karma::bug_package`), so a CVE or FTBFS bug is never dropped.
+/// Two ways a bug fails to belong. Its package may not be among the
+/// update's; only bugs that name their package outright are
+/// considered for that (see `karma::bug_package`), since a stale
+/// component on a CVE or FTBFS bug would otherwise drop it wrongly.
+/// Or it may be a bot-filed report for *another release* — an
+/// F46FailsToInstall listed on an F45 update, which the package
+/// check cannot see because the package is built. That one is read
+/// from the bots' own wording, which names the release outright, so
+/// it carries none of the staleness the component does.
+///
 /// Under `--yes` this warns and keeps them: silently discarding a
 /// bug the user passed to `--bug` is not something to do unasked.
 async fn screen_bugs(
     bz: &sandogasa_bugzilla::BzClient,
     packages: &[String],
+    branch: &str,
     bugs: &[u64],
     assume_yes: bool,
 ) -> Result<Vec<u64>, String> {
@@ -100,11 +127,11 @@ async fn screen_bugs(
         .iter()
         .filter_map(|id| {
             let bug = fetched.get(id)?;
-            let package = crate::karma::bug_package(&bug.summary, bug.component.as_deref())?;
-            (!packages.contains(&package)).then(|| Misfiled {
+            let reason = misfiled_reason(bug, packages, branch)?;
+            Some(Misfiled {
                 bug_id: *id,
                 summary: bug.summary.clone(),
-                package,
+                reason,
             })
         })
         .collect();
@@ -114,14 +141,9 @@ async fn screen_bugs(
 
     let shown: Vec<String> = misfiled
         .iter()
-        .map(|b| {
-            format!(
-                "  #{} {}\n    no {} among the update's packages",
-                b.bug_id, b.summary, b.package
-            )
-        })
+        .map(|b| format!("  #{} {}\n    {}", b.bug_id, b.summary, b.reason))
         .collect();
-    eprintln!("\nThis update builds nothing for these bugs' packages:");
+    eprintln!("\nThese bugs do not look like this update's to close:");
     for bug in &shown {
         eprintln!("{bug}");
     }
@@ -343,7 +365,13 @@ pub fn run(
     let bugs = if bugs.is_empty() {
         Vec::new()
     } else {
-        rt.block_on(screen_bugs(&bz, packages, &bugs, opts.assume_yes))?
+        rt.block_on(screen_bugs(
+            &bz,
+            packages,
+            report.dist_branch(),
+            &bugs,
+            opts.assume_yes,
+        ))?
     };
 
     if opts.assume_yes {
@@ -548,6 +576,41 @@ mod tests {
         })
     }
 
+    #[test]
+    fn a_bug_for_another_release_is_misfiled_though_its_package_is_built() {
+        // The real pairing: one dist-git commit named every
+        // release's FailsToInstall bug in its Fixes: trailer, so an
+        // f46 bug rides along on an f45 update. The package check
+        // cannot see it -- the package *is* built -- and submitting
+        // it would close the f46 bug on an f45 push.
+        let bug = crate::karma::BugFacts {
+            summary: "F46FailsToInstall: gnome-shell-extension-frippery-applications-menu"
+                .to_string(),
+            component: Some("gnome-shell-frippery".to_string()),
+            ..Default::default()
+        };
+        let packages = vec!["gnome-shell-frippery".to_string()];
+        let reason = misfiled_reason(&bug, &packages, "f45").expect("f46 does not belong on f45");
+        assert!(reason.contains("f46"), "{reason}");
+        assert!(reason.contains("f45"), "{reason}");
+        // The same bug on its own release belongs there.
+        assert_eq!(misfiled_reason(&bug, &packages, "f46"), None);
+    }
+
+    #[test]
+    fn a_package_the_update_does_not_build_is_named_before_any_release() {
+        // Both could be true at once; the package is the stronger
+        // claim and is what the user is told.
+        let bug = crate::karma::BugFacts {
+            summary: "zsh-5.9 is available".to_string(),
+            component: Some("zsh".to_string()),
+            ..Default::default()
+        };
+        let reason = misfiled_reason(&bug, &["rust-ctor".to_string()], "f45")
+            .expect("zsh is not among the packages");
+        assert!(reason.contains("no zsh"), "{reason}");
+    }
+
     #[tokio::test]
     async fn screen_bugs_keeps_bugs_the_update_builds_for() {
         let server = bz_with(serde_json::json!({
@@ -555,7 +618,7 @@ mod tests {
         }))
         .await;
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
-        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], &[1], true)
+        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], "f44", &[1], true)
             .await
             .unwrap();
         assert_eq!(kept, vec![1]);
@@ -570,7 +633,7 @@ mod tests {
         }))
         .await;
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
-        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], &[2], true)
+        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], "f44", &[2], true)
             .await
             .unwrap();
         assert_eq!(kept, vec![2]);
@@ -585,7 +648,7 @@ mod tests {
         }))
         .await;
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
-        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], &[3], true)
+        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], "f44", &[3], true)
             .await
             .unwrap();
         assert_eq!(kept, vec![3]);
@@ -602,7 +665,7 @@ mod tests {
             .mount(&server)
             .await;
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
-        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], &[4], false)
+        let kept = screen_bugs(&bz, &["rust-ctor".to_string()], "f44", &[4], false)
             .await
             .unwrap();
         assert_eq!(kept, vec![4], "a fetch failure must not drop bugs");

@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### ebranch: submit screens bugs by release, not only by package
+
+`--submit` offered to drop a listed bug when the update built
+nothing for its package. A bug for a package the update *does*
+build, but for another release, went through untouched — and
+submitting it closes that bug when the update reaches stable, on a
+branch that never fixed it.
+
+This is not a rare slip. A single dist-git commit that names every
+release's FailsToInstall bug in its `Fixes:` trailer puts all of
+them on every update that commit produces, so an F46FailsToInstall
+arrives on the F45 update looking exactly like the F45 one beside
+it. gnome-shell-frippery 51.0-1 did precisely that, and the F45 bug
+had already been closed by the rawhide build for the same reason.
+
+Both now reach the same prompt, each saying which applies:
+
+```console
+These bugs do not look like this update's to close:
+  #2537470 F46FailsToInstall: gnome-shell-extension-frippery-...
+    an f46 bug; this update is for f45
+Leave these bugs off the update? [Y/n/each]
+```
+
+The release is read from the bots' own wording, which names it
+outright, so it carries none of the staleness that keeps a CVE or
+FTBFS bug's component from being trusted against the builds. The
+package check still runs first and is what the user is told when
+both apply. Under `--yes` nothing is dropped, as before.
+
 ### ebranch: give-karma says why it cannot judge a bug
 
 A Bodhi update can list the same FailsToInstall report twice, once
