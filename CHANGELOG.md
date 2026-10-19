@@ -53,7 +53,11 @@ items that are checkable:
   `unapply-patches` is set in `debian/source/local-options`, so
   without it every build leaves the tree patched with an untracked
   `.pc` beside it. That file never ships in a source package, so
-  setting it affects nobody else's build.
+  setting it affects nobody else's build — the finding cites
+  `dpkg-source(1)` so that claim can be checked rather than taken on
+  trust. Each carries the line to add rather than a path to gbp's
+  example script, which is only present when git-buildpackage's docs
+  are installed.
 - **`stale-build`** — with a `.deb` in hand its version can be
   compared against `debian/changelog`, catching a check run against
   yesterday's build. That also retires a note that fired on every

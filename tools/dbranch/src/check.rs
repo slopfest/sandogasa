@@ -448,12 +448,20 @@ pub fn unapply_findings(
                 "debian/source/local-options does not set unapply-patches, \
                  so every build leaves this tree with its patches applied \
                  — which is not the state a packaging branch is meant to \
-                 be in. The file never ships in the source package, so \
-                 setting it affects nobody else's build."
+                 be in. That file never ships in the source package, so \
+                 setting it affects nobody else's build; see dpkg-source(1) \
+                 under --unapply-patches and debian/source/local-options."
                     .into(),
             )
+            // The line itself rather than gbp's example script: the
+            // script is only present when git-buildpackage's docs
+            // are installed, it also does the `.pc` half that has
+            // its own finding, and a command you can read beats a
+            // path you have to go and open.
             .with_command(
-                "/usr/share/doc/git-buildpackage/examples/gbp-configure-unpatched-source".into(),
+                "mkdir -p debian/source && echo unapply-patches \
+                 >> debian/source/local-options"
+                    .into(),
             ),
         );
     }
@@ -2066,13 +2074,13 @@ mod tests {
         let found = unapply_findings(Some("3.0 (quilt)\n"), true, None, true);
         assert_eq!(names(&found), ["patches-left-applied-after-build"]);
         assert_eq!(found[0].severity, Severity::Warning);
-        // gbp ships the fix, so point at it rather than dictating
-        // two lines to type.
+        // A command that can be read and run, not a path to a
+        // script that may not be installed.
         assert!(
             found[0]
                 .command
                 .as_deref()
-                .is_some_and(|c| c.ends_with("gbp-configure-unpatched-source")),
+                .is_some_and(|c| c.contains("echo unapply-patches")),
             "{:?}",
             found[0].command
         );
