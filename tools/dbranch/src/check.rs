@@ -594,7 +594,11 @@ pub fn stale_build_findings(changelog_version: &str, debs: &[(String, String)]) 
 /// exactly the package whose program most wants running. A build
 /// never runs it, so without this there is nothing between a broken
 /// binary and its first user.
-pub fn autopkgtest_findings(control: Option<&str>, testsuite: Option<&str>) -> Vec<Finding> {
+pub fn autopkgtest_findings(
+    control: Option<&str>,
+    testsuite: Option<&str>,
+    debs: &[String],
+) -> Vec<Finding> {
     if control.is_some_and(crate::autopkgtest::declares_test) {
         return Vec::new();
     }
@@ -616,8 +620,22 @@ pub fn autopkgtest_findings(control: Option<&str>, testsuite: Option<&str>) -> V
             .to_string(),
     };
     vec![
-        Finding::new("no-program-test", Severity::Warning, message)
-            .with_command("dbranch autopkgtest --deb ../*.deb".into()),
+        Finding::new("no-program-test", Severity::Warning, message).with_command(
+            // Name the packages in hand rather than guessing where
+            // they are. `../*.deb` is only right for a build that
+            // left its output beside the source; pbuilder-dist,
+            // which dbranch itself drives, puts it under
+            // ~/pbuilder/<dist>_result/, where that glob matches
+            // whatever unrelated package happens to be there.
+            match debs.is_empty() {
+                false => format!("dbranch autopkgtest --deb {}", debs.join(" ")),
+                // A plain placeholder rather than a glob. Only the
+                // operator knows where their build put the package,
+                // and a glob guessed at from here matches whatever
+                // else happens to be in that directory.
+                true => "dbranch autopkgtest --deb path-to-deb".to_string(),
+            },
+        ),
     ]
 }
 
@@ -1011,6 +1029,16 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
             .as_deref()
             .and_then(declared_testsuite)
             .as_deref(),
+        &opts
+            .debs
+            .iter()
+            .map(|d| {
+                std::path::absolute(d)
+                    .unwrap_or_else(|_| d.clone())
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>(),
     ));
 
     ui.step("Look for comments left behind by an older release");
@@ -1787,12 +1815,22 @@ mod tests {
     #[test]
     fn a_package_nothing_runs_is_reported_with_the_command_that_fixes_it() {
         let script = "Tests: smoke\nDepends: @\n";
-        assert!(autopkgtest_findings(Some(script), None).is_empty());
-        let found = autopkgtest_findings(None, None);
+        assert!(autopkgtest_findings(Some(script), None, &[]).is_empty());
+        let found = autopkgtest_findings(None, None, &[]);
         assert_eq!(names(&found), ["no-program-test"]);
+        // With no package in hand it must not guess a location:
+        // `../*.deb` is right only when the build left its output
+        // beside the source, and matches an unrelated package
+        // otherwise.
         assert_eq!(
             found[0].command.as_deref(),
-            Some("dbranch autopkgtest --deb ../*.deb")
+            Some("dbranch autopkgtest --deb path-to-deb")
+        );
+        // Given one, it names it.
+        let known = autopkgtest_findings(None, None, &["/tmp/foo_1-1_all.deb".to_string()]);
+        assert_eq!(
+            known[0].command.as_deref(),
+            Some("dbranch autopkgtest --deb /tmp/foo_1-1_all.deb")
         );
     }
 
@@ -1803,7 +1841,7 @@ mod tests {
         // when there is none. Both are real autopkgtests, so saying
         // "no autopkgtest" would be false -- what is true is that
         // neither runs the installed program.
-        let found = autopkgtest_findings(None, Some("autopkgtest-pkg-python"));
+        let found = autopkgtest_findings(None, Some("autopkgtest-pkg-python"), &[]);
         assert_eq!(names(&found), ["no-program-test"]);
         assert!(
             found[0]
@@ -1820,7 +1858,7 @@ mod tests {
         // A control file with only Test-Command: stanzas runs cargo
         // tests against the crate, never the binary.
         let generated = "Test-Command: /usr/share/cargo/bin/cargo-auto-test dbranch 0.26.0\n";
-        let found = autopkgtest_findings(Some(generated), None);
+        let found = autopkgtest_findings(Some(generated), None, &[]);
         assert_eq!(names(&found), ["no-program-test"]);
     }
 
