@@ -212,26 +212,64 @@ pub fn series_findings(series: &str, present: &BTreeSet<String>) -> Vec<Finding>
     found
 }
 
-/// Patches that no longer apply to this source.
+/// What trying a patch against this source showed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PatchState {
+    /// It applies cleanly.
+    Applies,
+    /// It is already in the source: the tree has patches applied, as
+    /// gbp's layout leaves them.
+    AlreadyApplied,
+    /// It applies in neither direction, with what patch(1) said.
+    Broken(String),
+}
+
+/// Findings for the patches that were tried.
 ///
-/// `failures` pairs a patch name with why it failed. The usual cause
-/// is the happiest one: upstream took the fix, and the patch is now
-/// describing work already done.
-pub fn apply_findings(failures: &[(String, String)]) -> Vec<Finding> {
-    failures
+/// The already-applied ones collapse into a single note, because the
+/// thing worth saying is about the tree and not about any one patch:
+/// here a patch you carry and a fix upstream has taken look exactly
+/// alike, so the stale-patch question cannot be answered at all.
+/// Saying nothing would imply it had been; saying it once per patch
+/// would bury a package carrying twenty of them.
+///
+/// It stays a note rather than silence for the same reason the check
+/// exists: this is the state where staleness hides. It is also why
+/// the check matters most before a build, on a tree whose patches
+/// are not yet applied.
+pub fn patch_findings(states: &[(String, PatchState)]) -> Vec<Finding> {
+    let mut found: Vec<Finding> = states
         .iter()
-        .map(|(patch, reason)| {
-            Finding::new(
-                "patch-does-not-apply",
-                Severity::Blocker,
-                format!(
-                    "debian/patches/{patch} no longer applies ({reason}) — \
-                     upstream may already carry it"
-                ),
-            )
-            .with_command(format!("patch -p1 --dry-run -f -i debian/patches/{patch}"))
+        .filter_map(|(patch, state)| match state {
+            PatchState::Broken(why) => Some(
+                Finding::new(
+                    "patch-does-not-apply",
+                    Severity::Blocker,
+                    format!("debian/patches/{patch} no longer applies ({why})"),
+                )
+                .with_command(format!("patch -p1 --dry-run -f -i debian/patches/{patch}")),
+            ),
+            _ => None,
         })
-        .collect()
+        .collect();
+    let applied = states
+        .iter()
+        .filter(|(_, state)| *state == PatchState::AlreadyApplied)
+        .count();
+    if applied > 0 {
+        found.push(Finding::new(
+            "patches-already-applied",
+            Severity::Note,
+            format!(
+                "{applied} of {} patches are already applied in this tree, \
+                 so whether any is stale could not be told — a patch you \
+                 carry and a fix upstream has taken look the same here. \
+                 Run this on an unpatched tree to find out.",
+                states.len()
+            ),
+        ));
+    }
+    found
 }
 
 /// Comments naming a release older than the one being packaged.
@@ -272,20 +310,66 @@ pub fn stale_mention_findings(files: &BTreeMap<String, String>, current: &str) -
     found
 }
 
+/// The source package a .deb belongs to, from `dpkg-deb -f` output.
+///
+/// `Source` names it when the binary package is named differently
+/// (`librust-sandogasa-build-dev` comes from `rust-sandogasa-build`),
+/// and is simply absent when the two agree, as for `fnlfmt`. It may
+/// carry a version in parentheses, which is not part of the name.
+pub fn deb_source_name(fields: &str) -> Option<String> {
+    let field = |key: &str| {
+        fields
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    field("Source:")
+        .map(|v| v.split_whitespace().next().unwrap_or(v))
+        .or_else(|| field("Package:"))
+        .map(str::to_string)
+}
+
+/// Why a .deb does not belong with this source tree, if it does not.
+///
+/// Worth failing the whole run over rather than reporting: every
+/// package check compares the source against the .deb, so the wrong
+/// .deb does not produce wrong findings here and there -- it reports
+/// every file the source ships as missing, which reads exactly like
+/// a catastrophically broken package. `-C` moves the tree being
+/// checked but not the `--deb` paths, which resolve against the
+/// current directory, so the two really can name different packages.
+pub fn source_mismatch(tree_source: &str, deb_source: Option<&str>, deb: &str) -> Option<String> {
+    match deb_source {
+        Some(name) if name == tree_source => None,
+        Some(name) => Some(format!(
+            "{deb} is a package of {name}, but debian/changelog here is \
+             {tree_source} — `-C` moves the tree being checked, not the \
+             --deb paths, which are relative to where you are"
+        )),
+        None => Some(format!("{deb} names no package — is it a .deb?")),
+    }
+}
+
 /// Whether anything runs the programs this package installs.
 ///
-/// A generated suite is not nothing, so "no autopkgtest" would often
-/// be false. What is true is narrower and more useful: none of them
-/// runs the installed program. autodep8's Python generator emits one
-/// `import` and marks it `superficial`, Debian's own word for a test
-/// that proves little; its Ruby generator runs the gem's own suite,
-/// which is the library's tests and is `skippable` when there are
-/// none; debcargo's stanzas run cargo tests against the crate. All
-/// three leave /usr/bin untouched.
+/// debcargo generates test stanzas for a crate with a library
+/// package, and none at all for one built binary-only -- which is
+/// exactly the package whose program most wants running. A build
+/// never runs it, so without this there is nothing between a broken
+/// binary and its first user.
 pub fn autopkgtest_findings(control: Option<&str>, testsuite: Option<&str>) -> Vec<Finding> {
     if control.is_some_and(crate::autopkgtest::declares_test) {
         return Vec::new();
     }
+    // A generated suite is not nothing, so "no autopkgtest" would be
+    // false. What is true is narrower and more useful: none of them
+    // runs the installed program. autodep8's Python generator emits
+    // one `import` and marks it `superficial`, Debian's own word for
+    // a test that proves little; its Ruby generator runs the gem's
+    // own suite, which is the library's tests and is `skippable` when
+    // there are none; debcargo's stanzas run cargo tests against the
+    // crate. All three leave /usr/bin untouched.
     let message = match testsuite {
         Some(suite) => format!(
             "{suite} exercises this package's library, not the programs \
@@ -423,7 +507,14 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
     let mut findings = Vec::new();
     let debian = opts.repo.join("debian");
     if !debian.is_dir() {
-        return Err(format!("{} has no debian/ directory", opts.repo.display()));
+        // The absolute path, not the literal `.`: being somewhere
+        // other than you thought is exactly how this is reached.
+        return Err(format!(
+            "{} has no debian/ directory — use -C to point at the package",
+            std::path::absolute(&opts.repo)
+                .unwrap_or_else(|_| opts.repo.clone())
+                .display()
+        ));
     }
 
     ui.step("Read the changelog and the source's own version");
@@ -439,25 +530,41 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         source.as_deref(),
     ));
 
+    // Before anything else looks at them: a .deb from another package
+    // would be compared against this source and report all of it
+    // missing. Cheap to check, and catastrophic to miss.
+    for deb in &opts.debs {
+        let shown = std::path::absolute(deb)
+            .unwrap_or_else(|_| deb.clone())
+            .display()
+            .to_string();
+        if !deb.is_file() {
+            return Err(format!("{shown}: no such file"));
+        }
+        let argv: Vec<String> = ["dpkg-deb", "-f", &shown, "Source", "Package"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (code, fields) = ui
+            .run_capture(&argv, &opts.repo)
+            .map_err(|e| format!("dpkg-deb -f {shown}: {e}"))?;
+        if code != 0 {
+            return Err(format!("dpkg-deb -f {shown} failed: {fields}"));
+        }
+        if let Some(why) =
+            source_mismatch(&header.package, deb_source_name(&fields).as_deref(), &shown)
+        {
+            return Err(why);
+        }
+    }
+
     ui.step("Compare debian/patches against the series file");
     let series_path = debian.join("patches/series");
     if series_path.is_file() {
         let series = read(&series_path)?;
         let present = patch_files(&debian.join("patches"));
         findings.extend(series_findings(&series, &present));
-        // An unpacked quilt source has its patches already applied,
-        // so a dry-run apply there tests nothing and fails anyway.
-        if opts.repo.join(".pc/applied-patches").is_file() {
-            findings.push(Finding::new(
-                "patches-already-applied",
-                Severity::Note,
-                "the patches are applied in this tree (.pc exists), so \
-                 whether they still apply was not tested"
-                    .into(),
-            ));
-        } else {
-            findings.extend(apply_findings(&failing_patches(&series, ui, &opts.repo)));
-        }
+        findings.extend(patch_findings(&patch_states(&series, ui, &opts.repo)));
     }
 
     ui.step("Check that something runs the installed programs");
@@ -575,40 +682,49 @@ fn patch_files(dir: &std::path::Path) -> BTreeSet<String> {
         .collect()
 }
 
-/// Which of the series' patches no longer apply, and why.
-fn failing_patches(
+/// Try each of the series' patches, forwards then backwards.
+///
+/// The reverse attempt is what keeps this honest. A patch already in
+/// the source fails to apply forwards exactly as a stale one does --
+/// `1 out of 1 hunk FAILED` either way -- and reporting that as
+/// broken is crying wolf at every gbp tree, which have their patches
+/// applied and no `.pc` directory to notice it by.
+fn patch_states(
     series: &str,
     ui: &crate::ui::Ui,
     repo: &std::path::Path,
-) -> Vec<(String, String)> {
-    let mut failed = Vec::new();
+) -> Vec<(String, PatchState)> {
+    let mut states = Vec::new();
     for line in series.lines() {
         let patch = line.trim();
         if patch.is_empty() || patch.starts_with('#') {
             continue;
         }
         let patch = patch.split_whitespace().next().unwrap_or(patch);
-        let argv: Vec<String> = [
-            "patch",
-            "-p1",
-            "--dry-run",
-            "-f",
-            "-s",
-            "-i",
-            &format!("debian/patches/{patch}"),
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        match ui.run_capture(&argv, repo) {
-            Ok((0, _)) => {}
-            Ok((_, out)) => failed.push((patch.to_string(), first_line(out.trim()).to_string())),
-            // patch(1) missing is not the package's fault; say so
-            // rather than reporting every patch as broken.
-            Err(e) => failed.push((patch.to_string(), format!("could not run patch: {e}"))),
-        }
+        let try_patch = |reverse: bool| -> Result<(i32, String), std::io::Error> {
+            let mut argv: Vec<String> = ["patch", "-p1", "--dry-run", "-f", "-s"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            if reverse {
+                argv.push("-R".to_string());
+            }
+            argv.push("-i".to_string());
+            argv.push(format!("debian/patches/{patch}"));
+            ui.run_capture(&argv, repo)
+        };
+        let state = match try_patch(false) {
+            Ok((0, out)) if out.trim().is_empty() => PatchState::Applies,
+            Ok((_, forward)) => match try_patch(true) {
+                Ok((0, out)) if out.trim().is_empty() => PatchState::AlreadyApplied,
+                _ => PatchState::Broken(first_line(forward.trim()).to_string()),
+            },
+            // patch(1) missing is not the package's fault.
+            Err(e) => PatchState::Broken(format!("could not run patch: {e}")),
+        };
+        states.push((patch.to_string(), state));
     }
-    failed
+    states
 }
 
 /// Every readable file directly in `debian/`, for the prose scan.
@@ -724,7 +840,6 @@ fn deb_entry_path(line: &str) -> Option<String> {
 /// point: a program that needs a file at an absolute path only finds
 /// it if that file was actually packaged, which is the bug being
 /// looked for.
-/// The programs a package installs, as absolute paths.
 pub(crate) fn installed_programs(packaged: &BTreeSet<String>) -> Vec<String> {
     packaged
         .iter()
@@ -789,6 +904,20 @@ fn smoke_test(
             .collect();
         match ui.run_capture(&argv, root.path()) {
             Ok((0, _)) => results.push((program, Smoke::Ok)),
+            // 127 is "command not found", and from an extracted
+            // package that almost always means its Depends are not
+            // installed here -- fnlfmt's `#!/usr/bin/env lua5.4`
+            // against a host with no lua5.4. The program never ran,
+            // so it has not failed; reporting it as broken would be
+            // crying wolf on every package with an interpreter.
+            Ok((127, output)) => results.push((
+                program,
+                Smoke::NotRun(format!(
+                    "{} — install the package's dependencies, or run \
+                     this where they are",
+                    first_line(output.trim())
+                )),
+            )),
             Ok((code, output)) => results.push((program, Smoke::Failed { code, output })),
             Err(e) => results.push((program, Smoke::NotRun(e.to_string()))),
         }
@@ -915,16 +1044,6 @@ mod tests {
     }
 
     #[test]
-    fn a_patch_upstream_has_taken_is_a_blocker_naming_its_command() {
-        let found = apply_findings(&[("relax-anstream.patch".into(), "hunk #1 FAILED".into())]);
-        assert_eq!(names(&found), ["patch-does-not-apply"]);
-        assert_eq!(
-            found[0].command.as_deref(),
-            Some("patch -p1 --dry-run -f -i debian/patches/relax-anstream.patch")
-        );
-    }
-
-    #[test]
     fn a_comment_about_an_older_release_is_a_note() {
         // The real one: "Packaging dbranch 0.25.4 before 0.26.0
         // exists" sat in debcargo.toml long after 0.26.0 existed.
@@ -954,6 +1073,18 @@ mod tests {
     }
 
     #[test]
+    fn a_package_nothing_runs_is_reported_with_the_command_that_fixes_it() {
+        let script = "Tests: smoke\nDepends: @\n";
+        assert!(autopkgtest_findings(Some(script), None).is_empty());
+        let found = autopkgtest_findings(None, None);
+        assert_eq!(names(&found), ["no-program-test"]);
+        assert_eq!(
+            found[0].command.as_deref(),
+            Some("dbranch autopkgtest --deb ../*.deb")
+        );
+    }
+
+    #[test]
     fn a_generated_suite_is_named_rather_than_called_nothing() {
         // autopkgtest-pkg-python emits one `import` marked
         // `superficial`; pkg-ruby runs the gem's own suite and skips
@@ -969,15 +1100,16 @@ mod tests {
             "{}",
             found[0].message
         );
+        assert!(found[0].message.contains("/usr/bin"));
     }
 
     #[test]
     fn debcargo_stanzas_alone_still_leave_the_programs_untested() {
+        // A control file with only Test-Command: stanzas runs cargo
+        // tests against the crate, never the binary.
         let generated = "Test-Command: /usr/share/cargo/bin/cargo-auto-test dbranch 0.26.0\n";
         let found = autopkgtest_findings(Some(generated), None);
         assert_eq!(names(&found), ["no-program-test"]);
-        // A named script is a test of the program; this is not.
-        assert!(autopkgtest_findings(Some("Tests: smoke\n"), None).is_empty());
     }
 
     #[test]
@@ -988,7 +1120,53 @@ mod tests {
             Some("autopkgtest-pkg-python")
         );
         assert_eq!(declared_testsuite("Source: foo\n"), None);
+        // An empty field declares nothing.
         assert_eq!(declared_testsuite("Testsuite:\n"), None);
+    }
+
+    #[test]
+    fn a_debs_source_is_its_source_field_or_else_its_own_name() {
+        // A binary package named differently from its source says so.
+        let rust = "Package: librust-sandogasa-build-dev\nSource: rust-sandogasa-build\n";
+        assert_eq!(
+            deb_source_name(rust).as_deref(),
+            Some("rust-sandogasa-build")
+        );
+        // When they agree, dpkg omits Source entirely.
+        assert_eq!(
+            deb_source_name("Package: fnlfmt\n").as_deref(),
+            Some("fnlfmt")
+        );
+        // Source may carry a version, which is not part of the name.
+        assert_eq!(
+            deb_source_name("Package: foo-bin\nSource: foo (1.2-3)\n").as_deref(),
+            Some("foo")
+        );
+        assert_eq!(deb_source_name(""), None);
+    }
+
+    #[test]
+    fn a_deb_from_another_package_stops_the_run() {
+        // The mistake is easy: -C moves the tree, but --deb paths
+        // resolve against the current directory, so the two can name
+        // different packages. Every package check compares source
+        // against .deb, so the wrong one reports all of the source
+        // missing -- which reads like a catastrophically broken
+        // package rather than like operator error.
+        let why = source_mismatch("fnlfmt", Some("rust-sandogasa-build"), "../x.deb")
+            .expect("a foreign package must stop this");
+        assert!(why.contains("is a package of rust-sandogasa-build"));
+        assert!(why.contains("debian/changelog here is fnlfmt"));
+        assert!(why.contains("not the --deb paths"), "it says why: {why}");
+    }
+
+    #[test]
+    fn the_right_deb_passes_and_an_unreadable_one_does_not() {
+        assert_eq!(source_mismatch("fnlfmt", Some("fnlfmt"), "../f.deb"), None);
+        assert!(
+            source_mismatch("fnlfmt", None, "../junk.deb")
+                .is_some_and(|w| w.contains("names no package"))
+        );
     }
 
     #[test]
@@ -1121,8 +1299,9 @@ mod tests {
             json: false,
         };
         let found = run(&opts, &silent()).expect("a readable tree checks");
-        // The versions agree, so the only thing to say is what was
-        // not looked at for want of a built package.
+        // The versions agree, so what is left is the two things this
+        // tree genuinely lacks: anything that runs the installed
+        // programs, and a built package to check against.
         assert_eq!(names(&found), ["no-program-test", "packages-not-checked"]);
         assert!(!has_blocker(&found));
     }
@@ -1158,6 +1337,14 @@ mod tests {
         };
         let err = run(&opts, &silent()).expect_err("there is nothing to check");
         assert!(err.contains("no debian/"), "{err}");
+        // Naming the absolute path matters: running from the wrong
+        // directory is how this is reached, and a bare "." would not
+        // tell you which directory that was.
+        assert!(
+            err.contains(&dir.path().display().to_string()),
+            "the error names where it looked: {err}"
+        );
+        assert!(err.contains("-C"), "and how to point it elsewhere: {err}");
     }
 
     #[test]
@@ -1239,6 +1426,51 @@ mod tests {
         assert_eq!(classify_asset("src/main.rs"), None);
         assert_eq!(classify_asset("README.md"), None);
         assert_eq!(classify_asset("libfoo.so"), None);
+    }
+
+    #[test]
+    fn patches_already_in_the_tree_collapse_into_one_note() {
+        // fnlfmt's tree is gbp's: patches applied, no .pc to notice
+        // it by. Forward application fails exactly as a stale patch
+        // does, so a blocker here was crying wolf -- and one note per
+        // patch would bury a package carrying twenty.
+        let states = [
+            ("0001-one.patch".to_string(), PatchState::AlreadyApplied),
+            ("0002-two.patch".to_string(), PatchState::AlreadyApplied),
+        ];
+        let found = patch_findings(&states);
+        assert_eq!(names(&found), ["patches-already-applied"]);
+        assert_eq!(found[0].severity, Severity::Note);
+        assert!(!has_blocker(&found));
+        assert!(
+            found[0].message.starts_with("2 of 2 patches"),
+            "{}",
+            found[0].message
+        );
+        // It must admit what it could not settle.
+        assert!(
+            found[0]
+                .message
+                .contains("upstream has taken look the same")
+        );
+    }
+
+    #[test]
+    fn a_patch_that_applies_in_neither_direction_is_still_a_blocker() {
+        let states = [
+            ("good.patch".to_string(), PatchState::Applies),
+            (
+                "stale.patch".to_string(),
+                PatchState::Broken("1 out of 1 hunk FAILED".into()),
+            ),
+        ];
+        let found = patch_findings(&states);
+        assert_eq!(names(&found), ["patch-does-not-apply"]);
+        assert!(has_blocker(&found));
+        assert_eq!(
+            found[0].command.as_deref(),
+            Some("patch -p1 --dry-run -f -i debian/patches/stale.patch")
+        );
     }
 
     #[test]

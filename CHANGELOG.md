@@ -57,6 +57,54 @@ and tests nothing when there is none. The gap is the same in every
 language, which is why the command keys off a package's `/usr/bin`
 contents rather than its ecosystem.
 
+### dbranch: check refuses a .deb from another package
+
+`-C` moves the tree being checked, but `--deb` paths resolve against
+the current directory like any other file argument, so the two can
+name different packages — which is what happens the first time you
+run `check` for one package from another's directory.
+
+That degrades badly rather than quietly. Every package check compares
+the source tree against the `.deb`, so a foreign one reports every
+file the source ships as uninstalled, reading like a catastrophically
+broken package instead of a mistyped path. It is now a hard failure
+before any other check runs, naming both packages and the absolute
+path the `.deb` was looked for at:
+
+```console
+$ dbranch check -C ~/src/debian/pkgs/fnlfmt --deb ../librust-…_arm64.deb
+dbranch: …/librust-sandogasa-build-dev_0.25.4-1_arm64.deb is a package
+of rust-sandogasa-build, but debian/changelog here is fnlfmt — `-C`
+moves the tree being checked, not the --deb paths, which are relative
+to where you are
+```
+
+A missing `--deb` likewise fails naming the absolute path it resolved
+to, which is what makes the directory mix-up visible.
+
+### dbranch: two checks that cried wolf
+
+Run against a real package, `check` reported two blockers where the
+package was fine. A checker that cries wolf gets ignored, so both are
+now distinguished properly.
+
+A patch **already applied** fails to apply exactly as a stale one
+does — `1 out of 1 hunk FAILED` either way — and the
+`.pc/applied-patches` guard does not notice, because a gbp tree has
+its patches applied and no `.pc` directory. Each patch is now tried
+backwards as well: reversing cleanly means it is already in the
+source. That tree then cannot answer the stale-patch question at all,
+since a patch you carry and a fix upstream has taken look identical,
+so it says so as a note rather than staying silent.
+
+**Exit 127** from an extracted package means the host has not got the
+package's dependencies — `#!/usr/bin/env lua5.4` on a machine without
+lua5.4 — so the program never ran and has not failed. It is reported
+as not run, naming what was missing, instead of as a broken binary.
+This is also the limit of the check: it is a cheap pre-check, not a
+substitute for autopkgtest, which installs the package and its
+dependencies in a testbed.
+
 ### dbranch: check packaging files instead of trusting them
 
 A Debian `debian/` directory is often adopted rather than written —

@@ -836,6 +836,58 @@ a program that does not start, packaging describing a different
 source, a patch that no longer applies. It sets the exit status, so
 widening it changes what fails a pipeline.
 
+### `-C` moves the tree, not the `--deb` paths
+
+`--deb` arguments resolve against the current directory like any
+other file argument, while `-C` moves the tree being checked. So the
+two can name different packages, and that is not a hypothetical: it
+happened the first time `check` was pointed at a real package from
+another repository's directory.
+
+It has to be a hard failure rather than a finding, because of how
+badly it degrades. Every package check compares the source tree
+against the `.deb`, so a foreign one reports *every file the source
+ships* as uninstalled — which reads like a catastrophically broken
+package rather than like operator error, and is exactly the sort of
+confident wrong answer that teaches people to ignore a tool.
+
+The identity comes from `dpkg-deb -f`: `Source` when the binary
+package is named differently from its source, and `Package` when they
+agree, since dpkg omits `Source` then. It is compared against
+`debian/changelog`'s own source name, before any other check runs.
+
+### A false blocker costs more than a missed one
+
+Both of these were found by running `check` against a real package
+(fnlfmt), and both reported a blocker where the package was fine. A
+checker that cries wolf gets ignored, and an ignored checker is worse
+than no checker, so the bar for `Severity::Blocker` is that the
+package is genuinely at fault.
+
+**A patch already applied looks exactly like a stale one.** Forward
+application fails with `1 out of 1 hunk FAILED` in both cases. The
+`.pc/applied-patches` guard does not catch it, because a gbp tree has
+its patches applied and no `.pc` directory at all. So each patch is
+tried forwards and then *backwards*: reversing cleanly means it is
+already in the source. The honest consequence is that such a tree
+cannot answer the stale-patch question at all — a patch we carry and
+a fix upstream has taken are indistinguishable there — so it reports
+a `Note` saying so rather than silence, which would imply the
+question had been settled.
+
+**Exit 127 from an extracted package means the host lacks its
+dependencies.** `dpkg-deb -x` unpacks files; it installs nothing, so
+`#!/usr/bin/env lua5.4` fails on a host without lua5.4 and the
+program never runs. That is not the package failing, and reporting it
+as a blocker would fire on every interpreted package on a clean
+machine. It becomes `Smoke::NotRun`, naming what was missing.
+
+The limitation to remember: that is also why a smoke test here is a
+cheap pre-check and not a substitute for autopkgtest, which installs
+the package and its dependencies in a testbed. To reach a failure
+like fnlfmt's missing `indentation.lua`, the package's `Depends` have
+to be installed first.
+
 ### Reading `dpkg-deb -c` output
 
 The last field is the path only for a plain file. A symlink line ends
