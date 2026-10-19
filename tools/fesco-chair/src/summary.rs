@@ -179,13 +179,17 @@ fn pending_announcements(
         let mut ticket = report.ticket.clone();
         ticket.decision = Some(decision.clone());
         let take = interactive && {
-            eprintln!("\n{}\n  {}", ticket.url, crate::votes::brief(&report, date));
+            eprintln!(
+                "\n{} \u{201c}{}\u{201d}\n  {}\n  {}",
+                ticket.label(),
+                ticket.title,
+                ticket.url,
+                crate::votes::brief(&report, date)
+            );
             sandogasa_cli::confirm(
                 &format!(
-                    "announce {} \u{201c}{}\u{201d} as {decision}? (comment the \
-                     decision on the ticket and tag it `pending announcement` first)",
-                    ticket.label(),
-                    ticket.title
+                    "announce as {decision}? (comment the decision on the \
+                     ticket and tag it `pending announcement` first)"
                 ),
                 true,
             )

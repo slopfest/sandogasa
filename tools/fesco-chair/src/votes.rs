@@ -144,6 +144,10 @@ pub struct VoteReport {
     #[serde(flatten)]
     pub ticket: Ticket,
     pub fast_track: bool,
+    /// Whether the ticket carries `vote-in-progress`, which is stale
+    /// once the vote is decided and wants dropping with the same
+    /// edit that adds `pending announcement`.
+    pub vote_label: bool,
     /// When the clock started and which event set it.
     pub start: DateTime<Utc>,
     pub start_basis: &'static str,
@@ -518,11 +522,19 @@ pub fn scan(
     now: DateTime<Utc>,
 ) -> Result<Vec<VoteReport>, Box<dyn std::error::Error>> {
     let mut issues = Vec::new();
+    // Which tickets carry `vote-in-progress`, so the chair can be
+    // told to drop it: a Fast Track ticket need not have it, and the
+    // issues are deduped below, which loses the query that found one.
+    let mut voting = std::collections::BTreeSet::new();
     for label in [FAST_TRACK_LABEL, VOTE_LABEL] {
         if verbose {
             eprintln!("[votes] fetching open `{label}` tickets");
         }
-        issues.extend(client.repo_issues(TRACKER_OWNER, TRACKER_REPO, "open", &[label])?);
+        let found = client.repo_issues(TRACKER_OWNER, TRACKER_REPO, "open", &[label])?;
+        if label == VOTE_LABEL {
+            voting.extend(found.iter().map(|i| i.number));
+        }
+        issues.extend(found);
     }
     issues.sort_by_key(|i| i.number);
     issues.dedup_by_key(|i| i.number);
@@ -556,6 +568,7 @@ pub fn scan(
             )
         });
         out.push(VoteReport {
+            vote_label: voting.contains(&issue.number),
             ticket: issue.into(),
             fast_track,
             start,
@@ -583,6 +596,62 @@ fn hint(report: &VoteReport, meeting: NaiveDate) -> Option<String> {
             at.format("%Y-%m-%d")
         )
     })
+}
+
+/// The label edit that moves a ticket to the announced pool.
+///
+/// `vote-in-progress` is stale the moment the vote concludes, and it
+/// is what keeps the ticket in the vote pool on the next run, so it
+/// goes in the same edit that adds the announcement label. A Fast
+/// Track ticket may never have carried it.
+fn relabel(report: &VoteReport) -> &'static str {
+    if report.vote_label {
+        "swap `vote-in-progress` for `pending announcement`"
+    } else {
+        "tag `pending announcement`"
+    }
+}
+
+/// What to do with a ticket whose vote has outrun the agenda.
+///
+/// Both cases end at the same label and differ only in which email
+/// carries the result: a vote already decided is announced beside
+/// the agenda it is being offered to, and one that concludes between
+/// now and the meeting is announced by the summary afterwards.
+/// Neither wants the discussion slot that saying yes would buy it,
+/// which is the part that is easy to get wrong -- the prompt asks
+/// only whether to add it, so the alternative is never on screen.
+///
+/// `None` once a vote belongs at the meeting, or while it cannot
+/// conclude before one: `hint` already says what to do there.
+pub fn announce_hint(report: &VoteReport, meeting: NaiveDate) -> Option<String> {
+    match report.verdict.outcome {
+        Outcome::Approved | Outcome::Rejected => Some(format!(
+            "decided: comment \u{201c}{}\u{201d}, {}, and it is announced \
+             with this agenda instead of taking a discussion slot",
+            // The decision line alone, which is what the announcement
+            // prints and what the tracker's own comments settle on.
+            // Members prefix it variously -- "After a week: ", "This is
+            // now approved by" -- and how long the vote actually ran is
+            // the line above this one, so the hint does not put words
+            // in the chair's mouth about it.
+            decision(report)?,
+            relabel(report),
+        )),
+        Outcome::Waiting
+            if report
+                .verdict
+                .decidable_at
+                .is_some_and(|at| at.date_naive() <= meeting) =>
+        {
+            Some(format!(
+                "once it concludes, {} and the post-meeting summary \
+                 announces it, so leaving it off here costs no time",
+                relabel(report),
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// The one-paragraph state of a vote, for the `agenda` and `summary`
@@ -967,6 +1036,90 @@ mod tests {
         );
     }
 
+    /// A report in one outcome, for the announce-hint tests.
+    fn outcome_report(outcome: Outcome, decidable: Option<&str>) -> VoteReport {
+        VoteReport {
+            ticket: Ticket {
+                number: 3691,
+                title: "t".into(),
+                url: "u".into(),
+                decision: None,
+                repo: None,
+                pull: false,
+                created: None,
+                updated: None,
+            },
+            fast_track: false,
+            vote_label: true,
+            start: at("2026-10-13T13:00:00Z"),
+            start_basis: "vote-in-progress label",
+            votes: Tally::default(),
+            tally: "(+4, 0, -0)".into(),
+            verdict: Verdict {
+                outcome,
+                detail: "d".into(),
+                votes_needed: 0,
+                decidable_at: decidable.map(at),
+            },
+            reminder: None,
+        }
+    }
+
+    #[test]
+    fn a_decided_vote_is_pointed_at_the_label_not_a_discussion_slot() {
+        let meeting = NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        for outcome in [Outcome::Approved, Outcome::Rejected] {
+            let report = outcome_report(outcome, None);
+            let hint =
+                announce_hint(&report, meeting).expect("a decided vote has somewhere else to go");
+            assert!(hint.contains("pending announcement"), "{hint}");
+            // The comment to post is spelled out, and is the same
+            // decision line the announcement prints.
+            let decision = decision(&report).expect("a decided vote has a decision line");
+            assert!(hint.contains(&decision), "{hint} / {decision}");
+            // How long it ran is the brief's business, not a claim
+            // the hint makes on the chair's behalf.
+            assert!(!hint.contains("After a week"), "{hint}");
+            // The stale label goes in the same edit, when it is there
+            // at all -- a Fast Track ticket may never have carried it.
+            assert!(hint.contains("swap `vote-in-progress`"), "{hint}");
+            let mut bare = outcome_report(outcome, None);
+            bare.vote_label = false;
+            let hint = announce_hint(&bare, meeting).expect("still decided");
+            assert!(hint.contains("tag `pending announcement`"), "{hint}");
+            assert!(!hint.contains("vote-in-progress"), "{hint}");
+        }
+    }
+
+    #[test]
+    fn a_vote_concluding_before_the_meeting_is_told_the_summary_catches_it() {
+        // #3691's case: it approves the morning of the meeting, so
+        // it cannot be announced with the agenda and does not need a
+        // slot either -- leaving it off loses no week.
+        let meeting = NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        let hint = announce_hint(
+            &outcome_report(Outcome::Waiting, Some("2026-10-20T09:00:00Z")),
+            meeting,
+        )
+        .expect("a vote concluding in time is announced by the summary");
+        assert!(hint.contains("summary"), "{hint}");
+
+        // One that cannot conclude in time is left to `hint`, which
+        // already says to let it run or force it with a -1.
+        assert_eq!(
+            announce_hint(
+                &outcome_report(Outcome::Waiting, Some("2026-10-27T09:00:00Z")),
+                meeting
+            ),
+            None
+        );
+        // A ticket already bound for the meeting wants its slot.
+        assert_eq!(
+            announce_hint(&outcome_report(Outcome::Meeting, None), meeting),
+            None
+        );
+    }
+
     #[test]
     fn brief_and_decision_summarize_a_report() {
         let mut report = VoteReport {
@@ -981,6 +1134,7 @@ mod tests {
                 updated: None,
             },
             fast_track: true,
+            vote_label: true,
             start: at("2026-09-16T13:07:00Z"),
             start_basis: "fast track label",
             votes: Tally::default(),
@@ -1022,6 +1176,7 @@ mod tests {
                 updated: None,
             },
             fast_track: true,
+            vote_label: true,
             start: at("2026-09-16T13:07:00Z"),
             start_basis: "fast track label",
             votes: Tally {

@@ -217,16 +217,17 @@ pub fn assemble(
         }
         let take = interactive && {
             eprintln!(
-                "\n{}\n  {}",
+                "\n{} \u{201c}{}\u{201d}\n  {}\n  {}",
+                report.ticket.label(),
+                report.ticket.title,
                 report.ticket.url,
                 crate::votes::brief(&report, date)
             );
+            if let Some(hint) = crate::votes::announce_hint(&report, date) {
+                eprintln!("  {hint}");
+            }
             sandogasa_cli::confirm(
-                &format!(
-                    "add {} \u{201c}{}\u{201d} to the agenda?",
-                    report.ticket.label(),
-                    report.ticket.title
-                ),
+                "add to the agenda?",
                 report.verdict.outcome == crate::votes::Outcome::Meeting,
             )?
         };
@@ -288,18 +289,15 @@ pub fn assemble(
             for item in rest {
                 if interactive {
                     eprintln!(
-                        "\n{}\n  opened {}, last updated {}",
+                        "\n{} \u{201c}{}\u{201d}\n  {}\n  opened {}, last updated {}",
+                        item.label(),
+                        item.title,
                         item.url,
                         item.created.as_deref().unwrap_or("?"),
                         item.updated.as_deref().unwrap_or("?")
                     );
                 }
-                let take = interactive
-                    && sources::confirm_default_no(&format!(
-                        "add {} \u{201c}{}\u{201d} to the agenda?",
-                        item.label(),
-                        item.title
-                    ))?;
+                let take = interactive && sources::confirm_default_no("add to the agenda?")?;
                 if take {
                     selected.push(item);
                 } else {
