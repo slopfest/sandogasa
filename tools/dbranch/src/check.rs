@@ -18,6 +18,11 @@
 //! 2. Does everything the source ships reach a package? (lost files)
 //! 3. Does the installed program actually run? (smoke)
 //!
+//! Where lintian does have a tag, this does not add a second one: a
+//! `debian/watch` that verifies a signature with no key under
+//! `debian/upstream/` is `debian-watch-file-pubkey-file-is-missing`,
+//! and two tools saying one thing is two to keep in agreement.
+//!
 //! Each finding carries the command a person could run to see it for
 //! themselves, so a report teaches the check as well as reporting it.
 
@@ -133,6 +138,23 @@ fn is_older(mentioned: &str, current: &str) -> bool {
     !mentioned.is_empty() && !current.is_empty() && version_key(mentioned) < version_key(current)
 }
 
+/// Does this carry `gbp dch -S`'s snapshot suffix, `~<N>.gbp<sha>`?
+///
+/// The suffix exists to sort *below* the release it stands in for,
+/// so that the real upload can still follow it. That is what makes
+/// it useful while iterating and what makes releasing one a trap:
+/// the number is spent, and the build people install is the one
+/// nobody meant to ship.
+fn snapshot_suffix(version: &str) -> bool {
+    version.rsplit_once('~').is_some_and(|(_, tail)| {
+        tail.split_once(".gbp").is_some_and(|(n, sha)| {
+            !n.is_empty()
+                && n.bytes().all(|c| c.is_ascii_digit())
+                && !sha.is_empty()
+                && sha.bytes().all(|c| c.is_ascii_hexdigit())
+        })
+    })
+}
 /// Does the packaging still describe this source?
 ///
 /// `source_version` is the version the *source* says it is, when that
@@ -169,6 +191,26 @@ pub fn version_findings(
         // already offers.
         None => {}
     }
+    // `gbp dch -S` writes the snapshot suffix and an UNRELEASED
+    // distribution together, and `gbp dch -R` strips both. One
+    // without the other means the release was finished by hand and
+    // only half of it was undone.
+    if distribution != "UNRELEASED" && snapshot_suffix(changelog_version) {
+        found.push(
+            Finding::new(
+                "snapshot-version-released",
+                Severity::Blocker,
+                format!(
+                    "debian/changelog releases {changelog_version} to \
+                     {distribution}, but that is a gbp snapshot version — \
+                     it sorts below the release it stands in for, so the \
+                     upload spends the version number on a build nobody \
+                     meant to ship"
+                ),
+            )
+            .with_command("gbp dch -R".into()),
+        );
+    }
     // debcargo writes a sentinel distribution that must not reach an
     // upload; a plain UNRELEASED is the normal state while preparing.
     if distribution.contains("FIXME") {
@@ -184,51 +226,65 @@ pub fn version_findings(
     found
 }
 
-/// Do `debian/patches/series` and the directory agree?
+/// The branches `debian/gbp.conf` names, against the ones that exist.
 ///
-/// Both directions are worth knowing. A listed patch that is missing
-/// breaks the build, so it surfaces quickly; an *unlisted* patch file
-/// does not, and is how a patch that was dropped stays in the tree
-/// looking as if it is still carried.
-pub fn series_findings(series: &str, present: &BTreeSet<String>) -> Vec<Finding> {
-    let listed: Vec<&str> = series
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        // A series line may carry options, e.g. `foo.patch -p0`.
-        .map(|l| l.split_whitespace().next().unwrap_or(l))
-        .collect();
-    let mut found = Vec::new();
-    for patch in &listed {
-        if !present.contains(*patch) {
-            found.push(
-                Finding::new(
-                    "patch-missing",
-                    Severity::Blocker,
-                    format!("debian/patches/series lists {patch}, which is not there"),
-                )
-                .with_command("cat debian/patches/series".into()),
-            );
+/// gbp does not stop when one is missing. `gbp export-orig` warns
+/// that the pristine-tar branch is absent and rebuilds the tarball
+/// from the upstream tag instead, which is why this is worth saying
+/// out loud: the fallback succeeds, so nothing reports that the
+/// branch the packaging promises was never pushed, and the tarball
+/// that is byte-identical today need not stay so once the toolchain
+/// moves.
+///
+/// `existing` is every branch git knows, local and remote-tracking
+/// with the remote stripped, so a fresh clone that has not checked a
+/// branch out yet does not look like a package missing one.
+pub fn gbp_branch_findings(conf: &str, existing: &BTreeSet<String>) -> Vec<Finding> {
+    let mut want: Vec<(String, String)> = Vec::new();
+    for line in conf.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        // A value built by interpolation cannot be resolved here, and
+        // guessing at one would invent a branch to complain about.
+        if value.is_empty() || value.contains("%(") {
+            continue;
+        }
+        match key {
+            "debian-branch" | "upstream-branch" => {
+                want.push((value.to_string(), format!("names {value} as its {key}")))
+            }
+            // The pristine-tar branch's name is not configurable.
+            "pristine-tar" if value.eq_ignore_ascii_case("true") => want.push((
+                "pristine-tar".to_string(),
+                "turns on pristine-tar".to_string(),
+            )),
+            _ => {}
         }
     }
-    for patch in present {
-        if !listed.contains(&patch.as_str()) {
-            found.push(
-                Finding::new(
-                    "patch-unlisted",
-                    Severity::Warning,
-                    format!(
-                        "debian/patches/{patch} is not in series — a dropped \
-                         patch left behind looks like one still carried"
-                    ),
-                )
-                .with_command("cat debian/patches/series".into()),
-            );
+    let mut said = BTreeSet::new();
+    let mut found = Vec::new();
+    for (branch, phrase) in want {
+        if existing.contains(&branch) || !said.insert(branch.clone()) {
+            continue;
         }
+        found.push(
+            Finding::new(
+                "gbp-branch-missing",
+                Severity::Warning,
+                format!(
+                    "debian/gbp.conf {phrase}, but there is no {branch} \
+                     branch here — gbp falls back instead of stopping, so \
+                     a build can succeed while what the packaging promises \
+                     is missing"
+                ),
+            )
+            .with_command("git branch -a".into()),
+        );
     }
     found
 }
-
 /// What trying a patch against this source showed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatchState {
@@ -336,45 +392,6 @@ fn patch_header(text: &str) -> &str {
     &text[..end]
 }
 
-/// Whether a patch's header is readable as DEP-3.
-///
-/// Only two things are insisted on, being what DEP-3 calls required:
-/// what the patch does, and where it came from. Everything else
-/// about the header's shape is left alone -- see the note in the
-/// body for why blank lines are not a finding.
-pub fn dep3_findings(patch: &str, text: &str) -> Vec<Finding> {
-    let header = patch_header(text);
-    let has = |keys: &[&str]| {
-        header
-            .lines()
-            .any(|l| keys.iter().any(|k| l.starts_with(k)))
-    };
-    let mut found = Vec::new();
-    if !has(&["Description:", "Subject:"]) {
-        found.push(dep3(
-            patch,
-            "says nowhere what it does (Description or Subject)",
-        ));
-    }
-    if !has(&["Origin:", "Author:", "From:"]) {
-        found.push(dep3(
-            patch,
-            "says nowhere where it came from (Origin, Author or From)",
-        ));
-    }
-    found.extend(trailer_findings(patch, header));
-    // Deliberately not checked: blank lines in the header. DEP-3 is
-    // RFC822-shaped, so in principle a blank line ends the field
-    // block -- but lintian reads the fields below one anyway (a
-    // patch whose `Forwarded:` sits under two blank lines does not
-    // raise patch-not-forwarded-upstream), and `gbp pq export`
-    // cannot emit anything else: it serialises the commit as mail,
-    // so the blank after Subject is structural. Flagging it would
-    // disagree with lintian and with git's own trailer convention,
-    // which puts a blank line before Signed-off-by.
-    found
-}
-
 /// The DEP-3 fields that sit below a patch's description.
 const DEP3_FIELDS: [&str; 8] = [
     "Origin",
@@ -403,13 +420,25 @@ fn header_field(line: &str) -> Option<&str> {
 /// duplicated sign-off -- which is how a real patch came to carry
 /// two of them.
 ///
-/// Deliberately not checked: whether `Forwarded:` is there at all.
-/// Lintian's `patch-not-forwarded-upstream` says that already, and
-/// duplicating it would leave two tools to keep in agreement.
-fn trailer_findings(patch: &str, header: &str) -> Vec<Finding> {
+/// Deliberately not checked: everything lintian already reads out of
+/// a patch header, which is most of DEP-3. `Forwarded:` is its
+/// `patch-not-forwarded-upstream`; a missing description or origin
+/// is `invalid-dep3-format-patch-no-description-and-subject` and
+/// `-no-origin`, whose rule is ours character for character --
+/// `Description` or `Subject`, then `Origin` or `Author` or `From`.
+/// Duplicating any of it would leave two tools to keep in agreement.
+///
+/// Blank lines in the header are not a finding either. DEP-3 is
+/// RFC822-shaped, so in principle one ends the field block -- but
+/// lintian reads the fields below it anyway, and `gbp pq export`
+/// cannot emit anything else: it serialises the commit as mail, so
+/// the blank after `Subject` is structural. Flagging it would
+/// disagree with lintian and with git's own trailer convention,
+/// which puts a blank line before `Signed-off-by`.
+pub fn trailer_findings(patch: &str, text: &str) -> Vec<Finding> {
     // Skip git's own From/Date/Subject block: the blank line after
     // it is structural, not a break in anything.
-    let lines: Vec<&str> = header.lines().collect();
+    let lines: Vec<&str> = patch_header(text).lines().collect();
     let body_from = lines
         .iter()
         .position(|l| l.trim().is_empty())
@@ -466,6 +495,36 @@ fn dep3(patch: &str, what: &str) -> Finding {
     .with_command(format!("head -20 debian/patches/{patch}"))
 }
 
+/// A patch that `gbp pq export` did not write.
+///
+/// Export filters `Gbp-Pq: Name` and `Gbp-Pq: Topic` out of the
+/// commit body -- they are gbp's `filter_cmds` -- and a commit
+/// carrying `Gbp-Pq: Ignore` yields no patch at all, so an exported
+/// patch cannot hold the tag in any of its forms. One that does was
+/// copied off the patch-queue branch by hand, and the two can then
+/// say different things with no sign of which is current.
+pub fn export_findings(patch: &str, text: &str) -> Vec<Finding> {
+    if !patch_header(text)
+        .lines()
+        .any(|l| l.trim_start().starts_with("Gbp-Pq:"))
+    {
+        return Vec::new();
+    }
+    vec![
+        Finding::new(
+            "patch-not-exported",
+            Severity::Warning,
+            format!(
+                "debian/patches/{patch} still carries a Gbp-Pq: line, which \
+                 gbp pq export strips — this file was copied off the \
+                 patch-queue branch rather than exported, so the branch and \
+                 debian/patches can disagree, and this copy is the one that \
+                 ships"
+            ),
+        )
+        .with_command(format!("grep -n Gbp-Pq: debian/patches/{patch}")),
+    ]
+}
 /// Changes to files outside `debian/` on a packaging branch.
 ///
 /// On a `3.0 (quilt)` package those cannot be committed here: the
@@ -1232,12 +1291,15 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         ));
     }
 
+    ui.step("Check the branches debian/gbp.conf names are here");
+    if let Ok(conf) = std::fs::read_to_string(debian.join("gbp.conf")) {
+        findings.extend(gbp_branch_findings(&conf, &git_branches(&opts.repo, ui)));
+    }
+
     ui.step("Compare debian/patches against the series file");
     let series_path = debian.join("patches/series");
     if series_path.is_file() {
         let series = read(&series_path)?;
-        let present = patch_files(&debian.join("patches"));
-        findings.extend(series_findings(&series, &present));
         findings.extend(patch_findings(
             &patch_states(&series, ui, &opts.repo),
             quilt_records_applied(&opts.repo),
@@ -1245,10 +1307,11 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         ));
     }
 
-    ui.step("Read each patch's header as DEP-3");
+    ui.step("Read each patch's header");
     for patch in patch_files(&debian.join("patches")) {
         if let Ok(text) = std::fs::read_to_string(debian.join("patches").join(&patch)) {
-            findings.extend(dep3_findings(&patch, &text));
+            findings.extend(trailer_findings(&patch, &text));
+            findings.extend(export_findings(&patch, &text));
         }
     }
 
@@ -1375,6 +1438,40 @@ fn git_branch(repo: &std::path::Path, ui: &crate::ui::Ui) -> String {
     }
 }
 
+/// Every branch git knows, local and remote-tracking.
+///
+/// The remote is stripped from a remote-tracking name so that
+/// `origin/main` also answers for `main`, but only there: a local
+/// `debian/latest` must not be read as a branch called `latest`.
+fn git_branches(repo: &std::path::Path, ui: &crate::ui::Ui) -> BTreeSet<String> {
+    let argv: Vec<String> = [
+        "git",
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads",
+        "refs/remotes",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let mut names = BTreeSet::new();
+    let Ok((0, out)) = ui.run_capture(&argv, repo) else {
+        return names;
+    };
+    for line in out.lines() {
+        let r = line.trim();
+        if let Some(n) = r.strip_prefix("refs/heads/") {
+            names.insert(n.to_string());
+        } else if let Some((_, rest)) = r
+            .strip_prefix("refs/remotes/")
+            .and_then(|n| n.split_once('/'))
+            && rest != "HEAD"
+        {
+            names.insert(rest.to_string());
+        }
+    }
+    names
+}
 /// Paths git reports as changed or untracked.
 fn git_changed(repo: &std::path::Path, ui: &crate::ui::Ui) -> Vec<String> {
     let argv: Vec<String> = ["git", "status", "--porcelain"]
@@ -2090,24 +2187,85 @@ mod tests {
     }
 
     #[test]
-    fn series_and_the_patch_directory_are_compared_both_ways() {
-        let present = BTreeSet::from(["kept.patch".to_string(), "dropped.patch".to_string()]);
-        let found = series_findings("kept.patch\ngone.patch\n", &present);
-        // Listed but absent breaks the build; present but unlisted is
-        // the dropped patch that still looks carried.
-        assert_eq!(names(&found), ["patch-missing", "patch-unlisted"]);
-        assert!(found[0].message.contains("gone.patch"));
-        assert!(found[1].message.contains("dropped.patch"));
+    fn a_snapshot_version_must_not_be_released() {
+        // The state `gbp dch -S` leaves: suffix and UNRELEASED
+        // together, which is how the whole iteration is spent.
+        assert!(version_findings("0.4.0-1~2.gbp8dc4b5", "UNRELEASED", None).is_empty());
+        // Releasing it is the half-done `gbp dch -R`.
+        let found = version_findings("0.4.0-1~2.gbp8dc4b5", "unstable", None);
+        assert_eq!(names(&found), ["snapshot-version-released"]);
+        assert!(has_blocker(&found));
+        // The released version itself says nothing.
+        assert!(version_findings("0.4.0-1", "unstable", None).is_empty());
     }
 
     #[test]
-    fn series_comments_blank_lines_and_options_are_read_the_way_quilt_reads_them() {
-        let present = BTreeSet::from(["a.patch".to_string()]);
-        let series = "# a comment\n\na.patch -p0\n";
+    fn gbp_conf_branches_are_checked_against_the_ones_that_exist() {
+        let conf = "[DEFAULT]\ndebian-branch = debian/latest\n\
+                    upstream-branch = main\npristine-tar = True\n";
+        let all = BTreeSet::from([
+            "debian/latest".to_string(),
+            "main".to_string(),
+            "pristine-tar".to_string(),
+        ]);
+        assert!(gbp_branch_findings(conf, &all).is_empty());
+        let found = gbp_branch_findings(conf, &BTreeSet::new());
+        assert_eq!(found.len(), 3);
+        assert!(found.iter().all(|f| f.check == "gbp-branch-missing"));
         assert!(
-            series_findings(series, &present).is_empty(),
-            "a commented series with an option is still satisfied"
+            found
+                .iter()
+                .any(|f| f.message.contains("no pristine-tar branch")),
+            "{found:?}"
         );
+        // It never blocks: gbp falls back, so the build still runs.
+        assert!(!has_blocker(&found));
+    }
+
+    #[test]
+    fn gbp_conf_promises_nothing_it_cannot_resolve() {
+        let none = BTreeSet::new();
+        // pristine-tar switched off promises no branch.
+        assert!(gbp_branch_findings("pristine-tar = False\n", &none).is_empty());
+        // An interpolated or empty value names nothing to look up.
+        assert!(gbp_branch_findings("debian-branch = %(foo)s\n", &none).is_empty());
+        assert!(gbp_branch_findings("debian-branch =\n[DEFAULT]\n", &none).is_empty());
+        // One branch named by two settings is reported once.
+        assert_eq!(
+            gbp_branch_findings("debian-branch = b\nupstream-branch = b\n", &none).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_patch_still_carrying_gbp_pq_was_not_exported() {
+        let exported = "From: A <a@b.c>\nSubject: fix\n\nBody.\n\n\
+                        Signed-off-by: A <a@b.c>\n---\n diff\n";
+        assert!(export_findings("0001-x.patch", exported).is_empty());
+        // Export strips the tag, so one that survived was copied.
+        let copied = "From: A <a@b.c>\nSubject: fix\n\nBody.\n\n\
+                      Gbp-Pq: Name 0001-x.patch\n---\n diff\n";
+        let found = export_findings("0001-x.patch", copied);
+        assert_eq!(names(&found), ["patch-not-exported"]);
+        assert!(!has_blocker(&found));
+        // The diff below the header is not the header.
+        let in_diff = "From: A <a@b.c>\nSubject: fix\n---\n+Gbp-Pq: Name x\n";
+        assert!(export_findings("0002-x.patch", in_diff).is_empty());
+    }
+
+    #[test]
+    fn only_gbps_own_suffix_counts_as_a_snapshot() {
+        assert!(snapshot_suffix("0.4.0-1~2.gbp8dc4b5"));
+        assert!(snapshot_suffix("1:2.0-1~10.gbpdeadbe"));
+        // A backport or a tilde-prerelease is an ordinary version
+        // that happens to sort low, and is uploaded on purpose.
+        assert!(!snapshot_suffix("1.0-1~bpo12+1"));
+        assert!(!snapshot_suffix("1.0~rc1-1"));
+        assert!(!snapshot_suffix("0.4.0-1"));
+        // The shape has to be complete to count.
+        assert!(!snapshot_suffix("0.4.0-1~.gbp8dc4b5"));
+        assert!(!snapshot_suffix("0.4.0-1~2.gbp"));
+        assert!(!snapshot_suffix("0.4.0-1~2.gbpzzzz"));
     }
 
     #[test]
@@ -2440,7 +2598,7 @@ mod tests {
         let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
                     Forwarded: https://example/1\nLast-Update: 2026-10-19\n\n\
                     Signed-off-by: A <a@b.c>\n\nSigned-off-by: A <a@b.c>\n--- a/f\n";
-        let found = dep3_findings("0001-x.patch", text);
+        let found = trailer_findings("0001-x.patch", text);
         assert!(
             found.iter().any(|f| f.message.contains("signs off twice")),
             "{found:?}"
@@ -2456,7 +2614,7 @@ mod tests {
         let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
                     Forwarded: not-needed\nLast-Update: 2026-10-19\n\n\
                     Signed-off-by: A <a@b.c>\n--- a/f\n";
-        assert!(dep3_findings("0002-x.patch", text).is_empty(), "{text}");
+        assert!(trailer_findings("0002-x.patch", text).is_empty(), "{text}");
     }
 
     #[test]
@@ -2464,14 +2622,14 @@ mod tests {
         let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
                     Forwarded: not-needed\nLast-Update: 2026-10-19\n\
                     Signed-off-by: A <a@b.c>\n--- a/f\n";
-        assert!(dep3_findings("0002-x.patch", text).is_empty(), "{text}");
+        assert!(trailer_findings("0002-x.patch", text).is_empty(), "{text}");
     }
 
     #[test]
     fn a_sign_off_above_the_dep3_fields_is_the_wrong_way_round() {
         let text = "From: A <a@b.c>\nSubject: Fix it\n\nProse.\n\n\
                     Signed-off-by: A <a@b.c>\nForwarded: not-needed\n--- a/f\n";
-        let found = dep3_findings("0003-x.patch", text);
+        let found = trailer_findings("0003-x.patch", text);
         assert!(
             found.iter().any(|f| f.message.contains("signs off above")),
             "{found:?}"
@@ -2484,23 +2642,7 @@ mod tests {
         // gbp exports begins; flagging it would fire on all of them.
         let text = "From: A <a@b.c>\nDate: Mon, 19 Oct 2026 10:00:00 +0100\n\
                     Subject: Fix it\n\nProse only, no fields.\n--- a/f\n";
-        assert!(dep3_findings("0004-x.patch", text).is_empty(), "{text}");
-    }
-
-    #[test]
-    fn a_patch_header_needs_to_say_what_and_whence() {
-        let bare = "--- a/x\n+++ b/x\n";
-        let found = dep3_findings("0001-x.patch", bare);
-        assert_eq!(found.len(), 2, "{found:?}");
-        assert!(found.iter().all(|f| f.check == "patch-header-not-dep3"));
-        assert!(found[0].message.contains("what it does"));
-        assert!(found[1].message.contains("where it came from"));
-    }
-
-    #[test]
-    fn a_header_that_keeps_going_with_dots_is_fine() {
-        let text = "Description: Fix it\n .\n More prose\nOrigin: upstream\n--- a/x\n";
-        assert!(dep3_findings("0001-x.patch", text).is_empty());
+        assert!(trailer_findings("0004-x.patch", text).is_empty(), "{text}");
     }
 
     #[test]

@@ -2,6 +2,102 @@
 
 ## Unreleased
 
+### dbranch: check stops repeating lintian
+
+`check` reported four things lintian already reports, so a package
+with a stray patch file was told about it twice, by two tools that
+had to be kept saying the same thing. One of them had already drifted:
+the rule for a patch's required fields was reimplemented here, and
+holding it in step with lintian's was nobody's job.
+
+Dropped, with the lintian tag that covers each:
+
+- a series entry with no file — `quilt-series-references-non-existent-patch`
+- a patch file in no series — `patch-file-present-but-not-mentioned-in-series`
+- no `Description:` or `Subject:` — `invalid-dep3-format-patch-no-description-and-subject`
+- no `Origin:`, `Author:` or `From:` — `invalid-dep3-format-patch-no-origin`
+
+The last two were exact: lintian's own check reads `Description` or
+`Subject`, then `Origin` or `Author` or `From`, which is what this
+asked for.
+
+What is left of the patch-header check is the part lintian has no tag
+for — a sign-off duplicated, or sitting above the DEP-3 fields where
+an amend cannot see it. `debian/patches` is still read, because
+trying each patch against the source is also something lintian does
+not do.
+
+The same question was asked of the rest and answered the other way: a
+`debian/watch` that verifies a signature with no key is
+`debian-watch-file-pubkey-file-is-missing`, so that check was never
+written.
+
+### dbranch: check spots a patch that was copied instead of exported
+
+`debian/patches` and the `gbp pq` branch can say different things
+with nothing to show which is current, and the packaging ships
+whichever is on disk. The way they come apart is a patch edited on
+the queue branch and carried across by hand rather than by
+`gbp pq export`.
+
+That leaves a mark. Export filters `Gbp-Pq: Name` and `Gbp-Pq: Topic`
+out of the commit body, and a commit carrying `Gbp-Pq: Ignore`
+produces no patch at all, so an exported patch cannot hold the tag in
+any of its forms — one that does was copied. `check` now reads each
+patch header for it and warns.
+
+The inverse is not a signal and is not checked: the tag is written by
+`gbp pq import`, not by export, so its *absence* says nothing about
+how a patch was produced.
+
+### dbranch: check looks for the branches debian/gbp.conf names
+
+A build can succeed with the `pristine-tar` branch missing. gbp warns
+and rebuilds the tarball from the upstream tag instead, which works
+until it doesn't — the fallback re-runs `git archive` and gzip, so it
+reproduces the uploaded bytes only for as long as the toolchain sits
+still, and a `-2` upload has to carry an orig identical to the one
+already in the archive.
+
+`check` now reads `debian/gbp.conf` and warns when a branch it names
+is nowhere to be found — `debian-branch`, `upstream-branch`, or the
+`pristine-tar` branch that `pristine-tar = True` implies. A warning
+rather than a blocker, because gbp does fall back and the build does
+finish.
+
+Remote-tracking branches count, so a fresh clone that has not checked
+one out yet is not reported, and a value built by interpolation is
+passed over rather than guessed at.
+
+### dbranch: check catches a snapshot version being released
+
+An upload can go out carrying the version `gbp dch -S` wrote while the
+work was still in progress — `0.4.0-1~2.gbp8dc4b5` rather than
+`0.4.0-1`. The suffix is built to sort *below* the release it stands
+in for, so that the real upload can still follow it; what that costs
+is that the version number has been spent on a build nobody meant to
+ship, and it is the one people install until the next one lands.
+
+`gbp dch -S` writes the suffix and an `UNRELEASED` distribution
+together, and `gbp dch -R` strips both, so the two agree for as long
+as the release is made with the tool. Finishing it by hand is where
+they come apart — `UNRELEASED` edited to `unstable` with the suffix
+left in place. `check` now reads them as a pair and blocks on that
+combination:
+
+```console
+blocker: debian/changelog releases 0.4.0-1~2.gbp8dc4b5 to unstable,
+  but that is a gbp snapshot version — it sorts below the release it
+  stands in for, so the upload spends the version number on a build
+  nobody meant to ship
+    gbp dch -R
+```
+
+A snapshot version alongside `UNRELEASED` is the ordinary state
+mid-work and says nothing. Only gbp's own `~<N>.gbp<sha>` shape
+counts, so a backport's `~bpo12+1` and a prerelease's `~rc1` — which
+sort low on purpose and are uploaded on purpose — are left alone.
+
 ### dbranch: autopkgtest refuses to write a test it cannot trust
 
 `check` would not call a program broken when the installed copy was

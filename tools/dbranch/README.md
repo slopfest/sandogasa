@@ -143,10 +143,11 @@ finds it.
 
 By default it reads the source tree alone, which needs no build: it
 compares the changelog's version against the version the source states
-for itself, reads `debian/patches/series` against the patch directory
-in both directions, tries each patch, notes whether anything runs the
-installed programs, and reports comments left behind by an older
-release. A `Testsuite:` field does not settle that last one: the
+for itself, refuses a `gbp` snapshot version being released to a real
+suite, looks for the branches `debian/gbp.conf` names, tries each
+patch, flags one that was copied off the patch-queue branch rather
+than exported, notes whether anything runs the installed programs,
+and reports comments left behind by an older release. A `Testsuite:` field does not settle that last one: the
 generated suites exercise a package's library and never `/usr/bin`,
 so the finding names the suite rather than claiming there is no
 autopkgtest. `--deb <file>` adds the two checks that need a built
