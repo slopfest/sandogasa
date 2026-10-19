@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### dbranch: autopkgtest refuses to write a test it cannot trust
+
+`check` would not call a program broken when the installed copy was
+a different build, because an extracted program resolves what it
+loads against that copy. `autopkgtest` ran the same probe with none
+of that caution — and persisted the answer.
+
+Found on a package that had just been fixed: `0.4.0-1` was installed
+without `indentation.lua`, the build being probed shipped it, and the
+extracted program failed against the stale install. The generated
+smoke test recorded that the program answered to nothing, which is a
+test that passes while exercising nothing at all.
+
+It now refuses, naming both versions and the command that would make
+the probe answerable:
+
+```console
+dbranch: this package ships files it may load at run time, and 0.4.0-1
+is installed, and this package is 0.4.0-1~2.gbp8dc4b5, so what the
+programs answer here would be about the other copy. Install this build
+first, then run again:
+
+    sudo apt install …/fnlfmt_0.4.0-1~2.gbp8dc4b5_all.deb
+```
+
+A refusal rather than a warning because of what is at stake on this
+side: `check` reports a wrong verdict, which the next run corrects,
+while `autopkgtest` writes one into the package. It refuses for a
+package that is not installed at all for the same reason, and not at
+all for one shipping only its programs, where nothing could have been
+hidden.
+
+`dbranch dep3-template` also gains a caveat with its route: the amend
+is for the commit you just wrote, not one that came from an import.
+`gbp pq import` appends `Gbp-Pq: Name <file>` as its own final
+paragraph, so `-s` never sees the sign-off already there and adds
+another on every run — and export strips the `Gbp-Pq:` line, leaving
+the two sign-offs adjacent in the patch. That is where the doubled
+sign-off this check reports came from.
+
 ### dbranch: check reads a patch's trailer block
 
 `patch-header-not-dep3` gains two complaints, both about where a

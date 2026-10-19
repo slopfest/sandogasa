@@ -51,6 +51,13 @@ pub fn is_quilt(repo: &Path) -> bool {
 /// seen and a second one is appended -- measured, and the reason a
 /// real patch carried two. A blank line before the sign-off makes
 /// no difference either way.
+///
+/// The amend belongs to the commit just written. An *imported*
+/// commit must not be amended with `-s`: `gbp pq import` appends
+/// `Gbp-Pq: Name <file>` as its own final paragraph, so the
+/// sign-off is never in the last one and `-s` adds another on every
+/// run. Export then strips the `Gbp-Pq:` line and the two sign-offs
+/// end up adjacent in the patch, which is where this was found.
 pub fn workflow(template: Option<&str>) -> Vec<String> {
     let commit = match template {
         Some(path) => format!("    git commit -t {path}"),
@@ -66,6 +73,11 @@ pub fn workflow(template: Option<&str>) -> Vec<String> {
         "  Put the sign-off after the DEP-3 fields: git reads the last".to_string(),
         "  paragraph, so one above them is not seen and the amend adds".to_string(),
         "  a second. A blank line before it is fine.".to_string(),
+        String::new(),
+        "  The amend is for the commit you just wrote. Do not amend one".to_string(),
+        "  that came from an import: it already carries its sign-off,".to_string(),
+        "  and gbp's trailing Gbp-Pq: line means -s never sees it and".to_string(),
+        "  adds another every time.".to_string(),
     ]
 }
 

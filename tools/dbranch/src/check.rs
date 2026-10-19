@@ -1773,7 +1773,7 @@ fn checksums_match(package: &str, root: &std::path::Path, ui: &crate::ui::Ui) ->
 }
 
 /// How each package being checked compares with what is installed.
-fn installed_states(
+pub(crate) fn installed_states(
     debs: &[std::path::PathBuf],
     root: &std::path::Path,
     ui: &crate::ui::Ui,

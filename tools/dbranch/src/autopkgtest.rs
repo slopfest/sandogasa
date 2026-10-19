@@ -154,6 +154,38 @@ pub fn plan(control: Option<&str>, smoke_exists: bool) -> Plan {
     Plan::AddSmoke(control.to_string())
 }
 
+/// Why the probe cannot be believed, if it cannot.
+///
+/// The probe runs the extracted program, which resolves anything it
+/// loads by absolute path against the *installed* copy. If that is a
+/// different build, the answer is about the other one: a package
+/// that is in fact fixed looks broken because the stale install is
+/// missing a file the new one ships. Writing a test on that footing
+/// is the harm -- the program answers nothing, and the generated
+/// test then exercises nothing while appearing to pass.
+///
+/// A package shipping only its programs has nothing to resolve, so
+/// the question does not arise.
+pub fn unreliable_probe(
+    states: &[crate::check::Installed],
+    ships_runtime_files: bool,
+) -> Option<String> {
+    if !ships_runtime_files {
+        return None;
+    }
+    states.iter().find_map(|state| match state {
+        crate::check::Installed::Differs(why) => Some(format!(
+            "this package ships files it may load at run time, and {why}"
+        )),
+        crate::check::Installed::Absent => Some(
+            "this package ships files it may load at run time and is not \
+             installed here"
+                .to_string(),
+        ),
+        crate::check::Installed::Same => None,
+    })
+}
+
 /// Probe each program for a verb it answers to, and write the test.
 ///
 /// Returns what was probed, so the caller can say which verb each
@@ -181,8 +213,33 @@ pub fn run(opts: &Options, ui: &crate::ui::Ui) -> Result<Vec<Probed>, String> {
         return Err("no programs in /usr/bin or /usr/sbin to test".to_string());
     }
 
-    ui.step("Ask each program which way it answers to being asked for help");
     let root = crate::check::extract_all(&opts.debs, ui)?;
+    // The probe runs the extracted program, which resolves anything
+    // it loads by absolute path against the *installed* copy. If
+    // that is a different build, the answer is about the other one:
+    // a fixed package can look broken because the stale install is
+    // missing a file it now ships. Writing a test on that basis is
+    // the harm -- the program answers nothing, and the generated
+    // test exercises nothing while appearing to pass.
+    ui.step("Check the installed copy is the package being probed");
+    let states = crate::check::installed_states(&opts.debs, root.path(), ui);
+    if let Some(why) = unreliable_probe(&states, crate::check::ships_runtime_files(&packaged)) {
+        return Err(format!(
+            "{why}, so what the programs answer here would be about the \
+             other copy. Install this build first, then run again:\n\n    \
+             sudo apt install {}",
+            opts.debs
+                .iter()
+                .map(|d| std::path::absolute(d)
+                    .unwrap_or_else(|_| d.clone())
+                    .display()
+                    .to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+    }
+
+    ui.step("Ask each program which way it answers to being asked for help");
     let probed: Vec<Probed> = programs
         .iter()
         .map(|program| Probed {
@@ -279,6 +336,39 @@ mod tests {
             program: program.to_string(),
             verb: verb.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn a_stale_installed_copy_makes_the_probe_meaningless() {
+        // The real case: 0.4.0-1 installed without indentation.lua,
+        // while the package being probed ships it. The extracted
+        // program resolved against the old install, failed, and a
+        // test was written that exercised nothing.
+        let states = [crate::check::Installed::Differs(
+            "0.4.0-1 is installed, and this package is 0.4.0-1~2.gbp8dc4b5".into(),
+        )];
+        let why = unreliable_probe(&states, true).expect("a different build is not this one");
+        assert!(why.contains("0.4.0-1 is installed"), "{why}");
+        assert!(why.contains("ships files it may load at run time"), "{why}");
+    }
+
+    #[test]
+    fn not_installed_at_all_is_just_as_meaningless() {
+        assert!(unreliable_probe(&[crate::check::Installed::Absent], true).is_some());
+    }
+
+    #[test]
+    fn the_question_does_not_arise_without_files_to_resolve() {
+        // A package shipping only its programs has nothing the
+        // install could have hidden, so the probe stands on its own.
+        assert!(unreliable_probe(&[crate::check::Installed::Absent], false).is_none());
+        let differs = [crate::check::Installed::Differs("x".into())];
+        assert!(unreliable_probe(&differs, false).is_none());
+    }
+
+    #[test]
+    fn the_installed_copy_being_this_build_is_what_makes_it_answerable() {
+        assert!(unreliable_probe(&[crate::check::Installed::Same], true).is_none());
     }
 
     #[test]
