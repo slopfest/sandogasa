@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+### dbranch: write an autopkgtest that runs what the package installs
+
+A package can build, lint clean, and install a program that does not
+start. `fnlfmt --help` died on a module that was never packaged, and
+nothing caught it, because nothing in a build runs the program — the
+reviewer who found it asked for an autopkgtest "even if that's just
+to display the help text".
+
+For a Rust crate the gap is structural rather than an oversight.
+debcargo generates test stanzas from the library package, so a crate
+built binary-only (`lib = false`, which is dbranch itself) gets no
+autopkgtest at all — precisely the package whose program most wants
+running.
+
+`dbranch autopkgtest --deb <file>` writes one. The awkward part is
+that there is no single way to ask a program for help: `--help` is
+the common answer, `help` the subcommand style, `-h` the terse one.
+A generated test that guesses wrong fails for a reason that has
+nothing to do with the package, so the verb is not guessed — each
+program is extracted and run until one works, and that is what gets
+written:
+
+```console
+$ dbranch autopkgtest --deb ../foo_1.2.3-1_all.deb
+/usr/bin/bar answers to help
+/usr/bin/foo answered to none of --help, help, -h — the test says so
+rather than pretending otherwise
+```
+
+A program that answers to nothing becomes a comment in the script
+naming what was tried, not a line that would pass while testing
+nothing. debcargo's own stanzas are kept with the smoke test above
+them, which is how `threecpio` carries a hand-written CLI test beside
+its generated ones.
+
+A package that already declares a test is left alone: a `Tests:`
+stanza means someone wrote a script and named it, so nothing is
+written and the command says why. There is no `--force` — a flag that
+overwrites a hand-written test is one that gets used by accident, and
+removing the stanza is a clearer way to say you meant it. debcargo's
+generated `Test-Command:` stanzas do not count as such a test, since
+they run the crate's cargo tests and never the installed program.
+
+`check` gained the matching finding, `no-program-test`, pointing at
+the command that writes one. It names the generated suite when there
+is one, because "no autopkgtest" would often be false and the true
+statement is narrower: every generator Debian ships exercises the
+library and never the installed program.
+`autopkgtest-pkg-python` emits a single `import` marked `superficial`
+— Debian's own word for a test that gives no real confidence;
+`autopkgtest-pkg-ruby` runs the gem's own suite, which is `skippable`
+and tests nothing when there is none. The gap is the same in every
+language, which is why the command keys off a package's `/usr/bin`
+contents rather than its ecosystem.
+
 ### dbranch: check packaging files instead of trusting them
 
 A Debian `debian/` directory is often adopted rather than written —

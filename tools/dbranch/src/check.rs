@@ -272,6 +272,44 @@ pub fn stale_mention_findings(files: &BTreeMap<String, String>, current: &str) -
     found
 }
 
+/// Whether anything runs the programs this package installs.
+///
+/// A generated suite is not nothing, so "no autopkgtest" would often
+/// be false. What is true is narrower and more useful: none of them
+/// runs the installed program. autodep8's Python generator emits one
+/// `import` and marks it `superficial`, Debian's own word for a test
+/// that proves little; its Ruby generator runs the gem's own suite,
+/// which is the library's tests and is `skippable` when there are
+/// none; debcargo's stanzas run cargo tests against the crate. All
+/// three leave /usr/bin untouched.
+pub fn autopkgtest_findings(control: Option<&str>, testsuite: Option<&str>) -> Vec<Finding> {
+    if control.is_some_and(crate::autopkgtest::declares_test) {
+        return Vec::new();
+    }
+    let message = match testsuite {
+        Some(suite) => format!(
+            "{suite} exercises this package's library, not the programs \
+             it installs in /usr/bin"
+        ),
+        None => "debian/tests/control names no test, so nothing runs the \
+                 programs this package installs"
+            .to_string(),
+    };
+    vec![
+        Finding::new("no-program-test", Severity::Warning, message)
+            .with_command("dbranch autopkgtest --deb ../*.deb".into()),
+    ]
+}
+
+/// The `Testsuite:` a `debian/control` declares, if any.
+pub fn declared_testsuite(control: &str) -> Option<String> {
+    control.lines().find_map(|line| {
+        line.strip_prefix("Testsuite:")
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
 /// A file the source ships that a package ought to carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceAsset {
@@ -421,6 +459,18 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
             findings.extend(apply_findings(&failing_patches(&series, ui, &opts.repo)));
         }
     }
+
+    ui.step("Check that something runs the installed programs");
+    findings.extend(autopkgtest_findings(
+        std::fs::read_to_string(debian.join("tests/control"))
+            .ok()
+            .as_deref(),
+        std::fs::read_to_string(debian.join("control"))
+            .ok()
+            .as_deref()
+            .and_then(declared_testsuite)
+            .as_deref(),
+    ));
 
     ui.step("Look for comments left behind by an older release");
     findings.extend(stale_mention_findings(
@@ -637,7 +687,7 @@ fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<SourceAsset
 }
 
 /// The paths a .deb installs, as `dpkg-deb -c` lists them.
-fn deb_contents(
+pub(crate) fn deb_contents(
     deb: &std::path::Path,
     ui: &crate::ui::Ui,
     cwd: &std::path::Path,
@@ -674,22 +724,25 @@ fn deb_entry_path(line: &str) -> Option<String> {
 /// point: a program that needs a file at an absolute path only finds
 /// it if that file was actually packaged, which is the bug being
 /// looked for.
-fn smoke_test(
-    debs: &[std::path::PathBuf],
-    packaged: &BTreeSet<String>,
-    ui: &crate::ui::Ui,
-) -> Result<Vec<(String, Smoke)>, String> {
-    let programs: Vec<String> = packaged
+/// The programs a package installs, as absolute paths.
+pub(crate) fn installed_programs(packaged: &BTreeSet<String>) -> Vec<String> {
+    packaged
         .iter()
-        .filter(|p| {
-            let p = p.trim_start_matches('.');
-            p.starts_with("/usr/bin/") || p.starts_with("/usr/sbin/")
-        })
-        .map(|p| p.trim_start_matches('.').to_string())
-        .collect();
-    if programs.is_empty() {
-        return Ok(Vec::new());
-    }
+        .map(|p| p.trim_start_matches('.'))
+        .filter(|p| p.starts_with("/usr/bin/") || p.starts_with("/usr/sbin/"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Unpack every package into one temporary root.
+///
+/// One root for all of them, because a program in one package may
+/// need a file from another, which is exactly the relationship a
+/// smoke test is looking for.
+pub(crate) fn extract_all(
+    debs: &[std::path::PathBuf],
+    ui: &crate::ui::Ui,
+) -> Result<tempfile::TempDir, String> {
     let root = tempfile::tempdir().map_err(|e| format!("could not make a temp dir: {e}"))?;
     for deb in debs {
         let argv: Vec<String> = [
@@ -708,6 +761,19 @@ fn smoke_test(
             return Err(format!("dpkg-deb -x {} failed: {out}", deb.display()));
         }
     }
+    Ok(root)
+}
+
+fn smoke_test(
+    debs: &[std::path::PathBuf],
+    packaged: &BTreeSet<String>,
+    ui: &crate::ui::Ui,
+) -> Result<Vec<(String, Smoke)>, String> {
+    let programs = installed_programs(packaged);
+    if programs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = extract_all(debs, ui)?;
     let mut results = Vec::new();
     for program in programs {
         let path = root.path().join(program.trim_start_matches('/'));
@@ -888,6 +954,44 @@ mod tests {
     }
 
     #[test]
+    fn a_generated_suite_is_named_rather_than_called_nothing() {
+        // autopkgtest-pkg-python emits one `import` marked
+        // `superficial`; pkg-ruby runs the gem's own suite and skips
+        // when there is none. Both are real autopkgtests, so saying
+        // "no autopkgtest" would be false -- what is true is that
+        // neither runs the installed program.
+        let found = autopkgtest_findings(None, Some("autopkgtest-pkg-python"));
+        assert_eq!(names(&found), ["no-program-test"]);
+        assert!(
+            found[0]
+                .message
+                .contains("autopkgtest-pkg-python exercises"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn debcargo_stanzas_alone_still_leave_the_programs_untested() {
+        let generated = "Test-Command: /usr/share/cargo/bin/cargo-auto-test dbranch 0.26.0\n";
+        let found = autopkgtest_findings(Some(generated), None);
+        assert_eq!(names(&found), ["no-program-test"]);
+        // A named script is a test of the program; this is not.
+        assert!(autopkgtest_findings(Some("Tests: smoke\n"), None).is_empty());
+    }
+
+    #[test]
+    fn the_declared_testsuite_is_read_from_debian_control() {
+        let control = "Source: damo\nSection: admin\nTestsuite: autopkgtest-pkg-python\n";
+        assert_eq!(
+            declared_testsuite(control).as_deref(),
+            Some("autopkgtest-pkg-python")
+        );
+        assert_eq!(declared_testsuite("Source: foo\n"), None);
+        assert_eq!(declared_testsuite("Testsuite:\n"), None);
+    }
+
+    #[test]
     fn a_man_page_that_reaches_no_package_is_reported() {
         // dbranch's own: man/dbranch.1 ships in the crate and nothing
         // installs it, so `man dbranch` would be missing.
@@ -1019,7 +1123,7 @@ mod tests {
         let found = run(&opts, &silent()).expect("a readable tree checks");
         // The versions agree, so the only thing to say is what was
         // not looked at for want of a built package.
-        assert_eq!(names(&found), ["packages-not-checked"]);
+        assert_eq!(names(&found), ["no-program-test", "packages-not-checked"]);
         assert!(!has_blocker(&found));
     }
 

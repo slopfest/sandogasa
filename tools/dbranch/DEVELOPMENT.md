@@ -750,6 +750,66 @@ the fork's project.
   tag`. `all` = `merge,build,lint,push` (upload/tag are deliberate
   publish/release steps, opt-in).
 
+## Generated packaging is probed, never guessed
+
+`autopkgtest` writes a test that runs each installed program, and the
+verb it uses is established by running the program rather than
+assumed. This is the rule for any packaging dbranch generates: a
+generated file that is wrong fails for a reason the packager did not
+cause and cannot easily read, which is worse than generating nothing.
+
+The corollary is that a probe which finds no answer must say so in
+the generated file. A program answering to none of `--help`, `help`
+or `-h` becomes a comment naming what was tried — never a line that
+would let the test pass while exercising nothing, which is the exact
+state the test exists to prevent.
+
+`HELP_VERBS` is ordered commonest-first, and `-h` is last on purpose:
+on some programs it is not help at all, so it must only be reached
+when the other two have been refused.
+
+### A language's generated suite is not a test of the program
+
+Every generator Debian ships exercises the *library*, never the
+installed program, so `Testsuite:` being present says nothing about
+whether `/usr/bin` works. Read from autodep8 0.31's own generators
+rather than assumed:
+
+- `autopkgtest-pkg-python` emits one stanza, `python3 -c "import M;
+  print(M)"` for each supported interpreter, and marks it
+  `superficial` — Debian's own word for a test that gives no real
+  confidence.
+- `autopkgtest-pkg-ruby` runs `gem2deb-test-runner`, which is more
+  than an import: it runs the gem's own suite against the installed
+  gem. But that is still the library's tests, and the stanza is
+  `skippable`, so a gem with no suite silently tests nothing.
+- debcargo's stanzas run `cargo-auto-test` against the crate, and a
+  crate built binary-only gets no stanzas at all.
+
+So `check` reports `no-program-test` rather than "no autopkgtest",
+and names the suite when there is one: claiming a package has no
+autopkgtest when it has one is false, and the useful statement is the
+narrower one. It is also why `dbranch autopkgtest` keys off the
+package's `/usr/bin` contents rather than its language — the gap is
+identical in all of them, and so is the fix. damo carries a
+hand-written `--help` smoke test beside `autopkgtest-pkg-python` for
+exactly this reason.
+
+### Generated packaging never overwrites written packaging
+
+`plan` decides this, and the distinction it draws is the useful one: a
+`Tests:` stanza names a script a person wrote, while debcargo's
+`Test-Command:` stanzas run the crate's cargo tests and never touch
+the installed program. The first means the job is already done and
+better than probing could manage; the second means the gap is still
+open, so the smoke test goes above them and both are kept.
+
+A stray `debian/tests/smoke` with no control entry stops the command
+too. Nothing runs it, so it looks disposable — but it is still
+somebody's file, and the one thing a generator must never do is
+destroy work it did not create. Any future generated file follows the
+same rule, which is why there is no `--force` to argue about.
+
 ## A check is only as good as the command it hands back
 
 `check` reports findings, and every finding carries the command that

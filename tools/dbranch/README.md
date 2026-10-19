@@ -81,6 +81,7 @@ stages you run need:
 ## Usage
 
 ```
+dbranch autopkgtest [-C <dir>] --deb <file>... [--dry-run] [--explain]
 dbranch check [-C <dir>] [--deb <file>...] [--json]
     [--dry-run] [--explain]
 dbranch clone <url> [<dir>] [--upstream-version <v>]
@@ -107,6 +108,31 @@ dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 
 `rebuild` is the main command (below).
 
+`autopkgtest` writes a test that runs the programs a package
+installs. A package can build, lint clean, and install a program that
+does not start, because nothing in a build runs it — so the cheapest
+guard is a test that invokes what you shipped, even if it only asks
+for the help text.
+
+The verb is probed, not guessed. There is no single way to ask a
+program to describe itself: `--help` is the common answer, `help` the
+subcommand style, `-h` the terse one. A generated test that guesses
+wrong fails for a reason that has nothing to do with the package, so
+each program is run until one works and that is what gets written. A
+program that answers to none of them is written into the script as a
+comment rather than a line that would pass without testing anything.
+debcargo's own generated stanzas are kept, with the smoke test above
+them, so a crate's cargo tests keep running too — they run the crate's
+cargo tests rather than the installed program, so a package carrying
+only those still has the gap.
+
+If `debian/tests/control` already declares a test, nothing is written
+and it says so. A `Tests:` stanza means someone wrote a script and
+named it, and that is almost always more specific than anything
+probing can produce; remove the stanza yourself if you want a new one.
+There is no `--force`, because a flag that overwrites a hand-written
+test is one that gets used by accident.
+
 `check` reads packaging files instead of trusting them. `debian/` is
 often adopted rather than written — from upstream, from an older
 release, from a generator's overlay — and goes stale quietly: a
@@ -118,8 +144,12 @@ finds it.
 By default it reads the source tree alone, which needs no build: it
 compares the changelog's version against the version the source states
 for itself, reads `debian/patches/series` against the patch directory
-in both directions, tries each patch, and notes comments left behind by
-an older release. `--deb <file>` adds the two checks that need a built
+in both directions, tries each patch, notes whether anything runs the
+installed programs, and reports comments left behind by an older
+release. A `Testsuite:` field does not settle that last one: the
+generated suites exercise a package's library and never `/usr/bin`,
+so the finding names the suite rather than claiming there is no
+autopkgtest. `--deb <file>` adds the two checks that need a built
 package — whether everything the source ships reaches a package, and
 whether the programs it installs actually run. That last one is the
 check a build can never do, because a build does not run the program:

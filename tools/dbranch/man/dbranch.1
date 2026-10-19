@@ -15,6 +15,37 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS dbranch autopkgtest
+\fBdbranch autopkgtest\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-deb\fR> 
+.PP
+Write an autopkgtest that runs the programs a package installs. A
+package can build, lint clean, and install a program that does not
+start, because nothing in a build runs it; the cheapest guard against
+that is a test which invokes what you shipped, even if it only asks
+for the help text.
+The verb is probed rather than guessed. There is no single way to ask
+a program to describe itself \-\- \-\-help is the common answer, help the
+subcommand style, \-h the terse one \-\- and a generated test that
+guesses wrong fails for a reason that has nothing to do with the
+package. Each program is run until one works, and that is what gets
+written.
+Keeps debcargo\*(Aqs own generated stanzas, placing the smoke test above
+them, so a crate\*(Aqs cargo tests keep running too.
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
+.TP
+\fB\-\-deb\fR \fI<DEB>\fR
+Built package(s) whose programs to probe (repeatable/CSV)
+.TP
+\fB\-\-dry\-run\fR
+Print the commands without running anything (a tutorial)
+.TP
+\fB\-\-explain\fR
+Run, but narrate each step + command first (follow along)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch check
 \fBdbranch check\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-deb\fR] [\fB\-\-json\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP

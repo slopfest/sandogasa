@@ -5,6 +5,7 @@
 //! conflict, regenerate the `~<codename>+<N>` rebuild entry, and
 //! scratch-build.
 
+pub mod autopkgtest;
 pub mod changelog;
 pub mod check;
 pub mod control;

@@ -25,6 +25,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Write an autopkgtest that runs what the package installs.
+    #[command(long_about = "\
+Write an autopkgtest that runs the programs a package installs. A
+package can build, lint clean, and install a program that does not
+start, because nothing in a build runs it; the cheapest guard against
+that is a test which invokes what you shipped, even if it only asks
+for the help text.
+The verb is probed rather than guessed. There is no single way to ask
+a program to describe itself -- --help is the common answer, help the
+subcommand style, -h the terse one -- and a generated test that
+guesses wrong fails for a reason that has nothing to do with the
+package. Each program is run until one works, and that is what gets
+written.
+Keeps debcargo's own generated stanzas, placing the smoke test above
+them, so a crate's cargo tests keep running too.")]
+    Autopkgtest {
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
+
+        /// Built package(s) whose programs to probe (repeatable/CSV).
+        #[arg(long, required = true, value_delimiter = ',', value_name = "DEB")]
+        deb: Vec<PathBuf>,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long)]
+        explain: bool,
+    },
+
     /// Check packaging files instead of trusting them.
     #[command(long_about = "\
 Check packaging files instead of trusting them. debian/ is often
@@ -509,6 +542,31 @@ fn main() -> ExitCode {
 
 fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        Command::Autopkgtest {
+            repo,
+            deb,
+            dry_run,
+            explain,
+        } => {
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet: false,
+            };
+            let opts = dbranch::autopkgtest::Options { repo, debs: deb };
+            for entry in dbranch::autopkgtest::run(&opts, &ui)? {
+                match entry.verb {
+                    Some(verb) => println!("{} answers to {verb}", entry.program),
+                    None => println!(
+                        "{} answered to none of {} — the test says so rather \
+                         than pretending otherwise",
+                        entry.program,
+                        dbranch::autopkgtest::HELP_VERBS.join(", ")
+                    ),
+                }
+            }
+            Ok(())
+        }
         Command::Check {
             repo,
             deb,
