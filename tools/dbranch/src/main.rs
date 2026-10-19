@@ -207,6 +207,42 @@ debian/ is left to you.")]
         explain: bool,
     },
 
+    /// Write the DEP-3 commit template a patch is written with.
+    #[command(long_about = "\
+Write the DEP-3 commit template a patch is written with. On a
+3.0 (quilt) package a fix to a file outside debian/ cannot be a
+commit on the packaging branch -- the orig tarball comes from
+upstream, so dpkg-source stops with \"aborting due to unexpected
+upstream changes\" and you find out at build time, having already
+made the commit. It has to be a patch, written on the gbp pq branch.
+What goes wrong next is the header: gbp pq export turns the commit
+message into the patch header, so a message with no Forwarded: field
+yields a patch that does not say whether upstream has seen the fix,
+which is what a sponsor asks first. This puts those fields in front
+of you as you write the commit.
+Written to .git, so it is neither committed nor shipped, and
+overwritten freely since the content is fixed. It deliberately does
+not set commit.template, which git cannot scope to one branch and
+which would then apply to packaging commits too, where DEP-3 fields
+mean nothing.")]
+    Dep3Template {
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
+
+        /// Print the template instead of writing it.
+        #[arg(long)]
+        print: bool,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long)]
+        explain: bool,
+    },
+
     /// Fix up gbp.conf / salsa-ci.yml on existing branch(es).
     Fixup {
         /// Branch(es) to fix up (default: the current branch).
@@ -617,6 +653,19 @@ fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
                 quiet: false,
             };
             rebuild::debusine_repo(&ui, &owner, &project, &suite, assume_yes)
+        }
+        Command::Dep3Template {
+            repo,
+            print,
+            dry_run,
+            explain,
+        } => {
+            let ui = Ui {
+                explain,
+                dry_run,
+                quiet: false,
+            };
+            dbranch::dep3::run(&repo, print, &ui).map_err(Into::into)
         }
         Command::Fixup {
             branches,

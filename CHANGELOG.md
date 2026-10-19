@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### dbranch: a command for the DEP-3 commit template
+
+On a `3.0 (quilt)` package a fix to a file outside `debian/` cannot
+be a commit on the packaging branch: the orig tarball comes from
+upstream, so `dpkg-source -b` stops with "aborting due to unexpected
+upstream changes" and you find out at build time, with the commit
+already made. It has to be a patch, written on the `gbp pq` branch,
+where the commit message becomes the patch header — so a message
+with no `Forwarded:` yields a patch that does not say whether
+upstream has seen the fix, which is what a sponsor asks first.
+
+dbranch already had a template for those fields, but it was only
+offered from two paths inside `rebuild`, after a lintian run or a
+copyright check. `dbranch dep3-template` makes it something you can
+ask for: it writes `.git/dbranch-dep3-template` — neither committed
+nor shipped — and prints the route that uses it. `--print` dumps the
+template instead.
+
+The route now defers the sign-off to an amend:
+
+```console
+gbp pq import
+...edit the file...
+git commit -t .git/dbranch-dep3-template
+git commit --amend --no-edit -s
+gbp pq export
+```
+
+`-s` appends its trailer after the last non-comment line, and the
+template has none but blanks, so passing it at commit time puts the
+sign-off *above* the commented fields and every field uncommented
+below it lands after it. By the amend those fields are real text, so
+the trailer follows them, which is also git's own convention.
+
+It deliberately does not set `commit.template`: git cannot scope one
+to a branch, so it would apply to packaging commits too, where DEP-3
+fields mean nothing. `rebuild`'s own note now calls the same code,
+so the template and the route exist once rather than twice.
+
 ### dbranch: check wraps its own output and says how to narrow an override
 
 Findings were printed as single long lines and left to the terminal

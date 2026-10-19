@@ -10,6 +10,7 @@ pub mod changelog;
 pub mod check;
 pub mod control;
 pub mod copyright;
+pub mod dep3;
 pub mod distroinfo;
 pub mod gbpconf;
 pub mod git;

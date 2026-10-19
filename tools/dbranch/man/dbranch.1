@@ -167,6 +167,40 @@ Run, but narrate each step + command first (follow along)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS dbranch dep3-template
+\fBdbranch dep3\-template\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-print\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Write the DEP\-3 commit template a patch is written with. On a
+3.0 (quilt) package a fix to a file outside debian/ cannot be a
+commit on the packaging branch \-\- the orig tarball comes from
+upstream, so dpkg\-source stops with "aborting due to unexpected
+upstream changes" and you find out at build time, having already
+made the commit. It has to be a patch, written on the gbp pq branch.
+What goes wrong next is the header: gbp pq export turns the commit
+message into the patch header, so a message with no Forwarded: field
+yields a patch that does not say whether upstream has seen the fix,
+which is what a sponsor asks first. This puts those fields in front
+of you as you write the commit.
+Written to .git, so it is neither committed nor shipped, and
+overwritten freely since the content is fixed. It deliberately does
+not set commit.template, which git cannot scope to one branch and
+which would then apply to packaging commits too, where DEP\-3 fields
+mean nothing.
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
+.TP
+\fB\-\-print\fR
+Print the template instead of writing it
+.TP
+\fB\-\-dry\-run\fR
+Print the commands without running anything (a tutorial)
+.TP
+\fB\-\-explain\fR
+Run, but narrate each step + command first (follow along)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch fixup
 \fBdbranch fixup\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
 .PP

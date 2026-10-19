@@ -1436,29 +1436,7 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
 /// Said only for quilt packages: a native one has no patch system and
 /// the advice would be wrong.
 fn note_upstream_fix_route(repo: &Path) {
-    let quilt = std::fs::read_to_string(repo.join("debian/source/format"))
-        .is_ok_and(|f| f.trim_start().starts_with("3.0 (quilt)"));
-    if !quilt {
-        return;
-    }
-    // Written under .git, which is neither committed nor shipped, so
-    // offering it costs the package nothing. Named relative to the
-    // repository, because that is where the commands are run.
-    let rel = ".git/dbranch-dep3-template";
-    let named = match std::fs::write(repo.join(rel), plan::dep3_commit_template()) {
-        Ok(()) => format!(" -t {rel}"),
-        Err(_) => String::new(),
-    };
-    eprintln!();
-    eprintln!("note: a fix outside debian/ is a patch, not a commit on this branch.");
-    eprintln!("  The commit message becomes the patch header, so its DEP-3 fields");
-    eprintln!("  -- Forwarded: above all -- are what say the fix went upstream:");
-    eprintln!();
-    eprintln!("    gbp pq import");
-    eprintln!("    ...edit the file...");
-    eprintln!("    git commit{named}");
-    eprintln!("    gbp pq export");
-    eprintln!();
+    crate::dep3::note_route(repo);
 }
 
 /// Validate `debian/copyright` against the DEP-5 model, with `cme`.
