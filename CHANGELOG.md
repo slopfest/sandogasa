@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### dbranch: check says whose fault a program not running is
+
+`check --deb` extracts a package and runs what it installs, and two
+things made that noisier than it should be.
+
+It only tried `--help`, so a subcommand-style program that answers to
+`help` was reported as broken — while `dbranch autopkgtest`, probing
+the same program, would happily write a working test for it. Both now
+try the same verbs in the same order.
+
+And a program that cannot start at all now names what the host is
+missing, read from the package's own `Depends`:
+
+```console
+/usr/bin/fnlfmt was not run: env: 'lua5.4': No such file or directory
+— fennel, lua5.4 are not installed here; autopkgtest installs a
+package's dependencies in a testbed, which this does not
+```
+
+Extracting a package installs nothing, so an interpreted program only
+finds its runtime if the host happens to have it. Saying which
+packages are absent makes plain that the verdict is about the machine
+rather than the package, and points at the tool that does it properly.
+
 ### dbranch: write an autopkgtest that runs what the package installs
 
 A package can build, lint clean, and install a program that does not

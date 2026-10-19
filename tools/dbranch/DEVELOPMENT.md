@@ -896,6 +896,28 @@ line ends in `/` and is not something that can be run. `/usr/bin/` was
 briefly reported as a program that would not start, which is what
 `deb_entry_path` and its test exist to prevent.
 
+### The smoke test asks every way, and says whose fault a failure is
+
+Two things keep this from crying wolf, and both were learned by
+running it rather than by testing it.
+
+It tries every verb in `autopkgtest::HELP_VERBS`, not just `--help`.
+The two commands have to agree on what "responds to help" means, or
+`check` reports a working subcommand-style program as broken while
+`autopkgtest` happily writes a test for it. The first refusal is the
+one quoted, since `--help` is the convention and its complaint is the
+most meaningful.
+
+And exit 127 is answered with the names of the dependencies the host
+lacks, read from the package's own `Depends` and checked with
+`dpkg-query`. Extraction installs nothing, so an interpreted program
+only finds its runtime by luck; naming `fennel, lua5.4` says plainly
+that the verdict is about this machine and not about the package, and
+points at autopkgtest, which installs them in a testbed. The probe is
+best effort — a dependency dpkg cannot be asked about is simply not
+listed, because this explains a failure rather than being another
+check.
+
 ### The smoke test runs from an extraction, not an installation
 
 `dpkg-deb -x` into a temporary root, then run each `/usr/bin` entry

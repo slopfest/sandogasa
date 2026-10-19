@@ -450,13 +450,100 @@ pub enum Smoke {
     NotRun(String),
 }
 
+/// The packages a `Depends:` field names, bare of versions and
+/// alternatives.
+///
+/// Only the names are wanted, to ask dpkg whether each is installed.
+/// An alternative (`a | b`) is satisfied by any of its branches, so
+/// each is reported separately and the caller says which are absent.
+pub fn depends_names(field: &str) -> Vec<String> {
+    field
+        .split(',')
+        .flat_map(|dep| dep.split('|'))
+        .filter_map(|dep| dep.split_whitespace().next())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Why a program could not be run here, naming the dependencies that
+/// are missing when any are.
+///
+/// Extracting a package installs nothing, so an interpreted program
+/// finds its runtime only if the host happens to have it. Saying
+/// which packages are absent turns a bare `env: 'lua5.4': No such
+/// file or directory` into something actionable, and makes plain
+/// that the answer is about this machine rather than the package.
+pub fn missing_dependency_note(output: &str, missing: &[String]) -> String {
+    match missing.is_empty() {
+        true => format!(
+            "{output} — install the package's dependencies, or run \
+             this where they are"
+        ),
+        false => format!(
+            "{output} — {} {} not installed here; autopkgtest installs \
+             a package's dependencies in a testbed, which this does not",
+            missing.join(", "),
+            match missing.len() {
+                1 => "is",
+                _ => "are",
+            }
+        ),
+    }
+}
+
+/// What one attempt at asking a program for help amounts to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attempt {
+    /// It answered; there is nothing more to try.
+    Answered,
+    /// No other verb will fare better either.
+    Hopeless(Smoke),
+    /// This verb was refused; another may still work.
+    Refused(Smoke),
+}
+
+/// Read one attempt, given what the run cost and what can be
+/// believed about it.
+///
+/// The whole judgement of the smoke test lives here: 127 means the
+/// host is missing something rather than the package being broken,
+/// and an ordinary failure is only the package's fault when the run
+/// could be believed in the first place.
+pub fn attempt_verdict(code: i32, output: &str, conclusive: bool, missing: &[String]) -> Attempt {
+    match code {
+        0 => Attempt::Answered,
+        // "command not found": the interpreter or a dependency is
+        // absent here, so every verb will fail the same way.
+        127 => Attempt::Hopeless(Smoke::NotRun(missing_dependency_note(
+            first_line(output),
+            missing,
+        ))),
+        _ if !conclusive => Attempt::Refused(Smoke::NotRun(format!(
+            "{} — this package ships files it may load at run time, and \
+             an extracted copy finds those only once the package is \
+             installed, so the failure says nothing about the package",
+            first_line(output)
+        ))),
+        _ => Attempt::Refused(Smoke::Failed {
+            code,
+            output: output.to_string(),
+        }),
+    }
+}
+
+/// Whether a `dpkg-query` status line reports a package installed.
+pub fn dpkg_reports_installed(status: &str) -> bool {
+    status.contains("install ok installed")
+}
+
 /// Programs the package installs that do not run.
 ///
 /// The one check that would have caught the failure this module was
 /// written for: a `/usr/bin` entry whose supporting file was never
 /// installed, so it dies on `--help` with a module-not-found. Nothing
 /// in a build catches that, because the build is not what runs it.
-pub fn smoke_findings(results: &[(String, Smoke)]) -> Vec<Finding> {
+pub fn smoke_findings(results: &[(String, Smoke)], install: &str) -> Vec<Finding> {
     results
         .iter()
         .filter_map(|(binary, outcome)| match outcome {
@@ -472,11 +559,18 @@ pub fn smoke_findings(results: &[(String, Smoke)]) -> Vec<Finding> {
                 )
                 .with_command(format!("{binary} --help")),
             ),
-            Smoke::NotRun(why) => Some(Finding::new(
-                "binary-not-run",
-                Severity::Note,
-                format!("{binary} was not run: {why}"),
-            )),
+            Smoke::NotRun(why) => Some(
+                Finding::new(
+                    "binary-not-run",
+                    Severity::Note,
+                    format!("{binary} was not run: {why}"),
+                )
+                // The command that would make the answer mean
+                // something. Suggested rather than run: installing a
+                // package system-wide is not something a read-only
+                // check does on your behalf, however useful.
+                .with_command(install.to_string()),
+            ),
         })
         .collect()
 }
@@ -602,7 +696,25 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         findings.extend(uninstalled_assets(&collect_assets(&opts.repo), &packaged));
 
         ui.step("Run each installed program, which is what a build never does");
-        findings.extend(smoke_findings(&smoke_test(&opts.debs, &packaged, ui)?));
+        // Name the packages actually in hand, so the suggestion can
+        // be run rather than adapted. Absolute, because apt reads a
+        // bare name as a package rather than a file, and because the
+        // command may well be pasted into another directory.
+        let install = format!(
+            "sudo apt install {}",
+            opts.debs
+                .iter()
+                .map(|d| std::path::absolute(d)
+                    .unwrap_or_else(|_| d.clone())
+                    .display()
+                    .to_string())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        findings.extend(smoke_findings(
+            &smoke_test(&opts.debs, &packaged, ui)?,
+            &install,
+        ));
     }
 
     report(&findings, opts.json);
@@ -834,7 +946,93 @@ fn deb_entry_path(line: &str) -> Option<String> {
     (!path.ends_with('/')).then(|| path.to_string())
 }
 
-/// Extract each package and run the programs it installs.
+/// One field of a .deb's control, or `None` if it cannot be read.
+fn deb_field(deb: &std::path::Path, field: &str, ui: &crate::ui::Ui) -> Option<String> {
+    let argv: Vec<String> = ["dpkg-deb", "-f", &deb.display().to_string(), field]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    match ui.run_capture(&argv, std::path::Path::new(".")) {
+        Ok((0, out)) => Some(out),
+        _ => None,
+    }
+}
+
+/// Which of `names` dpkg does not report as installed.
+///
+/// Best effort: a package dpkg cannot be asked about is treated as
+/// present, because this exists to explain a failure rather than to
+/// be another check, and guessing absent would invent one.
+fn not_installed(names: &[String], ui: &crate::ui::Ui) -> Vec<String> {
+    let mut missing = Vec::new();
+    for name in names {
+        let argv: Vec<String> = ["dpkg-query", "-W", "-f=${Status}", name]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let installed = matches!(
+            ui.run_capture(&argv, std::path::Path::new(".")),
+            Ok((0, status)) if dpkg_reports_installed(&status)
+        );
+        if !installed && !missing.contains(name) {
+            missing.push(name.clone());
+        }
+    }
+    missing
+}
+
+/// Dependencies of these packages that are not installed here.
+fn uninstalled_dependencies(debs: &[std::path::PathBuf], ui: &crate::ui::Ui) -> Vec<String> {
+    let names: Vec<String> = debs
+        .iter()
+        .filter_map(|deb| deb_field(deb, "Depends", ui))
+        .flat_map(|field| depends_names(&field))
+        .collect();
+    not_installed(&names, ui)
+}
+
+/// Whether every package being checked is itself installed here.
+///
+/// It decides whether a failing script means anything. A script
+/// finds its own modules through absolute paths, so an extracted one
+/// only works when its package is installed -- and when it is not,
+/// the failure says nothing about the package.
+fn packages_installed(debs: &[std::path::PathBuf], ui: &crate::ui::Ui) -> bool {
+    let names: Vec<String> = debs
+        .iter()
+        .filter_map(|deb| deb_field(deb, "Package", ui))
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty())
+        .collect();
+    !names.is_empty() && not_installed(&names, ui).is_empty()
+}
+
+/// Whether these packages ship anything a program might need while
+/// running: anything outside `/usr/bin`, `/usr/sbin`, and the
+/// documentation a program never loads.
+///
+/// This is what decides whether a failure from an extracted run can
+/// be believed. Extraction installs nothing, so a program that loads
+/// a file by absolute path finds it only if the package is already
+/// installed -- true of a script looking for its own modules, and
+/// equally of a statically linked binary reading its data files.
+///
+/// When a package ships *only* its programs, there is nothing for
+/// extraction to have hidden, and a failure is the package's own:
+/// the fixture that sources a `helper.sh` it never packages fails
+/// for a reason installing it would not fix.
+pub fn ships_runtime_files(packaged: &BTreeSet<String>) -> bool {
+    packaged.iter().any(|path| {
+        let path = path.trim_start_matches('.');
+        !(path.starts_with("/usr/bin/")
+            || path.starts_with("/usr/sbin/")
+            || path.starts_with("/usr/share/doc/")
+            || path.starts_with("/usr/share/man/")
+            || path.ends_with('/'))
+    })
+}
+
+/// Extract each package and run the programs it installs./// Extract each package and run the programs it installs./// Extract each package and run the programs it installs.
 ///
 /// Running from an extraction rather than an installation is the
 /// point: a program that needs a file at an absolute path only finds
@@ -888,6 +1086,12 @@ fn smoke_test(
     if programs.is_empty() {
         return Ok(Vec::new());
     }
+    let missing = uninstalled_dependencies(debs, ui);
+    let missing = &missing;
+    // Whether a failure here can be believed: either the package is
+    // installed, so absolute paths resolve to its own files, or it
+    // ships nothing a program could have been looking for.
+    let conclusive = packages_installed(debs, ui) || !ships_runtime_files(packaged);
     let root = extract_all(debs, ui)?;
     let mut results = Vec::new();
     for program in programs {
@@ -896,31 +1100,42 @@ fn smoke_test(
             results.push((program, Smoke::NotRun("not in the extracted tree".into())));
             continue;
         }
-        // `timeout` so a program that waits for input cannot hang the
-        // check, and because it keeps this a real, runnable command.
-        let argv: Vec<String> = ["timeout", "10", &path.display().to_string(), "--help"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        match ui.run_capture(&argv, root.path()) {
-            Ok((0, _)) => results.push((program, Smoke::Ok)),
-            // 127 is "command not found", and from an extracted
-            // package that almost always means its Depends are not
-            // installed here -- fnlfmt's `#!/usr/bin/env lua5.4`
-            // against a host with no lua5.4. The program never ran,
-            // so it has not failed; reporting it as broken would be
-            // crying wolf on every package with an interpreter.
-            Ok((127, output)) => results.push((
-                program,
-                Smoke::NotRun(format!(
-                    "{} — install the package's dependencies, or run \
-                     this where they are",
-                    first_line(output.trim())
-                )),
-            )),
-            Ok((code, output)) => results.push((program, Smoke::Failed { code, output })),
-            Err(e) => results.push((program, Smoke::NotRun(e.to_string()))),
+        // Every way of asking, in the same order `autopkgtest`
+        // probes them. Trying only `--help` reported a working
+        // subcommand-style program as broken, which is the kind of
+        // confident wrong answer that gets a checker ignored.
+        // `timeout` so a program that waits for input cannot hang
+        // the check, and because it stays a runnable command.
+        let mut outcome = None;
+        for verb in crate::autopkgtest::HELP_VERBS {
+            let argv: Vec<String> = ["timeout", "10", &path.display().to_string(), verb]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let attempt = match ui.run_capture(&argv, root.path()) {
+                Ok((code, output)) => attempt_verdict(code, output.trim(), conclusive, missing),
+                Err(e) => Attempt::Refused(Smoke::NotRun(e.to_string())),
+            };
+            match attempt {
+                Attempt::Answered => {
+                    outcome = Some(Smoke::Ok);
+                    break;
+                }
+                Attempt::Hopeless(smoke) => {
+                    outcome = Some(smoke);
+                    break;
+                }
+                // Keep the first refusal: `--help` is the convention,
+                // so its complaint is the one worth quoting.
+                Attempt::Refused(smoke) => {
+                    outcome.get_or_insert(smoke);
+                }
+            }
         }
+        results.push((
+            program,
+            outcome.unwrap_or_else(|| Smoke::NotRun("no way to ask it for help".into())),
+        ));
     }
     Ok(results)
 }
@@ -947,10 +1162,15 @@ pub fn render(findings: &[Finding]) -> String {
     out
 }
 
+/// The findings as a document for another tool to read.
+pub fn render_json(findings: &[Finding]) -> Result<String, String> {
+    serde_json::to_string_pretty(findings).map_err(|e| e.to_string())
+}
+
 /// Print the findings, as JSON or as prose.
 fn report(findings: &[Finding], json: bool) {
     if json {
-        match serde_json::to_string_pretty(findings) {
+        match render_json(findings) {
             Ok(text) => println!("{text}"),
             Err(e) => eprintln!("could not render JSON: {e}"),
         }
@@ -959,9 +1179,19 @@ fn report(findings: &[Finding], json: bool) {
     print!("{}", render(findings));
 }
 
-/// The first line of a tool's output, for a one-line message.
+/// The first line of a tool's output, for quoting in a message.
+///
+/// Trailing punctuation goes too. A tool that is about to list
+/// details ends its first line with a colon -- lua's "module 'x' not
+/// found:" -- and quoting that mid-sentence leaves the colon butting
+/// against whatever follows.
 fn first_line(text: &str) -> &str {
-    text.lines().next().unwrap_or("").trim()
+    text.lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches([':', ';', ','])
+        .trim_end()
 }
 
 #[cfg(test)]
@@ -1474,6 +1704,184 @@ mod tests {
     }
 
     #[test]
+    fn a_depends_field_yields_bare_package_names() {
+        assert_eq!(depends_names("fennel, lua5.4"), ["fennel", "lua5.4"]);
+        // Versions and architecture qualifiers are not part of a name.
+        assert_eq!(
+            depends_names("libc6 (>= 2.34), python3:any"),
+            ["libc6", "python3:any"]
+        );
+        // Either branch of an alternative can satisfy it, so both are
+        // worth asking dpkg about.
+        assert_eq!(depends_names("lua5.4 | lua5.3"), ["lua5.4", "lua5.3"]);
+        assert!(depends_names("").is_empty());
+    }
+
+    #[test]
+    fn the_not_run_note_names_what_the_host_is_missing() {
+        let note = missing_dependency_note(
+            "env: 'lua5.4': No such file or directory",
+            &["fennel".to_string(), "lua5.4".to_string()],
+        );
+        assert!(note.contains("fennel, lua5.4 are not installed here"));
+        // It has to say the verdict is about the machine, not the
+        // package, and where a real answer comes from.
+        assert!(note.contains("autopkgtest installs a package's dependencies"));
+        // One missing dependency reads as one thing, not two.
+        let one = missing_dependency_note("env: 'x'", &["lua5.4".to_string()]);
+        assert!(one.contains("lua5.4 is not installed here"), "{one}");
+    }
+
+    #[test]
+    fn with_nothing_identifiably_missing_the_note_still_explains_itself() {
+        let note = missing_dependency_note("env: 'x': No such file", &[]);
+        assert!(note.contains("install the package's dependencies"));
+        assert!(!note.contains("has not got"));
+    }
+
+    #[test]
+    fn a_package_of_programs_alone_hides_nothing_from_an_extraction() {
+        // The fixture that sources a helper.sh it never packages:
+        // nothing was left behind by extracting, so its failure is
+        // its own and installing would not fix it.
+        let packaged = BTreeSet::from([
+            "./usr/bin/foo".to_string(),
+            "./usr/share/doc/foo/copyright".to_string(),
+            "./usr/share/man/man1/foo.1.gz".to_string(),
+        ]);
+        assert!(!ships_runtime_files(&packaged));
+    }
+
+    #[test]
+    fn a_package_shipping_modules_or_data_can_hide_them() {
+        // fnlfmt ships its own Lua module, which an extracted copy
+        // looks for on the host and does not find -- a failure about
+        // this machine, not about the package.
+        let packaged = BTreeSet::from([
+            "./usr/bin/fnlfmt".to_string(),
+            "./usr/share/lua/5.4/fnlfmt.lua".to_string(),
+        ]);
+        assert!(ships_runtime_files(&packaged));
+        // A statically linked binary with data files is the same
+        // case, which is why this does not ask about interpreters.
+        let with_data = BTreeSet::from([
+            "./usr/bin/thing".to_string(),
+            "./usr/share/thing/table.bin".to_string(),
+        ]);
+        assert!(ships_runtime_files(&with_data));
+    }
+
+    #[test]
+    fn a_quoted_tool_message_does_not_trail_into_the_sentence() {
+        // lua ends its first line with a colon before listing the
+        // paths it searched, which read badly before an em dash.
+        assert_eq!(
+            first_line("lua5.4: /usr/bin/x:4: module 'x' not found:\n  no field"),
+            "lua5.4: /usr/bin/x:4: module 'x' not found"
+        );
+        assert_eq!(first_line("plain message"), "plain message");
+        assert_eq!(first_line(""), "");
+    }
+
+    #[test]
+    fn the_programs_a_package_installs_are_its_bin_entries() {
+        let packaged = BTreeSet::from([
+            "./usr/bin/foo".to_string(),
+            "./usr/sbin/bard".to_string(),
+            "./usr/share/lua/5.4/foo.lua".to_string(),
+            "./usr/share/doc/foo/copyright".to_string(),
+        ]);
+        // Sorted as the set holds them: ./usr/bin before ./usr/sbin.
+        assert_eq!(
+            installed_programs(&packaged),
+            ["/usr/bin/foo", "/usr/sbin/bard"]
+        );
+    }
+
+    #[test]
+    fn the_json_document_carries_the_slug_and_the_command() {
+        let findings = vec![
+            Finding::new("a-check", Severity::Blocker, "it broke".into())
+                .with_command("run this".into()),
+        ];
+        let text = render_json(&findings).expect("findings serialize");
+        assert!(text.contains("\"check\": \"a-check\""), "{text}");
+        assert!(text.contains("\"severity\": \"blocker\""), "{text}");
+        assert!(text.contains("\"command\": \"run this\""), "{text}");
+        // A finding with no command omits the key rather than
+        // carrying a null for a reader to special-case.
+        let bare = render_json(&[Finding::new("b", Severity::Note, "x".into())]).unwrap();
+        assert!(!bare.contains("command"), "{bare}");
+    }
+
+    #[test]
+    fn a_deb_that_is_not_there_stops_the_run_naming_where_it_looked() {
+        let dir = fixture("1.2.3-1");
+        let opts = CheckOptions {
+            repo: dir.path().to_path_buf(),
+            debs: vec![std::path::PathBuf::from("definitely-not-here.deb")],
+            json: false,
+        };
+        let err = run(&opts, &silent()).expect_err("a missing package stops this");
+        assert!(err.contains("no such file"), "{err}");
+        // Absolute, because the path was read against the current
+        // directory and not against -C, which is the whole trap.
+        assert!(err.starts_with('/'), "it says where it looked: {err}");
+    }
+
+    #[test]
+    fn a_program_that_answers_ends_the_asking() {
+        assert_eq!(
+            attempt_verdict(0, "usage: ...", true, &[]),
+            Attempt::Answered
+        );
+    }
+
+    #[test]
+    fn command_not_found_is_hopeless_and_blames_the_host() {
+        // 127 from an extracted package means its dependencies are
+        // not installed here, so no other verb will fare better.
+        let Attempt::Hopeless(Smoke::NotRun(why)) = attempt_verdict(
+            127,
+            "env: 'lua5.4': No such file or directory",
+            false,
+            &["lua5.4".to_string()],
+        ) else {
+            panic!("a missing interpreter is hopeless, not a refusal");
+        };
+        assert!(why.contains("lua5.4 is not installed here"), "{why}");
+    }
+
+    #[test]
+    fn a_refusal_is_the_packages_fault_only_when_it_can_be_believed() {
+        // The fixture that ships only its program: nothing was
+        // hidden by extracting, so its failure is its own.
+        let Attempt::Refused(Smoke::Failed { code, .. }) =
+            attempt_verdict(2, "cannot open helper.sh", true, &[])
+        else {
+            panic!("a conclusive refusal is a failure");
+        };
+        assert_eq!(code, 2);
+
+        // fnlfmt, which ships a module an extracted copy cannot see.
+        let Attempt::Refused(Smoke::NotRun(why)) =
+            attempt_verdict(1, "module 'fnlfmt' not found:", false, &[])
+        else {
+            panic!("an inconclusive refusal is not a failure");
+        };
+        assert!(why.contains("says nothing about the package"), "{why}");
+        // The quoted line loses its trailing colon on the way in.
+        assert!(why.contains("module 'fnlfmt' not found —"), "{why}");
+    }
+
+    #[test]
+    fn dpkg_status_is_read_for_the_installed_state_alone() {
+        assert!(dpkg_reports_installed("install ok installed"));
+        assert!(!dpkg_reports_installed("deinstall ok config-files"));
+        assert!(!dpkg_reports_installed(""));
+    }
+
+    #[test]
     fn a_program_that_dies_on_help_is_a_blocker() {
         // The failure this module exists for: the binary is there,
         // the build passed, and it cannot start because a file it
@@ -1486,7 +1894,7 @@ mod tests {
                     .into(),
             },
         )];
-        let found = smoke_findings(&results);
+        let found = smoke_findings(&results, "sudo apt install ./x.deb");
         assert_eq!(names(&found), ["binary-does-not-run"]);
         assert_eq!(found[0].severity, Severity::Blocker);
         assert!(found[0].message.contains("module 'indentation' not found"));
@@ -1502,7 +1910,7 @@ mod tests {
                 Smoke::NotRun("not executable here".into()),
             ),
         ];
-        let found = smoke_findings(&results);
+        let found = smoke_findings(&results, "sudo apt install ./x.deb");
         assert_eq!(names(&found), ["binary-not-run"]);
         assert_eq!(found[0].severity, Severity::Note);
         assert!(!has_blocker(&found), "an untried binary is not a blocker");
