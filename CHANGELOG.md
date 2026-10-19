@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### dbranch: check wraps its own output and says how to narrow an override
+
+Findings were printed as single long lines and left to the terminal
+to break, which splits words: `very-long-` / `line-length-in-source-
+file`, `--show-over` / `rides`. They are now wrapped at 78 columns,
+with continuation lines indented by two so they stay clear of the
+command's four. Commands wrap too, but with a trailing backslash: a
+soft-wrapped command cannot be pasted and run, which is the only
+reason to print one, while a shell continuation can. Breaks fall
+between arguments, never inside one.
+
+`unscoped-lintian-override` also says how to fix itself rather than
+only what is wrong. Narrowing an override means appending the
+context lintian prints for it, with paths in square brackets and `*`
+as a wildcard, and the command it offers is the lintian run that
+prints that context — not `lintian-explain-tags`, which says what a
+tag means and nothing about how to override it. It names every tag
+it listed rather than only the first.
+
+The finding also warns about `--display-experimental`, because
+without it an experimental tag stays hidden and its override looks
+dead when it is not. That trap caught this author: a real override
+suppressing two 5506-character lines appeared to be suppressing
+nothing.
+
+Backticks and other Markdown are gone from the findings. Nothing
+renders them in a terminal, and the text is meant to paste straight
+into a bug report or a mail to a sponsor — the same reason the
+message stays uncoloured while only the severity word is styled.
+
 ### dbranch: check reports what is wrong, not what it did not do
 
 Two notes were nagging rather than reporting, and both are gone.

@@ -405,13 +405,26 @@ pub fn override_findings(path: &str, text: &str) -> Vec<Finding> {
             "unscoped-lintian-override",
             Severity::Note,
             format!(
-                "{path} silences {} with no pattern, so it applies to \
-                 every occurrence including ones not there yet — give \
-                 a pattern to any that names a file",
+                "{path} silences {} with no context, so each applies to \
+                 every occurrence, including ones not there yet. Narrow \
+                 one by appending the context lintian prints for it — \
+                 paths in square brackets, * as a wildcard. A tag \
+                 showing only at the experimental or pedantic level \
+                 needs those flags to appear at all, and without them \
+                 its override looks dead when it is not. \
+                 See the Lintian User's Manual, under Format of \
+                 override files.",
                 bare.join(", ")
             ),
         )
-        .with_command(format!("lintian-explain-tags {}", bare[0])),
+        // The run that prints the context to copy, rather than
+        // lintian-explain-tags, which says what a tag means and
+        // nothing about how to override it. The path is a
+        // placeholder: only the operator knows where their build
+        // put the .dsc.
+        .with_command(
+            "lintian --show-overrides --display-experimental --pedantic path-to-dsc".into(),
+        ),
     ]
 }
 
@@ -1615,6 +1628,32 @@ fn smoke_test(
     Ok((results, states))
 }
 
+/// A command broken across lines the shell's own way.
+///
+/// Soft-wrapping a command would stop it running, which is the only
+/// reason to print one — but a trailing backslash is a continuation
+/// the shell understands, so a long command can still be pasted
+/// whole. Breaks fall on spaces between arguments, never inside one.
+pub fn wrap_command(command: &str, indent: usize, width: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = " ".repeat(indent);
+    let mut empty = true;
+    for word in command.split_whitespace() {
+        if !empty && line.len() + 1 + word.len() + 2 > width {
+            lines.push(format!("{line} \\"));
+            line = " ".repeat(indent + 2);
+            empty = true;
+        }
+        if !empty {
+            line.push(' ');
+        }
+        line.push_str(word);
+        empty = false;
+    }
+    lines.push(line);
+    lines.join("\n")
+}
+
 /// The findings as a person reads them: worst first, each followed by
 /// the command that shows the same thing.
 ///
@@ -1631,25 +1670,36 @@ pub fn render_styled(findings: &[Finding], colour: bool) -> String {
     let mut out = String::new();
     for finding in sorted {
         let (label, message) = (finding.severity.label(), &finding.message);
+        // Wrap ourselves rather than leaving it to the terminal,
+        // which breaks mid-word. Continuation lines are indented by
+        // two, which keeps them clear of the command's four.
+        let wrapped = sandogasa_cli::wrap_prefixed(&format!("{label}: {message}"), "", 78);
+        let mut lines = wrapped.lines();
+        let first = lines.next().unwrap_or_default();
         match colour {
             true => {
                 let s = finding.severity.style();
+                let rest = first.strip_prefix(label).unwrap_or(first);
                 out.push_str(&format!(
-                    "{}{label}{}: {message}\n",
+                    "{}{label}{}{rest}\n",
                     s.render(),
                     s.render_reset()
                 ));
             }
-            false => out.push_str(&format!("{label}: {message}\n")),
+            false => out.push_str(&format!("{first}\n")),
+        }
+        for line in lines {
+            out.push_str(&format!("  {line}\n"));
         }
         if let Some(command) = &finding.command {
+            let wrapped = wrap_command(command, 4, 78);
             match colour {
                 true => out.push_str(&format!(
-                    "    {}{command}{}\n",
+                    "{}{wrapped}{}\n",
                     dim.render(),
                     dim.render_reset()
                 )),
-                false => out.push_str(&format!("    {command}\n")),
+                false => out.push_str(&format!("{wrapped}\n")),
             }
         }
     }
@@ -1924,9 +1974,11 @@ mod tests {
                 .message
                 .contains("very-long-line-length-in-source-file")
         );
+        // The command prints the context to copy, which is what
+        // narrowing needs — not an explanation of the tag.
         assert_eq!(
             found[0].command.as_deref(),
-            Some("lintian-explain-tags very-long-line-length-in-source-file")
+            Some("lintian --show-overrides --display-experimental --pedantic path-to-dsc")
         );
     }
 
@@ -2301,6 +2353,32 @@ mod tests {
             "the error names where it looked: {err}"
         );
         assert!(err.contains("-C"), "and how to point it elsewhere: {err}");
+    }
+
+    #[test]
+    fn a_long_command_breaks_the_way_a_shell_understands() {
+        let wrapped = wrap_command("lintian-explain-tags alpha-tag beta-tag gamma-tag", 4, 40);
+        let lines: Vec<&str> = wrapped.lines().collect();
+        // Every line but the last ends in a continuation, so the
+        // whole thing pastes and runs.
+        for line in &lines[..lines.len() - 1] {
+            assert!(line.ends_with(" \\"), "{line}");
+        }
+        assert!(!lines[lines.len() - 1].ends_with('\\'));
+        assert!(lines[0].starts_with("    lintian-explain-tags"));
+        // Continuations are indented past the command.
+        assert!(lines[1].starts_with("      "), "{}", lines[1]);
+        // Nothing is broken inside an argument.
+        let rejoined: String = wrapped.replace(" \\\n", " ");
+        assert_eq!(
+            rejoined.split_whitespace().collect::<Vec<_>>(),
+            ["lintian-explain-tags", "alpha-tag", "beta-tag", "gamma-tag"]
+        );
+    }
+
+    #[test]
+    fn a_short_command_is_left_on_one_line() {
+        assert_eq!(wrap_command("make man", 4, 78), "    make man");
     }
 
     #[test]
