@@ -254,7 +254,11 @@ pub enum PatchState {
 /// exists: this is the state where staleness hides. It is also why
 /// the check matters most before a build, on a tree whose patches
 /// are not yet applied.
-pub fn patch_findings(states: &[(String, PatchState)], quilt_applied: bool) -> Vec<Finding> {
+pub fn patch_findings(
+    states: &[(String, PatchState)],
+    quilt_applied: bool,
+    on_patch_queue: bool,
+) -> Vec<Finding> {
     let mut found: Vec<Finding> = states
         .iter()
         .filter_map(|(patch, state)| match state {
@@ -273,7 +277,10 @@ pub fn patch_findings(states: &[(String, PatchState)], quilt_applied: bool) -> V
         .iter()
         .filter(|(_, state)| *state == PatchState::AlreadyApplied)
         .count();
-    if applied > 0 {
+    // A patch-queue branch holds the patches *as commits*: they are
+    // applied there because that is what the branch is for. Saying
+    // so would be telling someone off for using gbp pq correctly.
+    if applied > 0 && !on_patch_queue {
         // Two different states look alike from the content alone,
         // and they need different fixes. Quilt recording the patches
         // as applied means a build left them that way and popping
@@ -377,6 +384,137 @@ fn dep3(patch: &str, what: &str) -> Finding {
     .with_command(format!("head -20 debian/patches/{patch}"))
 }
 
+/// Changes to files outside `debian/` on a packaging branch.
+///
+/// On a `3.0 (quilt)` package those cannot be committed here: the
+/// orig tarball comes from upstream, so `dpkg-source -b` stops with
+/// "aborting due to unexpected upstream changes" and the packager
+/// finds out at build time, with the commit already made. The fix
+/// belongs on the `gbp pq` branch, where the commit message becomes
+/// the patch header.
+///
+/// `changed` is `git status --porcelain` output. Nothing is reported
+/// on a patch-queue branch, where upstream files are *expected* to
+/// differ -- that is what the branch is for.
+pub fn upstream_change_findings(branch: &str, changed: &[String]) -> Vec<Finding> {
+    if branch.starts_with("patch-queue/") {
+        return Vec::new();
+    }
+    let outside: Vec<&String> = changed
+        .iter()
+        .filter(|path| !path.starts_with("debian/") && !path.starts_with(".pc"))
+        .collect();
+    if outside.is_empty() {
+        return Vec::new();
+    }
+    let shown: Vec<&str> = outside.iter().take(3).map(|p| p.as_str()).collect();
+    let more = match outside.len() > 3 {
+        true => format!(" and {} more", outside.len() - 3),
+        false => String::new(),
+    };
+    vec![
+        Finding::new(
+            "upstream-change-on-packaging-branch",
+            Severity::Warning,
+            format!(
+                "{}{more} changed outside debian/, which a 3.0 (quilt) \
+                 build cannot carry: dpkg-source stops with \"aborting \
+                 due to unexpected upstream changes\". It belongs in a \
+                 patch, written on the gbp pq branch where the commit \
+                 message becomes the patch header.",
+                shown.join(", ")
+            ),
+        )
+        .with_command("dbranch dep3-template".into()),
+    ]
+}
+
+/// The debhelper compatibility level a `debian/control` asks for.
+///
+/// Read from the `debhelper-compat (= N)` build dependency, which is
+/// where it lives now; a `debian/compat` file predates every level
+/// this cares about.
+pub fn debhelper_compat(control: &str) -> Option<u32> {
+    let at = control.find("debhelper-compat")?;
+    let rest = &control[at..];
+    let open = rest.find('(')?;
+    let close = rest.find(')')?;
+    rest.get(open + 1..close)?
+        .trim_start_matches(['=', ' '])
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The fields dpkg treats as relationships, whose substvars
+/// debhelper applies by itself from compat 14.
+const RELATION_FIELDS: [&str; 11] = [
+    "Pre-Depends",
+    "Depends",
+    "Recommends",
+    "Suggests",
+    "Enhances",
+    "Breaks",
+    "Conflicts",
+    "Provides",
+    "Replaces",
+    "Built-Using",
+    "Static-Built-Using",
+];
+
+/// Relationship substvars that no longer need writing out.
+///
+/// From compat 14 `dh_gencontrol` applies a substvar named after a
+/// relationship field on its own, so `Depends: ${misc:Depends},
+/// ${shlibs:Depends}` can go entirely and `Depends: foo,
+/// ${misc:Depends}` reduces to `Depends: foo`.
+///
+/// Nothing else checks this. Lintian flags the redundant
+/// `Priority: optional` that arrives with the same upgrade but has
+/// no tag for these, and debhelper's own checklist says so, citing
+/// Debian bug #1067653. Substvars named after other fields --
+/// `${binary:Version}` and the like -- are untouched by the change
+/// and are not reported.
+pub fn substvar_findings(control: &str) -> Vec<Finding> {
+    if debhelper_compat(control).is_none_or(|level| level < 14) {
+        return Vec::new();
+    }
+    let mut found: Vec<String> = Vec::new();
+    for line in control.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find("${") {
+            rest = &rest[at + 2..];
+            let Some(end) = rest.find('}') else { break };
+            let var = &rest[..end];
+            if let Some((_, field)) = var.split_once(':')
+                && RELATION_FIELDS.contains(&field)
+                && !found.contains(&format!("${{{var}}}"))
+            {
+                found.push(format!("${{{var}}}"));
+            }
+            rest = &rest[end + 1..];
+        }
+    }
+    if found.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        Finding::new(
+            "redundant-relationship-substvar",
+            Severity::Note,
+            format!(
+                "debian/control still writes out {}, which debhelper \
+                 applies by itself from compat 14. Lintian has no tag \
+                 for this yet (Debian bug #1067653), so nothing else \
+                 will mention it. See \
+                 debhelper-compat-upgrade-checklist(7), under v14.",
+                found.join(", ")
+            ),
+        )
+        .with_command("grep -n ':Depends}' debian/control".into()),
+    ]
+}
+
 /// Lintian overrides that name a tag and nothing else.
 ///
 /// An override carrying no pattern silences that tag everywhere, for
@@ -400,15 +538,20 @@ pub fn override_findings(path: &str, text: &str) -> Vec<Finding> {
     if bare.is_empty() {
         return Vec::new();
     }
+    // One override reads as "it", several as "each".
+    let (applies, narrow) = match bare.len() {
+        1 => ("it applies", "Narrow it"),
+        _ => ("each applies", "Narrow one"),
+    };
     vec![
         Finding::new(
             "unscoped-lintian-override",
             Severity::Note,
             format!(
-                "{path} silences {} with no context, so each applies to \
-                 every occurrence, including ones not there yet. Narrow \
-                 one by appending the context lintian prints for it — \
-                 paths in square brackets, * as a wildcard. A tag \
+                "{path} silences {} with no context, so {applies} to \
+                 every occurrence, including ones not there yet. \
+                 {narrow} by appending the context lintian prints for \
+                 it — paths in square brackets, * as a wildcard. A tag \
                  showing only at the experimental or pedantic level \
                  needs those flags to appear at all, and without them \
                  its override looks dead when it is not. \
@@ -992,6 +1135,21 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         }
     }
 
+    let branch = git_branch(&opts.repo, ui);
+    let on_patch_queue = branch.starts_with("patch-queue/");
+    if on_patch_queue {
+        findings.push(Finding::new(
+            "on-patch-queue-branch",
+            Severity::Note,
+            format!(
+                "{branch} is gbp's patch queue, which holds the patches \
+                 as commits and is recreated on demand. debian/ here is \
+                 whatever it was at the last import, so anything said \
+                 about it may be stale."
+            ),
+        ));
+    }
+
     ui.step("Compare debian/patches against the series file");
     let series_path = debian.join("patches/series");
     if series_path.is_file() {
@@ -1001,6 +1159,7 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         findings.extend(patch_findings(
             &patch_states(&series, ui, &opts.repo),
             quilt_records_applied(&opts.repo),
+            on_patch_queue,
         ));
     }
 
@@ -1009,6 +1168,22 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         if let Ok(text) = std::fs::read_to_string(debian.join("patches").join(&patch)) {
             findings.extend(dep3_findings(&patch, &text));
         }
+    }
+
+    ui.step("Look for upstream changes that belong in a patch");
+    if debian.join("source/format").is_file()
+        && std::fs::read_to_string(debian.join("source/format"))
+            .is_ok_and(|f| f.trim_start().starts_with("3.0 (quilt)"))
+    {
+        findings.extend(upstream_change_findings(
+            &branch,
+            &git_changed(&opts.repo, ui),
+        ));
+    }
+
+    ui.step("Look for substvars debhelper now applies by itself");
+    if let Ok(control) = std::fs::read_to_string(debian.join("control")) {
+        findings.extend(substvar_findings(&control));
     }
 
     ui.step("Look for lintian overrides with nothing to narrow them");
@@ -1104,6 +1279,34 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
 
     report(&findings, opts.json);
     Ok(findings)
+}
+
+/// The branch checked out, or an empty string when git cannot say.
+fn git_branch(repo: &std::path::Path, ui: &crate::ui::Ui) -> String {
+    let argv: Vec<String> = ["git", "branch", "--show-current"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    match ui.run_capture(&argv, repo) {
+        Ok((0, out)) => out.trim().to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Paths git reports as changed or untracked.
+fn git_changed(repo: &std::path::Path, ui: &crate::ui::Ui) -> Vec<String> {
+    let argv: Vec<String> = ["git", "status", "--porcelain"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let Ok((0, out)) = ui.run_capture(&argv, repo) else {
+        return Vec::new();
+    };
+    out.lines()
+        // Porcelain v1: two status columns, a space, then the path.
+        .filter_map(|l| l.get(3..))
+        .map(|p| p.trim_matches('"').to_string())
+        .collect()
 }
 
 /// Every lintian override file under `debian/`, with its text.
@@ -1962,6 +2165,125 @@ mod tests {
     }
 
     #[test]
+    fn applied_patches_are_expected_on_the_patch_queue_branch() {
+        // That branch holds the patches as commits, so they are
+        // applied there by design. Reporting it would be telling
+        // someone off for using gbp pq the documented way.
+        let states = [("0001-x.patch".to_string(), PatchState::AlreadyApplied)];
+        assert!(patch_findings(&states, false, true).is_empty());
+        // Off that branch it is still worth saying.
+        assert_eq!(
+            names(&patch_findings(&states, false, false)),
+            ["patches-applied-in-tree"]
+        );
+        // A patch that applies in neither direction is broken
+        // wherever it is found.
+        let broken = [("x.patch".to_string(), PatchState::Broken("failed".into()))];
+        assert_eq!(
+            names(&patch_findings(&broken, false, true)),
+            ["patch-does-not-apply"]
+        );
+    }
+
+    #[test]
+    fn an_upstream_file_changed_on_the_packaging_branch_is_a_warning() {
+        // The mistake this exists for: editing an upstream file on
+        // debian/latest, which a quilt build cannot carry.
+        let changed = vec!["fnlfmt.1".to_string(), "debian/control".to_string()];
+        let found = upstream_change_findings("debian/latest", &changed);
+        assert_eq!(names(&found), ["upstream-change-on-packaging-branch"]);
+        assert!(
+            found[0].message.starts_with("fnlfmt.1 changed"),
+            "{}",
+            found[0].message
+        );
+        // debian/ is this branch's to change, so it is not listed.
+        assert!(!found[0].message.contains("debian/control"));
+        assert_eq!(found[0].command.as_deref(), Some("dbranch dep3-template"));
+    }
+
+    #[test]
+    fn the_patch_queue_branch_is_where_they_belong() {
+        // Upstream files differ there by design; warning would be
+        // telling someone off for using the workflow correctly.
+        let changed = vec!["fnlfmt.1".to_string()];
+        assert!(upstream_change_findings("patch-queue/debian/latest", &changed).is_empty());
+    }
+
+    #[test]
+    fn a_clean_tree_and_quilts_own_directory_say_nothing() {
+        assert!(upstream_change_findings("debian/latest", &[]).is_empty());
+        // .pc is quilt's bookkeeping, not an upstream change.
+        let pc = vec![".pc/".to_string(), "debian/rules".to_string()];
+        assert!(upstream_change_findings("debian/latest", &pc).is_empty());
+    }
+
+    #[test]
+    fn a_long_list_is_summarised_rather_than_recited() {
+        let changed: Vec<String> = (1..=6).map(|n| format!("file{n}.c")).collect();
+        let found = upstream_change_findings("debian/latest", &changed);
+        assert!(
+            found[0].message.contains("and 3 more"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
+    fn the_compat_level_is_read_from_the_build_dependency() {
+        let control = "Source: foo\nBuild-Depends: debhelper-compat (= 14),\n";
+        assert_eq!(debhelper_compat(control), Some(14));
+        assert_eq!(
+            debhelper_compat("Build-Depends: debhelper-compat (=13)"),
+            Some(13)
+        );
+        assert_eq!(debhelper_compat("Source: foo\n"), None);
+    }
+
+    #[test]
+    fn relationship_substvars_are_redundant_from_compat_fourteen() {
+        let control = "Source: foo\nBuild-Depends: debhelper-compat (= 14),\n\n\
+                       Package: foo\nDepends: ${misc:Depends}, ${shlibs:Depends}\n";
+        let found = substvar_findings(control);
+        assert_eq!(names(&found), ["redundant-relationship-substvar"]);
+        assert!(
+            found[0]
+                .message
+                .contains("${misc:Depends}, ${shlibs:Depends}")
+        );
+        // Nothing else says this: lintian has no tag for it, which
+        // debhelper's own checklist records against a bug number.
+        assert!(found[0].message.contains("#1067653"));
+    }
+
+    #[test]
+    fn an_older_compat_still_needs_them_written_out() {
+        let control = "Build-Depends: debhelper-compat (= 13),\n\
+                       Depends: ${misc:Depends}\n";
+        assert!(substvar_findings(control).is_empty());
+        // And a control naming no level at all says nothing.
+        assert!(substvar_findings("Depends: ${misc:Depends}\n").is_empty());
+    }
+
+    #[test]
+    fn a_substvar_named_after_another_field_is_left_alone() {
+        // The change covers substvars named after relationship
+        // fields; ${binary:Version} and friends still have to be
+        // written out, so reporting them would be wrong.
+        let control = "Build-Depends: debhelper-compat (= 14),\n\
+                       Depends: foo (= ${binary:Version}), ${source:Version}\n";
+        assert!(substvar_findings(control).is_empty());
+        // A language helper's substvar is named after a relationship
+        // field and so is covered.
+        let py = "Build-Depends: debhelper-compat (= 14),\nDepends: ${python3:Depends}\n";
+        assert!(
+            substvar_findings(py)[0]
+                .message
+                .contains("${python3:Depends}")
+        );
+    }
+
+    #[test]
     fn an_override_with_no_pattern_silences_a_tag_everywhere() {
         // fnlfmt's: two vendored files excused by silencing the tag
         // for the whole package, future files included.
@@ -2007,7 +2329,7 @@ mod tests {
     fn quilt_knowing_it_applied_them_gets_different_advice() {
         let states = [("0001-x.patch".to_string(), PatchState::AlreadyApplied)];
         // Quilt has them on its stack: popping puts it right.
-        let popped = patch_findings(&states, true);
+        let popped = patch_findings(&states, true, false);
         assert!(popped[0].message.contains("left so by a build"));
         assert_eq!(
             popped[0].command.as_deref(),
@@ -2016,7 +2338,7 @@ mod tests {
         // Quilt records nothing, so the content is committed on the
         // branch as well as carried as a patch. Popping would do
         // nothing at all, and advising it would be worse than silence.
-        let committed = patch_findings(&states, false);
+        let committed = patch_findings(&states, false, false);
         assert!(
             committed[0].message.contains("committed on this branch"),
             "{}",
@@ -2472,7 +2794,7 @@ mod tests {
             ("0001-one.patch".to_string(), PatchState::AlreadyApplied),
             ("0002-two.patch".to_string(), PatchState::AlreadyApplied),
         ];
-        let found = patch_findings(&states, true);
+        let found = patch_findings(&states, true, false);
         assert_eq!(names(&found), ["patches-applied-in-tree"]);
         assert_eq!(found[0].severity, Severity::Note);
         assert!(!has_blocker(&found));
@@ -2494,7 +2816,7 @@ mod tests {
                 PatchState::Broken("1 out of 1 hunk FAILED".into()),
             ),
         ];
-        let found = patch_findings(&states, true);
+        let found = patch_findings(&states, true, false);
         assert_eq!(names(&found), ["patch-does-not-apply"]);
         assert!(has_blocker(&found));
         assert_eq!(

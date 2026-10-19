@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### dbranch: check knows which branch it is standing on
+
+Two findings came out of walking into the same trap twice.
+
+**`upstream-change-on-packaging-branch`** reports files changed
+outside `debian/` on a packaging branch. On a `3.0 (quilt)` package
+those cannot be carried: `dpkg-source` stops with "aborting due to
+unexpected upstream changes", and you learn that at build time with
+the commit already made. It belongs in a patch, so the finding's
+command is `dbranch dep3-template`.
+
+The same question has the opposite answer one branch over. On
+`patch-queue/*` the patches *are* applied and upstream files *do*
+differ — that is what the branch is for — so both that finding and
+`patches-applied-in-tree` fall silent there, and a note says where
+you are and that `debian/` may be stale relative to the packaging
+branch. For fnlfmt it was ten commits behind.
+
+`patch-does-not-apply` still fires on either: a patch broken in both
+directions is broken wherever you are standing.
+
+### dbranch: check spots substvars debhelper now applies by itself
+
+From debhelper compat 14 `dh_gencontrol` applies a substvar named
+after a relationship field on its own, so `Depends: ${misc:Depends},
+${shlibs:Depends}` can be removed entirely and `Depends: foo,
+${misc:Depends}` reduces to `Depends: foo`.
+
+Nothing else will tell you. Lintian flags the redundant
+`Priority: optional` that arrives with the same upgrade, but has no
+tag for these — debhelper's own
+`debhelper-compat-upgrade-checklist(7)` says so, citing Debian bug
+#1067653. So this is a gap rather than a duplicate, which is the
+test for adding a check in lintian's territory.
+
+`redundant-relationship-substvar` reports them, and only them:
+substvars named after other fields, such as `${binary:Version}`, are
+untouched by the change and are not reported. It stays quiet below
+compat 14, and on a `debian/control` that names no level.
+
 ### dbranch: a command for the DEP-3 commit template
 
 On a `3.0 (quilt)` package a fix to a file outside `debian/` cannot
