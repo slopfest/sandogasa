@@ -81,6 +81,12 @@ pub enum Vote {
     Plus,
     Zero,
     Minus,
+    /// One comment carrying both a `+1` and a `-1`: a position held
+    /// against a condition rather than a vote cast. Counted as
+    /// neither, because taking the last token read "I'm +1 assuming
+    /// this can be done quickly, but -1 if it turns out we'd have a
+    /// broken package" as a flat -1.
+    Unclear,
 }
 
 /// Each member's latest vote, split by value; `silent` members have
@@ -90,6 +96,10 @@ pub struct Tally {
     pub plus: Vec<String>,
     pub zero: Vec<String>,
     pub minus: Vec<String>,
+    /// Members whose latest comment is a [`Vote::Unclear`]. Left out
+    /// of [`Tally::counts`]: the tally reports votes cast, and this
+    /// is the absence of one.
+    pub unclear: Vec<String>,
     pub silent: Vec<String>,
 }
 
@@ -180,6 +190,7 @@ struct VotesJson<'a> {
 pub fn parse_vote(body: &str) -> Option<Vote> {
     let mut explicit = None;
     let mut bare_zero = false;
+    let (mut plus, mut minus) = (false, false);
     for line in body.lines() {
         let t = line.trim_start();
         if t.starts_with('>') || t.contains("(+") {
@@ -188,13 +199,16 @@ pub fn parse_vote(body: &str) -> Option<Vote> {
         for word in t.split_whitespace() {
             let w = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && !"+-±".contains(c));
             match w {
-                "+1" => explicit = Some(Vote::Plus),
-                "-1" => explicit = Some(Vote::Minus),
+                "+1" => (explicit, plus) = (Some(Vote::Plus), true),
+                "-1" => (explicit, minus) = (Some(Vote::Minus), true),
                 "+0" | "-0" | "±0" | "+-0" | "+/-0" => explicit = Some(Vote::Zero),
                 "0" => bare_zero = true,
                 _ => {}
             }
         }
+    }
+    if plus && minus {
+        return Some(Vote::Unclear);
     }
     explicit.or(bare_zero.then_some(Vote::Zero))
 }
@@ -267,6 +281,7 @@ pub fn tally<'a>(
             Some(Vote::Plus) => out.plus.push(m.clone()),
             Some(Vote::Zero) => out.zero.push(m.clone()),
             Some(Vote::Minus) => out.minus.push(m.clone()),
+            Some(Vote::Unclear) => out.unclear.push(m.clone()),
             None => out.silent.push(m.clone()),
         }
     }
@@ -339,6 +354,23 @@ pub fn classify(
             format!(
                 "-1 from {}: a -1 sends the ticket to the meeting agenda{ft}",
                 tally.minus.join(", ")
+            ),
+            None,
+            0,
+        );
+    }
+    // After the -1 rule, so a standing objection keeps the clearer
+    // explanation; both end at the meeting either way. Before every
+    // approval path, because an unresolved condition is exactly what
+    // must not be approved past.
+    if !tally.unclear.is_empty() {
+        return verdict(
+            Outcome::Meeting,
+            format!(
+                "unclear vote from {}: a comment carrying both a +1 and a -1 \
+                 is counted as neither, and the question it leaves open is \
+                 what the meeting is for",
+                tally.unclear.join(", ")
             ),
             None,
             0,
@@ -713,6 +745,7 @@ pub fn render(report: &VoteReport, meeting: NaiveDate) -> String {
         format!("    +1: {}", list(&report.votes.plus)),
         format!("     0: {}", list(&report.votes.zero)),
         format!("    -1: {}", list(&report.votes.minus)),
+        format!("    unclear: {}", list(&report.votes.unclear)),
         format!("    no vote: {}", list(&report.votes.silent)),
         format!(
             "  {}: {}",
@@ -861,6 +894,84 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_holding_both_signs_is_not_a_vote() {
+        // decathorpe on #3696, verbatim. Taking the last token read
+        // this as a flat -1 and sent the ticket to the meeting as a
+        // recorded objection, which is not what it says.
+        assert_eq!(
+            parse_vote(
+                "I'm +1 assuming this *can* be done quickly, but -1 if it \
+                 turns out we'd have a broken gedit-plugins package for the \
+                 lifetime of F45."
+            ),
+            Some(Vote::Unclear)
+        );
+        // His earlier comment holds one sign and is a vote.
+        assert_eq!(
+            parse_vote("In general I would be +1 here, though I'd like to know how"),
+            Some(Vote::Plus)
+        );
+        // A quoted pair is somebody else's words, and a tally line is
+        // a record, so neither turns a comment unclear.
+        assert_eq!(parse_vote("> I'm +1 ... but -1 if\n\n+1"), Some(Vote::Plus));
+        assert_eq!(parse_vote("After a week: APPROVED (+3, 0, 0)"), None);
+    }
+
+    #[test]
+    fn an_unclear_vote_is_uncounted_and_sends_the_ticket_to_the_meeting() {
+        let roster = members(&["ngompa", "salimma", "decathorpe"]);
+        let t = tally(
+            [
+                ("ngompa", "+1"),
+                ("salimma", "+1"),
+                ("decathorpe", "I'm +1 assuming X, but -1 if Y"),
+            ]
+            .into_iter(),
+            &roster,
+            &BTreeMap::new(),
+        );
+        assert_eq!(t.unclear, members(&["decathorpe"]));
+        // Counted as neither, so the tally reports the two real +1s.
+        assert_eq!(t.counts(), "(+2, 0, -0)");
+
+        // It still reaches the agenda, on the honest grounds.
+        let start = at("2026-10-18T12:00:00Z");
+        let v = classify(&t, true, start, at("2026-10-19T12:00:00Z"));
+        assert_eq!(v.outcome, Outcome::Meeting);
+        assert!(v.detail.contains("decathorpe"), "{}", v.detail);
+        assert!(v.detail.contains("unclear"), "{}", v.detail);
+
+        // The chair can resolve it by hand without editing the ticket.
+        let fixed = tally(
+            [("decathorpe", "I'm +1 assuming X, but -1 if Y")].into_iter(),
+            &roster,
+            &BTreeMap::from([("decathorpe".to_string(), Some(Vote::Minus))]),
+        );
+        assert_eq!(fixed.minus, members(&["decathorpe"]));
+        assert!(fixed.unclear.is_empty());
+    }
+
+    #[test]
+    fn a_standing_minus_one_keeps_its_own_explanation() {
+        // Both route to the meeting; the -1 is the clearer signal
+        // and is what the chair is told.
+        let roster = members(&["a", "b"]);
+        let t = tally(
+            [("a", "-1"), ("b", "+1 if X but -1 if Y")].into_iter(),
+            &roster,
+            &BTreeMap::new(),
+        );
+        let v = classify(
+            &t,
+            false,
+            at("2026-10-10T12:00:00Z"),
+            at("2026-10-19T12:00:00Z"),
+        );
+        assert_eq!(v.outcome, Outcome::Meeting);
+        assert!(v.detail.starts_with("-1 from a"), "{}", v.detail);
+    }
+
+    #[test]
     fn tally_keeps_each_members_latest_vote_and_ignores_outsiders() {
         let m = members(&["decathorpe", "kevin", "zbyszek"]);
         let t = tally(
@@ -880,6 +991,7 @@ mod tests {
                 plus: members(&["kevin"]),
                 zero: members(&["decathorpe"]),
                 minus: vec![],
+                unclear: vec![],
                 silent: members(&["zbyszek"]),
             }
         );
@@ -1183,6 +1295,7 @@ mod tests {
                 plus: members(&["kevin", "zbyszek"]),
                 zero: members(&["decathorpe"]),
                 minus: vec![],
+                unclear: vec![],
                 silent: members(&["duffy"]),
             },
             tally: "(+2, 1, -0)".into(),

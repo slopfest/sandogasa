@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### fesco-chair: a conditional vote is no longer counted as a -1
+
+A member who writes “I'm +1 assuming this *can* be done quickly, but
+-1 if it turns out we'd have a broken package for the lifetime of
+F45” has not voted -1. They have asked a question. `parse_vote` took
+the last token it saw, so the ticket was recorded as carrying a
+standing objection, and the agenda said so.
+
+A comment holding both a `+1` and a `-1` is now `Vote::Unclear`:
+counted as neither, listed under its own heading in `votes`, and
+routed to the meeting agenda on the grounds that the question it
+leaves open is what meeting time is for. On the gedit exception for
+F45 that moves the tally from `(+2, 0, -1)` to `(+2, 0, -0)` while
+keeping the ticket on the agenda, which was the right place for the
+wrong reason.
+
+The rule sits after the `-1` rule, so a genuine objection keeps the
+clearer explanation, and before every approval path, including Fast
+Track's `+7` — an unresolved condition is exactly what must not be
+approved past. A member's earlier vote is not resurrected: the later
+comment supersedes it. Quoted text and tally lines are skipped as
+before, so neither turns a comment unclear.
+
+Text like “changing my -1 to +1” now reads as unclear too. It is
+genuinely ambiguous, it fails toward discussion rather than a silent
+miscount, and `--vote N:FAS=+1|0|-1` resolves it without editing the
+ticket.
+
+### fesco-chair: the agenda says what a decided vote needs
+
+The agenda's vote prompt asked only whether to add a ticket, so the
+alternative never appeared. A ticket already approved in its ticket
+was offered a discussion slot it did not need, and one approving on
+the morning of the meeting looked like it would be lost for a week
+if skipped. Both want the `pending announcement` label and differ
+only in which email carries the result — the agenda beside them, or
+the summary afterwards.
+
+Each prompt now says which, and spells out the edit: the decision
+line to comment, and the label to set, including swapping out
+`vote-in-progress` where the ticket still carries it. The suggested
+comment is the decision line alone, `APPROVED (+5, 0, -0)`; the
+tracker's own comments prefix it variously and how long a vote ran
+is already on the line above, so no duration is claimed.
+
+The prompt blocks also led with the URL and closed with the title,
+so a title sat directly above the next ticket's URL and could be
+read against it. Title and number now head the block and the
+question is just “add to the agenda?”.
+
 ### ebranch: submit screens bugs by release, not only by package
 
 `--submit` offered to drop a listed bug when the update built
