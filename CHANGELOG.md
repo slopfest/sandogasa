@@ -2,7 +2,36 @@
 
 ## Unreleased
 
-### dbranch: work through the rest of a sponsor's checklist
+### dbranch: check reports what is wrong, not what it did not do
+
+Two notes were nagging rather than reporting, and both are gone.
+
+`source-version-unknown` said the source's own version could not be
+established — but a packaging tree records it nowhere, so this was a
+check that does not apply rather than one that was skipped, and it
+fired on nearly every Debian package. With a `.deb` the version
+question is answered properly, by comparing the changelog against
+what was actually built.
+
+`packages-not-checked` said that passing `--deb` would compare the
+source against a built package. That is a mode, not an omission:
+some of this is worth knowing before a build and the rest needs one
+afterwards, so saying it every time nagged whoever ran the first
+kind.
+
+`patch-header-not-dep3` also stops flagging blank lines in a patch
+header. Running lintian on a real package shows it reads the fields
+below one regardless — a patch whose `Forwarded:` sits under two
+blank lines raises no `patch-not-forwarded-upstream` — and
+`gbp pq export` cannot emit anything else, since it serialises the
+commit as a mail message. The check was telling packagers to fix
+output that the only tool generating it cannot avoid producing, and
+to drop the blank line git's own convention puts before
+`Signed-off-by`. What remains is what DEP-3 requires and lintian
+does not check: that a patch says what it does and where it came
+from.
+
+### dbranch: check lintian overrides, DEP-3 headers and patch state
 
 An application manager's review of a package turned into a list of
 things a tool could have found first. `check` gains the remaining
@@ -14,9 +43,10 @@ items that are checkable:
   warning, since a bare tag is right for a tag that carries no file
   of its own, and knowing which is which is lintian's job.
 - **`patch-header-not-dep3`** — a patch saying nowhere what it does
-  or where it came from, and a blank line in the header, which ends
-  it so every field below is read as prose. The fix is ` .`
-  continuation, as `debian/copyright` already does.
+  or where it came from, those being the two things DEP-3 requires.
+  Blank lines in the header are deliberately *not* flagged: lintian
+  reads the fields below one anyway, and `gbp pq export` cannot emit
+  anything else, since it serialises the commit as mail.
 - **`patches-left-applied-after-build`** and
   **`pc-directory-not-ignored`** — `dpkg-source` applies patches in
   its `--before-build` hook and only puts them back when

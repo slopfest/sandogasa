@@ -144,7 +144,6 @@ pub fn version_findings(
     changelog_version: &str,
     distribution: &str,
     source_version: Option<&str>,
-    checked_against_a_build: bool,
 ) -> Vec<Finding> {
     let mut found = Vec::new();
     let packaged = upstream_version(changelog_version);
@@ -162,19 +161,13 @@ pub fn version_findings(
             .with_command("head -1 debian/changelog".into()),
         ),
         Some(_) => {}
-        // With a .deb in hand the version question is answered a
-        // better way -- changelog against what was actually built --
-        // so this note would only be noise. Without one, an unpacked
-        // VCS tree records its upstream version nowhere, and saying
-        // so beats implying the check passed.
-        None if checked_against_a_build => {}
-        None => found.push(Finding::new(
-            "source-version-unknown",
-            Severity::Note,
-            "could not establish the source's own version, so the \
-             changelog version was not checked against it"
-                .into(),
-        )),
+        // Nothing to report. A packaging tree records its upstream
+        // version nowhere, so this is not a check that was skipped
+        // but one that does not apply, and saying so on every
+        // Debian package would be noise. What the version can be
+        // checked against is a build, which `packages-not-checked`
+        // already offers.
+        None => {}
     }
     // debcargo writes a sentinel distribution that must not reach an
     // upload; a plain UNRELEASED is the normal state while preparing.
@@ -338,14 +331,10 @@ fn patch_header(text: &str) -> &str {
 
 /// Whether a patch's header is readable as DEP-3.
 ///
-/// DEP-3 is RFC822-shaped, so a blank line ends the header: anything
-/// below it is no longer a field, which is how a description written
-/// as a git commit message stops being machine-readable halfway
-/// down. A continued paragraph keeps going with ` .` for its blank
-/// lines, the way `debian/copyright` does.
-///
-/// Only two fields are insisted on, since those are what DEP-3 calls
-/// required: what the patch does, and where it came from.
+/// Only two things are insisted on, being what DEP-3 calls required:
+/// what the patch does, and where it came from. Everything else
+/// about the header's shape is left alone -- see the note in the
+/// body for why blank lines are not a finding.
 pub fn dep3_findings(patch: &str, text: &str) -> Vec<Finding> {
     let header = patch_header(text);
     let has = |keys: &[&str]| {
@@ -366,15 +355,15 @@ pub fn dep3_findings(patch: &str, text: &str) -> Vec<Finding> {
             "says nowhere where it came from (Origin, Author or From)",
         ));
     }
-    // A blank line before the diff ends the header early, so every
-    // field below it is read as prose rather than as a field.
-    if header.lines().skip(1).any(|l| l.trim().is_empty()) {
-        found.push(dep3(
-            patch,
-            "has a blank line in its header, which ends it — continue \
-             the description with ` .` instead, as debian/copyright does",
-        ));
-    }
+    // Deliberately not checked: blank lines in the header. DEP-3 is
+    // RFC822-shaped, so in principle a blank line ends the field
+    // block -- but lintian reads the fields below one anyway (a
+    // patch whose `Forwarded:` sits under two blank lines does not
+    // raise patch-not-forwarded-upstream), and `gbp pq export`
+    // cannot emit anything else: it serialises the commit as mail,
+    // so the blank after Subject is structural. Flagging it would
+    // disagree with lintian and with git's own trailer convention,
+    // which puts a blank line before Signed-off-by.
     found
 }
 
@@ -952,7 +941,6 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         &header.version,
         &header.distribution,
         source.as_deref(),
-        !opts.debs.is_empty(),
     ));
 
     // Before anything else looks at them: a .deb from another package
@@ -1047,15 +1035,11 @@ pub fn run(opts: &CheckOptions, ui: &crate::ui::Ui) -> Result<Vec<Finding>, Stri
         upstream_version(&header.version),
     ));
 
-    if opts.debs.is_empty() {
-        findings.push(Finding::new(
-            "packages-not-checked",
-            Severity::Note,
-            "no built package given, so what the source ships and what \
-             it installs were not compared — pass --deb to check that"
-                .into(),
-        ));
-    } else {
+    // Running without a built package is a mode, not an omission:
+    // some of this is worth knowing before a build and the rest
+    // needs one afterwards. Saying "pass --deb" every time would be
+    // nagging someone who deliberately ran the first kind.
+    if !opts.debs.is_empty() {
         ui.step("Check the packages were built from this packaging");
         let built: Vec<(String, String)> = opts
             .debs
@@ -1726,7 +1710,7 @@ mod tests {
     fn packaging_adopted_from_another_release_is_a_blocker() {
         // The overlay this check was written for: a changelog left at
         // 0.25.4 while 0.26.0 was what got packaged.
-        let found = version_findings("0.25.4-1", "unstable", Some("0.26.0"), false);
+        let found = version_findings("0.25.4-1", "unstable", Some("0.26.0"));
         assert_eq!(names(&found), ["stale-changelog-version"]);
         assert_eq!(found[0].severity, Severity::Blocker);
         assert!(found[0].command.is_some(), "a finding names its command");
@@ -1734,18 +1718,19 @@ mod tests {
 
     #[test]
     fn a_changelog_that_matches_its_source_says_nothing() {
-        assert!(version_findings("0.26.0-1", "unstable", Some("0.26.0"), false).is_empty());
+        assert!(version_findings("0.26.0-1", "unstable", Some("0.26.0")).is_empty());
         // The epoch and revision are not the source's business.
-        assert!(version_findings("1:0.26.0-3", "unstable", Some("0.26.0"), false).is_empty());
+        assert!(version_findings("1:0.26.0-3", "unstable", Some("0.26.0")).is_empty());
     }
 
     #[test]
-    fn an_unknown_source_version_is_reported_rather_than_passed_over() {
-        // A check that skips silently cannot be told from one that
-        // passed, which is the whole failure mode here.
-        let found = version_findings("0.26.0-1", "unstable", None, false);
-        assert_eq!(names(&found), ["source-version-unknown"]);
-        assert_eq!(found[0].severity, Severity::Note);
+    fn a_tree_that_states_no_source_version_is_not_nagged_about_it() {
+        // A packaging tree records its upstream version nowhere, so
+        // this is a check that does not apply rather than one that
+        // was skipped — reporting it would fire on every Debian
+        // package dbranch exists for.
+        let found = version_findings("0.26.0-1", "unstable", None);
+        assert!(found.is_empty(), "{found:?}");
     }
 
     #[test]
@@ -1754,12 +1739,11 @@ mod tests {
             "0.26.0-1",
             "UNRELEASED-FIXME-AUTOGENERATED-DEBCARGO",
             Some("0.26.0"),
-            false,
         );
         assert_eq!(names(&found), ["changelog-distribution-placeholder"]);
         // A plain UNRELEASED is the normal state while preparing an
         // upload, so it must not be noise.
-        assert!(version_findings("0.26.0-1", "UNRELEASED", Some("0.26.0"), false).is_empty());
+        assert!(version_findings("0.26.0-1", "UNRELEASED", Some("0.26.0")).is_empty());
     }
 
     #[test]
@@ -1993,16 +1977,6 @@ mod tests {
         assert!(found.iter().all(|f| f.check == "patch-header-not-dep3"));
         assert!(found[0].message.contains("what it does"));
         assert!(found[1].message.contains("where it came from"));
-    }
-
-    #[test]
-    fn a_blank_line_ends_a_dep3_header_early() {
-        // git format-patch's shape: a blank line between the subject
-        // and the body, after which nothing is a field any more.
-        let text = "From: A <a@b.c>\nSubject: Fix it\n\nSome prose\n--- a/x\n";
-        let found = dep3_findings("0001-x.patch", text);
-        assert_eq!(names(&found), ["patch-header-not-dep3"]);
-        assert!(found[0].message.contains("` .`"), "{}", found[0].message);
     }
 
     #[test]
@@ -2258,7 +2232,7 @@ mod tests {
     }
 
     #[test]
-    fn a_source_only_run_reports_what_it_could_not_check() {
+    fn a_source_only_run_reports_only_what_is_wrong() {
         let dir = fixture("1.2.3-1");
         std::fs::write(
             dir.path().join("Cargo.toml"),
@@ -2274,7 +2248,9 @@ mod tests {
         // The versions agree, so what is left is the two things this
         // tree genuinely lacks: anything that runs the installed
         // programs, and a built package to check against.
-        assert_eq!(names(&found), ["no-program-test", "packages-not-checked"]);
+        // Only what is actually wrong: running without a built
+        // package is a mode, so nothing reports its absence.
+        assert_eq!(names(&found), ["no-program-test"]);
         assert!(!has_blocker(&found));
     }
 

@@ -810,6 +810,34 @@ somebody's file, and the one thing a generator must never do is
 destroy work it did not create. Any future generated file follows the
 same rule, which is why there is no `--force` to argue about.
 
+## Disagreeing with lintian is worse than duplicating it
+
+The rule against reimplementing lintian has a sharper corollary: a
+check that contradicts it is actively harmful, because the packager
+now has two tools telling them different things and no way to know
+which is right.
+
+`patch-header-not-dep3` nearly shipped that way. DEP-3 is
+RFC822-shaped, so in principle a blank line ends the field block and
+anything below it stops being a field — which is what a reviewer
+objected to in a real patch. But lintian reads those fields anyway:
+a patch whose `Forwarded:` sits below two blank lines does *not*
+raise `patch-not-forwarded-upstream`. And `gbp pq export` cannot
+produce anything else, because it serialises the commit as a mail
+message, so the blank line after `Subject` is structural. Flagging it
+would have meant disagreeing with lintian, contradicting the only
+tool that generates these patches, and telling people to break git's
+convention of a blank line before `Signed-off-by`.
+
+So the check keeps only what DEP-3 genuinely requires and lintian
+does not check: that the patch says what it does and where it came
+from.
+
+Before adding a check in lintian's territory, run lintian on a real
+package and see what it already says. `redundant-priority-optional-field`
+and `package-uses-old-debhelper-compat-version` are both emitted
+today, which retired another planned check before it was written.
+
 ## What gbp expects of a packaging branch
 
 Checks in this area rest on facts worth writing down, because they
@@ -855,11 +883,19 @@ Two rules this puts on new checks:
   be worse. What lintian cannot do is compare the packaging against
   *the source it came from*, or run the program afterwards. That gap
   is where checks belong.
-- **Say when a check did not run.** `source-version-unknown`,
-  `patches-already-applied` and `packages-not-checked` all exist
-  because a check that skips silently cannot be told from one that
-  passed — which is the exact failure mode the whole command is aimed
-  at. Report the skip, at `Note`, and name what would make it run.
+- **Say when a check did not run — but only when it could have.**
+  A check that skips silently cannot be told from one that passed,
+  which is the exact failure mode the whole command is aimed at. The
+  qualifier matters as much as the rule: two notes were removed for
+  failing it. `source-version-unknown` was *inapplicable* rather than
+  skipped, since a packaging tree records its upstream version
+  nowhere, so it fired on nearly every Debian package dbranch exists
+  for. `packages-not-checked` reported a *mode*: checking before a
+  build is the point of the source-only checks, and telling someone
+  to pass `--deb` when they deliberately ran pre-build is nagging
+  them for using the tool correctly. What survives is
+  `patches-applied-in-tree`, which reports a question this tree
+  genuinely cannot answer.
 
 `Severity::Blocker` is reserved for what a sponsor would refuse over:
 a program that does not start, packaging describing a different
