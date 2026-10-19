@@ -81,6 +81,8 @@ stages you run need:
 ## Usage
 
 ```
+dbranch check [-C <dir>] [--deb <file>...] [--json]
+    [--dry-run] [--explain]
 dbranch clone <url> [<dir>] [--upstream-version <v>]
     [--debian-branch <branch>] [--upstream-remote <name>]
     [--from-upstream-packaging | --fresh]
@@ -103,7 +105,36 @@ dbranch update [<branch>] [--stage <list>] [-C <dir>]
 dbranch watch-ci [<branch>] [-C <dir>] [--dry-run] [--explain]
 ```
 
-`rebuild` is the main command (below). `clone <url> [<dir>]` starts a
+`rebuild` is the main command (below).
+
+`check` reads packaging files instead of trusting them. `debian/` is
+often adopted rather than written — from upstream, from an older
+release, from a generator's overlay — and goes stale quietly: a
+changelog naming a version that is no longer the one being packaged, a
+patch upstream has since applied, a file that is in the source and
+reaches no package. None of that stops a build, so a build is not what
+finds it.
+
+By default it reads the source tree alone, which needs no build: it
+compares the changelog's version against the version the source states
+for itself, reads `debian/patches/series` against the patch directory
+in both directions, tries each patch, and notes comments left behind by
+an older release. `--deb <file>` adds the two checks that need a built
+package — whether everything the source ships reaches a package, and
+whether the programs it installs actually run. That last one is the
+check a build can never do, because a build does not run the program:
+it extracts each package and invokes every `/usr/bin` entry with
+`--help`, which is how a missing support file turns into a visible
+failure rather than a user's first impression.
+
+Every finding carries a command that shows the same thing, so a report
+can be checked rather than believed. Nothing is written. The exit
+status is non-zero when a finding would block a sponsor — a program
+that does not start, packaging describing a different source, a patch
+that no longer applies — and `--json` prints the findings as a
+document for another tool to read.
+
+`clone <url> [<dir>]` starts a
 package from upstream's git rather than from tarballs (gbp's "upstream
 uses git" flow): it clones with upstream as remote `upstream`, starts
 the Debian branch (`debian/latest`; `--debian-branch` to change) at the

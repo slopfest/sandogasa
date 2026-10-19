@@ -750,6 +750,51 @@ the fork's project.
   tag`. `all` = `merge,build,lint,push` (upload/tag are deliberate
   publish/release steps, opt-in).
 
+## A check is only as good as the command it hands back
+
+`check` reports findings, and every finding carries the command that
+shows the same thing. That is not decoration — it is the learning-tool
+contract applied to a checker. A finding a person cannot reproduce is
+one they have to take on trust, and a checker people take on trust is
+one nobody notices has gone wrong.
+
+Two rules this puts on new checks:
+
+- **Prefer the question nothing else asks.** Lintian reads a finished
+  package well; do not reimplement it, because the copy will drift and
+  be worse. What lintian cannot do is compare the packaging against
+  *the source it came from*, or run the program afterwards. That gap
+  is where checks belong.
+- **Say when a check did not run.** `source-version-unknown`,
+  `patches-already-applied` and `packages-not-checked` all exist
+  because a check that skips silently cannot be told from one that
+  passed — which is the exact failure mode the whole command is aimed
+  at. Report the skip, at `Note`, and name what would make it run.
+
+`Severity::Blocker` is reserved for what a sponsor would refuse over:
+a program that does not start, packaging describing a different
+source, a patch that no longer applies. It sets the exit status, so
+widening it changes what fails a pipeline.
+
+### Reading `dpkg-deb -c` output
+
+The last field is the path only for a plain file. A symlink line ends
+`./usr/bin/x -> target`, so the last field is the target; a directory
+line ends in `/` and is not something that can be run. `/usr/bin/` was
+briefly reported as a program that would not start, which is what
+`deb_entry_path` and its test exist to prevent.
+
+### The smoke test runs from an extraction, not an installation
+
+`dpkg-deb -x` into a temporary root, then run each `/usr/bin` entry
+there. Running from an extraction is the point: a program that needs a
+file at an absolute path finds it only if that file was actually
+packaged. Run against an *installed* copy, the host's existing files
+would satisfy it and the bug would hide. The consequence to remember
+is that a host which already has the package installed can mask the
+finding, so a clean machine or a container is the honest place to run
+it.
+
 ## A test gives git an identity through one variable, not seven
 
 `GIT_CONFIG_COUNT` with a key and value per setting needs seven

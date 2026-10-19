@@ -363,6 +363,7 @@ dependencies = [
  "dirs",
  "sandogasa-build",
  "sandogasa-cli",
+ "serde",
  "serde_json",
  "tempfile",
 ]

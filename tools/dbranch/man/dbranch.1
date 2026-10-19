@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH dbranch 1 2026-10-14 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH dbranch 1 2026-10-19 "sandogasa 0.26.0" "Sandogasa Manual"
 .SH NAME
 dbranch \- Propagate a Debian package across its Ubuntu PPA and Debian branches
 .SH SYNOPSIS
@@ -15,6 +15,38 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS dbranch check
+\fBdbranch check\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-deb\fR] [\fB\-\-json\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.PP
+Check packaging files instead of trusting them. debian/ is often
+adopted rather than written \-\- from upstream, from an older release,
+from a generator\*(Aqs overlay \-\- and then goes stale quietly: a
+changelog naming a version that is no longer being packaged, a patch
+upstream already applied, a file that is in the source and reaches no
+package. None of that stops a build, so a build is not what finds it.
+Reads the source tree by default, which needs no build. Give \-\-deb to
+add the two checks that need one: whether everything the source ships
+reaches a package, and whether the programs it installs actually run
+\-\- the second being the one a build can never do for you.
+Writes nothing. Exits non\-zero when something would block a sponsor.
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
+.TP
+\fB\-\-deb\fR \fI<DEB>\fR
+Built package(s) to check against (repeatable or CSV)
+.TP
+\fB\-\-json\fR
+Print findings as JSON
+.TP
+\fB\-\-dry\-run\fR
+Print the commands without running anything (a tutorial)
+.TP
+\fB\-\-explain\fR
+Run, but narrate each step + command first (follow along)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch clone
 \fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-salsa\fR] [\fB\-\-wrap\-and\-sort\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
 .PP

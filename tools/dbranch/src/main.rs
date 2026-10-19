@@ -25,6 +25,41 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check packaging files instead of trusting them.
+    #[command(long_about = "\
+Check packaging files instead of trusting them. debian/ is often
+adopted rather than written -- from upstream, from an older release,
+from a generator's overlay -- and then goes stale quietly: a
+changelog naming a version that is no longer being packaged, a patch
+upstream already applied, a file that is in the source and reaches no
+package. None of that stops a build, so a build is not what finds it.
+Reads the source tree by default, which needs no build. Give --deb to
+add the two checks that need one: whether everything the source ships
+reaches a package, and whether the programs it installs actually run
+-- the second being the one a build can never do for you.
+Writes nothing. Exits non-zero when something would block a sponsor.")]
+    Check {
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
+
+        /// Built package(s) to check against (repeatable or CSV).
+        #[arg(long, value_delimiter = ',', value_name = "DEB")]
+        deb: Vec<PathBuf>,
+
+        /// Print findings as JSON.
+        #[arg(long, conflicts_with = "dry_run")]
+        json: bool,
+
+        /// Print the commands without running anything (a tutorial).
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Run, but narrate each step + command first (follow along).
+        #[arg(long)]
+        explain: bool,
+    },
+
     /// Clone upstream's git to package it straight from its tags.
     #[command(long_about = "\
 Clone upstream's git to package it straight from its tags (gbp's
@@ -474,6 +509,36 @@ fn main() -> ExitCode {
 
 fn run(command: Command) -> Result<(), Box<dyn std::error::Error>> {
     match command {
+        Command::Check {
+            repo,
+            deb,
+            json,
+            dry_run,
+            explain,
+        } => {
+            // Narration goes to stdout, so under --json it would
+            // land in the middle of the document. `explain` is often
+            // on from the config file rather than the command line,
+            // which is exactly when this would be a surprise.
+            let ui = Ui {
+                explain: explain && !json,
+                dry_run,
+                quiet: json,
+            };
+            let opts = dbranch::check::CheckOptions {
+                repo,
+                debs: deb,
+                json,
+            };
+            let findings = dbranch::check::run(&opts, &ui)?;
+            match dbranch::check::has_blocker(&findings) {
+                true => Err(Box::new(dbranch::ui::StageFailure {
+                    command: "dbranch check".into(),
+                    code: 1,
+                })),
+                false => Ok(()),
+            }
+        }
         Command::DebusineRepo {
             owner,
             project,

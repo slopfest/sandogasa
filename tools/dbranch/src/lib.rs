@@ -6,6 +6,7 @@
 //! scratch-build.
 
 pub mod changelog;
+pub mod check;
 pub mod control;
 pub mod copyright;
 pub mod distroinfo;

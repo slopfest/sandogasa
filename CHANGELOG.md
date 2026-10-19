@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+### dbranch: check packaging files instead of trusting them
+
+A Debian `debian/` directory is often adopted rather than written —
+from upstream's own tree, from the previous release, from a
+generator's overlay — and it then goes stale without saying so. Our
+own dbranch overlay was a worked example: a changelog still at
+0.25.4 while 0.26.0 was what got packaged, and two patches still
+listed in `series` months after upstream took both fixes. Nothing
+there stops a build, which is the problem — a build is not what finds
+it.
+
+The failure that prompted this was someone else's. A reviewer ran a
+packaged program and it died on startup:
+
+```console
+$ fnlfmt --help
+lua5.4: /usr/bin/fnlfmt:7: module 'indentation' not found:
+```
+
+A file that existed in the source, built fine, and was never copied
+into the package. The build passed, every lint passed, and the first
+thing a user would have seen was that traceback.
+
+`dbranch check` is the three questions nothing else asks, in the order
+they bite. Does the packaging still describe this source — changelog
+version against the version the source states for itself, `series`
+read against the patch directory in both directions, each patch tried,
+and comments naming a release older than the one being packaged? Does
+everything the source ships reach a package? Do the programs it
+installs actually run?
+
+The first group needs no build and is the default. `--deb <file>` adds
+the other two: it extracts each package and invokes every `/usr/bin`
+entry with `--help`, which is the only way to find a support file that
+was never installed, because a build does not run the program.
+
+Every finding carries a command that shows the same thing, so a report
+can be checked rather than believed, and `--json` prints them as a
+document. Nothing is written. The exit status is non-zero on a finding
+that would block a sponsor.
+
+Run against dbranch's own package, it reports what it was built to
+find: `man/dbranch.1` ships in the crate and reaches no package, so
+`man dbranch` would be missing, and `lib = false` means debcargo
+generates no autopkgtest, so nothing executes the binary at all.
+
+New dependencies for the tool: `serde` (already in the tree via
+`serde_json`) and `tempfile`, which moves from dev-dependencies
+because extracting a package to run it needs somewhere that cleans
+itself up. `rust-tempfile` is in Debian testing and unstable, so the
+packaging chain is unaffected.
+
 ### ebranch: accept or refuse discovered bugs one at a time
 
 `check-update --submit` offers the bugs it thinks an update closes as
