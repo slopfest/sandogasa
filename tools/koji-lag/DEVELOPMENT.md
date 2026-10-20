@@ -349,6 +349,28 @@ ends completed after it too, so nothing newer than the window's end can
 belong to it. Anyone tempted to add symmetry here should note that the
 asymmetry is what lets a sweep bound its own work.
 
+## A published report is not regenerated to tidy it
+
+Every report carries a `generator` field naming the koji-lag release
+that wrote it, so a published tree says what produced each file. The
+point of the stamp is that months *stay* as the release of their day
+wrote them: regenerating an old month to make the tree uniform is
+churn, because the numbers do not move. Measured on 2026-10-20,
+re-rendering 2026-07 under a build five minor versions newer than the
+one that published it produced a byte-identical `report.txt` and a
+`report.json` differing only in its timestamp.
+
+Reports written before the stamp existed carry no `generator` at all,
+which is its own answer and wants no backfill.
+
+The exception is a *correction*: a reporting error found after
+publication has to be regenerated, because leaving wrong numbers
+published is worse than a large diff. When that happens, keep the
+superseded reports alongside rather than replacing them — someone
+reading a figure that moved needs to see both to know what changed
+and by how much, and a git diff of a regenerated tree cannot be read
+that way once several months move at once.
+
 ## Anything worth reporting belongs in `report`, not in an analysis
 
 **The ordering is an onboarding cost, and every rung up it loses people.**

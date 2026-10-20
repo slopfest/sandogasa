@@ -96,9 +96,27 @@ pub struct ArchStats {
     pub bottleneck_median_delay: Option<f64>,
 }
 
+/// What wrote this report, for the `generator` field.
+///
+/// The plain crate version, not the `git describe` that `--version`
+/// shows: a report is published and compared against its neighbours,
+/// so the stamp must be the same for everyone building the same
+/// release rather than naming the checkout it came from.
+pub fn generator() -> String {
+    concat!("koji-lag ", env!("CARGO_PKG_VERSION")).to_string()
+}
+
 /// The whole report, serialized as-is for `--json`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ReportOutput {
+    /// The koji-lag release that wrote this report.
+    ///
+    /// A published tree accumulates reports written by whatever
+    /// version was current that month, and nothing else in the file
+    /// says which. Without it the only provenance is a hand-kept
+    /// note of where one release stopped and the next began, which
+    /// is wrong the moment a month is regenerated.
+    pub generator: String,
     pub instances: Vec<String>,
     /// Effective completion-time window, UTC unix seconds.
     pub since: Option<f64>,
@@ -461,6 +479,7 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect(),
+        generator: generator(),
         // From `period` where the caller gave one: a store query has
         // already applied it, so `since`/`until` are unset there and the
         // report would otherwise say it covered no particular period.
@@ -1172,6 +1191,21 @@ fn render_table(
 #[cfg(test)]
 mod tests {
     use crate::dataset::{BUILD_SRPM_FROM_SCM, REBUILD_SRPM};
+
+    #[test]
+    fn a_report_says_which_release_wrote_it() {
+        // Published months accumulate across releases and nothing
+        // else in the file says which wrote one.
+        let g = super::generator();
+        let version = g
+            .strip_prefix("koji-lag ")
+            .expect("the stamp names the tool");
+        // Exactly the crate version, not the `git describe` that
+        // `--version` shows: two people building the same release
+        // must stamp the same string, and a published report is
+        // compared against its neighbours.
+        assert_eq!(version, env!("CARGO_PKG_VERSION"), "{g}");
+    }
 
     #[test]
     fn both_names_for_the_source_rebuild_are_counted() {

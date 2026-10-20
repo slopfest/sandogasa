@@ -2,37 +2,32 @@
 
 ## Unreleased
 
-### fesco-chair: the unclear-vote prompt is testable
+### fesco-chair: a conditional vote is not a -1
 
-`resolve_unclear_votes` held both the loop and the terminal read, so
-nothing could exercise what it shows, in what order, or what each
-answer does to the tally — `agenda.rs` sat at 40% line coverage with
-the newest code in it untested.
+A member who writes "I'm +1 assuming this *can* be done quickly, but
+-1 if it turns out we'd have a broken gedit-plugins package for the
+lifetime of F45" has not voted -1. They have asked a question.
+`parse_vote` took the last token it saw, so the ticket was recorded
+as carrying a standing objection and the agenda said so.
 
-The loop is now `resolve_with`, taking the answer as a
-`FnMut(&str, &Unclear) -> io::Result<Option<Vote>>`, and
-`resolve_unclear_votes` is the four-line wrapper that reads stdin
-into it. Canned answers cover leaving a vote alone, answering it,
-a ticket with nothing unclear, and a failed read — which must stop
-rather than count a vote nobody cast. `agenda.rs` goes from 40.51%
-to 55.78%.
+A comment holding both a `+1` and a `-1` is now `Vote::Unclear`:
+counted as neither, and routed to the meeting agenda because the
+question it leaves open is what meeting time is for. On #3696 that
+moved the tally from `(+3, 0, -1)` to `(+3, 0, -0)` while keeping the
+ticket on the agenda — the right place for the wrong reason.
 
-DEVELOPMENT.md gains the rule this is the third instance of: a
-prompt is a thin shell around something testable, with the answer
-becoming a value and the work becoming a function over a client.
-Both times the coverage floor caught it this week, the fix was that
-split rather than more tests around the outside.
+The rule sits after the `-1` rule, so a genuine objection keeps the
+clearer explanation, and before every approval path including Fast
+Track's `+7`: an unresolved condition is exactly what must not be
+approved past. A member's earlier vote is not resurrected, since the
+later comment supersedes it, and quoted text and tally lines are
+skipped as before.
 
-### fesco-chair: show the comment behind an unclear vote, and settle it
-
-A comment holding both a `+1` and a `-1` was reported as a name and
-nothing else — `unclear: decathorpe` — so finding out what was said
-meant opening the ticket, and acting on it meant a second run with
-`--vote`. On a long thread that is two detours for a question the
-tool had already identified.
-
-The comment is now shown, with the anchor the API gives for it, and
-the chair is asked how it should count:
+Reporting a name and nothing else left the chair to open the ticket
+to find out what was said, and a second run with `--vote` to act on
+it. The comment is shown instead, with the anchor the API gives for
+it, and the answer is asked for before anything is judged on the
+tally:
 
 ```console
   decathorpe wrote both a +1 and a -1:
@@ -44,92 +39,56 @@ the chair is asked how it should count:
 
 Answering re-tallies and re-classifies at once, so the brief, the
 hint and the announce offer all read the answer rather than the
-guess. Enter leaves it unclear, which keeps the ticket at the
-meeting. The answer lives only for that run, since the comment it
-settles has not changed, so the equivalent `--vote` flag is printed
-for a ticket that lingers.
+guess. Enter leaves it unclear. The answer lives only for that run,
+since the comment it settles has not changed, so the equivalent
+`--vote` flag is printed for a ticket that lingers — round-tripped
+through the parser `--vote` itself uses, so what is printed is
+accepted.
 
-The member's *latest* unclear comment is the one shown, matching how
-the tally takes their latest vote. `votes` shows the same excerpt
-and anchor, so the read-only view answers the question too, and no
-link is printed where the API gives no anchor.
+Text like "changing my -1 to +1" reads as unclear too. It is
+genuinely ambiguous, it fails toward discussion rather than a silent
+miscount, and the override resolves it. Anything more would mean
+reading intent from prose: on the same update gotmax23 wrote "+1 but
+this may need a provenpackager on board", which a keyword rule would
+have marked unclear and dropped from a tally that correctly
+approved.
 
-### sandogasa-forgejo: a timeline entry carries its anchor
+### fesco-chair: make the tracker edits instead of describing them
 
-`TimelineEvent` gains `html_url`, which the API returns for a
-comment (`…/issues/3696#issuecomment-1367373`). Without it a caller
-that wanted to point at one comment on a long thread had to build
-the link from an id it also could not see.
-
-### fesco-chair makes the tracker edits it used to tell you to make
-
-Every decided vote cost the chair the same four edits in a browser:
+A decided in-ticket vote cost the chair four edits in a browser:
 comment the decision, drop `vote-in-progress`, add `pending
 announcement` and, once the mail was out, comment the archive link,
-swap the label for a status and close. Miss any one and the ticket
-is still in the vote pool on the next run, so the next agenda asks
-about it again — and the tool knew all of it already, having just
-computed the tally.
+swap the label for a status and close. Miss one and the ticket is
+still in the vote pool on the next run, so the next agenda asks
+about it again — while the tool had just computed the tally that
+settles all of it.
 
-`agenda` now offers the edit instead of describing it. A decided
-vote is offered before the agenda question is put at all, since
-asking that first invites a yes that sends an already-decided ticket
-to the meeting:
+`agenda` now offers the edit. The offer comes before the agenda
+question, since asking that first invites a yes that sends an
+already-decided ticket to the meeting; taking it moves the ticket
+into that same announcement's "Discussed and Voted in the Ticket"
+section rather than the next one's. The decision line is editable at
+the prompt, because a derived tally can be wrong — a conditional vote
+is uncounted, and `--vote`/`--ignore` exist for when only a person
+can say. A ticket taken onto the agenda is offered its `meeting`
+label together with the comment saying when it will be discussed.
 
-```console
-#3691 “Change: Libical4”
-  ticket vote since 2026-10-01, tally (+4, 0, -0)
-  approved: after two weeks: +4 with no -1
-  decision: APPROVED (+4, 0, -0)
-  post this decision and swap `vote-in-progress` for `pending
-    announcement`? [Y/n/e to edit]:
-```
+A new `announced` subcommand closes the loop. Given the archive link
+it reads the announcement and acts only on the tickets it names,
+which matters because a decision may be announced in a reply to an
+earlier one: a pending ticket the link does not name is reported and
+left alone. Note that an archive *thread* URL renders the whole
+thread, replies included, so a reply wants its own `/message/` link.
 
-Taking it moves the ticket into that same announcement's "Discussed
-and Voted in the Ticket" section rather than the next one's. `e`
-re-prompts with the line editable, because the tally is derived and
-a derived tally can be wrong — a conditional vote is uncounted, a
-token can be misread, and `--vote`/`--ignore` exist for when only a
-person can say. A ticket taken onto the agenda is likewise offered
-its `meeting` label together with the comment saying when it will be
-discussed.
+Guards, in the order they bite. A decision already in a ticket's
+comments is not posted over, so one commented by hand and not yet
+tagged is not announced twice. A ticket whose decision cannot be read
+is left open rather than closed with a guess. `--dry-run` writes
+nothing anywhere, and nothing is written without being shown first.
 
-A new `announced` subcommand closes the loop after the mail goes
-out. Given the archive link it reads the announcement, takes the
-tickets it actually names, and for each comments the link, drops
-`pending announcement`, adds the status it was decided with, and
-closes it:
-
-```console
-fesco-chair announced https://lists.fedoraproject.org/.../message/GGXO.../
-#3691 “Change: Libical4”
-  APPROVED (+4, 0, -0) → close with `Status/Accepted`
-record the announcement and close it? [Y/n]:
-```
-
-Reading the announcement matters because a decision may be announced
-in a reply to an earlier one: run against the original agenda and
-only the tickets it listed are touched, run against the reply and
-only that one is. A pending ticket the link does not name is
-reported and left alone. Note that an archive *thread* URL renders
-the whole thread, replies included, so a reply wants its own
-`/message/` link.
-
-Nothing is written without being shown first, `--dry-run` writes
-nothing at all, and a decision already in a ticket's comments is not
-posted over — a ticket commented by hand but not yet tagged would
-otherwise be announced twice. A ticket whose decision cannot be read
-is left open rather than closed with a guess.
-
-Used for real on 2026-10-20 against the FESCo tracker: #3690 and
-#3691 were both announced and closed this way.
-
-### sandogasa-forgejo: comment on, label and close an issue
-
-The crate could create an issue and nothing else, so anything that
-wanted to record an outcome on the tracker had to tell a human to go
-and do it. Adds `create_comment`, `add_labels`, `remove_label` and
-`close_issue`, and `Issue` now carries the `labels` the API embeds.
+Used for real against the FESCo tracker on 2026-10-20: #3690 and
+#3691 were both announced and closed this way, each against its own
+archive link.
 
 ### fesco-chair: the voting week runs from when the ticket was opened
 
@@ -157,55 +116,19 @@ Tickets whose vote was timed from a late label will now report an
 earlier — and correct — decision date, so some will read as already
 decided on the next run.
 
-### fesco-chair: a conditional vote is no longer counted as a -1
+### sandogasa-forgejo: a timeline entry carries its anchor
 
-A member who writes “I'm +1 assuming this *can* be done quickly, but
--1 if it turns out we'd have a broken package for the lifetime of
-F45” has not voted -1. They have asked a question. `parse_vote` took
-the last token it saw, so the ticket was recorded as carrying a
-standing objection, and the agenda said so.
+`TimelineEvent` gains `html_url`, which the API returns for a
+comment (`…/issues/3696#issuecomment-1367373`). Without it a caller
+that wanted to point at one comment on a long thread had to build
+the link from an id it also could not see.
 
-A comment holding both a `+1` and a `-1` is now `Vote::Unclear`:
-counted as neither, listed under its own heading in `votes`, and
-routed to the meeting agenda on the grounds that the question it
-leaves open is what meeting time is for. On the gedit exception for
-F45 that moves the tally from `(+2, 0, -1)` to `(+2, 0, -0)` while
-keeping the ticket on the agenda, which was the right place for the
-wrong reason.
+### sandogasa-forgejo: comment on, label and close an issue
 
-The rule sits after the `-1` rule, so a genuine objection keeps the
-clearer explanation, and before every approval path, including Fast
-Track's `+7` — an unresolved condition is exactly what must not be
-approved past. A member's earlier vote is not resurrected: the later
-comment supersedes it. Quoted text and tally lines are skipped as
-before, so neither turns a comment unclear.
-
-Text like “changing my -1 to +1” now reads as unclear too. It is
-genuinely ambiguous, it fails toward discussion rather than a silent
-miscount, and `--vote N:FAS=+1|0|-1` resolves it without editing the
-ticket.
-
-### fesco-chair: the agenda says what a decided vote needs
-
-The agenda's vote prompt asked only whether to add a ticket, so the
-alternative never appeared. A ticket already approved in its ticket
-was offered a discussion slot it did not need, and one approving on
-the morning of the meeting looked like it would be lost for a week
-if skipped. Both want the `pending announcement` label and differ
-only in which email carries the result — the agenda beside them, or
-the summary afterwards.
-
-Each prompt now says which, and spells out the edit: the decision
-line to comment, and the label to set, including swapping out
-`vote-in-progress` where the ticket still carries it. The suggested
-comment is the decision line alone, `APPROVED (+5, 0, -0)`; the
-tracker's own comments prefix it variously and how long a vote ran
-is already on the line above, so no duration is claimed.
-
-The prompt blocks also led with the URL and closed with the title,
-so a title sat directly above the next ticket's URL and could be
-read against it. Title and number now head the block and the
-question is just “add to the agenda?”.
+The crate could create an issue and nothing else, so anything that
+wanted to record an outcome on the tracker had to tell a human to go
+and do it. Adds `create_comment`, `add_labels`, `remove_label` and
+`close_issue`, and `Issue` now carries the `labels` the API embeds.
 
 ### ebranch: submit screens bugs by release, not only by package
 
@@ -267,212 +190,117 @@ belonging to `epel10.4`, so the two differ without disagreeing and
 nothing is claimed; a human-filed bug follows no wording and is left
 unexplained rather than guessed at.
 
-### dbranch: check stops repeating lintian
+### dbranch: check packaging files instead of trusting them
 
-`check` reported four things lintian already reports, so a package
-with a stray patch file was told about it twice, by two tools that
-had to be kept saying the same thing. One of them had already drifted:
-the rule for a patch's required fields was reimplemented here, and
-holding it in step with lintian's was nobody's job.
+A Debian `debian/` directory is often adopted rather than written —
+from upstream's own tree, from the previous release, from a
+generator's overlay — and it then goes stale without saying so. Our
+own dbranch overlay was a worked example: a changelog still at
+0.25.4 while 0.26.0 was what got packaged. Nothing there stops a
+build, which is the problem — a build is not what finds it.
 
-Dropped, with the lintian tag that covers each:
-
-- a series entry with no file — `quilt-series-references-non-existent-patch`
-- a patch file in no series — `patch-file-present-but-not-mentioned-in-series`
-- no `Description:` or `Subject:` — `invalid-dep3-format-patch-no-description-and-subject`
-- no `Origin:`, `Author:` or `From:` — `invalid-dep3-format-patch-no-origin`
-
-The last two were exact: lintian's own check reads `Description` or
-`Subject`, then `Origin` or `Author` or `From`, which is what this
-asked for.
-
-What is left of the patch-header check is the part lintian has no tag
-for — a sign-off duplicated, or sitting above the DEP-3 fields where
-an amend cannot see it. `debian/patches` is still read, because
-trying each patch against the source is also something lintian does
-not do.
-
-The same question was asked of the rest and answered the other way: a
-`debian/watch` that verifies a signature with no key is
-`debian-watch-file-pubkey-file-is-missing`, so that check was never
-written.
-
-### dbranch: check spots a patch that was copied instead of exported
-
-`debian/patches` and the `gbp pq` branch can say different things
-with nothing to show which is current, and the packaging ships
-whichever is on disk. The way they come apart is a patch edited on
-the queue branch and carried across by hand rather than by
-`gbp pq export`.
-
-That leaves a mark. Export filters `Gbp-Pq: Name` and `Gbp-Pq: Topic`
-out of the commit body, and a commit carrying `Gbp-Pq: Ignore`
-produces no patch at all, so an exported patch cannot hold the tag in
-any of its forms — one that does was copied. `check` now reads each
-patch header for it and warns.
-
-The inverse is not a signal and is not checked: the tag is written by
-`gbp pq import`, not by export, so its *absence* says nothing about
-how a patch was produced.
-
-### dbranch: check looks for the branches debian/gbp.conf names
-
-A build can succeed with the `pristine-tar` branch missing. gbp warns
-and rebuilds the tarball from the upstream tag instead, which works
-until it doesn't — the fallback re-runs `git archive` and gzip, so it
-reproduces the uploaded bytes only for as long as the toolchain sits
-still, and a `-2` upload has to carry an orig identical to the one
-already in the archive.
-
-`check` now reads `debian/gbp.conf` and warns when a branch it names
-is nowhere to be found — `debian-branch`, `upstream-branch`, or the
-`pristine-tar` branch that `pristine-tar = True` implies. A warning
-rather than a blocker, because gbp does fall back and the build does
-finish.
-
-Remote-tracking branches count, so a fresh clone that has not checked
-one out yet is not reported, and a value built by interpolation is
-passed over rather than guessed at.
-
-### dbranch: check catches a snapshot version being released
-
-An upload can go out carrying the version `gbp dch -S` wrote while the
-work was still in progress — `0.4.0-1~2.gbp8dc4b5` rather than
-`0.4.0-1`. The suffix is built to sort *below* the release it stands
-in for, so that the real upload can still follow it; what that costs
-is that the version number has been spent on a build nobody meant to
-ship, and it is the one people install until the next one lands.
-
-`gbp dch -S` writes the suffix and an `UNRELEASED` distribution
-together, and `gbp dch -R` strips both, so the two agree for as long
-as the release is made with the tool. Finishing it by hand is where
-they come apart — `UNRELEASED` edited to `unstable` with the suffix
-left in place. `check` now reads them as a pair and blocks on that
-combination:
+The failure that prompted this was someone else's. A reviewer ran a
+packaged program and it died on startup:
 
 ```console
-blocker: debian/changelog releases 0.4.0-1~2.gbp8dc4b5 to unstable,
-  but that is a gbp snapshot version — it sorts below the release it
-  stands in for, so the upload spends the version number on a build
-  nobody meant to ship
-    gbp dch -R
+$ fnlfmt --help
+lua5.4: /usr/bin/fnlfmt:7: module 'indentation' not found:
 ```
 
-A snapshot version alongside `UNRELEASED` is the ordinary state
-mid-work and says nothing. Only gbp's own `~<N>.gbp<sha>` shape
-counts, so a backport's `~bpo12+1` and a prerelease's `~rc1` — which
-sort low on purpose and are uploaded on purpose — are left alone.
+A file that existed in the source, built fine, and was never copied
+into the package. The build passed, every lint passed, and the first
+thing a user would have seen was that traceback.
 
-### dbranch: autopkgtest refuses to write a test it cannot trust
+`dbranch check` asks what nothing else does, in the order it bites.
 
-`check` would not call a program broken when the installed copy was
-a different build, because an extracted program resolves what it
-loads against that copy. `autopkgtest` ran the same probe with none
-of that caution — and persisted the answer.
+**Does the packaging still describe this source?** The changelog's
+version against the version the source states for itself; a
+`gbp dch -S` snapshot version being released to a real suite, which
+sorts *below* the release it stands in for and so spends the number
+on a build nobody meant to ship; the branches `debian/gbp.conf`
+names, since gbp falls back rather than stopping when one is absent;
+each patch tried against the source; a patch still carrying a
+`Gbp-Pq:` line, which `gbp pq export` strips, so one that survived
+was copied off the queue branch by hand; substvars debhelper has
+applied by itself since compat 14; a lintian override with no
+context, which silences every future occurrence as well as the one
+it was written for; and comments naming a release older than the one
+being packaged.
 
-Found on a package that had just been fixed: `0.4.0-1` was installed
-without `indentation.lua`, the build being probed shipped it, and the
-extracted program failed against the stale install. The generated
-smoke test recorded that the program answered to nothing, which is a
-test that passes while exercising nothing at all.
+**Does everything the source ships reach a package, and do the
+programs it installs actually run?** `--deb <file>` adds these: it
+extracts each package and invokes every `/usr/bin` entry with
+`--help`, which is the only way to find a support file that was never
+installed, because a build does not run the program.
 
-It now refuses, naming both versions and the command that would make
-the probe answerable:
+Two lessons are built in, both from false alarms on a real package,
+because a checker that cries wolf gets ignored:
 
-```console
-dbranch: this package ships files it may load at run time, and 0.4.0-1
-is installed, and this package is 0.4.0-1~2.gbp8dc4b5, so what the
-programs answer here would be about the other copy. Install this build
-first, then run again:
+- A patch **already applied** fails exactly as a stale one does —
+  `1 out of 1 hunk FAILED` either way — and the `.pc/applied-patches`
+  guard does not notice, because a gbp tree has its patches applied
+  and no `.pc` directory. Each patch is tried backwards as well:
+  reversing cleanly means it is already in the source. Such a tree
+  cannot answer the stale-patch question at all, since a patch you
+  carry and a fix upstream has taken look identical, so it says so
+  rather than staying silent.
+- **Exit 127** means the host has not got the package's
+  dependencies — `#!/usr/bin/env lua5.4` without lua5.4 — so the
+  program never ran and has not failed. It is reported as not run,
+  naming what was missing. That is also the limit of the check: a
+  cheap pre-check, not a substitute for autopkgtest, which installs
+  into a testbed.
 
-    sudo apt install …/fnlfmt_0.4.0-1~2.gbp8dc4b5_all.deb
-```
+What it deliberately leaves alone is as much the point. Lintian
+already reads a finished package well, so `check` does not repeat
+it: a series entry with no file is
+`quilt-series-references-non-existent-patch`, a patch file in no
+series is `patch-file-present-but-not-mentioned-in-series`, a
+missing description or origin is
+`invalid-dep3-format-patch-no-description-and-subject` and
+`-no-origin`, and a `debian/watch` verifying a signature with no key
+is `debian-watch-file-pubkey-file-is-missing`. What is left of the
+patch-header check is the part lintian has no tag for: a sign-off
+duplicated, or sitting above the DEP-3 fields where
+`git commit --amend -s` cannot see it and adds a second.
 
-A refusal rather than a warning because of what is at stake on this
-side: `check` reports a wrong verdict, which the next run corrects,
-while `autopkgtest` writes one into the package. It refuses for a
-package that is not installed at all for the same reason, and not at
-all for one shipping only its programs, where nothing could have been
-hidden.
+Each finding names the command that shows the same thing, so a
+report can be checked rather than believed; the exit status is
+non-zero only for what would stop a sponsor; and `--json` prints the
+findings for another tool to read. Output wraps at 78 columns with
+commands kept pasteable, and a report says what is wrong rather than
+listing what it did not look at.
 
-`dbranch dep3-template` also gains a caveat with its route: the amend
-is for the commit you just wrote, not one that came from an import.
-`gbp pq import` appends `Gbp-Pq: Name <file>` as its own final
-paragraph, so `-s` never sees the sign-off already there and adds
-another on every run — and export strips the `Gbp-Pq:` line, leaving
-the two sign-offs adjacent in the patch. That is where the doubled
-sign-off this check reports came from.
+### dbranch: write an autopkgtest that runs what the package installs
 
-### dbranch: check reads a patch's trailer block
+A package can build, lint clean, and install a program that does not
+start. `fnlfmt --help` died on a module that was never packaged, and
+nothing caught it, because nothing in a build runs the program — the
+reviewer who found it asked for an autopkgtest "even if that's just
+to display the help text".
 
-`patch-header-not-dep3` gains two complaints, both about where a
-sign-off sits.
+For a Rust crate the gap is structural rather than an oversight.
+debcargo generates test stanzas from the library package, so a crate
+built binary-only (`lib = false`, which is dbranch itself) gets no
+autopkgtest at all — precisely the package whose program most wants
+running.
 
-A patch that **signs off twice**, which one real patch did.
+`dbranch autopkgtest --deb <file>` writes one. There is no single way
+to ask a program for help: `--help` is the common answer, `help` the
+subcommand style, `-h` the terse one. A generated test that guesses
+wrong fails for a reason that has nothing to do with the package, so
+the verb is not guessed — each program is extracted and run until one
+works, and that is what gets written.
 
-A **sign-off above the DEP-3 fields**, which is the cause: `git
-commit --amend -s` reads the *last paragraph*, so a sign-off with
-fields after it is not seen and a second is appended.
-
-Both of those were measured rather than reasoned about, after the
-first attempt got the cause wrong. A blank line before a trailing
-sign-off looks like it should matter and does not — an amend over
-`fields, blank, sign-off` adds nothing — so the rule that flagged it
-is gone. It would have fired on about half the patches in the
-archive: of 86 found carrying a sign-off, 46 sit adjacent to a field
-and 40 after a blank line, and neither is wrong.
-
-Also not checked, for the same reason: ` .` separators in a
-description. That is deb822 continuation syntax, meaningful only
-inside a folded `Description:` field, and a patch written in
-git-format-patch style has no continuation lines for it to govern.
-Of 94 patches surveyed, none used it.
-
-Still left to lintian: whether `Forwarded:` is present at all.
-
-`dbranch dep3-template` prints the matching advice with its route —
-put the sign-off after the DEP-3 fields — since the route is what
-walks into the problem.
-
-### dbranch: check knows which branch it is standing on
-
-Two findings came out of walking into the same trap twice.
-
-**`upstream-change-on-packaging-branch`** reports files changed
-outside `debian/` on a packaging branch. On a `3.0 (quilt)` package
-those cannot be carried: `dpkg-source` stops with "aborting due to
-unexpected upstream changes", and you learn that at build time with
-the commit already made. It belongs in a patch, so the finding's
-command is `dbranch dep3-template`.
-
-The same question has the opposite answer one branch over. On
-`patch-queue/*` the patches *are* applied and upstream files *do*
-differ — that is what the branch is for — so both that finding and
-`patches-applied-in-tree` fall silent there, and a note says where
-you are and that `debian/` may be stale relative to the packaging
-branch. For fnlfmt it was ten commits behind.
-
-`patch-does-not-apply` still fires on either: a patch broken in both
-directions is broken wherever you are standing.
-
-### dbranch: check spots substvars debhelper now applies by itself
-
-From debhelper compat 14 `dh_gencontrol` applies a substvar named
-after a relationship field on its own, so `Depends: ${misc:Depends},
-${shlibs:Depends}` can be removed entirely and `Depends: foo,
-${misc:Depends}` reduces to `Depends: foo`.
-
-Nothing else will tell you. Lintian flags the redundant
-`Priority: optional` that arrives with the same upgrade, but has no
-tag for these — debhelper's own
-`debhelper-compat-upgrade-checklist(7)` says so, citing Debian bug
-#1067653. So this is a gap rather than a duplicate, which is the
-test for adding a check in lintian's territory.
-
-`redundant-relationship-substvar` reports them, and only them:
-substvars named after other fields, such as `${binary:Version}`, are
-untouched by the change and are not reported. It stays quiet below
-compat 14, and on a `debian/control` that names no level.
+It refuses rather than guess when the probe cannot be trusted. An
+extracted program resolves what it loads against the *installed*
+copy, so probing a package whose installed version differs measures
+the wrong build: found on a package that had just been fixed, where
+`0.4.0-1` was installed without `indentation.lua`, the build being
+probed shipped it, and the generated test recorded that the program
+answered to nothing — a test that passes while exercising nothing at
+all. It now stops, naming both versions and the command that would
+make the probe answerable.
 
 ### dbranch: a command for the DEP-3 commit template
 
@@ -512,297 +340,6 @@ It deliberately does not set `commit.template`: git cannot scope one
 to a branch, so it would apply to packaging commits too, where DEP-3
 fields mean nothing. `rebuild`'s own note now calls the same code,
 so the template and the route exist once rather than twice.
-
-### dbranch: check wraps its own output and says how to narrow an override
-
-Findings were printed as single long lines and left to the terminal
-to break, which splits words: `very-long-` / `line-length-in-source-
-file`, `--show-over` / `rides`. They are now wrapped at 78 columns,
-with continuation lines indented by two so they stay clear of the
-command's four. Commands wrap too, but with a trailing backslash: a
-soft-wrapped command cannot be pasted and run, which is the only
-reason to print one, while a shell continuation can. Breaks fall
-between arguments, never inside one.
-
-`unscoped-lintian-override` also says how to fix itself rather than
-only what is wrong. Narrowing an override means appending the
-context lintian prints for it, with paths in square brackets and `*`
-as a wildcard, and the command it offers is the lintian run that
-prints that context — not `lintian-explain-tags`, which says what a
-tag means and nothing about how to override it. It names every tag
-it listed rather than only the first.
-
-The finding also warns about `--display-experimental`, because
-without it an experimental tag stays hidden and its override looks
-dead when it is not. That trap caught this author: a real override
-suppressing two 5506-character lines appeared to be suppressing
-nothing.
-
-Backticks and other Markdown are gone from the findings. Nothing
-renders them in a terminal, and the text is meant to paste straight
-into a bug report or a mail to a sponsor — the same reason the
-message stays uncoloured while only the severity word is styled.
-
-### dbranch: check reports what is wrong, not what it did not do
-
-Two notes were nagging rather than reporting, and both are gone.
-
-`source-version-unknown` said the source's own version could not be
-established — but a packaging tree records it nowhere, so this was a
-check that does not apply rather than one that was skipped, and it
-fired on nearly every Debian package. With a `.deb` the version
-question is answered properly, by comparing the changelog against
-what was actually built.
-
-`packages-not-checked` said that passing `--deb` would compare the
-source against a built package. That is a mode, not an omission:
-some of this is worth knowing before a build and the rest needs one
-afterwards, so saying it every time nagged whoever ran the first
-kind.
-
-`patch-header-not-dep3` also stops flagging blank lines in a patch
-header. Running lintian on a real package shows it reads the fields
-below one regardless — a patch whose `Forwarded:` sits under two
-blank lines raises no `patch-not-forwarded-upstream` — and
-`gbp pq export` cannot emit anything else, since it serialises the
-commit as a mail message. The check was telling packagers to fix
-output that the only tool generating it cannot avoid producing, and
-to drop the blank line git's own convention puts before
-`Signed-off-by`. What remains is what DEP-3 requires and lintian
-does not check: that a patch says what it does and where it came
-from.
-
-### dbranch: check lintian overrides, DEP-3 headers and patch state
-
-An application manager's review of a package turned into a list of
-things a tool could have found first. `check` gains the remaining
-items that are checkable:
-
-- **`unscoped-lintian-override`** — an override naming a tag and
-  nothing else silences it everywhere, for ever, including the
-  occurrence nobody has introduced yet. A note rather than a
-  warning, since a bare tag is right for a tag that carries no file
-  of its own, and knowing which is which is lintian's job.
-- **`patch-header-not-dep3`** — a patch saying nowhere what it does
-  or where it came from, those being the two things DEP-3 requires.
-  Blank lines in the header are deliberately *not* flagged: lintian
-  reads the fields below one anyway, and `gbp pq export` cannot emit
-  anything else, since it serialises the commit as mail.
-- **`patches-left-applied-after-build`** and
-  **`pc-directory-not-ignored`** — `dpkg-source` applies patches in
-  its `--before-build` hook and only puts them back when
-  `unapply-patches` is set in `debian/source/local-options`, so
-  without it every build leaves the tree patched with an untracked
-  `.pc` beside it. That file never ships in a source package, so
-  setting it affects nobody else's build — the finding cites
-  `dpkg-source(1)` so that claim can be checked rather than taken on
-  trust. Each carries the line to add rather than a path to gbp's
-  example script, which is only present when git-buildpackage's docs
-  are installed.
-- **`stale-build`** — with a `.deb` in hand its version can be
-  compared against `debian/changelog`, catching a check run against
-  yesterday's build. That also retires a note that fired on every
-  non-Rust package: an unpacked VCS tree records its upstream
-  version nowhere, so with a build to compare against,
-  `source-version-unknown` is suppressed.
-- **`installed-copy-differs`** — compares *contents*, not versions,
-  with `md5sum -c` against dpkg's own record from the extraction
-  root. Iterating on packaging rebuilds the same version over and
-  over, so comparing versions would call an hours-old installed copy
-  a match and quietly exercise it instead.
-
-Two corrections to shipped behaviour. `--deb` now takes several
-values, because the command this tool itself printed — `dbranch
-autopkgtest --deb ../*.deb` — failed as soon as the glob matched
-more than one file. And `patches-applied-in-tree` reads quilt's own
-stack before advising: patches on the stack were left by a build and
-popping them puts it right, while an empty stack means the change is
-committed on the packaging branch *as well as* carried as a patch,
-where popping would do nothing.
-
-Findings are now coloured by severity — the word alone, with the
-command dimmed. The message text stays plain so a finding pastes
-into a bug report without escape codes, and anstream strips the
-colour when output is piped or `NO_COLOR` is set.
-
-### dbranch: check says whose fault a program not running is
-
-`check --deb` extracts a package and runs what it installs, and two
-things made that noisier than it should be.
-
-It only tried `--help`, so a subcommand-style program that answers to
-`help` was reported as broken — while `dbranch autopkgtest`, probing
-the same program, would happily write a working test for it. Both now
-try the same verbs in the same order.
-
-And a program that cannot start at all now names what the host is
-missing, read from the package's own `Depends`:
-
-```console
-/usr/bin/fnlfmt was not run: env: 'lua5.4': No such file or directory
-— fennel, lua5.4 are not installed here; autopkgtest installs a
-package's dependencies in a testbed, which this does not
-```
-
-Extracting a package installs nothing, so an interpreted program only
-finds its runtime if the host happens to have it. Saying which
-packages are absent makes plain that the verdict is about the machine
-rather than the package, and points at the tool that does it properly.
-
-### dbranch: write an autopkgtest that runs what the package installs
-
-A package can build, lint clean, and install a program that does not
-start. `fnlfmt --help` died on a module that was never packaged, and
-nothing caught it, because nothing in a build runs the program — the
-reviewer who found it asked for an autopkgtest "even if that's just
-to display the help text".
-
-For a Rust crate the gap is structural rather than an oversight.
-debcargo generates test stanzas from the library package, so a crate
-built binary-only (`lib = false`, which is dbranch itself) gets no
-autopkgtest at all — precisely the package whose program most wants
-running.
-
-`dbranch autopkgtest --deb <file>` writes one. The awkward part is
-that there is no single way to ask a program for help: `--help` is
-the common answer, `help` the subcommand style, `-h` the terse one.
-A generated test that guesses wrong fails for a reason that has
-nothing to do with the package, so the verb is not guessed — each
-program is extracted and run until one works, and that is what gets
-written:
-
-```console
-$ dbranch autopkgtest --deb ../foo_1.2.3-1_all.deb
-/usr/bin/bar answers to help
-/usr/bin/foo answered to none of --help, help, -h — the test says so
-rather than pretending otherwise
-```
-
-A program that answers to nothing becomes a comment in the script
-naming what was tried, not a line that would pass while testing
-nothing. debcargo's own stanzas are kept with the smoke test above
-them, which is how `threecpio` carries a hand-written CLI test beside
-its generated ones.
-
-A package that already declares a test is left alone: a `Tests:`
-stanza means someone wrote a script and named it, so nothing is
-written and the command says why. There is no `--force` — a flag that
-overwrites a hand-written test is one that gets used by accident, and
-removing the stanza is a clearer way to say you meant it. debcargo's
-generated `Test-Command:` stanzas do not count as such a test, since
-they run the crate's cargo tests and never the installed program.
-
-`check` gained the matching finding, `no-program-test`, pointing at
-the command that writes one. It names the generated suite when there
-is one, because "no autopkgtest" would often be false and the true
-statement is narrower: every generator Debian ships exercises the
-library and never the installed program.
-`autopkgtest-pkg-python` emits a single `import` marked `superficial`
-— Debian's own word for a test that gives no real confidence;
-`autopkgtest-pkg-ruby` runs the gem's own suite, which is `skippable`
-and tests nothing when there is none. The gap is the same in every
-language, which is why the command keys off a package's `/usr/bin`
-contents rather than its ecosystem.
-
-### dbranch: check refuses a .deb from another package
-
-`-C` moves the tree being checked, but `--deb` paths resolve against
-the current directory like any other file argument, so the two can
-name different packages — which is what happens the first time you
-run `check` for one package from another's directory.
-
-That degrades badly rather than quietly. Every package check compares
-the source tree against the `.deb`, so a foreign one reports every
-file the source ships as uninstalled, reading like a catastrophically
-broken package instead of a mistyped path. It is now a hard failure
-before any other check runs, naming both packages and the absolute
-path the `.deb` was looked for at:
-
-```console
-$ dbranch check -C ~/src/debian/pkgs/fnlfmt --deb ../librust-…_arm64.deb
-dbranch: …/librust-sandogasa-build-dev_0.25.4-1_arm64.deb is a package
-of rust-sandogasa-build, but debian/changelog here is fnlfmt — `-C`
-moves the tree being checked, not the --deb paths, which are relative
-to where you are
-```
-
-A missing `--deb` likewise fails naming the absolute path it resolved
-to, which is what makes the directory mix-up visible.
-
-### dbranch: two checks that cried wolf
-
-Run against a real package, `check` reported two blockers where the
-package was fine. A checker that cries wolf gets ignored, so both are
-now distinguished properly.
-
-A patch **already applied** fails to apply exactly as a stale one
-does — `1 out of 1 hunk FAILED` either way — and the
-`.pc/applied-patches` guard does not notice, because a gbp tree has
-its patches applied and no `.pc` directory. Each patch is now tried
-backwards as well: reversing cleanly means it is already in the
-source. That tree then cannot answer the stale-patch question at all,
-since a patch you carry and a fix upstream has taken look identical,
-so it says so as a note rather than staying silent.
-
-**Exit 127** from an extracted package means the host has not got the
-package's dependencies — `#!/usr/bin/env lua5.4` on a machine without
-lua5.4 — so the program never ran and has not failed. It is reported
-as not run, naming what was missing, instead of as a broken binary.
-This is also the limit of the check: it is a cheap pre-check, not a
-substitute for autopkgtest, which installs the package and its
-dependencies in a testbed.
-
-### dbranch: check packaging files instead of trusting them
-
-A Debian `debian/` directory is often adopted rather than written —
-from upstream's own tree, from the previous release, from a
-generator's overlay — and it then goes stale without saying so. Our
-own dbranch overlay was a worked example: a changelog still at
-0.25.4 while 0.26.0 was what got packaged, and two patches still
-listed in `series` months after upstream took both fixes. Nothing
-there stops a build, which is the problem — a build is not what finds
-it.
-
-The failure that prompted this was someone else's. A reviewer ran a
-packaged program and it died on startup:
-
-```console
-$ fnlfmt --help
-lua5.4: /usr/bin/fnlfmt:7: module 'indentation' not found:
-```
-
-A file that existed in the source, built fine, and was never copied
-into the package. The build passed, every lint passed, and the first
-thing a user would have seen was that traceback.
-
-`dbranch check` is the three questions nothing else asks, in the order
-they bite. Does the packaging still describe this source — changelog
-version against the version the source states for itself, `series`
-read against the patch directory in both directions, each patch tried,
-and comments naming a release older than the one being packaged? Does
-everything the source ships reach a package? Do the programs it
-installs actually run?
-
-The first group needs no build and is the default. `--deb <file>` adds
-the other two: it extracts each package and invokes every `/usr/bin`
-entry with `--help`, which is the only way to find a support file that
-was never installed, because a build does not run the program.
-
-Every finding carries a command that shows the same thing, so a report
-can be checked rather than believed, and `--json` prints them as a
-document. Nothing is written. The exit status is non-zero on a finding
-that would block a sponsor.
-
-Run against dbranch's own package, it reports what it was built to
-find: `man/dbranch.1` ships in the crate and reaches no package, so
-`man dbranch` would be missing, and `lib = false` means debcargo
-generates no autopkgtest, so nothing executes the binary at all.
-
-New dependencies for the tool: `serde` (already in the tree via
-`serde_json`) and `tempfile`, which moves from dev-dependencies
-because extracting a package to run it needs somewhere that cleans
-itself up. `rust-tempfile` is in Debian testing and unstable, so the
-packaging chain is unaffected.
 
 ### ebranch: accept or refuse discovered bugs one at a time
 
