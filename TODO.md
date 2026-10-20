@@ -347,6 +347,132 @@ What has to exist first:
   v1): median build time per (host, arch) to spot sick builders —
   host names are already captured in the dataset.
 
+## sandogasa-report: slice by repo and user, and size what we own (2026-10-20, #20)
+
+Two changes, deliberately separable, and a third explored and
+deferred. Decided 2026-10-20 after working the model through against
+real repositories.
+
+### Part 1 — slicing (no new dependency, not gated)
+
+`report` is already scoped by user and period (`--user`, `--since/
+--until` or `--period`) but cannot group what it found, so "what
+happened to this repository last quarter" and "what did this person
+do across repositories" are both answered by reading the whole
+report. Add a grouping axis over the contributions already gathered:
+by repository, by user, or by both. No forge query changes, no
+packaging cost; it should land first and is useful with or without
+Part 2.
+
+Use the singular repeated-or-CSV flag shape (`--by repo,user`) rather
+than a modal `--group-by`.
+
+### Part 2 — size the repositories we own (feature-gated)
+
+**Scope: repositories configured as ours outright, and nothing
+else.** For those, COCOMO the tree: no apportioning, no blame, no
+handover boundary, no cross-repo dedup. The statement it produces is
+true and communicates — "sandogasa is an N-line project that would
+cost X to build from scratch".
+
+`cocomo` 0.11.5 is a library as well as a CLI, and its model entry
+point takes a raw SLOC count:
+
+```rust
+pub fn cocomo(sloc: f64, eaf: f64, avg_wage: f64, overhead: f64,
+              params: &(f64, f64, f64), dev_time: f64) -> (f64, f64, f64, f64)
+```
+
+Only the `Cocomo` struct carries `paths` for the CLI's tokei scan, so
+we are free to decide what SLOC means and call the model directly.
+This is a crate dependency, not an external tool, so the gate is a
+cargo feature rather than a startup availability check.
+
+**Be clear about what the number buys.** COCOMO is monotonic in
+SLOC, so it adds no information a line count does not already carry;
+it converts units into person-months while importing the model's
+greenfield assumptions. The benefit is presentational — "2.9
+person-months" reaches a manager in a way "1,200 lines" does not —
+and that is a real benefit, but it is the only one. Report the line
+count beside it.
+
+### Gating, in three places
+
+- **Cargo**: `cocomo = ["dep:cocomo"]`, off by default, following the
+  `sandogasa-cli` pattern of a documented reason per feature. Off
+  because Fedora cannot build it yet, and a default-on feature would
+  make the package unbuildable rather than merely reduced.
+- **Config**: opt-in even when compiled in. An estimate is a claim
+  about someone's work, not something produced because the binary
+  happens to support it.
+- **Runtime**: a config asking for an estimate from a binary built
+  without the feature prints one line saying so and carries on. Not
+  an error — a Fedora user copying a config from elsewhere must get
+  their report, not a failure.
+
+Tests must honour the flag, since the point is that Fedora's
+`%check` passes with it off: `#[cfg(feature = "cocomo")]` on anything
+that estimates, and **always-on** tests for the absence path — the
+config key parses, the note prints once, the report is otherwise
+identical. That second set is what catches a packaging surprise, so
+it is the set that matters. Add a `--features cocomo` run to the
+gates so the enabled path is not built only by whoever remembers.
+
+### Explored and deferred: everything beyond repositories we own
+
+Each of these was worked through on 2026-10-20 and costs more
+confidence than it returns. Recorded so the reasoning is not
+re-derived.
+
+- **Per-user or per-commit breakdown.** COCOMO's exponent is above
+  one, so effort is superlinear and **the slices do not add up**: the
+  same 1,200 lines score 2.9 person-months as one period and 2.6 if
+  each of ten commits is estimated and summed. Two users' figures
+  will not sum to their repository's. Apportioning a whole-repo
+  estimate by `git blame` share restores additivity, because a fixed
+  total is being split — that is the route if this is ever wanted,
+  not estimating each slice.
+- **Downstream forks** (`base...ours`, e.g. a rebased RHEL package
+  under `centos/hyperscale/rpms`). Measuring the divergence carried
+  is defensible and excludes mirrored commits structurally — no
+  commit filtering needed, the branch diff does it. But it **punishes
+  upstreaming**: when `wprof` was promoted to Fedora its divergence
+  went to approximately zero, so the measure would report nothing for
+  the best possible outcome, while a stale fork nobody has touched
+  scores high. "Divergence carried" and "work done" are different
+  quantities and neither substitutes for the other.
+- **Work propagated verbatim** (a getdeps commit reaching every
+  folly-based project). Counting it per repository multiplies one
+  authoring by N; deduping to one understates, because N pull
+  requests is real work. Resolved by not folding them together: the
+  lines are counted once (dedup by `git patch-id`), and the
+  propagation is already counted in its own unit, since the report
+  tracks PRs opened and merged. Nothing is multiplied and no constant
+  is invented.
+- **Imported history.** `wprof`'s CentOS-era history was imported
+  into `src.fedoraproject.org/rpms/wprof`, so its eleven CentOS
+  commits physically exist in both repositories and a personal report
+  covering both forges would count the authoring twice. A boundary is
+  needed per repository relationship, and it wants to be a **commit,
+  not a date** — both sides of wprof's handover are on 2026-07-31.
+  The committer-email domain (`@centosproject.org` against
+  `@fedoraproject.org`) splits the clear cases but left two
+  `@fb.com` commits unclassified, so it is a reasonable way to
+  *propose* a boundary and a poor way to decide one. **The
+  authoritative source is Koji**: the first Fedora build is when the
+  package became Fedora's deliverable, it needs no configuration, and
+  `sandogasa-koji` already speaks to both hubs.
+
+### Fedora
+
+Blocked, and the feature gate is the answer rather than the blocker.
+`rust-cocomo` needs `conv` and `format_num` reviewed, and cocomo pins
+`tokei ^14` where Fedora has 15.0.0 — an upstream bump or a compat
+package. Until then the spec builds with the feature off and ships a
+report without the column, which costs little when the feature only
+sizes repositories we own. Re-check with
+`ebranch check-crate cocomo -b rawhide`.
+
 ## poi-tracker deps: record an edge for every provider a walk collects (2026-09-08)
 
 The closure-inventory recompute (`reconcile`, `keep -o`) found 45
