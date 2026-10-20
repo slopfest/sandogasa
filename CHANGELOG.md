@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### sandogasa-report: group a report by repository
+
+A report is collected domain by domain and service by service, which
+answers "what did this person do on GitLab" well and "what happened to
+this repository" not at all — the answer is spread across every
+section and has to be reassembled by eye.
+
+`--by repo` appends a table that regroups it, busiest repository
+first:
+
+```markdown
+## By repository
+
+| Repository | Opened | Merged | Commits |
+| --- | ---: | ---: | ---: |
+| `gitlab.com/CentOS/Hyperscale/rpms/perf` | 4 | 3 | 12 |
+| `github.com/slopfest/sandogasa` | 2 | 2 | 61 |
+```
+
+Nothing new is queried. Every item already carried the repository it
+belonged to, so this regroups what was gathered rather than fetching
+it again.
+
+A repository is keyed by host *and* path, so the same `owner/name` on
+two forges stays two rows. Columns no repository used are dropped
+rather than printed as a line of zeroes, and ties in the ordering
+break on the name, since these reports are committed and diffed and
+two runs over the same data must order identically. GitLab commits
+are the pushed count, not the authored one, and the two are not
+summed: a push can carry work the pusher did not write, which the
+per-forge section already documents.
+
+Not on by default — the output shape should not change under anyone
+who did not ask — but `[defaults] by = ["repo"]` pins it per user
+through the usual flag-defaults mechanism, and `--no-defaults`
+escapes it for one run.
+
+`--by` takes an axis rather than being a switch, but `user` is
+deliberately absent: a run is scoped to one person, so grouping by
+user would yield a single group. Attributing a whole namespace's
+activity per person is a different query shape and is recorded in
+TODO.md.
+
 ### fesco-chair: a conditional vote is not a -1
 
 A member who writes "I'm +1 assuming this *can* be done quickly, but

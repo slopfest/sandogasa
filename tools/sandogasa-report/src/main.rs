@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 mod bodhi;
 mod brace;
 mod bugzilla;
+mod by_repo;
 mod config;
 mod configure;
 mod forge;
@@ -40,6 +41,18 @@ enum Command {
     Report(ReportArgs),
 }
 
+/// An axis a report can be broken down along.
+///
+/// Only `repo` for now: a run is scoped to one person, so grouping
+/// by user would yield a single group. Attributing a namespace's
+/// activity per person is a different query shape and is recorded in
+/// TODO.md rather than bolted on here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum Axis {
+    /// One row per repository, summed across domains and forges.
+    Repo,
+}
+
 #[derive(clap::Args)]
 struct ReportArgs {
     /// Path to main config file (domains, groups).
@@ -53,6 +66,10 @@ struct ReportArgs {
     /// Domain(s) to report on (defined in config).
     #[arg(short, long, required = true)]
     domain: Vec<String>,
+
+    /// Add a breakdown grouped this way (repeat or comma-separate).
+    #[arg(long, value_name = "AXIS", value_delimiter = ',')]
+    by: Vec<Axis>,
 
     /// Start date (inclusive, YYYY-MM-DD).
     #[arg(long, group = "date_range")]
@@ -492,11 +509,23 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         bugzilla,
     };
 
-    // Format output.
+    // Format output. A breakdown is appended rather than replacing
+    // the sections, since it summarises what they already say and a
+    // reader usually wants both.
+    let by_repo = cli.by.contains(&Axis::Repo);
     let output = if cli.json {
-        serde_json::to_string_pretty(&unified).expect("JSON serialization failed")
+        let rows = by_repo.then(|| by_repo::gather(&unified));
+        serde_json::to_string_pretty(&serde_json::json!({
+            "report": &unified,
+            "by_repo": rows,
+        }))
+        .expect("JSON serialization failed")
     } else {
-        report::format_markdown(&unified, cli.detailed, &cfg.groups)
+        let mut md = report::format_markdown(&unified, cli.detailed, &cfg.groups);
+        if by_repo {
+            md.push_str(&by_repo::format_markdown(&by_repo::gather(&unified)));
+        }
+        md
     };
 
     // Write output.
@@ -530,6 +559,7 @@ mod tests {
     #[test]
     fn resolve_date_range_requires_since_or_period() {
         let cli = ReportArgs {
+            by: Vec::new(),
             config: None,
             user: None,
             domain: vec![],
@@ -554,6 +584,7 @@ mod tests {
     #[test]
     fn resolve_date_range_accepts_period() {
         let cli = ReportArgs {
+            by: Vec::new(),
             config: None,
             user: None,
             domain: vec![],

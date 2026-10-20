@@ -135,11 +135,55 @@ sandogasa-report report -c config.toml -d fedora \
 - `--detailed` — counts per repo, project or component under each
   heading; `--detailed --detailed` lists the items themselves (every
   PR, bug, patch and ticket, and every build of a Bodhi update)
+- `--by <AXIS>` — append a breakdown grouped that way (repeatable or
+  comma-separated). `repo` is the only axis: one row per repository,
+  summed across every domain and forge the report covers, busiest
+  first. It regroups what was already collected, so it costs no extra
+  queries. See [By repository](#by-repository).
 - `--json` — output as JSON instead of Markdown
 - `-o, --output <PATH>` — write output to file
 - `--no-bugzilla` / `--no-bodhi` / `--no-koji` / `--no-gitlab` /
   `--no-github` / `--no-forgejo` — skip data sources
 - `-v, --verbose` — print progress to stderr
+
+### By repository
+
+A report is collected domain by domain and service by service, which
+answers "what did this person do on GitLab" well and "what happened to
+this repository" not at all — the answer is spread across every
+section. `--by repo` appends a table that regroups it:
+
+```console
+$ sandogasa-report report -c config.toml -d hyperscale --period 2026Q3 --by repo
+```
+
+```markdown
+## By repository
+
+| Repository | Opened | Merged | Commits |
+| --- | ---: | ---: | ---: |
+| `gitlab.com/CentOS/Hyperscale/rpms/perf` | 4 | 3 | 12 |
+| `github.com/slopfest/sandogasa` | 2 | 2 | 61 |
+```
+
+A repository is keyed by host and path together, so the same
+`owner/name` on two forges stays two rows. Columns no repository used
+are dropped rather than printed as a line of zeroes. Commits are the
+ones pushed, which is what the per-forge sections already report — a
+push can carry work the pusher did not write, so pushed and authored
+counts are not added together.
+
+To have it on every run, pin it as a flag default (see
+[System-wide configuration](#system-wide-configuration)):
+
+```toml
+[defaults]
+by = ["repo"]
+```
+
+`--no-defaults` ignores that for a single run. It is not on by
+default: these reports are often committed and diffed, so the output
+shape does not change under anyone who did not ask for it.
 
 ## Configuration
 

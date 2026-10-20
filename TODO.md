@@ -418,6 +418,29 @@ identical. That second set is what catches a packaging surprise, so
 it is the set that matters. Add a `--features cocomo` run to the
 gates so the enabled path is not built only by whoever remembers.
 
+### Part 3 — per-person attribution across a namespace (deferred)
+
+A report run covers exactly one person: `--user` resolves to a single
+profile and every forge query is scoped to that login, so grouping a
+run by user would yield one group. The Hyperscale SIG wants the
+opposite — all the repositories under one namespace
+(`centos/hyperscale/rpms/*`), attributed per person, to see **who is
+active and who is not**.
+
+Do not build this as N user-scoped runs merged together. The question
+is namespace-shaped, so the query should be too: GitLab lists a
+group's merge requests with their authors in one pass, and attributing
+from that costs one set of queries rather than one per member. It also
+answers the question properly — a per-member sweep can only report on
+members someone remembered to list, while a namespace sweep surfaces
+whoever is actually there, which is the point of asking who is active.
+
+Watch for: a namespace query returns everyone, including bots and
+mirror pushes, so the attribution needs the same care `commits_pushed`
+already documents — push events include commits the pusher did not
+author. "Nobody is active in this repository" and "the only activity
+is mirrored" are different findings and should not look alike.
+
 ### Explored and deferred: everything beyond repositories we own
 
 Each of these was worked through on 2026-10-20 and costs more
