@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### koji-lag: report official and scratch builds separately
+
+A queue figure read across both populations is not a fact about an
+architecture. Koschei's continuous rebuilds are scratch builds,
+scratch capacity is provisioned separately, and on some architectures
+there are far more scratch builds than real ones — so a large,
+cheaply-served scratch volume can sit on top of an official queue
+problem and hide it completely.
+
+It did. In 2026-09 ppc64le's p90 queue wait read **2.2m over all
+builds and 11.8m over official ones alone**, because 24,046 scratch
+packages waiting 1.8m averaged away 3,374 official ones waiting
+11.8m. A five-fold understatement, in the number most likely to be
+quoted.
+
+`health` is now assessed three times — over everything, over official
+builds, and over scratch — and each warning says which population it
+came from. A warning that fires identically on both is printed once,
+untagged, since that is a property of the fleet. The first run of
+this surfaced two things the combined view had never shown:
+
+```console
+warning: official builds: ppc64le: 68 task(s) over 6h took 22.0% of builder time
+warning: scratch builds: s390x: 11.8% of builder time went to failed or cancelled tasks
+```
+
+The first is the same long-task concentration already reported for
+s390x, on ppc64le, where scratch volume had kept it under the
+threshold. The second is a fifth of s390x's scratch builder time
+going to work that is thrown away.
+
+The per-arch tables gain a `pkgs` column — distinct packages built —
+because every other figure is conditioned on how much an architecture
+was asked to build, and a report that does not state its denominator
+invites exactly the comparison that misleads. s390x builds 2,527
+packages officially against x86_64's 3,431; over *all* builds those
+read 2,828 against 22,907, which is a statement about Koschei
+coverage rather than about Fedora.
+
+FINDINGS.md has said "report per class, never aggregated" since the
+first version, after an earlier reading produced a headline that
+turned out to describe releng waiting for releng. This makes the rule
+mechanical rather than something a reader has to remember.
+
 ### sandogasa-report: group a report by repository
 
 A report is collected domain by domain and service by service, which

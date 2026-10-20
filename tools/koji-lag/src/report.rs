@@ -83,6 +83,16 @@ enum BuildShape {
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ArchStats {
     pub arch: String,
+    /// Distinct packages this architecture built in the period.
+    ///
+    /// The denominator every other figure here is conditioned on. An
+    /// architecture building a tenth of the distribution is not
+    /// comparable with one building all of it, and a median that does
+    /// not say so invites exactly that comparison — s390x's coverage
+    /// fell from ~23,700 packages a month to ~2,500 between 2025-07
+    /// and 2025-09 while ppc64le and x86_64 held at ~24,500, and
+    /// thirteen months of reports did not mention it.
+    pub packages: usize,
     /// Seconds queued before a builder started the task.
     pub queue_wait: Option<DistSummary>,
     /// Seconds building.
@@ -139,7 +149,27 @@ pub struct ReportOutput {
     /// Signals that say an architecture is in trouble, with the thresholds
     /// they crossed — see [`crate::health`]. Reported per class and per
     /// cohort of submitter, never summed across either.
+    /// Signals over every selected task, official and scratch
+    /// together.
+    ///
+    /// Kept because some questions are about the fleet whatever
+    /// submitted the work, but read [`ReportOutput::health_official`]
+    /// before quoting a queue figure: scratch volume dilutes it. In
+    /// 2026-09 ppc64le's p90 wait was 2.2m over all builds and 11.8m
+    /// over official ones alone, because 24,046 scratch packages
+    /// waiting 1.8m sat on top of 3,374 official ones waiting 11.8m.
     pub health: crate::health::Health,
+    /// The same signals over official builds only — what ships, and
+    /// what a release waits on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_official: Option<crate::health::Health>,
+    /// The same signals over scratch builds only. Separate because
+    /// scratch capacity is provisioned separately: on s390x in
+    /// 2026-09 scratch builds waited 27.7m at p90 against official's
+    /// 15.0m, which is a fact about scratch builders, not about the
+    /// architecture.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_scratch: Option<crate::health::Health>,
     /// The source rebuild that starts every build, by the arch of the
     /// host that ran it. Koji picks that host independently of what the
     /// build targets, so a package can wait on a machine it does not
@@ -453,20 +483,39 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         (Some(split(false)), Some(split(true)))
     };
 
+    let health_window = opts.period.or(match (opts.since, opts.until) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    });
+    let cohorts_wanted = opts.owners.is_empty();
+    // `None` where the split was not made at all — a run already
+    // narrowed to one population has nothing to separate.
+    let health_split = |want: bool| -> Option<crate::health::Health> {
+        if official.is_none() && scratch.is_none() {
+            return None;
+        }
+        let subset: Vec<&TaskRecord> = selected
+            .iter()
+            .copied()
+            .filter(|t| scratchness(t) == Some(want))
+            .collect();
+        (!subset.is_empty())
+            .then(|| crate::health::assess(dataset, &subset, health_window, cohorts_wanted))
+    };
+
     ReportOutput {
         // The period the report is about, which for a store query is
         // `period` — `since`/`until` are cleared there so a build's children
         // are not filtered twice. Utilisation needs a window length, so
         // without one it is simply not computed.
-        health: crate::health::assess(
-            dataset,
-            &selected,
-            opts.period.or(match (opts.since, opts.until) {
-                (Some(a), Some(b)) => Some((a, b)),
-                _ => None,
-            }),
-            opts.owners.is_empty(),
-        ),
+        health: crate::health::assess(dataset, &selected, health_window, cohorts_wanted),
+        // Assessed again over each population on its own. A queue
+        // figure read across both is not a fact about an
+        // architecture: scratch capacity is provisioned separately,
+        // so mixing them lets a large, cheaply-served scratch volume
+        // hide an official queue problem behind it.
+        health_official: health_split(false),
+        health_scratch: health_split(true),
         // From the windows where there are any, and otherwise from the
         // rows: a period the store holds only in part has no window to
         // name it, and "Instances:" followed by nothing is no answer.
@@ -527,7 +576,15 @@ fn arch_stats_by(
 ) -> Vec<ArchStats> {
     let mut queue: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut build: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    // Counted over every task the period holds, not only those that
+    // reach a distribution: coverage is what was *asked* of an
+    // architecture, so a build that failed or was never timed still
+    // says the package was in its set.
+    let mut packages: BTreeMap<String, std::collections::BTreeSet<&str>> = BTreeMap::new();
     for task in tasks {
+        if let Some(pkg) = task.package.as_deref() {
+            packages.entry(label(task)).or_default().insert(pkg);
+        }
         if in_queue_wait_population(task)
             && let Some(wait) = task.queue_wait()
         {
@@ -542,6 +599,7 @@ fn arch_stats_by(
     let mut all_arches: std::collections::BTreeSet<String> = queue.keys().cloned().collect();
     all_arches.extend(build.keys().cloned());
     all_arches.extend(bottleneck_delays.keys().map(|a| a.to_string()));
+    all_arches.extend(packages.keys().cloned());
 
     let mut rows: Vec<ArchStats> = all_arches
         .into_iter()
@@ -552,6 +610,9 @@ fn arch_stats_by(
             sorted_delays.sort_by(|a, b| a.total_cmp(b));
             ArchStats {
                 arch: arch.to_string(),
+                packages: packages
+                    .get(arch)
+                    .map_or(0, std::collections::BTreeSet::len),
                 queue_wait: queue.get(arch).cloned().and_then(|mut v| summarize(&mut v)),
                 build_time: build.get(arch).cloned().and_then(|mut v| summarize(&mut v)),
                 builds_bottlenecked: sorted_delays.len(),
@@ -672,8 +733,28 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     let _ = writeln!(o, "Instances: {}", output.instances.join(", "));
     // Warnings first, and unconditionally: a threshold crossed at the foot
     // of a long report is a threshold nobody read.
-    for w in &output.health.warnings {
-        let _ = writeln!(o, "warning: {}", w.text);
+    //
+    // Tagged by population where the split was made. A queue warning
+    // read across both says nothing about an architecture — scratch
+    // capacity is provisioned separately — and the untagged form hid
+    // that ppc64le's official p90 wait was 11.8m while its combined
+    // figure was 2.2m. A warning that fires on both populations is
+    // printed once, untagged, since it is a property of the fleet.
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for (tag, health) in [
+        ("", Some(&output.health)),
+        ("official builds: ", output.health_official.as_ref()),
+        ("scratch builds: ", output.health_scratch.as_ref()),
+    ] {
+        let Some(health) = health else { continue };
+        for w in &health.warnings {
+            if tag.is_empty() {
+                seen.insert(w.text.as_str());
+                let _ = writeln!(o, "warning: {}", w.text);
+            } else if !seen.contains(w.text.as_str()) {
+                let _ = writeln!(o, "warning: {tag}{}", w.text);
+            }
+        }
     }
     if output.mixed_filtered_coverage {
         let _ = writeln!(
@@ -771,7 +852,21 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     if let Some(scratch) = &output.scratch {
         render_rows(&mut o, "Scratch builds", scratch, min_samples);
     }
+    // Each population on its own where the split was made. The
+    // combined set is still rendered first, since some questions are
+    // about the fleet whatever submitted the work — but a queue
+    // figure is not one of them, and the two sections below are what
+    // a reader should quote.
     render_health(&mut o, &output.health, min_samples);
+    for (label, health) in [
+        ("official", output.health_official.as_ref()),
+        ("scratch", output.health_scratch.as_ref()),
+    ] {
+        if let Some(health) = health {
+            let _ = writeln!(o, "\n--- {label} builds only ---");
+            render_health(&mut o, health, min_samples);
+        }
+    }
     // These tables get pasted into tickets and threads, so they
     // must explain themselves. Backticked bullets stay readable in
     // a terminal and render as a list in Markdown (a bare leading
@@ -1089,9 +1184,13 @@ fn render_table(
     if rows.is_empty() {
         return;
     }
-    let columns = if with_attribution { 10 } else { 7 };
-    let headers: [String; 10] = [
+    let columns = if with_attribution { 11 } else { 8 };
+    let headers: [String; 11] = [
         first_column.to_string(),
+        // Coverage first, because every column after it is
+        // conditioned on how much this architecture was asked to
+        // build. A median read without it compares package mixes.
+        "pkgs".to_string(),
         "queued".to_string(),
         "med-wait".to_string(),
         "p90-wait".to_string(),
@@ -1104,7 +1203,7 @@ fn render_table(
     ];
     let headers = &headers[..columns];
 
-    let mut cells: Vec<[String; 10]> = Vec::new();
+    let mut cells: Vec<[String; 11]> = Vec::new();
     let mut thin: Vec<String> = Vec::new();
     for row in rows {
         let samples = row
@@ -1131,6 +1230,7 @@ fn render_table(
         let (built, med_time, p90_time) = dist(&row.build_time);
         cells.push([
             row.arch.clone(),
+            row.packages.to_string(),
             queued,
             med_wait,
             p90_wait,

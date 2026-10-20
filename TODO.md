@@ -496,6 +496,61 @@ report without the column, which costs little when the feature only
 sizes repositories we own. Re-check with
 `ebranch check-crate cocomo -b rawhide`.
 
+### Surface what the 2026-10-20 ad hoc run had to find by hand
+
+Five questions were answered by querying the store directly. Each is
+a standing property of a fleet, not a one-off, and the report should
+answer them without anyone writing SQL. Listed in the order they cost
+us most.
+
+- **Coverage, per architecture, month over month.** s390x stopped
+  building about 90% of the distribution between 2025-07 and 2025-09
+  — 23,733 distinct packages a month down to 2,459, while ppc64le and
+  x86_64 held at ~24,500 throughout — and **nothing in thirteen months
+  of reports said so**. A `COUNT(DISTINCT package)` per arch per
+  period, with the change against the previous period, would have
+  caught it the first month. This is the single most valuable addition
+  here: every lag figure is conditioned on what an architecture is
+  being asked to build, and a report that does not state the
+  denominator invites exactly the comparison that misleads.
+
+- **How slow this architecture is *for the same package*.** The
+  existing warning fires on absolute duration — "131 task(s) over 6h
+  took 24.8% of builder time ... check for hangs" — and on s390x those
+  tasks are llvm, gcc, vtk, libreoffice and webkitgtk. They are not
+  hangs; they are large packages, and the warning sends a reader
+  looking for a fault that is not there. Replace or supplement it with
+  the cross-arch ratio: gcc takes 23.1h on s390x against 6.1h on
+  x86_64, webkitgtk 5.5h against 0.8h. The same package on the same
+  day is the only comparison that separates "big build" from "slow
+  architecture", and it is computable from rows already stored.
+
+- **Capacity as the denominator for load.** `host_config` exists for
+  this and no report reads it. s390x holds 1.6x ppc64le's scheduling
+  capacity while carrying 7% of its tasks — about 21x less work per
+  unit — which turns "s390x needs more builders" from a plausible ask
+  into a refuted one. Report tasks per capacity unit per arch, with
+  the caveat that capacity is Koji's scheduling weight and comparing
+  it across architectures assumes the unit means the same on each.
+
+- **A tail diverging from its median.** s390x's median wait was flat
+  from August to September (51s to 53s) while its p90 more than
+  doubled (8.0m to 17.9m). Both numbers are printed; nothing says they
+  moved in opposite directions. Flag it — that pattern is precisely
+  when a median-only reading says an architecture is healthy and the
+  people at the edge know otherwise.
+
+- **Whether the period contains a mass rebuild.** The `events`
+  directory already records them, and a month containing one is not
+  comparable to a month that does not: July 2026's s390x package count
+  was 5x its neighbours' purely because of the 2026-07-15 rebuild.
+  Say so in the period's own report rather than leaving a reader to
+  discover it by noticing the shape.
+
+Do not add all five as warnings. The first and the last belong in the
+period header as facts about what was measured; the middle three are
+findings and belong where the health warnings already are.
+
 ## poi-tracker deps: record an edge for every provider a walk collects (2026-09-08)
 
 The closure-inventory recompute (`reconcile`, `keep -o`) found 45
