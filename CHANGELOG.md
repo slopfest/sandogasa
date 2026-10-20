@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### fesco-chair: the voting week runs from when the ticket was opened
+
+`Change: Libical4` was filed on 2026-10-01 and collected four +1 and
+no -1. On the morning of the 2026-10-20 meeting `agenda` reported it
+as still waiting, approving later that day — when in fact its week
+had ended on 2026-10-08 and it had been approved for twelve days. It
+went out on an agenda as new business instead of being announced.
+
+The vote was being timed from the `vote-in-progress` label, added on
+2026-10-13, which gave it a fresh week ending at 13:38 on the day of
+the meeting. The label only draws attention to a vote; it does not
+start one. [FESCo's ticket-vote
+policy](https://docs.fedoraproject.org/en-US/fesco/#ticket-votes)
+counts from the ticket, and a Change is a formal proposal upon
+creation.
+
+`vote_start` is gone: with creation always deciding there was no
+choice left to make, and `start_basis` is now always `ticket
+creation`. `label_added_at` stays, since Fast Track's 48-hour
+reminder is still timed from its label, and it gains a test for the
+add-remove-re-add case a real ticket showed.
+
+Tickets whose vote was timed from a late label will now report an
+earlier — and correct — decision date, so some will read as already
+decided on the next run.
+
 ### fesco-chair: a conditional vote is no longer counted as a -1
 
 A member who writes “I'm +1 assuming this *can* be done quickly, but

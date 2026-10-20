@@ -298,21 +298,6 @@ pub fn label_added_at(events: &[TimelineEvent], label: &str) -> Option<DateTime<
         .and_then(parse_time)
 }
 
-/// When the vote's clock started: the `vote-in-progress` label, else
-/// the ticket's creation (a proposal is voted on from the moment it is
-/// made; a Change ticket is one on creation), with the basis named
-/// for the report. A Fast Track request only adds the early exit and
-/// the reminder — it does not restart the week.
-pub fn vote_start(
-    events: &[TimelineEvent],
-    created: DateTime<Utc>,
-) -> (DateTime<Utc>, &'static str) {
-    match label_added_at(events, VOTE_LABEL) {
-        Some(t) => (t, "vote-in-progress label"),
-        None => (created, "ticket creation"),
-    }
-}
-
 /// Apply the ticket-vote rules to a tally at `now`. Rule order
 /// follows the policy: a `-1` sends the ticket to the meeting (and
 /// drops it from Fast Track), `+7` with no `-1` approves a Fast Track
@@ -583,7 +568,12 @@ pub fn scan(
             .unwrap_or(now);
         let fast_track = issue.title.contains(FAST_TRACK_TITLE)
             || label_added_at(&events, FAST_TRACK_LABEL).is_some();
-        let (start, start_basis) = vote_start(&events, created);
+        // The week runs from when the ticket was opened. The
+        // `vote-in-progress` label only draws attention to a vote;
+        // counting from it gave Change: Libical4 a week that had not
+        // ended by the meeting, twelve days after it actually
+        // approved.
+        let (start, start_basis) = (created, "ticket creation");
         let votes = tally(
             comments(&events).map(|(l, b, _)| (l, b)),
             members,
@@ -972,6 +962,58 @@ mod tests {
     }
 
     #[test]
+    fn label_added_at_takes_the_last_addition_and_ignores_removals() {
+        // Fast Track's clock is the only thing still read from a
+        // label, and a label can go on, come off and go back on --
+        // #3690 carried two `vote-in-progress` events that way.
+        let events = vec![
+            label("fast track", true, "2026-09-16T13:07:00Z"),
+            label("fast track", false, "2026-09-17T09:00:00Z"),
+            label("fast track", true, "2026-09-18T10:00:00Z"),
+        ];
+        assert_eq!(
+            label_added_at(&events, "fast track"),
+            Some(at("2026-09-18T10:00:00Z"))
+        );
+        // A label only ever removed was never added.
+        let off = vec![label("meeting", false, "2026-09-17T09:00:00Z")];
+        assert_eq!(label_added_at(&off, "meeting"), None);
+        assert_eq!(label_added_at(&events, "meeting"), None);
+    }
+
+    #[test]
+    fn the_week_runs_from_when_the_ticket_was_opened() {
+        // Change: Libical4 — filed 2026-10-01, labelled 2026-10-13,
+        // +4 and no -1. Counting from the label gave it a week
+        // ending 13:38 on the day of the meeting, so the agenda said
+        // "approves 2026-10-20" for a vote that had in fact approved
+        // on 2026-10-08. The label only flags a vote; it does not
+        // start one.
+        let roster = members(&["a", "b", "c", "d"]);
+        let t = tally(
+            [("a", "+1"), ("b", "+1"), ("c", "+1"), ("d", "+1")].into_iter(),
+            &roster,
+            &BTreeMap::new(),
+        );
+        let opened = at("2026-10-01T11:40:12Z");
+        let labelled = at("2026-10-13T13:38:33Z");
+        let meeting_morning = at("2026-10-20T09:00:00Z");
+        assert_eq!(
+            classify(&t, false, opened, meeting_morning).outcome,
+            Outcome::Approved
+        );
+        assert_eq!(
+            classify(&t, false, opened, at("2026-10-08T12:00:00Z")).outcome,
+            Outcome::Approved
+        );
+        // What the label-based start produced, for the record.
+        assert_eq!(
+            classify(&t, false, labelled, meeting_morning).outcome,
+            Outcome::Waiting
+        );
+    }
+
+    #[test]
     fn tally_keeps_each_members_latest_vote_and_ignores_outsiders() {
         let m = members(&["decathorpe", "kevin", "zbyszek"]);
         let t = tally(
@@ -1029,22 +1071,6 @@ mod tests {
         assert!(parse_scoped("x:kevin").is_err());
         assert!(parse_override("3685:kevin").is_err());
         assert!(parse_override("3685:kevin=maybe").is_err());
-    }
-
-    #[test]
-    fn vote_start_is_the_vote_label_else_creation_never_fast_track() {
-        let created = at("2026-09-15T14:39:04Z");
-        let ft = vec![
-            label("meeting", true, "2026-09-15T14:39:10Z"),
-            label("fast track", true, "2026-09-16T13:07:00Z"),
-        ];
-        // #3685: proposed on filing, Fast Track requested a day later —
-        // the week still ends 2026-09-22.
-        assert_eq!(vote_start(&ft, created), (created, "ticket creation"));
-        let mut both = ft.clone();
-        both.push(label("vote-in-progress", true, "2026-09-17T00:00:00Z"));
-        assert_eq!(vote_start(&both, created).1, "vote-in-progress label");
-        assert_eq!(vote_start(&[], created), (created, "ticket creation"));
     }
 
     #[test]
@@ -1164,7 +1190,7 @@ mod tests {
             fast_track: false,
             vote_label: true,
             start: at("2026-10-13T13:00:00Z"),
-            start_basis: "vote-in-progress label",
+            start_basis: "ticket creation",
             votes: Tally::default(),
             tally: "(+4, 0, -0)".into(),
             verdict: Verdict {
@@ -1248,7 +1274,7 @@ mod tests {
             fast_track: true,
             vote_label: true,
             start: at("2026-09-16T13:07:00Z"),
-            start_basis: "fast track label",
+            start_basis: "ticket creation",
             votes: Tally::default(),
             tally: "(+5, 1, -0)".into(),
             verdict: Verdict {
@@ -1290,7 +1316,7 @@ mod tests {
             fast_track: true,
             vote_label: true,
             start: at("2026-09-16T13:07:00Z"),
-            start_basis: "fast track label",
+            start_basis: "ticket creation",
             votes: Tally {
                 plus: members(&["kevin", "zbyszek"]),
                 zero: members(&["decathorpe"]),
