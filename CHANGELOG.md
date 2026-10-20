@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### fesco-chair: the unclear-vote prompt is testable
+
+`resolve_unclear_votes` held both the loop and the terminal read, so
+nothing could exercise what it shows, in what order, or what each
+answer does to the tally — `agenda.rs` sat at 40% line coverage with
+the newest code in it untested.
+
+The loop is now `resolve_with`, taking the answer as a
+`FnMut(&str, &Unclear) -> io::Result<Option<Vote>>`, and
+`resolve_unclear_votes` is the four-line wrapper that reads stdin
+into it. Canned answers cover leaving a vote alone, answering it,
+a ticket with nothing unclear, and a failed read — which must stop
+rather than count a vote nobody cast. `agenda.rs` goes from 40.51%
+to 55.78%.
+
+DEVELOPMENT.md gains the rule this is the third instance of: a
+prompt is a thin shell around something testable, with the answer
+becoming a value and the work becoming a function over a client.
+Both times the coverage floor caught it this week, the fix was that
+split rather than more tests around the outside.
+
 ### fesco-chair: show the comment behind an unclear vote, and settle it
 
 A comment holding both a `+1` and a `-1` was reported as a name and

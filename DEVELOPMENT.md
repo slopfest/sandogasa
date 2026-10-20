@@ -255,6 +255,43 @@ ships keeps its tree pure Rust and the runner free of a C toolchain.
 `dist plan` shows what a release would produce and
 `dist build --artifacts=local --target=<triple>` builds one for real.
 
+## A prompt is a thin shell around something testable
+
+Code that reads the terminal cannot be reached by `cargo test`, so
+whatever a prompt *does* must not live inside it. Split the decision
+and the writing out into plain functions and leave the prompt holding
+nothing but the read.
+
+Two shapes cover almost everything:
+
+- **An answer becomes a value.** `parse_offer_answer`,
+  `parse_unclear_answer` and `parse_karma_answer` each turn one line
+  into an enum, so the strictness is testable on its own — which
+  matters most where Enter is the dangerous answer. `agenda`'s offer
+  posts to the tracker on Enter, so a typo must re-ask rather than be
+  read as consent, and that is a test, not a hope.
+- **The work becomes a function over a client.** `announce::write`,
+  `relabel_only`, `tag_meeting` and `record` are each callable without
+  a terminal and tested against `mockito` for URL shape, payload and
+  ordering — including that `--dry-run` writes nothing, proven by
+  registering *no* write mocks so any request fails the test.
+
+Where the loop itself is worth testing, take the answer as a
+parameter: `agenda::resolve_with` is the prompt loop with a
+`FnMut(&str, &Unclear) -> io::Result<Option<Vote>>` supplied, and
+`resolve_unclear_votes` is the four-line wrapper that reads stdin into
+it. Canned answers then exercise what is shown, in what order, and
+what each answer does to the tally.
+
+This is a coverage rule as much as a design one, and the gate enforces
+it the hard way. On 2026-10-20 `announce.rs` landed at 60% line
+coverage with its writes buried inside its prompts and took the
+workspace *under* its floor — 82.47% against 82.5 — twice in one day.
+Both times the fix was the split above, not more tests around the
+outside. Writing it this way first costs nothing; retrofitting it
+costs a gate failure and a second pass over code you have stopped
+thinking about.
+
 ## A list offered for approval is approved item by item
 
 When a tool proposes a *set* of things it found — bugs an update looks

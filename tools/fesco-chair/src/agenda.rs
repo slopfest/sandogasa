@@ -450,7 +450,34 @@ pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
 /// answer is the one `--vote N:FAS=V` would have given, applied
 /// without a second run.
 fn resolve_unclear_votes(report: &mut crate::votes::VoteReport) -> std::io::Result<()> {
-    use std::io::{BufRead, Write};
+    resolve_with(report, Utc::now(), |_, _| {
+        use std::io::{BufRead, Write};
+        loop {
+            eprint!("  count it as? [+1/0/-1/Enter to leave unclear]: ");
+            std::io::stderr().flush()?;
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line)?;
+            if let Some(how) = crate::votes::parse_unclear_answer(&line) {
+                return Ok(how);
+            }
+            eprintln!("  answer +1, 0, -1, or Enter");
+        }
+    })
+}
+
+/// The loop itself, with answers coming from `ask`.
+///
+/// Split from the reading so it can be driven by canned answers: it
+/// decides what is shown, in what order, and what each answer does
+/// to the tally, none of which should need a terminal to exercise.
+fn resolve_with<F>(
+    report: &mut crate::votes::VoteReport,
+    now: chrono::DateTime<Utc>,
+    mut ask: F,
+) -> std::io::Result<()>
+where
+    F: FnMut(&str, &crate::votes::Unclear) -> std::io::Result<Option<crate::votes::Vote>>,
+{
     let unclear: Vec<(String, crate::votes::Unclear)> = report
         .unclear_comments
         .iter()
@@ -464,22 +491,13 @@ fn resolve_unclear_votes(report: &mut crate::votes::VoteReport) -> std::io::Resu
         if !comment.url.is_empty() {
             eprintln!("    {}", comment.url);
         }
-        loop {
-            eprint!("  count it as? [+1/0/-1/Enter to leave unclear]: ");
-            std::io::stderr().flush()?;
-            let mut line = String::new();
-            std::io::stdin().lock().read_line(&mut line)?;
-            if let Some(how) = crate::votes::parse_unclear_answer(&line) {
-                crate::votes::resolve_unclear(report, &who, how, Utc::now());
-                if let Some(how) = how {
-                    eprintln!(
-                        "    (same as {})",
-                        crate::votes::vote_flag(report.ticket.number, &who, how)
-                    );
-                }
-                break;
-            }
-            eprintln!("  answer +1, 0, -1, or Enter");
+        let how = ask(&who, &comment)?;
+        crate::votes::resolve_unclear(report, &who, how, now);
+        if let Some(how) = how {
+            eprintln!(
+                "    (same as {})",
+                crate::votes::vote_flag(report.ticket.number, &who, how)
+            );
         }
     }
     Ok(())
@@ -505,6 +523,118 @@ mod tests {
             created: None,
             updated: None,
         }
+    }
+
+    /// A report with one unclear vote, as #3696 carried.
+    fn unclear_report() -> crate::votes::VoteReport {
+        use crate::votes::{Unclear, classify, tally};
+        let roster = ["ngompa", "salimma", "zbyszek", "decathorpe"]
+            .map(str::to_string)
+            .to_vec();
+        let votes = tally(
+            [
+                ("ngompa", "+1"),
+                ("salimma", "+1"),
+                ("zbyszek", "+1"),
+                ("decathorpe", "I'm +1 assuming X, but -1 if Y"),
+            ]
+            .into_iter(),
+            &roster,
+            &std::collections::BTreeMap::new(),
+        );
+        let start = "2026-10-18T12:00:00Z".parse().unwrap();
+        let now: chrono::DateTime<Utc> = "2026-10-20T09:00:00Z".parse().unwrap();
+        crate::votes::VoteReport {
+            ticket: ticket(3696, "[FastTrack] gedit exception"),
+            fast_track: true,
+            vote_label: true,
+            announced: None,
+            unclear_comments: std::collections::BTreeMap::from([(
+                "decathorpe".to_string(),
+                Unclear {
+                    body: "I'm +1 assuming X, but -1 if Y".to_string(),
+                    url: "https://forge.example/3696#issuecomment-1367373".to_string(),
+                },
+            )]),
+            start,
+            start_basis: "ticket creation",
+            tally: votes.counts(),
+            verdict: classify(&votes, true, start, now),
+            votes,
+            reminder: None,
+        }
+    }
+
+    fn now() -> chrono::DateTime<Utc> {
+        "2026-10-20T09:00:00Z".parse().unwrap()
+    }
+
+    #[test]
+    fn leaving_an_unclear_vote_alone_changes_nothing() {
+        let mut report = unclear_report();
+        let before = report.tally.clone();
+        let mut asked = Vec::new();
+        resolve_with(&mut report, now(), |who, c| {
+            asked.push((who.to_string(), c.url.clone()));
+            Ok(None)
+        })
+        .unwrap();
+        // The member and the anchor are both offered to the caller,
+        // which is what the prompt prints.
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, "decathorpe");
+        assert!(asked[0].1.ends_with("#issuecomment-1367373"));
+        assert_eq!(report.tally, before);
+        assert_eq!(report.votes.unclear, vec!["decathorpe".to_string()]);
+    }
+
+    #[test]
+    fn answering_an_unclear_vote_recounts_and_rejudges_it() {
+        let mut report = unclear_report();
+        assert_eq!(report.tally, "(+3, 0, -0)");
+        assert!(report.verdict.detail.contains("unclear vote"));
+
+        resolve_with(&mut report, now(), |_, _| {
+            Ok(Some(crate::votes::Vote::Minus))
+        })
+        .unwrap();
+        assert_eq!(report.tally, "(+3, 0, -1)");
+        assert!(report.votes.unclear.is_empty());
+        assert!(report.unclear_comments.is_empty());
+        // Same destination, but now on a recorded objection.
+        assert_eq!(report.verdict.outcome, crate::votes::Outcome::Meeting);
+        assert!(
+            report.verdict.detail.starts_with("-1 from decathorpe"),
+            "{}",
+            report.verdict.detail
+        );
+    }
+
+    #[test]
+    fn a_ticket_with_nothing_unclear_asks_nothing() {
+        let mut report = unclear_report();
+        report.unclear_comments.clear();
+        report.votes.unclear.clear();
+        let mut asked = 0;
+        resolve_with(&mut report, now(), |_, _| {
+            asked += 1;
+            Ok(None)
+        })
+        .unwrap();
+        assert_eq!(asked, 0);
+    }
+
+    #[test]
+    fn a_failure_to_read_an_answer_stops_rather_than_guessing() {
+        let mut report = unclear_report();
+        let before = report.tally.clone();
+        let err = resolve_with(&mut report, now(), |_, _| {
+            Err(std::io::Error::other("stdin closed"))
+        })
+        .expect_err("a read failure is not an answer");
+        assert_eq!(err.to_string(), "stdin closed");
+        // Nothing was counted on the strength of a failed read.
+        assert_eq!(report.tally, before);
     }
 
     #[test]
