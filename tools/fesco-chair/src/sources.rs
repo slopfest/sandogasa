@@ -33,6 +33,9 @@ pub const MEETING_LABEL: &str = "meeting";
 pub const PENDING_LABEL: &str = "pending announcement";
 /// Label on tickets with an in-ticket vote running.
 pub const VOTE_LABEL: &str = "vote-in-progress";
+/// Status labels a ticket is closed with, by what was decided.
+pub const ACCEPTED_LABEL: &str = "Status/Accepted";
+pub const REJECTED_LABEL: &str = "Status/Rejected";
 /// Label on tickets under the policy's Fast Track (`+7` approves at
 /// once, a reminder is due after 48 hours).
 pub const FAST_TRACK_LABEL: &str = "fast track";
@@ -337,8 +340,17 @@ pub fn pending_tickets(
 /// concludes with e.g. "After a week: APPROVED (+3, 0, 0)" right
 /// before the ticket is tagged). Best-effort: a fetch or parse miss
 /// warns and leaves the template placeholder for the chair.
+///
+/// A ticket that already carries a decision is left alone. `agenda`
+/// sets one on a vote it has just announced, and re-reading the
+/// comments would either race the post or, under `--dry-run` where
+/// nothing was posted, replace a known decision with the
+/// placeholder.
 pub fn fill_decisions(client: &sandogasa_forgejo::Client, tickets: &mut [Ticket], verbose: bool) {
     for ticket in tickets {
+        if ticket.decision.is_some() {
+            continue;
+        }
         if verbose {
             eprintln!("[decision] parsing #{}", ticket.number);
         }
@@ -639,6 +651,29 @@ Meeting summary
             created: None,
             updated: None,
         }
+    }
+
+    #[test]
+    fn fill_decisions_leaves_a_known_decision_alone() {
+        // `agenda` sets the decision on a vote it has just
+        // announced. Re-reading the comments would race the post,
+        // and under --dry-run -- where nothing was posted -- it put
+        // the DECISION placeholder back on an approved Change.
+        let mut tickets = vec![Ticket {
+            number: 3691,
+            title: "Change: Libical4".into(),
+            url: "u".into(),
+            decision: Some("APPROVED (+4, 0, -0)".into()),
+            repo: None,
+            pull: false,
+            created: None,
+            updated: None,
+        }];
+        // No client call is made for a ticket that already has one,
+        // so an unreachable base URL is safe here and proves it.
+        let client = sandogasa_forgejo::Client::new("http://127.0.0.1:1", "t").unwrap();
+        fill_decisions(&client, &mut tickets, false);
+        assert_eq!(tickets[0].decision.as_deref(), Some("APPROVED (+4, 0, -0)"));
     }
 
     #[test]

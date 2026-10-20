@@ -158,6 +158,12 @@ pub struct VoteReport {
     /// once the vote is decided and wants dropping with the same
     /// edit that adds `pending announcement`.
     pub vote_label: bool,
+    /// A decision already written into the ticket's comments, if
+    /// there is one. A ticket tagged `pending announcement` never
+    /// reaches the offer at all, but one commented by hand and not
+    /// yet tagged does, and must not be commented a second time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub announced: Option<String>,
     /// When the clock started and which event set it.
     pub start: DateTime<Utc>,
     pub start_basis: &'static str,
@@ -589,7 +595,11 @@ pub fn scan(
                 now,
             )
         });
+        // Newest first, as extract_decision reads them.
+        let bodies: Vec<&str> = comments(&events).map(|(_, b, _)| b).collect();
+        let announced = sources::extract_decision(bodies.into_iter().rev());
         out.push(VoteReport {
+            announced,
             vote_label: voting.contains(&issue.number),
             ticket: issue.into(),
             fast_track,
@@ -626,8 +636,8 @@ fn hint(report: &VoteReport, meeting: NaiveDate) -> Option<String> {
 /// is what keeps the ticket in the vote pool on the next run, so it
 /// goes in the same edit that adds the announcement label. A Fast
 /// Track ticket may never have carried it.
-fn relabel(report: &VoteReport) -> &'static str {
-    if report.vote_label {
+pub(crate) fn relabel(has_vote_label: bool) -> &'static str {
+    if has_vote_label {
         "swap `vote-in-progress` for `pending announcement`"
     } else {
         "tag `pending announcement`"
@@ -650,7 +660,7 @@ pub fn announce_hint(report: &VoteReport, meeting: NaiveDate) -> Option<String> 
     match report.verdict.outcome {
         Outcome::Approved | Outcome::Rejected => Some(format!(
             "decided: comment \u{201c}{}\u{201d}, {}, and it is announced \
-             with this agenda instead of taking a discussion slot",
+             with this agenda",
             // The decision line alone, which is what the announcement
             // prints and what the tracker's own comments settle on.
             // Members prefix it variously -- "After a week: ", "This is
@@ -658,7 +668,7 @@ pub fn announce_hint(report: &VoteReport, meeting: NaiveDate) -> Option<String> 
             // the line above this one, so the hint does not put words
             // in the chair's mouth about it.
             decision(report)?,
-            relabel(report),
+            relabel(report.vote_label),
         )),
         Outcome::Waiting
             if report
@@ -669,7 +679,7 @@ pub fn announce_hint(report: &VoteReport, meeting: NaiveDate) -> Option<String> 
             Some(format!(
                 "once it concludes, {} and the post-meeting summary \
                  announces it, so leaving it off here costs no time",
-                relabel(report),
+                relabel(report.vote_label),
             ))
         }
         _ => None,
@@ -962,6 +972,25 @@ mod tests {
     }
 
     #[test]
+    fn a_decision_already_in_the_comments_is_found() {
+        // A ticket commented by hand but not yet tagged still
+        // reaches the offer, and must not be commented twice.
+        let events = vec![
+            comment("zbyszek", "+1", "2026-10-02T09:00:00Z"),
+            comment("salimma", "APPROVED (+4, 0, -0)", "2026-10-08T09:00:00Z"),
+        ];
+        let bodies: Vec<&str> = comments(&events).map(|(_, b, _)| b).collect();
+        assert_eq!(
+            sources::extract_decision(bodies.into_iter().rev()).as_deref(),
+            Some("APPROVED (+4, 0, -0)")
+        );
+        // A ticket whose vote is merely running has none.
+        let running = vec![comment("kevin", "+1", "2026-10-02T09:00:00Z")];
+        let bodies: Vec<&str> = comments(&running).map(|(_, b, _)| b).collect();
+        assert_eq!(sources::extract_decision(bodies.into_iter().rev()), None);
+    }
+
+    #[test]
     fn label_added_at_takes_the_last_addition_and_ignores_removals() {
         // Fast Track's clock is the only thing still read from a
         // label, and a label can go on, come off and go back on --
@@ -1189,6 +1218,7 @@ mod tests {
             },
             fast_track: false,
             vote_label: true,
+            announced: None,
             start: at("2026-10-13T13:00:00Z"),
             start_basis: "ticket creation",
             votes: Tally::default(),
@@ -1204,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn a_decided_vote_is_pointed_at_the_label_not_a_discussion_slot() {
+    fn a_decided_vote_is_pointed_at_the_label() {
         let meeting = NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
         for outcome in [Outcome::Approved, Outcome::Rejected] {
             let report = outcome_report(outcome, None);
@@ -1273,6 +1303,7 @@ mod tests {
             },
             fast_track: true,
             vote_label: true,
+            announced: None,
             start: at("2026-09-16T13:07:00Z"),
             start_basis: "ticket creation",
             votes: Tally::default(),
@@ -1315,6 +1346,7 @@ mod tests {
             },
             fast_track: true,
             vote_label: true,
+            announced: None,
             start: at("2026-09-16T13:07:00Z"),
             start_basis: "ticket creation",
             votes: Tally {

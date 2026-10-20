@@ -22,6 +22,10 @@ pub struct AgendaArgs {
     #[arg(long, value_name = "YYYY-MM-DD")]
     pub date: Option<NaiveDate>,
 
+    /// Show the decision comment and label edit without making them.
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// Force ticket(s) into Discussed and Voted (repeat/CSV).
     #[arg(long, value_name = "N", value_delimiter = ',')]
     pub voted: Vec<u64>,
@@ -109,19 +113,18 @@ pub fn run(args: &AgendaArgs) -> ExitCode {
             subject(date)
         );
         eprintln!(
-            "\nreminder: comment \"This issue will be discussed at the next \
-             meeting on {date}\" on each meeting ticket (see the wiki's \
-             pre-meeting list)\n\
-             after sending: on each announced ticket, comment \
-             \"Announced: <archive link>\", untag `pending announcement`, \
-             and close it with the matching status"
+            "\nafter sending: take the archive link and run `fesco-chair \
+             announced <link>`, which comments it on each announced ticket, \
+             untags `pending announcement` and closes it with the status it \
+             was decided with"
         );
         if !votes_taken.is_empty() {
             let list: Vec<String> = votes_taken.iter().map(|n| format!("#{n}")).collect();
             eprintln!(
-                "tag `meeting` on {}: taken onto the agenda from an in-ticket \
-                 vote, so the tracker still shows only the vote label",
-                list.join(", ")
+                "still to do by hand on {}: tag `meeting` and comment \"{}\" \
+                 (see the wiki's pre-meeting list)",
+                list.join(", "),
+                crate::announce::meeting_comment(date),
             );
         }
     }
@@ -169,7 +172,7 @@ pub fn assemble(
     if args.verbose {
         eprintln!("[agenda] fetching '{}' tickets", sources::PENDING_LABEL);
     }
-    let voted = sources::pending_tickets(&client)?;
+    let mut voted = sources::pending_tickets(&client)?;
     if args.verbose {
         eprintln!("[agenda] fetching '{}' tickets", sources::MEETING_LABEL);
     }
@@ -215,7 +218,7 @@ pub fn assemble(
         if voted.iter().chain(&meeting).any(|t| t.number == number) {
             continue;
         }
-        let take = interactive && {
+        if interactive {
             eprintln!(
                 "\n{} \u{201c}{}\u{201d}\n  {}\n  {}",
                 report.ticket.label(),
@@ -226,13 +229,54 @@ pub fn assemble(
             if let Some(hint) = crate::votes::announce_hint(&report, date) {
                 eprintln!("  {hint}");
             }
-            sandogasa_cli::confirm(
+        }
+        // A decided vote wants announcing, not a discussion slot, so
+        // the edit it needs is offered before the agenda question is
+        // put at all -- asking that first invites a yes that sends an
+        // already-decided ticket to the meeting. Taking the offer
+        // moves the ticket into this very announcement's "Discussed
+        // and Voted in the Ticket" section rather than the next
+        // one's; declining falls through to the agenda question.
+        if interactive && let Some(decision) = crate::votes::decision(&report) {
+            match crate::announce::offer(
+                &client,
+                number,
+                &decision,
+                report.announced.as_deref(),
+                report.vote_label,
+                args.dry_run,
+            ) {
+                Ok(crate::announce::Announced::Done(text)) => {
+                    let mut ticket = report.ticket;
+                    ticket.decision = Some(text);
+                    voted.push(ticket);
+                    continue;
+                }
+                Ok(crate::announce::Announced::Skipped) => {}
+                Err(e) => eprintln!("  not announced: {e}"),
+            }
+        }
+        let take = interactive
+            && sandogasa_cli::confirm(
                 "add to the agenda?",
                 report.verdict.outcome == crate::votes::Outcome::Meeting,
-            )?
-        };
+            )?;
         if take {
-            votes_taken.push(number);
+            // The tracker shows only the vote label on this ticket,
+            // so the agenda it is now on is invisible there until
+            // `meeting` goes on. Offered rather than assumed: the
+            // label is what the pre-meeting list is built from.
+            let tagged = interactive
+                && match crate::announce::offer_meeting(&client, number, date, args.dry_run) {
+                    Ok(done) => done,
+                    Err(e) => {
+                        eprintln!("  not tagged: {e}");
+                        false
+                    }
+                };
+            if !tagged {
+                votes_taken.push(number);
+            }
             meeting.push(report.ticket);
         } else {
             votes_open.push(report.ticket);

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fesco-chair 1 2026-10-14 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH fesco-chair 1 2026-10-20 "sandogasa 0.26.0" "Sandogasa Manual"
 .SH NAME
 fesco\-chair \- FESCo meeting chair helper — agenda, day\-of script, summary email, ticket votes
 .SH SYNOPSIS
@@ -16,12 +16,15 @@ Print help
 Print version
 .SH COMMANDS
 .SS fesco-chair agenda
-\fBfesco\-chair agenda\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfesco\-chair agenda\fR [\fB\-\-date\fR] [\fB\-\-dry\-run\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Compose the meeting announcement email from the tracker
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date (default: the coming Tuesday)
+.TP
+\fB\-\-dry\-run\fR
+Show the decision comment and label edit without making them
 .TP
 \fB\-\-voted\fR \fI<N>\fR
 Force ticket(s) into Discussed and Voted (repeat/CSV)
@@ -55,6 +58,28 @@ Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS fesco-chair announced
+\fBfesco\-chair announced\fR [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-all\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> 
+.PP
+Record that the announcement went out, and close its tickets
+.TP
+\fB\-\-dry\-run\fR
+Show what would be written without writing it
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Do not prompt; record every pending ticket
+.TP
+\fB\-\-all\fR
+Consider every pending ticket, without reading the announcement to see which it actually names
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIURL\fR>
+Link to the announcement in the list archive
 .SS fesco-chair changes
 \fBfesco\-chair changes\fR [\fB\-\-ticket\fR] [\fB\-\-json\fR] [\fB\-\-script\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
@@ -82,12 +107,15 @@ Store the Forgejo API token (interactive)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair script
-\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-dry\-run\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
 Day\-of checklist plus the meetbot command script
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date (default: the coming Tuesday)
+.TP
+\fB\-\-dry\-run\fR
+Show the decision comment and label edit without making them
 .TP
 \fB\-\-voted\fR \fI<N>\fR
 Force ticket(s) into Discussed and Voted (repeat/CSV)

@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### fesco-chair makes the tracker edits it used to tell you to make
+
+Every decided vote cost the chair the same four edits in a browser:
+comment the decision, drop `vote-in-progress`, add `pending
+announcement` and, once the mail was out, comment the archive link,
+swap the label for a status and close. Miss any one and the ticket
+is still in the vote pool on the next run, so the next agenda asks
+about it again — and the tool knew all of it already, having just
+computed the tally.
+
+`agenda` now offers the edit instead of describing it. A decided
+vote is offered before the agenda question is put at all, since
+asking that first invites a yes that sends an already-decided ticket
+to the meeting:
+
+```console
+#3691 “Change: Libical4”
+  ticket vote since 2026-10-01, tally (+4, 0, -0)
+  approved: after two weeks: +4 with no -1
+  decision: APPROVED (+4, 0, -0)
+  post this decision and swap `vote-in-progress` for `pending
+    announcement`? [Y/n/e to edit]:
+```
+
+Taking it moves the ticket into that same announcement's "Discussed
+and Voted in the Ticket" section rather than the next one's. `e`
+re-prompts with the line editable, because the tally is derived and
+a derived tally can be wrong — a conditional vote is uncounted, a
+token can be misread, and `--vote`/`--ignore` exist for when only a
+person can say. A ticket taken onto the agenda is likewise offered
+its `meeting` label together with the comment saying when it will be
+discussed.
+
+A new `announced` subcommand closes the loop after the mail goes
+out. Given the archive link it reads the announcement, takes the
+tickets it actually names, and for each comments the link, drops
+`pending announcement`, adds the status it was decided with, and
+closes it:
+
+```console
+fesco-chair announced https://lists.fedoraproject.org/.../message/GGXO.../
+#3691 “Change: Libical4”
+  APPROVED (+4, 0, -0) → close with `Status/Accepted`
+record the announcement and close it? [Y/n]:
+```
+
+Reading the announcement matters because a decision may be announced
+in a reply to an earlier one: run against the original agenda and
+only the tickets it listed are touched, run against the reply and
+only that one is. A pending ticket the link does not name is
+reported and left alone. Note that an archive *thread* URL renders
+the whole thread, replies included, so a reply wants its own
+`/message/` link.
+
+Nothing is written without being shown first, `--dry-run` writes
+nothing at all, and a decision already in a ticket's comments is not
+posted over — a ticket commented by hand but not yet tagged would
+otherwise be announced twice. A ticket whose decision cannot be read
+is left open rather than closed with a guess.
+
+Used for real on 2026-10-20 against the FESCo tracker: #3690 and
+#3691 were both announced and closed this way.
+
+### sandogasa-forgejo: comment on, label and close an issue
+
+The crate could create an issue and nothing else, so anything that
+wanted to record an outcome on the tracker had to tell a human to go
+and do it. Adds `create_comment`, `add_labels`, `remove_label` and
+`close_issue`, and `Issue` now carries the `labels` the API embeds.
+
 ### fesco-chair: the voting week runs from when the ticket was opened
 
 `Change: Libical4` was filed on 2026-10-01 and collected four +1 and
