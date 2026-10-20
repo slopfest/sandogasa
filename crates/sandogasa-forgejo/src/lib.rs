@@ -227,6 +227,10 @@ pub struct Issue {
     pub closed_at: Option<String>,
     #[serde(default)]
     pub repository: Option<RepositoryRef>,
+    /// The labels the issue carries. Empty from endpoints that do
+    /// not embed them, so absence is not evidence of none.
+    #[serde(default)]
+    pub labels: Vec<Label>,
 }
 
 impl Issue {
@@ -739,6 +743,89 @@ impl Client {
         Ok(http::blocking_json_ok(resp, "Forgejo create issue")?)
     }
 
+    /// Post a comment on an issue, returning it as created.
+    pub fn create_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+        body: &str,
+    ) -> Result<IssueComment, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/issues/{index}/comments",
+            self.base_url
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "body": body }))
+            .send()?;
+        Ok(http::blocking_json_ok(resp, "Forgejo create comment")?)
+    }
+
+    /// Close an issue.
+    ///
+    /// Closing one already closed is accepted, so this need not be
+    /// guarded by a state check.
+    pub fn close_issue(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+    ) -> Result<Issue, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/v1/repos/{owner}/{repo}/issues/{index}", self.base_url);
+        let resp = self
+            .http
+            .patch(&url)
+            .json(&serde_json::json!({ "state": "closed" }))
+            .send()?;
+        Ok(http::blocking_json_ok(resp, "Forgejo close issue")?)
+    }
+
+    /// Add labels to an issue, by id, leaving the ones already on it.
+    ///
+    /// Ids rather than names, as the API requires; [`Client::label_ids`]
+    /// resolves them. Adding a label the issue already carries is not
+    /// an error.
+    pub fn add_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+        labels: &[i64],
+    ) -> Result<Vec<Label>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/issues/{index}/labels",
+            self.base_url
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({ "labels": labels }))
+            .send()?;
+        Ok(http::blocking_json_ok(resp, "Forgejo add labels")?)
+    }
+
+    /// Remove one label from an issue, by id.
+    ///
+    /// Removing a label the issue does not carry answers 204 like any
+    /// other success, so this is safe to call without checking first.
+    pub fn remove_label(
+        &self,
+        owner: &str,
+        repo: &str,
+        index: u64,
+        label: i64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/issues/{index}/labels/{label}",
+            self.base_url
+        );
+        let resp = self.http.delete(&url).send()?;
+        http::blocking_ok(resp, "Forgejo remove label")?;
+        Ok(())
+    }
+
     /// List issues (not pulls) on `owner/repo`, filtered by `state`
     /// (`open` / `closed` / `all`) and label names — an issue must
     /// carry *every* listed label to match (Forgejo ANDs the
@@ -952,6 +1039,83 @@ mod tests {
     fn new_rejects_plaintext_remote() {
         // A token must not be sent to a plaintext http non-loopback URL.
         assert!(Client::new("http://forge.example.com", "tok").is_err());
+    }
+
+    #[test]
+    fn create_comment_posts_the_body_to_the_issue() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3691/comments")
+            .match_header("authorization", "token tok")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"body": "APPROVED (+4, 0, -0)"}),
+            ))
+            .with_status(201)
+            .with_body(r#"{"id": 7, "body": "APPROVED (+4, 0, -0)"}"#)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let c = client
+            .create_comment("fesco", "tickets", 3691, "APPROVED (+4, 0, -0)")
+            .unwrap();
+        mock.assert();
+        assert_eq!(c.body, "APPROVED (+4, 0, -0)");
+    }
+
+    #[test]
+    fn add_labels_sends_ids_and_remove_label_takes_one_in_the_path() {
+        let mut server = mockito::Server::new();
+        let add = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3691/labels")
+            .match_body(mockito::Matcher::Json(serde_json::json!({"labels": [42]})))
+            .with_status(200)
+            .with_body(r#"[{"id": 42, "name": "pending announcement"}]"#)
+            .create();
+        let remove = server
+            .mock(
+                "DELETE",
+                "/api/v1/repos/fesco/tickets/issues/3691/labels/19",
+            )
+            .with_status(204)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let got = client.add_labels("fesco", "tickets", 3691, &[42]).unwrap();
+        client.remove_label("fesco", "tickets", 3691, 19).unwrap();
+        add.assert();
+        remove.assert();
+        assert_eq!(got[0].name, "pending announcement");
+    }
+
+    #[test]
+    fn a_write_that_is_refused_says_so_rather_than_reporting_success() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3691/comments")
+            .with_status(403)
+            .with_body("token has no write scope")
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let err = client
+            .create_comment("fesco", "tickets", 3691, "x")
+            .expect_err("403 is not success");
+        mock.assert();
+        let msg = err.to_string();
+        assert!(msg.contains("403"), "{msg}");
+        assert!(msg.contains("write scope"), "{msg}");
+    }
+
+    #[test]
+    fn an_issue_carries_the_labels_the_api_embeds() {
+        let i: Issue = serde_json::from_str(
+            r#"{"number": 3691, "title": "Change: Libical4",
+                "labels": [{"id": 19, "name": "vote-in-progress"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(i.labels.len(), 1);
+        assert_eq!(i.labels[0].name, "vote-in-progress");
+        // An endpoint that embeds none leaves the list empty rather
+        // than failing to parse.
+        let bare: Issue = serde_json::from_str(r#"{"number": 1, "title": "t"}"#).unwrap();
+        assert!(bare.labels.is_empty());
     }
 
     #[test]
