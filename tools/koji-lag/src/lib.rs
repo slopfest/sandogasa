@@ -13,6 +13,7 @@
 
 pub mod annotate;
 pub mod class;
+pub mod compare;
 pub mod csv;
 pub mod dataset;
 pub mod events;

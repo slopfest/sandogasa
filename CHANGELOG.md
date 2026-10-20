@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### koji-lag: compare architectures on the same package, by build length
+
+Every per-architecture median in a report compares *package mixes*.
+Fedora's architectures do not build the same set — s390x built 2,527
+packages in 2026-09 where x86_64 built 3,427 — so a row saying
+s390x's median build is 3.2m against x86_64's 1.5m says as much about
+what each was asked to build as about how fast it did it. Nothing in
+the report let a reader get past that, and the question it blocks is
+the one people actually ask.
+
+A new table pairs on the package and bands by how long the reference
+took:
+
+```
+Same package against x86_64, by how long x86_64 took:
+
+| arch | <5m | 5-30m | 30-60m | >1h |
+|---|---:|---:|---:|---:|
+| aarch64 | 1.43x (22531) | 1.49x (727) | 1.47x (63) | 1.36x (51) |
+| ppc64le | 1.79x (22510) | 1.64x (724) | 1.65x (63) | 1.44x (49) |
+| s390x | 1.50x (2397) | 2.75x (286) | 2.70x (24) | 2.52x (23) |
+```
+
+Banding matters as much as pairing. A single ratio averages opposite
+effects into a number true of no build at all: across every package
+s390x against ppc64le comes out at 1.06, parity, while it is in fact
+faster on short builds and twice as slow on long ones. Banded, the
+shape is plain — and it shows that **s390x is the only architecture
+whose penalty grows with build length**, where aarch64 and ppc64le
+are flat across all four bands. That is the signature of a per-build
+compute shortfall rather than a scheduling one.
+
+Each cell is the median of the per-package ratios, not the ratio of
+the medians, so one enormous package moves the figure by one
+package's worth rather than by its size. Bands thinner than
+`--min-samples` are withheld under the same guard as every other
+table, and an architecture with nothing left to show is dropped
+rather than rendered as a row of dashes.
+
+`noarch` is excluded: a noarch package is built once and shipped
+everywhere, so its task and the reference's task for the same package
+are not the same work. Pairing them produced ratios of 0.01x, which
+reads as an architecture a hundred times faster than x86_64 rather
+than as the category error it is.
+
 ### koji-lag: say how unevenly a delay falls, in one number
 
 Every table reported a median and a p90 and left the relationship

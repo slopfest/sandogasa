@@ -123,6 +123,13 @@ pub fn generator() -> String {
     concat!("koji-lag ", env!("CARGO_PKG_VERSION")).to_string()
 }
 
+/// What a same-package comparison measures against.
+///
+/// x86_64 because that is what people benchmark against in practice,
+/// and because it is fast enough that its build lengths spread the
+/// other architectures across the bands rather than bunching them.
+const SAME_PACKAGE_REFERENCE: &str = "x86_64";
+
 /// The whole report, serialized as-is for `--json`.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ReportOutput {
@@ -170,6 +177,17 @@ pub struct ReportOutput {
     /// what a release waits on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_official: Option<crate::health::Health>,
+    /// Every architecture against a reference, on the same packages,
+    /// split by how long the reference took.
+    ///
+    /// The per-architecture medians above compare package *mixes* —
+    /// the architectures do not build the same set — so this is the
+    /// only table here from which "slower" can honestly be read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub same_package: Vec<crate::compare::ArchComparison>,
+    /// The architecture `same_package` compares against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_package_reference: Option<String>,
     /// The same signals over scratch builds only. Separate because
     /// scratch capacity is provisioned separately: on s390x in
     /// 2026-09 scratch builds waited 27.7m at p90 against official's
@@ -521,6 +539,12 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         // architecture: scratch capacity is provisioned separately,
         // so mixing them lets a large, cheaply-served scratch volume
         // hide an official queue problem behind it.
+        same_package: crate::compare::against(
+            &selected,
+            SAME_PACKAGE_REFERENCE,
+            opts.include_failed,
+        ),
+        same_package_reference: Some(SAME_PACKAGE_REFERENCE.to_string()),
         health_official: health_split(false),
         health_scratch: health_split(true),
         // From the windows where there are any, and otherwise from the
@@ -874,6 +898,7 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     // about the fleet whatever submitted the work — but a queue
     // figure is not one of them, and the two sections below are what
     // a reader should quote.
+    render_same_package(&mut o, output, min_samples);
     render_health(&mut o, &output.health, min_samples);
     for (label, health) in [
         ("official", output.health_official.as_ref()),
@@ -940,6 +965,67 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
 /// aligned for terminal/plain-text reading, and pasteable into
 /// anything that renders Markdown. Rows below the sample guard
 /// are pulled out into a footnote (Markdown cells can't span).
+/// Every architecture against the reference, on the same packages,
+/// banded by how long the reference took.
+///
+/// The one table here from which "slower" can be read: every other
+/// per-architecture figure compares package mixes, because the
+/// architectures do not build the same set.
+fn render_same_package(o: &mut String, output: &ReportOutput, min_samples: usize) {
+    use std::fmt::Write as _;
+    let (Some(reference), false) = (
+        output.same_package_reference.as_deref(),
+        output.same_package.is_empty(),
+    ) else {
+        return;
+    };
+    let bands: Vec<&str> = output
+        .same_package
+        .first()
+        .map(|a| a.bands.iter().map(|b| b.band).collect())
+        .unwrap_or_default();
+    let _ = writeln!(
+        o,
+        "\nSame package against {reference}, by how long {reference} took:\n"
+    );
+    let _ = write!(o, "| arch |");
+    for band in &bands {
+        let _ = write!(o, " {band} |");
+    }
+    let _ = writeln!(o);
+    let _ = write!(o, "|---|");
+    for _ in &bands {
+        let _ = write!(o, "---:|");
+    }
+    let _ = writeln!(o);
+    for arch in &output.same_package {
+        // A row every band of which is too thin to quote says
+        // nothing, and is noise beside the rows that do.
+        if !arch.bands.iter().any(|b| b.packages >= min_samples) {
+            continue;
+        }
+        let _ = write!(o, "| {} |", arch.arch);
+        for band in &arch.bands {
+            match band.ratio.filter(|_| band.packages >= min_samples) {
+                Some(r) => {
+                    let _ = write!(o, " {r:.2}x ({}) |", band.packages);
+                }
+                None => {
+                    let _ = write!(o, " - |");
+                }
+            }
+        }
+        let _ = writeln!(o);
+    }
+    let _ = writeln!(
+        o,
+        "\nEach cell is the median of the per-package ratios, with the number\n\
+         of packages paired in that band. Below 1.00 is faster than \
+         {reference}.\n\
+         A band is blank where too few packages paired to say anything."
+    );
+}
+
 /// The health tables: per class, per cohort, and how builder time went.
 ///
 /// Per class because summing them produced a headline that described releng
