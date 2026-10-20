@@ -164,6 +164,11 @@ pub struct VoteReport {
     /// yet tagged does, and must not be commented a second time.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub announced: Option<String>,
+    /// What each member in [`Tally::unclear`] actually wrote. The
+    /// tool cannot tell a held question from a firm objection, so
+    /// the sentence goes in front of the person who can.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub unclear_comments: BTreeMap<String, Unclear>,
     /// When the clock started and which event set it.
     pub start: DateTime<Utc>,
     pub start_basis: &'static str,
@@ -598,8 +603,28 @@ pub fn scan(
         // Newest first, as extract_decision reads them.
         let bodies: Vec<&str> = comments(&events).map(|(_, b, _)| b).collect();
         let announced = sources::extract_decision(bodies.into_iter().rev());
+        // The comment that could not be read as a vote, per member,
+        // taking the latest as the tally does. Read off the events
+        // rather than through `comments`, which drops the anchor.
+        let mut unclear_comments = BTreeMap::new();
+        for who in &votes.unclear {
+            if let Some(e) = events.iter().rfind(|e| {
+                e.kind == "comment"
+                    && e.user.as_ref().is_some_and(|u| u.login == *who)
+                    && parse_vote(&e.body) == Some(Vote::Unclear)
+            }) {
+                unclear_comments.insert(
+                    who.clone(),
+                    Unclear {
+                        body: e.body.clone(),
+                        url: e.html_url.clone(),
+                    },
+                );
+            }
+        }
         out.push(VoteReport {
             announced,
+            unclear_comments,
             vote_label: voting.contains(&issue.number),
             ticket: issue.into(),
             fast_track,
@@ -641,6 +666,102 @@ pub(crate) fn relabel(has_vote_label: bool) -> &'static str {
         "swap `vote-in-progress` for `pending announcement`"
     } else {
         "tag `pending announcement`"
+    }
+}
+
+/// A comment that could not be read as a vote, and where to find
+/// it: on a long thread the sentence alone is not enough to go back
+/// to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Unclear {
+    pub body: String,
+    /// The comment's anchor on the issue page, empty when the API
+    /// gave none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
+}
+
+/// One line of an unclear comment, for showing at a prompt.
+///
+/// The first non-empty line is enough to recognise what was said;
+/// the full text is a click away and the ticket is named above it.
+pub fn unclear_excerpt(body: &str, width: usize) -> String {
+    let line = body
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if line.chars().count() <= width {
+        return line.to_string();
+    }
+    let kept: String = line.chars().take(width.saturating_sub(1)).collect();
+    // Trimmed before the ellipsis: cutting mid-sentence often lands
+    // on a space, and "turns out …" reads as a typo.
+    format!("{}\u{2026}", kept.trim_end())
+}
+
+/// Move a member's unclear vote to `how`, or leave it unclear when
+/// `None`, and work out the verdict again.
+///
+/// The same effect as `--vote N:FAS=V`, applied without a second
+/// run: the tool cannot read a conditional, but the chair reading
+/// the comment can, and asking them there is cheaper than asking
+/// them to start over.
+pub fn resolve_unclear(report: &mut VoteReport, who: &str, how: Option<Vote>, now: DateTime<Utc>) {
+    let Some(at) = report.votes.unclear.iter().position(|m| m == who) else {
+        return;
+    };
+    let Some(how) = how else { return };
+    report.votes.unclear.remove(at);
+    report.unclear_comments.remove(who);
+    match how {
+        Vote::Plus => report.votes.plus.push(who.to_string()),
+        Vote::Zero => report.votes.zero.push(who.to_string()),
+        Vote::Minus => report.votes.minus.push(who.to_string()),
+        // Already where it belongs.
+        Vote::Unclear => return,
+    }
+    for list in [
+        &mut report.votes.plus,
+        &mut report.votes.zero,
+        &mut report.votes.minus,
+    ] {
+        list.sort();
+    }
+    report.tally = report.votes.counts();
+    report.verdict = classify(&report.votes, report.fast_track, report.start, now);
+}
+
+/// The `--vote` flag that would reproduce a resolution.
+///
+/// An answer at the prompt lives only for that run — the comment it
+/// settles has not changed, so the next run asks again. Printing the
+/// flag means a ticket that lingers can be answered once and pasted
+/// thereafter.
+///
+/// Round-trips through the parser `--vote` itself uses, so what is
+/// printed is accepted.
+pub fn vote_flag(number: u64, who: &str, how: Vote) -> String {
+    let v = match how {
+        Vote::Plus => "+1",
+        Vote::Zero => "0",
+        Vote::Minus => "-1",
+        // Not reachable from a resolution, which never sets it.
+        Vote::Unclear => "0",
+    };
+    format!("--vote {number}:{who}={v}")
+}
+
+/// Read an answer to the how-should-this-count prompt. `None` is
+/// unrecognized; `Some(None)` leaves the vote unclear.
+#[allow(clippy::option_option)]
+pub fn parse_unclear_answer(line: &str) -> Option<Option<Vote>> {
+    match line.trim() {
+        "" | "l" | "leave" => Some(None),
+        "+1" | "1" | "+" => Some(Some(Vote::Plus)),
+        "0" => Some(Some(Vote::Zero)),
+        "-1" | "-" => Some(Some(Vote::Minus)),
+        _ => None,
     }
 }
 
@@ -753,6 +874,13 @@ pub fn render(report: &VoteReport, meeting: NaiveDate) -> String {
             report.verdict.detail
         ),
     ];
+
+    for (who, c) in &report.unclear_comments {
+        lines.push(format!("    {who}: {}", unclear_excerpt(&c.body, 64)));
+        if !c.url.is_empty() {
+            lines.push(format!("      {}", c.url));
+        }
+    }
     if let Some(h) = hint(report, meeting) {
         lines.push(format!("  {h}"));
     }
@@ -857,6 +985,13 @@ mod tests {
         }))
     }
 
+    fn comment_at(login: &str, body: &str, when: &str, url: &str) -> TimelineEvent {
+        event(serde_json::json!({
+            "type": "comment", "body": body, "user": {"login": login},
+            "created_at": when, "html_url": url
+        }))
+    }
+
     fn label(name: &str, added: bool, when: &str) -> TimelineEvent {
         event(serde_json::json!({
             "type": "label", "body": if added { "1" } else { "" },
@@ -891,6 +1026,155 @@ mod tests {
         assert_eq!(parse_vote("After a week: APPROVED (+3, 0, 0)"), None);
         // A bare 0 does not override a signed vote in the same comment.
         assert_eq!(parse_vote("+1, this breaks 0 packages"), Some(Vote::Plus));
+    }
+
+    #[test]
+    fn an_unclear_comment_is_found_with_its_anchor() {
+        // The API gives the anchor outright, which is what makes a
+        // long thread navigable from the prompt.
+        let events = [
+            comment_at(
+                "decathorpe",
+                "In general I would be +1 here",
+                "2026-10-18T10:00:00Z",
+                "u/1",
+            ),
+            comment_at(
+                "decathorpe",
+                "I'm +1 assuming X, but -1 if Y",
+                "2026-10-19T10:00:00Z",
+                "https://forge.example/issues/3696#issuecomment-1367373",
+            ),
+        ];
+        let who = "decathorpe";
+        let found = events
+            .iter()
+            .rfind(|e| {
+                e.kind == "comment"
+                    && e.user.as_ref().is_some_and(|u| u.login == *who)
+                    && parse_vote(&e.body) == Some(Vote::Unclear)
+            })
+            .expect("the latest unclear comment");
+        // The earlier firm +1 is not it; the later ambiguous one is.
+        assert_eq!(found.body, "I'm +1 assuming X, but -1 if Y");
+        assert_eq!(
+            found.html_url,
+            "https://forge.example/issues/3696#issuecomment-1367373"
+        );
+    }
+
+    #[test]
+    fn an_unclear_excerpt_is_one_line_and_bounded() {
+        let real = "I'm +1 assuming this *can* be done quickly, but -1 if it \
+                    turns out we'd have a broken gedit-plugins package for the \
+                    lifetime of F45.";
+        let short = unclear_excerpt(real, 40);
+        assert!(short.chars().count() <= 40, "{short}");
+        assert!(short.ends_with('\u{2026}'), "{short}");
+        // No space left dangling before the ellipsis.
+        assert!(!short.contains(" \u{2026}"), "{short}");
+        assert!(short.starts_with("I'm +1 assuming"), "{short}");
+        // A short comment is given whole, with no ellipsis.
+        assert_eq!(unclear_excerpt("+1 or -1", 40), "+1 or -1");
+        // Leading blank lines are skipped, and only one line shown.
+        assert_eq!(unclear_excerpt("\n\n  +1 or -1\nmore\n", 40), "+1 or -1");
+        assert_eq!(unclear_excerpt("", 40), "");
+    }
+
+    #[test]
+    fn resolving_an_unclear_vote_recounts_and_rejudges() {
+        let roster = members(&["ngompa", "salimma", "decathorpe"]);
+        let votes = tally(
+            [
+                ("ngompa", "+1"),
+                ("salimma", "+1"),
+                ("decathorpe", "I'm +1 assuming X, but -1 if Y"),
+            ]
+            .into_iter(),
+            &roster,
+            &BTreeMap::new(),
+        );
+        let start = at("2026-10-18T12:00:00Z");
+        let now = at("2026-10-19T12:00:00Z");
+        let mut report = VoteReport {
+            ticket: Ticket {
+                number: 3696,
+                title: "t".into(),
+                url: "u".into(),
+                decision: None,
+                repo: None,
+                pull: false,
+                created: None,
+                updated: None,
+            },
+            fast_track: true,
+            vote_label: true,
+            announced: None,
+            unclear_comments: BTreeMap::from([(
+                "decathorpe".to_string(),
+                Unclear {
+                    body: "I'm +1 assuming X, but -1 if Y".to_string(),
+                    url: "https://forge.example/fesco/tickets/issues/3696#issuecomment-1367373"
+                        .to_string(),
+                },
+            )]),
+            start,
+            start_basis: "ticket creation",
+            tally: votes.counts(),
+            verdict: classify(&votes, true, start, now),
+            votes,
+            reminder: None,
+        };
+        assert_eq!(report.tally, "(+2, 0, -0)");
+        assert_eq!(report.verdict.outcome, Outcome::Meeting);
+
+        // Leaving it unclear changes nothing at all.
+        resolve_unclear(&mut report, "decathorpe", None, now);
+        assert_eq!(report.votes.unclear, members(&["decathorpe"]));
+        assert_eq!(report.tally, "(+2, 0, -0)");
+
+        // Counting it as the -1 he might have meant keeps the ticket
+        // at the meeting, but now on a recorded objection.
+        let mut as_minus = report;
+        resolve_unclear(&mut as_minus, "decathorpe", Some(Vote::Minus), now);
+        assert!(as_minus.votes.unclear.is_empty());
+        assert!(as_minus.unclear_comments.is_empty());
+        assert_eq!(as_minus.tally, "(+2, 0, -1)");
+        assert_eq!(as_minus.verdict.outcome, Outcome::Meeting);
+        assert!(as_minus.verdict.detail.starts_with("-1 from decathorpe"));
+    }
+
+    #[test]
+    fn the_printed_vote_flag_is_one_the_parser_accepts() {
+        // What is printed has to be pasteable, so it round-trips
+        // through the parser `--vote` itself uses.
+        for how in [Vote::Plus, Vote::Zero, Vote::Minus] {
+            let flag = vote_flag(3696, "decathorpe", how);
+            let arg = flag.strip_prefix("--vote ").expect("the flag's value");
+            assert_eq!(
+                parse_override(arg),
+                Ok((3696, "decathorpe".to_string(), how)),
+                "{flag}"
+            );
+        }
+        assert_eq!(
+            vote_flag(3696, "decathorpe", Vote::Minus),
+            "--vote 3696:decathorpe=-1"
+        );
+    }
+
+    #[test]
+    fn an_unclear_answer_is_read_strictly() {
+        assert_eq!(parse_unclear_answer(""), Some(None));
+        assert_eq!(parse_unclear_answer("l"), Some(None));
+        assert_eq!(parse_unclear_answer("+1"), Some(Some(Vote::Plus)));
+        assert_eq!(parse_unclear_answer(" 1 "), Some(Some(Vote::Plus)));
+        assert_eq!(parse_unclear_answer("0"), Some(Some(Vote::Zero)));
+        assert_eq!(parse_unclear_answer("-1"), Some(Some(Vote::Minus)));
+        // Enter leaves it unclear, so a typo must re-ask rather than
+        // silently counting a vote nobody cast.
+        assert_eq!(parse_unclear_answer("maybe"), None);
+        assert_eq!(parse_unclear_answer("+2"), None);
     }
 
     #[test]
@@ -1219,6 +1503,7 @@ mod tests {
             fast_track: false,
             vote_label: true,
             announced: None,
+            unclear_comments: BTreeMap::new(),
             start: at("2026-10-13T13:00:00Z"),
             start_basis: "ticket creation",
             votes: Tally::default(),
@@ -1304,6 +1589,7 @@ mod tests {
             fast_track: true,
             vote_label: true,
             announced: None,
+            unclear_comments: BTreeMap::new(),
             start: at("2026-09-16T13:07:00Z"),
             start_basis: "ticket creation",
             votes: Tally::default(),
@@ -1332,6 +1618,64 @@ mod tests {
     }
 
     #[test]
+    fn render_shows_an_unclear_comment_and_where_to_find_it() {
+        let roster = members(&["ngompa", "decathorpe"]);
+        let votes = tally(
+            [("ngompa", "+1"), ("decathorpe", "+1 if X but -1 if Y")].into_iter(),
+            &roster,
+            &BTreeMap::new(),
+        );
+        let start = at("2026-10-18T12:00:00Z");
+        let now = at("2026-10-19T12:00:00Z");
+        let report = VoteReport {
+            ticket: Ticket {
+                number: 3696,
+                title: "[FastTrack] gedit exception".into(),
+                url: "https://forge.example/3696".into(),
+                decision: None,
+                repo: None,
+                pull: false,
+                created: None,
+                updated: None,
+            },
+            fast_track: true,
+            vote_label: true,
+            announced: None,
+            unclear_comments: BTreeMap::from([(
+                "decathorpe".to_string(),
+                Unclear {
+                    body: "+1 if X but -1 if Y".to_string(),
+                    url: "https://forge.example/3696#issuecomment-1367373".to_string(),
+                },
+            )]),
+            start,
+            start_basis: "ticket creation",
+            tally: votes.counts(),
+            verdict: classify(&votes, true, start, now),
+            votes,
+            reminder: None,
+        };
+        let out = render(&report, NaiveDate::from_ymd_opt(2026, 10, 20).unwrap());
+        assert!(out.contains("unclear: decathorpe"), "{out}");
+        assert!(out.contains("+1 if X but -1 if Y"), "{out}");
+        assert!(out.contains("#issuecomment-1367373"), "{out}");
+        // The uncounted vote is absent from the three vote lines.
+        assert!(out.contains("    +1: ngompa\n"), "{out}");
+        assert!(out.contains("    -1: -\n"), "{out}");
+
+        // With no anchor, no broken link is printed.
+        let mut bare = report;
+        bare.unclear_comments
+            .get_mut("decathorpe")
+            .unwrap()
+            .url
+            .clear();
+        let out = render(&bare, NaiveDate::from_ymd_opt(2026, 10, 20).unwrap());
+        assert!(out.contains("+1 if X but -1 if Y"), "{out}");
+        assert!(!out.contains("issuecomment"), "{out}");
+    }
+
+    #[test]
     fn render_hints_when_the_vote_outlives_the_meeting() {
         let report = VoteReport {
             ticket: Ticket {
@@ -1347,6 +1691,7 @@ mod tests {
             fast_track: true,
             vote_label: true,
             announced: None,
+            unclear_comments: BTreeMap::new(),
             start: at("2026-09-16T13:07:00Z"),
             start_basis: "ticket creation",
             votes: Tally {

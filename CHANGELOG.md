@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### fesco-chair: show the comment behind an unclear vote, and settle it
+
+A comment holding both a `+1` and a `-1` was reported as a name and
+nothing else — `unclear: decathorpe` — so finding out what was said
+meant opening the ticket, and acting on it meant a second run with
+`--vote`. On a long thread that is two detours for a question the
+tool had already identified.
+
+The comment is now shown, with the anchor the API gives for it, and
+the chair is asked how it should count:
+
+```console
+  decathorpe wrote both a +1 and a -1:
+    I'm +1 assuming this *can* be done quickly, but -1 if it turns…
+    https://forge.fedoraproject.org/fesco/tickets/issues/3696#issuecomment-1367373
+  count it as? [+1/0/-1/Enter to leave unclear]: -1
+    (same as --vote 3696:decathorpe=-1)
+```
+
+Answering re-tallies and re-classifies at once, so the brief, the
+hint and the announce offer all read the answer rather than the
+guess. Enter leaves it unclear, which keeps the ticket at the
+meeting. The answer lives only for that run, since the comment it
+settles has not changed, so the equivalent `--vote` flag is printed
+for a ticket that lingers.
+
+The member's *latest* unclear comment is the one shown, matching how
+the tally takes their latest vote. `votes` shows the same excerpt
+and anchor, so the read-only view answers the question too, and no
+link is printed where the API gives no anchor.
+
+### sandogasa-forgejo: a timeline entry carries its anchor
+
+`TimelineEvent` gains `html_url`, which the API returns for a
+comment (`…/issues/3696#issuecomment-1367373`). Without it a caller
+that wanted to point at one comment on a long thread had to build
+the link from an id it also could not see.
+
 ### fesco-chair makes the tracker edits it used to tell you to make
 
 Every decided vote cost the chair the same four edits in a browser:

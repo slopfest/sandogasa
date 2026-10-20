@@ -213,19 +213,25 @@ pub fn assemble(
     // followup inference below places them.
     let mut votes_open = Vec::new();
     let mut votes_taken = Vec::new();
-    for report in crate::votes::open_votes(&client, &args.voters, args.verbose, Utc::now()) {
+    for mut report in crate::votes::open_votes(&client, &args.voters, args.verbose, Utc::now()) {
         let number = report.ticket.number;
         if voted.iter().chain(&meeting).any(|t| t.number == number) {
             continue;
         }
+        // An unclear vote is settled before anything is judged on
+        // it: the verdict, the hint and the offer all read from the
+        // tally, so asking afterwards would mean asking again.
         if interactive {
             eprintln!(
-                "\n{} \u{201c}{}\u{201d}\n  {}\n  {}",
+                "\n{} \u{201c}{}\u{201d}\n  {}",
                 report.ticket.label(),
                 report.ticket.title,
                 report.ticket.url,
-                crate::votes::brief(&report, date)
             );
+            resolve_unclear_votes(&mut report)?;
+        }
+        if interactive {
+            eprintln!("  {}", crate::votes::brief(&report, date));
             if let Some(hint) = crate::votes::announce_hint(&report, date) {
                 eprintln!("  {hint}");
             }
@@ -435,6 +441,48 @@ pub fn render_body(date: NaiveDate, sections: &Sections) -> String {
         sources::TRACKER_REPO,
     );
     o
+}
+
+/// Ask how each unclear comment on a ticket should count.
+///
+/// The tool cannot tell "I'm +1 assuming X, but -1 if Y" from a
+/// vote, so it shows what was written and lets the chair say. The
+/// answer is the one `--vote N:FAS=V` would have given, applied
+/// without a second run.
+fn resolve_unclear_votes(report: &mut crate::votes::VoteReport) -> std::io::Result<()> {
+    use std::io::{BufRead, Write};
+    let unclear: Vec<(String, crate::votes::Unclear)> = report
+        .unclear_comments
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (who, comment) in unclear {
+        eprintln!(
+            "  {who} wrote both a +1 and a -1:\n    {}",
+            crate::votes::unclear_excerpt(&comment.body, 68)
+        );
+        if !comment.url.is_empty() {
+            eprintln!("    {}", comment.url);
+        }
+        loop {
+            eprint!("  count it as? [+1/0/-1/Enter to leave unclear]: ");
+            std::io::stderr().flush()?;
+            let mut line = String::new();
+            std::io::stdin().lock().read_line(&mut line)?;
+            if let Some(how) = crate::votes::parse_unclear_answer(&line) {
+                crate::votes::resolve_unclear(report, &who, how, Utc::now());
+                if let Some(how) = how {
+                    eprintln!(
+                        "    (same as {})",
+                        crate::votes::vote_flag(report.ticket.number, &who, how)
+                    );
+                }
+                break;
+            }
+            eprintln!("  answer +1, 0, -1, or Enter");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

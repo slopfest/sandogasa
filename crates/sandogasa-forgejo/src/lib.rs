@@ -302,6 +302,11 @@ pub struct TimelineEvent {
     pub created_at: Option<String>,
     #[serde(default)]
     pub label: Option<LabelRef>,
+    /// Where this entry sits on the issue page, as the API gives it
+    /// (`…/issues/3696#issuecomment-1367373`). Empty for an entry
+    /// the API does not anchor.
+    #[serde(default)]
+    pub html_url: String,
 }
 
 impl TimelineEvent {
