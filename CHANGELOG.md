@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### fesco-chair: `announced` closes the tickets the meeting decided
+
+A ticket approved at a meeting stayed open. `announced` closed out
+everything tagged `pending announcement`, and nothing ever tags a
+ticket the meeting itself decided — that label means "decided in its
+ticket, waiting for a mail to go out", and a ticket decided at the
+meeting is announced by the summary of that meeting. So after the
+2026-10-20 meeting the run reported `nothing tagged
+‘pending announcement’` and exited, leaving #3696 open with
+`vote-in-progress` still on it, to be found by hand or not at all.
+
+The summary mail links its own minutes, so the meeting does not have
+to be named on the command line or guessed from the date. meetbot
+nests an `AGREED` under the `TOPIC` it was said during, and chairs
+write the ticket number into the topic, so each agreement is matched
+to the ticket it decided.
+
+Only an agreement that carries a verdict and a tally counts.
+`AGREED: approved (+6, 0, -0)` closes a ticket;
+`AGREED: we will revisit this next week` is just as much an
+agreement and leaves it open, and an `INFO` or `ACTION` line is not a
+decision at all. A ticket already closed during the meeting is
+reported and skipped rather than passed over in silence, since a
+ticket absent from the output otherwise looks like one the minutes
+failed to parse.
+
+The minutes are a transcript of a live meeting, so the derived
+verdict is a suggestion: the `AGREED` line is shown verbatim beside
+it and the text is editable at the prompt, as it already is for an
+in-ticket vote. `--dry-run` prints every edit without making one.
+The recorded ticket sheds `vote-in-progress` rather than
+`pending announcement`, and only when it has one.
+
+
 ### koji-lag: compare architectures on the same package, by build length
 
 Every per-architecture median in a report compares *package mixes*.

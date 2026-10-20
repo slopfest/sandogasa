@@ -116,6 +116,41 @@ with a warning. A
 reminder to comment on each ticket ("This issue will be discussed at
 the next meeting on …") is printed to stderr.
 
+### `announced`
+
+```sh
+fesco-chair announced <url>            # the archive link to the mail
+fesco-chair announced <url> --dry-run  # show the edits, write nothing
+fesco-chair announced <url> -y         # do not prompt
+fesco-chair announced <url> --all      # every pending ticket, named or not
+```
+
+Closes out the tickets an announcement covers: comments
+`Announced: <url>`, drops `pending announcement`, tags
+`Status/Accepted` or `Status/Rejected` from the decision in the
+ticket's comments, and closes it. A ticket whose comments carry no
+decision, or whose decision names no status, is left open and
+reported.
+
+Two kinds of ticket are closed out. The first is everything tagged
+`pending announcement` and named in the mail — the tracker URLs the
+agenda prints under each entry say which, so a decision announced in
+a reply does not close tickets the reply never mentioned; `--all`
+takes every pending ticket instead.
+
+The second is the tickets the meeting itself decided. A summary mail
+links its meetbot minutes, and each `AGREED` line under a `TOPIC`
+naming a ticket is that ticket's decision, so a summary closes them
+without their ever having been tagged. Only an agreement carrying a
+verdict and a tally counts: `AGREED: approved (+6, 0, -0)` closes a
+ticket, `AGREED: we will revisit next week` does not, and an `INFO`
+or `ACTION` never does. The `vote-in-progress` label comes off if it
+is still there.
+
+The decision each ticket closes with is shown with the `AGREED` line
+it was read from, and is editable at the prompt (`e`) before anything
+is written.
+
 ### `changes`
 
 ```sh

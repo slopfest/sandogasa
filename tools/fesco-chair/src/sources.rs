@@ -12,7 +12,7 @@
 //! appeared at a previous meeting is a followup — inferred here by
 //! scanning recent meetbot minutes for its `TOPIC: #NNNN` line.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use sandogasa_meetbot::{Meetbot, Meeting};
@@ -304,6 +304,61 @@ pub fn extract_ticket_numbers(minutes: &str) -> BTreeSet<u64> {
             if let Ok(n) = digits.parse() {
                 out.insert(n);
             }
+        }
+    }
+    out
+}
+
+/// What a meeting agreed about one ticket.
+///
+/// Both halves are kept: the derived verdict is what gets commented,
+/// and the line it came from is what a person checks it against. A
+/// tool that showed only its own conclusion would be asking to be
+/// trusted rather than verified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeetingDecision {
+    /// The verdict and tally, as the announcement writes it.
+    pub decision: String,
+    /// The `AGREED` text it was read from, verbatim.
+    pub agreed: String,
+}
+
+/// Decisions a meeting reached, by ticket.
+///
+/// meetbot nests an `AGREED` under the `TOPIC` it was said during,
+/// so a ticket's decision is the AGREED lines following its TOPIC
+/// line and preceding the next one. A meeting decides a ticket by
+/// agreeing something about it; an INFO or an ACTION is not a
+/// decision and leaves the ticket open.
+///
+/// Only an agreement carrying a verdict counts, which
+/// [`extract_decision`] is what decides — "AGREED: approved
+/// (+6, 0, -0)" closes a ticket and "AGREED: we will revisit next
+/// week" does not, though both are agreements.
+pub fn extract_decisions(minutes: &str) -> BTreeMap<u64, MeetingDecision> {
+    let mut out = BTreeMap::new();
+    let mut current: BTreeSet<u64> = BTreeSet::new();
+    for line in minutes.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("* TOPIC:") {
+            current = extract_ticket_numbers(line);
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("* AGREED:") else {
+            continue;
+        };
+        let Some(decision) = extract_decision(std::iter::once(rest)) else {
+            continue;
+        };
+        for number in &current {
+            // First decision wins: a topic revisited later in the
+            // same meeting usually restates rather than overturns,
+            // and a chair who did overturn one would say so in a
+            // comment the tool must not silently contradict.
+            out.entry(*number).or_insert_with(|| MeetingDecision {
+                decision: decision.clone(),
+                agreed: rest.trim().to_string(),
+            });
         }
     }
     out
@@ -690,6 +745,73 @@ Meeting summary
         let (selected, rest) = partition_forced(vec![docs_item(28)], &[]);
         assert!(selected.is_empty());
         assert_eq!(rest.len(), 1);
+    }
+
+    /// Shaped on the 2026-10-20 minutes: a topic that was agreed,
+    /// one that only drew an INFO, and one whose agreement decided
+    /// nothing.
+    const MINUTES: &str = "\
+* TOPIC: #3696 Incompatible update exception for gedit (jsmith, 19:05:11)\n\
+  * AGREED: Incompatible update exception for gedit and libgedit-* \
+approved (+6, 0, -0) (jsmith, 19:12:40)\n\
+* TOPIC: #3688 Slow architectures (jsmith, 19:13:02)\n\
+  * INFO: s390x builders gained memory and CPU weight (jsmith, 19:20:11)\n\
+* TOPIC: #3693 Something else entirely (jsmith, 19:31:44)\n\
+  * AGREED: we will revisit this next week (jsmith, 19:40:02)\n\
+";
+
+    #[test]
+    fn extract_decisions_reads_an_agreed_under_its_topic() {
+        let got = extract_decisions(MINUTES);
+        assert_eq!(got.keys().copied().collect::<Vec<_>>(), vec![3696]);
+        let d = &got[&3696];
+        assert_eq!(d.decision, "APPROVED (+6, 0, -0)");
+        assert!(
+            d.agreed.starts_with("Incompatible update exception"),
+            "the verbatim line is kept for the person to check: {}",
+            d.agreed
+        );
+    }
+
+    #[test]
+    fn an_agreement_without_a_verdict_decides_nothing() {
+        // #3693's meeting agreed something, but agreeing to come
+        // back to a ticket must not close it.
+        assert!(!extract_decisions(MINUTES).contains_key(&3693));
+    }
+
+    #[test]
+    fn an_info_line_is_not_a_decision() {
+        assert!(!extract_decisions(MINUTES).contains_key(&3688));
+    }
+
+    #[test]
+    fn an_agreed_before_any_topic_belongs_to_no_ticket() {
+        let out = extract_decisions("  * AGREED: APPROVED (+5, 0, -0) (chair, 19:01:00)\n");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn the_first_decision_on_a_topic_wins() {
+        let minutes = "\
+* TOPIC: #42 A ticket (chair, 19:00:00)\n\
+  * AGREED: APPROVED (+5, 0, -0) (chair, 19:05:00)\n\
+  * AGREED: REJECTED (+0, 0, -5) (chair, 19:06:00)\n\
+";
+        assert_eq!(
+            extract_decisions(minutes)[&42].decision,
+            "APPROVED (+5, 0, -0)"
+        );
+    }
+
+    #[test]
+    fn one_agreement_can_decide_every_ticket_its_topic_names() {
+        let minutes = "\
+* TOPIC: #10 and #11 taken together (chair, 19:00:00)\n\
+  * AGREED: APPROVED (+6, 0, -0) (chair, 19:05:00)\n\
+";
+        let got = extract_decisions(minutes);
+        assert_eq!(got.keys().copied().collect::<Vec<_>>(), vec![10, 11]);
     }
 
     #[test]

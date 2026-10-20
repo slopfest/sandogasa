@@ -778,7 +778,10 @@ impl Client {
         repo: &str,
         index: u64,
     ) -> Result<Issue, Box<dyn std::error::Error>> {
-        let url = format!("{}/api/v1/repos/{owner}/{repo}/issues/{index}", self.base_url);
+        let url = format!(
+            "{}/api/v1/repos/{owner}/{repo}/issues/{index}",
+            self.base_url
+        );
         let resp = self
             .http
             .patch(&url)

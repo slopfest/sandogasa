@@ -64,6 +64,34 @@ fn edit_line(current: &str) -> Result<String, String> {
     })
 }
 
+/// Show `text`, ask `question` about it, and let it be edited
+/// first. `None` is a decline.
+///
+/// Editable because every caller is offering a line the tool
+/// derived -- from a tally, or from a meeting's minutes -- and a
+/// derived line is a suggestion. The person is being asked to
+/// confirm the text, not merely to consent to it being posted.
+fn confirm_text(question: &str, text: &str) -> Result<Option<String>, String> {
+    let mut text = text.to_string();
+    loop {
+        eprintln!("  decision: {text}");
+        eprint!("  {question} [Y/n/e to edit]: ");
+        use std::io::{BufRead, Write};
+        std::io::stderr().flush().map_err(|e| e.to_string())?;
+        let mut line = String::new();
+        std::io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
+        match parse_offer_answer(&line) {
+            Some(Offer::Post) => return Ok(Some(text)),
+            Some(Offer::Skip) => return Ok(None),
+            Some(Offer::Edit) => text = edit_line(&text)?,
+            None => eprintln!("  answer y, n, or e"),
+        }
+    }
+}
+
 /// Offer to announce `decision` on `number`, and do it if accepted.
 ///
 /// `has_vote_label` says whether `vote-in-progress` is there to drop;
@@ -98,27 +126,9 @@ pub fn offer(
         return Ok(Announced::Done(existing.to_string()));
     }
     let question = format!("post this decision and {relabel}?");
-    let mut text = decision.to_string();
-    loop {
-        eprintln!("  decision: {text}");
-        eprint!("  {question} [Y/n/e to edit]: ");
-        use std::io::{BufRead, Write};
-        std::io::stderr().flush().map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?;
-        match parse_offer_answer(&line) {
-            Some(Offer::Post) => break,
-            Some(Offer::Skip) => return Ok(Announced::Skipped),
-            Some(Offer::Edit) => {
-                text = edit_line(&text)?;
-                continue;
-            }
-            None => eprintln!("  answer y, n, or e"),
-        }
-    }
+    let Some(text) = confirm_text(&question, decision)? else {
+        return Ok(Announced::Skipped);
+    };
     if dry_run {
         eprintln!("  would comment on #{number}: {text}");
         eprintln!("  would {relabel}");
@@ -294,6 +304,24 @@ fn fetch_announcement(url: &str) -> Result<String, String> {
     resp.text().map_err(|e| format!("reading {url}: {e}"))
 }
 
+/// The meetbot minutes an announcement links to.
+///
+/// A summary mail carries the minutes it summarises, so the meeting
+/// does not have to be named on the command line or guessed from the
+/// date — and a mail that links no minutes is not a summary, which
+/// is the right reason to do nothing.
+pub fn minutes_url(body: &str) -> Option<String> {
+    const MARK: &str = "https://meetbot.fedoraproject.org/";
+    let at = body.find(MARK)?;
+    let url: String = body[at..]
+        .chars()
+        .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '<')
+        .collect();
+    // The plain-text artefact: the HTML one is a page of markup the
+    // AGREED lines would have to be dug out of.
+    Some(sources::txt_url(&url))
+}
+
 /// The status a ticket is closed with, from what was decided.
 ///
 /// `None` when the decision cannot be read, which is a reason to
@@ -313,6 +341,17 @@ pub fn status_for(decision: &str) -> Option<&'static str> {
 /// The comment recording where the announcement went.
 pub fn announced_comment(url: &str) -> String {
     format!("Announced: {url}")
+}
+
+/// The comment closing a ticket the meeting itself decided.
+///
+/// One comment rather than two: the decision was never posted to
+/// the ticket -- it was said in the meeting -- so the record of
+/// what was decided and the link to where it was announced are the
+/// same act, and splitting them would leave a ticket whose history
+/// reads as two separate events.
+pub fn meeting_decision_comment(decision: &str, url: &str) -> String {
+    format!("{decision}\n\n{}", announced_comment(url))
 }
 
 /// Close out every ticket still tagged `pending announcement`.
@@ -335,36 +374,41 @@ pub fn run(args: &AnnouncedArgs) -> std::process::ExitCode {
 fn assemble(args: &AnnouncedArgs) -> Result<(), Box<dyn std::error::Error>> {
     let client = sources::forge_client()?;
     let mut tickets = sources::pending_tickets(&client)?;
+    // Not an early return on an empty pool: a meeting's own
+    // decisions never pass through `pending announcement`, so
+    // "nothing is tagged" is not "nothing to do" — which is how a
+    // ticket approved at the 2026-10-20 meeting was left open.
     if tickets.is_empty() {
         eprintln!("nothing tagged `{}`", sources::PENDING_LABEL);
-        return Ok(());
     }
     sources::fill_decisions(&client, &mut tickets, args.verbose);
+    // Fetched once: it says both which tickets it names and which
+    // meeting it summarises.
+    let announcement = match fetch_announcement(&args.url) {
+        Ok(body) => Some(body),
+        Err(e) => {
+            eprintln!("warning: {e}");
+            None
+        }
+    };
     // Which tickets this announcement actually names. A decision
     // may be announced in a reply to an earlier announcement, so
     // "everything pending" is not the same set as "everything this
     // link announced", and closing a ticket against a mail that
     // says nothing about it is a falsehood in its own history.
-    let named = if args.all {
-        None
-    } else {
-        match fetch_announcement(&args.url) {
-            Ok(body) => {
-                let found = announced_tickets(&body);
-                if found.is_empty() {
-                    eprintln!(
-                        "warning: {} names no tracker ticket; considering every \
-                         pending one (pass --all to silence this)",
-                        args.url
-                    );
-                    None
-                } else {
-                    Some(found)
-                }
-            }
-            Err(e) => {
-                eprintln!("warning: {e}; considering every pending ticket");
+    let named = match (args.all, announcement.as_deref()) {
+        (true, _) | (_, None) => None,
+        (false, Some(body)) => {
+            let found = announced_tickets(body);
+            if found.is_empty() {
+                eprintln!(
+                    "warning: {} names no tracker ticket; considering every \
+                     pending one (pass --all to silence this)",
+                    args.url
+                );
                 None
+            } else {
+                Some(found)
             }
         }
     };
@@ -379,6 +423,43 @@ fn assemble(args: &AnnouncedArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let interactive = !args.assume_yes && std::io::IsTerminal::is_terminal(&std::io::stdin());
+
+    // Tickets this meeting decided, which never pass through
+    // `pending announcement`: that label means "decided, waiting for
+    // a mail", and the summary of the meeting is their mail. Read
+    // from the minutes the announcement itself links to.
+    let decided = match announcement.as_deref().and_then(minutes_url) {
+        Some(url) => match sources::http_client().get(&url).send() {
+            Ok(resp) => match resp.text() {
+                Ok(text) => sources::extract_decisions(&text),
+                Err(e) => {
+                    eprintln!("warning: reading {url}: {e}");
+                    Default::default()
+                }
+            },
+            Err(e) => {
+                eprintln!("warning: fetching {url}: {e}");
+                Default::default()
+            }
+        },
+        None => Default::default(),
+    };
+    for (number, found) in &decided {
+        if tickets.iter().any(|t| t.number == *number) {
+            continue;
+        }
+        if let Err(e) = offer_meeting_decision(
+            &client,
+            *number,
+            found,
+            &args.url,
+            interactive,
+            args.dry_run,
+        ) {
+            eprintln!("  not closed: {e}");
+        }
+    }
+
     for ticket in &tickets {
         if named.as_ref().is_some_and(|n| !n.contains(&ticket.number)) {
             continue;
@@ -410,7 +491,14 @@ fn assemble(args: &AnnouncedArgs) -> Result<(), Box<dyn std::error::Error>> {
         if interactive && !sandogasa_cli::confirm("record the announcement and close it?", true)? {
             continue;
         }
-        if let Err(e) = record(&client, ticket.number, &args.url, status, args.dry_run) {
+        if let Err(e) = record(
+            &client,
+            ticket.number,
+            &announced_comment(&args.url),
+            &[sources::PENDING_LABEL],
+            status,
+            args.dry_run,
+        ) {
             eprintln!("  not closed: {e}");
         }
     }
@@ -420,35 +508,54 @@ fn assemble(args: &AnnouncedArgs) -> Result<(), Box<dyn std::error::Error>> {
 /// Comment, untag, tag the status, close — in that order.
 ///
 /// The comment first for the same reason as a decision: it is the
-/// record. The label comes off before the close so that a failure
+/// record. The labels come off before the close so that a failure
 /// part-way leaves the ticket visible to the next run rather than
 /// closed and forgotten.
+///
+/// `drop` is the labels to take off, which differ by route: an
+/// announced ticket sheds `pending announcement`, a ticket the
+/// meeting itself decided sheds `vote-in-progress` — and only when
+/// it has one, since removing a label a ticket never carried is an
+/// error the tracker is entitled to raise.
 fn record(
     client: &sandogasa_forgejo::Client,
     number: u64,
-    url: &str,
+    body: &str,
+    drop: &[&str],
     status: &str,
     dry_run: bool,
 ) -> Result<(), String> {
     let (owner, repo) = (sources::TRACKER_OWNER, sources::TRACKER_REPO);
     if dry_run {
-        eprintln!("  would comment: {}", announced_comment(url));
-        eprintln!(
-            "  would untag `{}`, tag `{status}`, and close",
-            sources::PENDING_LABEL
-        );
+        eprintln!("  would comment:");
+        for line in body.lines() {
+            // Not indented when empty: the blank line separating a
+            // decision from its archive link is part of the comment,
+            // and four spaces is not a blank line.
+            if line.is_empty() {
+                eprintln!();
+            } else {
+                eprintln!("    {line}");
+            }
+        }
+        for label in drop {
+            eprintln!("  would untag `{label}`");
+        }
+        eprintln!("  would tag `{status}` and close");
         return Ok(());
     }
     client
-        .create_comment(owner, repo, number, &announced_comment(url))
+        .create_comment(owner, repo, number, body)
         .map_err(|e| format!("commenting on #{number}: {e}"))?;
-    let pending = client
-        .label_ids(owner, repo, &[sources::PENDING_LABEL])
-        .map_err(|e| format!("resolving `{}`: {e}", sources::PENDING_LABEL))?;
-    for id in pending {
-        client
-            .remove_label(owner, repo, number, id)
-            .map_err(|e| format!("untagging #{number}: {e}"))?;
+    for label in drop {
+        let ids = client
+            .label_ids(owner, repo, &[label])
+            .map_err(|e| format!("resolving `{label}`: {e}"))?;
+        for id in ids {
+            client
+                .remove_label(owner, repo, number, id)
+                .map_err(|e| format!("untagging #{number} `{label}`: {e}"))?;
+        }
     }
     let ids = client
         .label_ids(owner, repo, &[status])
@@ -461,6 +568,83 @@ fn record(
         .map_err(|e| format!("closing #{number}: {e}"))?;
     eprintln!("  recorded and closed #{number} as `{status}`");
     Ok(())
+}
+
+/// Close out a ticket the meeting itself decided.
+///
+/// These never pass through `pending announcement`: that label
+/// means "decided in its ticket, waiting for a mail to go out", and
+/// a ticket decided at the meeting is announced by the summary of
+/// that meeting. So nothing tags them, and before this they stayed
+/// open with `vote-in-progress` still on until someone noticed.
+///
+/// The AGREED line is shown verbatim beside the verdict read from
+/// it. The minutes are a transcript of a live meeting -- a chair
+/// can agree two things in one line, or write the tally loosely --
+/// so the person confirms the text rather than the tool asserting
+/// it, and the derived line is only the prepopulated default.
+fn offer_meeting_decision(
+    client: &sandogasa_forgejo::Client,
+    number: u64,
+    found: &sources::MeetingDecision,
+    url: &str,
+    interactive: bool,
+    dry_run: bool,
+) -> Result<(), String> {
+    let (owner, repo) = (sources::TRACKER_OWNER, sources::TRACKER_REPO);
+    let issue = client
+        .issue(owner, repo, number)
+        .map_err(|e| format!("reading #{number}: {e}"))?;
+    // Already closed is the common case: most of a meeting's
+    // tickets were handled when they were discussed. Saying so
+    // beats silence, since a ticket missing from the run's output
+    // otherwise looks like one the minutes failed to parse.
+    if issue.state != "open" {
+        eprintln!(
+            "\n#{number} \u{201c}{}\u{201d}\n  already closed",
+            issue.title
+        );
+        return Ok(());
+    }
+    let Some(status) = status_for(&found.decision) else {
+        eprintln!(
+            "\n#{number} \u{201c}{}\u{201d}\n  AGREED: {}\n  names no status, so it is left open",
+            issue.title, found.agreed
+        );
+        return Ok(());
+    };
+    let has_vote_label = issue.labels.iter().any(|l| l.name == sources::VOTE_LABEL);
+    eprintln!(
+        "\n#{number} \u{201c}{}\u{201d}\n  {}\n  decided at the meeting, never tagged `{}`\n  \
+         AGREED: {}",
+        issue.title,
+        issue.html_url,
+        sources::PENDING_LABEL,
+        found.agreed
+    );
+    let question = format!("close it with `{status}`?");
+    let text = if interactive {
+        match confirm_text(&question, &found.decision)? {
+            Some(text) => text,
+            None => return Ok(()),
+        }
+    } else {
+        eprintln!("  decision: {}", found.decision);
+        found.decision.clone()
+    };
+    let drop: &[&str] = if has_vote_label {
+        &[sources::VOTE_LABEL]
+    } else {
+        &[]
+    };
+    record(
+        client,
+        number,
+        &meeting_decision_comment(&text, url),
+        drop,
+        status,
+        dry_run,
+    )
 }
 
 #[cfg(test)]
@@ -566,7 +750,15 @@ mod tests {
             .with_body(r#"{"number": 3690, "title": "t", "state": "closed"}"#)
             .create();
         let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
-        record(&client, 3690, url, sources::ACCEPTED_LABEL, false).unwrap();
+        record(
+            &client,
+            3690,
+            &announced_comment(url),
+            &[sources::PENDING_LABEL],
+            sources::ACCEPTED_LABEL,
+            false,
+        )
+        .unwrap();
         comment.assert();
         untag.assert();
         status.assert();
@@ -582,7 +774,8 @@ mod tests {
         record(
             &client,
             3690,
-            "https://lists.example/m/",
+            &announced_comment("https://lists.example/m/"),
+            &[sources::PENDING_LABEL],
             sources::ACCEPTED_LABEL,
             true,
         )
@@ -677,6 +870,168 @@ mod tests {
         let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
         let err = tag_meeting(&client, 3696, date, false).expect_err("403 is not success");
         assert!(err.contains("#3696"), "{err}");
+    }
+
+    /// An open ticket the meeting decided, still carrying the vote
+    /// label it was never relieved of.
+    fn open_issue(server: &mut mockito::ServerGuard) -> mockito::Mock {
+        server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues/3696")
+            .with_status(200)
+            .with_body(
+                r#"{"number": 3696, "title": "Incompatible update exception for gedit",
+                     "state": "open",
+                     "html_url": "https://pagure.io/fesco/tickets/issue/3696",
+                     "labels": [{"id": 19, "name": "vote-in-progress"},
+                                {"id": 5, "name": "fast track"}]}"#,
+            )
+            .create()
+    }
+
+    fn decided() -> sources::MeetingDecision {
+        sources::MeetingDecision {
+            decision: "APPROVED (+6, 0, -0)".into(),
+            agreed: "Incompatible update exception for gedit and libgedit-* approved (+6, 0, -0)"
+                .into(),
+        }
+    }
+
+    #[test]
+    fn a_ticket_the_meeting_decided_is_recorded_untagged_and_closed() {
+        let mut server = tracker();
+        let read = open_issue(&mut server);
+        let url = "https://lists.example/archives/message/ABC/";
+        let comment = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/comments")
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "body": format!("APPROVED (+6, 0, -0)\n\nAnnounced: {url}")
+            })))
+            .with_status(201)
+            .with_body(r#"{"id": 3, "body": "x"}"#)
+            .create();
+        // The vote label, not `pending announcement`: it never had
+        // one, and that is the whole reason it was still open.
+        let untag = server
+            .mock(
+                "DELETE",
+                "/api/v1/repos/fesco/tickets/issues/3696/labels/19",
+            )
+            .with_status(204)
+            .create();
+        let status = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/labels")
+            .match_body(mockito::Matcher::Json(serde_json::json!({"labels": [77]})))
+            .with_status(200)
+            .with_body(r#"[{"id": 77, "name": "Status/Accepted"}]"#)
+            .create();
+        let close = server
+            .mock("PATCH", "/api/v1/repos/fesco/tickets/issues/3696")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"state": "closed"}),
+            ))
+            .with_status(200)
+            .with_body(r#"{"number": 3696, "title": "t", "state": "closed"}"#)
+            .create();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        offer_meeting_decision(&client, 3696, &decided(), url, false, false).unwrap();
+        read.assert();
+        comment.assert();
+        untag.assert();
+        status.assert();
+        close.assert();
+    }
+
+    #[test]
+    fn a_ticket_closed_at_the_meeting_is_left_alone() {
+        let mut server = tracker();
+        // No write mock: the server rejects anything unmatched, so
+        // a second pass over an already-handled meeting that wrote
+        // would fail here rather than duplicate a comment.
+        server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues/3696")
+            .with_status(200)
+            .with_body(r#"{"number": 3696, "title": "t", "state": "closed"}"#)
+            .create();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        offer_meeting_decision(&client, 3696, &decided(), "https://x/", false, false).unwrap();
+    }
+
+    #[test]
+    fn a_meeting_decision_naming_no_status_writes_nothing() {
+        let mut server = tracker();
+        open_issue(&mut server);
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        let vague = sources::MeetingDecision {
+            decision: "DEFERRED (+0, 0, -0)".into(),
+            agreed: "deferred to next week (+0, 0, -0)".into(),
+        };
+        offer_meeting_decision(&client, 3696, &vague, "https://x/", false, false).unwrap();
+    }
+
+    #[test]
+    fn a_ticket_without_the_vote_label_has_none_dropped() {
+        let mut server = tracker();
+        server
+            .mock("GET", "/api/v1/repos/fesco/tickets/issues/3696")
+            .with_status(200)
+            .with_body(r#"{"number": 3696, "title": "t", "state": "open", "labels": []}"#)
+            .create();
+        server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/comments")
+            .with_status(201)
+            .with_body(r#"{"id": 3, "body": "x"}"#)
+            .create();
+        server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/labels")
+            .with_status(200)
+            .with_body(r#"[{"id": 77, "name": "Status/Accepted"}]"#)
+            .create();
+        server
+            .mock("PATCH", "/api/v1/repos/fesco/tickets/issues/3696")
+            .with_status(200)
+            .with_body(r#"{"number": 3696, "title": "t", "state": "closed"}"#)
+            .create();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        // A DELETE would go unmatched and fail; that it does not is
+        // the assertion.
+        offer_meeting_decision(&client, 3696, &decided(), "https://x/", false, false).unwrap();
+    }
+
+    #[test]
+    fn the_minutes_come_from_the_summary_as_plain_text() {
+        let body = "Minutes: https://meetbot.fedoraproject.org/fedora-meeting/\
+                    2026-10-20/fesco.2026-10-20-19.00.html\nLog: elsewhere\n";
+        assert_eq!(
+            minutes_url(body).as_deref(),
+            Some(
+                "https://meetbot.fedoraproject.org/fedora-meeting/2026-10-20/\
+                 fesco.2026-10-20-19.00.txt"
+            )
+        );
+    }
+
+    #[test]
+    fn a_summary_linking_no_minutes_names_none() {
+        assert_eq!(minutes_url("FESCo met on Monday. Nothing to see.\n"), None);
+    }
+
+    #[test]
+    fn a_minutes_link_in_html_stops_at_the_quote() {
+        let body = r#"<a href="https://meetbot.fedoraproject.org/x/fesco.html">minutes</a>"#;
+        assert_eq!(
+            minutes_url(body).as_deref(),
+            Some("https://meetbot.fedoraproject.org/x/fesco.txt")
+        );
+    }
+
+    #[test]
+    fn the_meeting_comment_records_the_decision_and_the_link() {
+        let got = meeting_decision_comment("APPROVED (+6, 0, -0)", "https://lists.example/m/");
+        assert!(got.starts_with("APPROVED (+6, 0, -0)"), "{got}");
+        assert!(
+            got.ends_with("Announced: https://lists.example/m/"),
+            "{got}"
+        );
     }
 
     #[test]
