@@ -26,6 +26,26 @@ pub enum Announced {
     Skipped,
 }
 
+/// What an answer to the post-this-decision prompt asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Offer {
+    Post,
+    Skip,
+    Edit,
+}
+
+/// Read one answer. `None` is unrecognized, which re-asks rather
+/// than falling through to the default: the default here writes to
+/// the tracker, so a typo must not be read as consent.
+pub fn parse_offer_answer(line: &str) -> Option<Offer> {
+    match line.trim().to_ascii_lowercase().as_str() {
+        "" | "y" | "yes" => Some(Offer::Post),
+        "n" | "no" => Some(Offer::Skip),
+        "e" | "edit" => Some(Offer::Edit),
+        _ => None,
+    }
+}
+
 /// Read a replacement for `current`, empty keeping it.
 fn edit_line(current: &str) -> Result<String, String> {
     use std::io::{BufRead, Write};
@@ -89,14 +109,14 @@ pub fn offer(
             .lock()
             .read_line(&mut line)
             .map_err(|e| e.to_string())?;
-        match line.trim().to_ascii_lowercase().as_str() {
-            "" | "y" | "yes" => break,
-            "n" | "no" => return Ok(Announced::Skipped),
-            "e" | "edit" => {
+        match parse_offer_answer(&line) {
+            Some(Offer::Post) => break,
+            Some(Offer::Skip) => return Ok(Announced::Skipped),
+            Some(Offer::Edit) => {
                 text = edit_line(&text)?;
                 continue;
             }
-            _ => eprintln!("  answer y, n, or e"),
+            None => eprintln!("  answer y, n, or e"),
         }
     }
     if dry_run {
@@ -182,11 +202,25 @@ pub fn offer_meeting(
     if !sandogasa_cli::confirm(&question, true).map_err(|e| e.to_string())? {
         return Ok(false);
     }
+    tag_meeting(client, number, date, dry_run)?;
+    Ok(true)
+}
+
+/// Say when a ticket will be discussed, and label it accordingly.
+///
+/// Split from the prompt so the writes can be exercised without a
+/// terminal: a mistake here is one made against the live tracker.
+fn tag_meeting(
+    client: &sandogasa_forgejo::Client,
+    number: u64,
+    date: chrono::NaiveDate,
+    dry_run: bool,
+) -> Result<(), String> {
     let body = meeting_comment(date);
     if dry_run {
         eprintln!("  would comment on #{number}: {body}");
         eprintln!("  would tag #{number} `{}`", sources::MEETING_LABEL);
-        return Ok(true);
+        return Ok(());
     }
     let (owner, repo) = (sources::TRACKER_OWNER, sources::TRACKER_REPO);
     client
@@ -202,7 +236,7 @@ pub fn offer_meeting(
         "  commented on #{number} and tagged `{}`",
         sources::MEETING_LABEL
     );
-    Ok(true)
+    Ok(())
 }
 
 /// `announced` — record that the announcement went out.
@@ -432,6 +466,233 @@ fn record(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tracker that answers the label lookup, so the write paths
+    /// can be exercised without one.
+    fn tracker() -> mockito::ServerGuard {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v1/repos/fesco/tickets/labels")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                r#"[{"id": 19, "name": "vote-in-progress"},
+                    {"id": 42, "name": "pending announcement"},
+                    {"id": 61, "name": "meeting"},
+                    {"id": 77, "name": "Status/Accepted"}]"#,
+            )
+            .expect_at_least(1)
+            .create();
+        server
+    }
+
+    #[test]
+    fn announcing_a_decision_comments_then_moves_the_labels() {
+        let mut server = tracker();
+        let comment = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3691/comments")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"body": "APPROVED (+4, 0, -0)"}),
+            ))
+            .with_status(201)
+            .with_body(r#"{"id": 1, "body": "APPROVED (+4, 0, -0)"}"#)
+            .create();
+        let add = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3691/labels")
+            .match_body(mockito::Matcher::Json(serde_json::json!({"labels": [42]})))
+            .with_status(200)
+            .with_body(r#"[{"id": 42, "name": "pending announcement"}]"#)
+            .create();
+        let drop = server
+            .mock(
+                "DELETE",
+                "/api/v1/repos/fesco/tickets/issues/3691/labels/19",
+            )
+            .with_status(204)
+            .create();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        write(&client, 3691, "APPROVED (+4, 0, -0)", true).unwrap();
+        comment.assert();
+        add.assert();
+        drop.assert();
+    }
+
+    #[test]
+    fn a_ticket_without_the_vote_label_has_none_removed() {
+        let mut server = tracker();
+        let add = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/labels")
+            .with_status(200)
+            .with_body(r#"[{"id": 42, "name": "pending announcement"}]"#)
+            .create();
+        // No DELETE is registered, so any attempt to remove a label
+        // fails the test rather than passing unnoticed.
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        relabel_only(&client, 3696, false).unwrap();
+        add.assert();
+    }
+
+    #[test]
+    fn recording_an_announcement_comments_untags_tags_and_closes() {
+        let mut server = tracker();
+        let url = "https://lists.example/archives/message/ABC/";
+        let comment = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3690/comments")
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "body": format!("Announced: {url}")
+            })))
+            .with_status(201)
+            .with_body(r#"{"id": 2, "body": "x"}"#)
+            .create();
+        let untag = server
+            .mock(
+                "DELETE",
+                "/api/v1/repos/fesco/tickets/issues/3690/labels/42",
+            )
+            .with_status(204)
+            .create();
+        let status = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3690/labels")
+            .match_body(mockito::Matcher::Json(serde_json::json!({"labels": [77]})))
+            .with_status(200)
+            .with_body(r#"[{"id": 77, "name": "Status/Accepted"}]"#)
+            .create();
+        let close = server
+            .mock("PATCH", "/api/v1/repos/fesco/tickets/issues/3690")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"state": "closed"}),
+            ))
+            .with_status(200)
+            .with_body(r#"{"number": 3690, "title": "t", "state": "closed"}"#)
+            .create();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        record(&client, 3690, url, sources::ACCEPTED_LABEL, false).unwrap();
+        comment.assert();
+        untag.assert();
+        status.assert();
+        close.assert();
+    }
+
+    #[test]
+    fn a_dry_run_writes_nothing() {
+        // No mock but the label lookup is registered, so any write
+        // at all would fail the request and surface as an error.
+        let server = tracker();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        record(
+            &client,
+            3690,
+            "https://lists.example/m/",
+            sources::ACCEPTED_LABEL,
+            true,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_refused_write_is_reported_and_names_the_ticket() {
+        let mut server = tracker();
+        server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3691/comments")
+            .with_status(403)
+            .with_body("token has no write scope")
+            .create();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        let err = write(&client, 3691, "APPROVED (+4, 0, -0)", true)
+            .expect_err("a refused comment is not a success");
+        assert!(err.contains("#3691"), "{err}");
+        assert!(err.contains("403"), "{err}");
+    }
+
+    #[test]
+    fn tagging_for_the_meeting_says_when_and_labels_it() {
+        let mut server = tracker();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        let comment = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/comments")
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "body": "This issue will be discussed at the next meeting on 2026-10-20"
+            })))
+            .with_status(201)
+            .with_body(r#"{"id": 3, "body": "x"}"#)
+            .create();
+        let label = server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/labels")
+            .match_body(mockito::Matcher::Json(serde_json::json!({"labels": [61]})))
+            .with_status(200)
+            .with_body(r#"[{"id": 61, "name": "meeting"}]"#)
+            .create();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        tag_meeting(&client, 3696, date, false).unwrap();
+        comment.assert();
+        label.assert();
+    }
+
+    #[test]
+    fn a_dry_run_of_the_meeting_tag_writes_nothing() {
+        let server = tracker();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        tag_meeting(&client, 3696, date, true).unwrap();
+    }
+
+    #[test]
+    fn the_announcement_is_fetched_and_its_failures_are_reported() {
+        let mut server = mockito::Server::new();
+        let body = "#3690 Change: Crystal Language\n\
+                    https://forge.fedoraproject.org/fesco/tickets/issues/3690\n";
+        server
+            .mock("GET", "/archives/message/ABC/")
+            .with_status(200)
+            .with_body(body)
+            .create();
+        let text = fetch_announcement(&format!("{}/archives/message/ABC/", server.url())).unwrap();
+        assert_eq!(
+            announced_tickets(&text),
+            std::collections::BTreeSet::from([3690])
+        );
+
+        // A link that 404s is reported rather than read as an
+        // announcement naming nothing, which would widen the run to
+        // every pending ticket.
+        server
+            .mock("GET", "/archives/message/GONE/")
+            .with_status(404)
+            .with_body("no such message")
+            .create();
+        let err = fetch_announcement(&format!("{}/archives/message/GONE/", server.url()))
+            .expect_err("404 is not an announcement");
+        assert!(err.contains("404"), "{err}");
+    }
+
+    #[test]
+    fn a_refused_meeting_tag_names_the_ticket() {
+        let mut server = tracker();
+        server
+            .mock("POST", "/api/v1/repos/fesco/tickets/issues/3696/comments")
+            .with_status(403)
+            .with_body("nope")
+            .create();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        let client = sandogasa_forgejo::Client::new(&server.url(), "tok").unwrap();
+        let err = tag_meeting(&client, 3696, date, false).expect_err("403 is not success");
+        assert!(err.contains("#3696"), "{err}");
+    }
+
+    #[test]
+    fn an_answer_to_the_post_prompt_is_read_strictly() {
+        assert_eq!(parse_offer_answer(""), Some(Offer::Post));
+        assert_eq!(parse_offer_answer(" Y \n"), Some(Offer::Post));
+        assert_eq!(parse_offer_answer("yes"), Some(Offer::Post));
+        assert_eq!(parse_offer_answer("n"), Some(Offer::Skip));
+        assert_eq!(parse_offer_answer("NO"), Some(Offer::Skip));
+        assert_eq!(parse_offer_answer("e"), Some(Offer::Edit));
+        assert_eq!(parse_offer_answer("edit"), Some(Offer::Edit));
+        // Enter posts, so a typo must re-ask rather than be read as
+        // consent to write to the tracker.
+        assert_eq!(parse_offer_answer("yep"), None);
+        assert_eq!(parse_offer_answer("q"), None);
+    }
 
     #[test]
     fn the_status_a_ticket_closes_with_comes_from_its_decision() {

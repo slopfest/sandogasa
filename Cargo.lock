@@ -577,6 +577,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "mockito",
  "reqwest",
  "sandogasa-bugzilla",
  "sandogasa-build",

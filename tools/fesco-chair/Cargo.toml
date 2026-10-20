@@ -29,5 +29,6 @@ tokio = { workspace = true }
 sandogasa-build = { workspace = true }
 
 [dev-dependencies]
+mockito = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["man"] }
 tempfile = { workspace = true }
