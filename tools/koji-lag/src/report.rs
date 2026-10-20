@@ -1201,8 +1201,8 @@ fn render_table(
     if rows.is_empty() {
         return;
     }
-    let columns = if with_attribution { 13 } else { 10 };
-    let headers: [String; 13] = [
+    let columns = if with_attribution { 14 } else { 11 };
+    let headers: [String; 14] = [
         first_column.to_string(),
         // Coverage first, because every column after it is
         // conditioned on how much this architecture was asked to
@@ -1219,13 +1219,18 @@ fn render_table(
         // are not the same tasks.
         "med-total".to_string(),
         "p90-total".to_string(),
+        // p90 over median, on the end-to-end time. How unevenly the
+        // delay falls, in one number: a pool where everyone waits a
+        // little sits near 1, and a high value is the shape a median
+        // alone cannot show.
+        "spread".to_string(),
         "bottleneck".to_string(),
         "med-delay".to_string(),
         "tot-delay".to_string(),
     ];
     let headers = &headers[..columns];
 
-    let mut cells: Vec<[String; 13]> = Vec::new();
+    let mut cells: Vec<[String; 14]> = Vec::new();
     let mut thin: Vec<String> = Vec::new();
     for row in rows {
         let samples = row
@@ -1251,6 +1256,14 @@ fn render_table(
         let (queued, med_wait, p90_wait) = dist(&row.queue_wait);
         let (built, med_time, p90_time) = dist(&row.build_time);
         let (_, med_total, p90_total) = dist(&row.total_time);
+        // Guarded on a positive median: a period whose tasks all
+        // completed instantly has no spread to report, and dividing
+        // would print an infinity.
+        let spread = row
+            .total_time
+            .as_ref()
+            .filter(|t| t.median > 0.0)
+            .map_or_else(|| "-".to_string(), |t| format!("{:.1}x", t.p90 / t.median));
         cells.push([
             row.arch.clone(),
             row.packages.to_string(),
@@ -1262,6 +1275,7 @@ fn render_table(
             p90_time,
             med_total,
             p90_total,
+            spread,
             row.builds_bottlenecked.to_string(),
             row.bottleneck_median_delay
                 .map(fmt_duration)

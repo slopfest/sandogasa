@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### koji-lag: say how unevenly a delay falls, in one number
+
+Every table reported a median and a p90 and left the relationship
+between them to the reader. That relationship is the finding, not a
+detail: FINDINGS.md returns to it repeatedly — "a population median
+will not show this" — and it was still something a person had to
+compute by eye, across a row, for each architecture in turn.
+
+The per-architecture tables gain a `spread` column: p90 over median
+on the end-to-end time. September 2026, official builds:
+
+| arch | med-total | p90-total | spread |
+|---|---:|---:|---:|
+| s390x | 4.6m | 54.7m | **11.9x** |
+| ppc64le | 4.2m | 30.2m | 7.1x |
+| aarch64 | 2.8m | 12.0m | 4.2x |
+| x86_64 | 2.3m | 9.3m | 4.0x |
+| noarch | 1.9m | 2.4m | 1.3x |
+
+The ordering is the concentration story with no interpretation
+needed. A pool where everyone waits a little sits near 1; s390x at
+11.9x is a pool where most builds are fine and a tenth are not, which
+is precisely what a median conceals.
+
+Shown on the end-to-end time rather than wait or build alone, since
+that is what a submitter experienced. A period whose median is zero
+prints `-` rather than an infinity.
+
 ### koji-lag: report the time a submitter actually waited
 
 A report gave queue wait and build time and left the reader to add
