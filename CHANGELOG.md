@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### koji-lag: report the time a submitter actually waited
+
+A report gave queue wait and build time and left the reader to add
+them. They do not add. Medians are not additive, and at p90 the gap
+is wider still, because the tasks that queue longest are not the
+tasks that build longest — the tails compound rather than sum.
+
+Measured on 2026-09 official builds, s390x's p90 wait was 15.0m and
+its p90 build 25.5m, so adding gives 40.5m. **The actual p90 from
+creation to completion was 54.7m** — a 35% understatement, in the
+figure closest to what a person experienced.
+
+The per-architecture tables gain `med-total` and `p90-total`, taken
+over the same population as the build-time columns so all three
+describe one set of tasks. It is worth having for what it says on its
+own: end to end at p90 in 2026-09, s390x was 5.9x x86_64 and ppc64le
+3.2x, while at the median s390x was only 2.0x. A median says "twice
+as slow"; the distribution says a tenth of builds take six times as
+long.
+
+The tables are wider for it — 142 columns where they were 118.
+
 ### koji-lag: report official and scratch builds separately
 
 A queue figure read across both populations is not a fact about an

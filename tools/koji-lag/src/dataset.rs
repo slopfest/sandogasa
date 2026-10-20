@@ -184,6 +184,16 @@ impl TaskRecord {
         Some(self.completion_ts? - self.start_ts?)
     }
 
+    /// Creation to completion: what the submitter actually waited.
+    ///
+    /// Not derivable from the other two. Medians do not add, so
+    /// `median(wait) + median(build)` is not `median(total)`, and at
+    /// p90 the gap is wider still — the slowest waits and the slowest
+    /// builds are not the same tasks.
+    pub fn total_time(&self) -> Option<f64> {
+        Some(self.completion_ts? - self.create_ts)
+    }
+
     /// The dataset key for this record.
     pub fn key(&self) -> String {
         format!("{}:{}", self.instance, self.task_id)

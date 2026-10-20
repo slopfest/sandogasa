@@ -533,6 +533,28 @@ us most.
   the caveat that capacity is Koji's scheduling weight and comparing
   it across architectures assumes the unit means the same on each.
 
+- **Builder capacity as a timeline, not a snapshot.** `host_config`
+  records every revision with its own validity span, precisely so
+  "capacity available on 2025-01-16" is a query rather than a guess —
+  and nothing reports it. s390x saw three bulk reconfiguration days in
+  all of 2026 (06-04, 06-05, 10-07), which is static enough that a
+  reader assumes builders do not change underneath them. They do, and
+  on 2026-10-07 one was added while the per-host average fell.
+
+  Reporting it would also have caught an error made on 2026-10-20:
+  averaging capacity across *all stored revisions* and comparing that
+  with the current ones produced a fictitious 1.65x rise, where the
+  capacity actually in force moved 88.5 to 91.5. A timeline makes that
+  mistake impossible to make.
+
+  The harder lesson is that capacity is the wrong instrument for the
+  thing people most want to know. Koji records no CPU count —
+  `hostinfo` gives capacity, arches and channels — so vCPUs added
+  inside a VM are invisible, which is exactly what IBM and
+  Infrastructure did to s390x in October 2026. Capacity says how much
+  concurrent work a host will accept, never how much machine each
+  build gets. Report the timeline, and say what it cannot see.
+
 - **A tail diverging from its median.** s390x's median wait was flat
   from August to September (51s to 53s) while its p90 more than
   doubled (8.0m to 17.9m). Both numbers are printed; nothing says they

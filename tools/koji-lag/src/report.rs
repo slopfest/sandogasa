@@ -97,6 +97,13 @@ pub struct ArchStats {
     pub queue_wait: Option<DistSummary>,
     /// Seconds building.
     pub build_time: Option<DistSummary>,
+    /// Seconds from task creation to completion — queue and build
+    /// together, which is what the submitter experienced.
+    ///
+    /// Reported because it cannot be reconstructed from the other
+    /// two: medians do not add, and the tasks that wait longest are
+    /// not the tasks that build longest.
+    pub total_time: Option<DistSummary>,
     /// Builds where this arch finished last (their bottleneck).
     pub builds_bottlenecked: usize,
     /// Total seconds this arch finished after the runner-up,
@@ -576,6 +583,7 @@ fn arch_stats_by(
 ) -> Vec<ArchStats> {
     let mut queue: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut build: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut total: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     // Counted over every task the period holds, not only those that
     // reach a distribution: coverage is what was *asked* of an
     // architecture, so a build that failed or was never timed still
@@ -594,6 +602,14 @@ fn arch_stats_by(
             && let Some(time) = task.build_time()
         {
             build.entry(label(task)).or_default().push(time);
+        }
+        // The build-time population, since a task that never ran has
+        // no total to report either — and reusing it keeps the three
+        // columns describing the same set of tasks.
+        if in_build_time_population(task, include_failed)
+            && let Some(time) = task.total_time()
+        {
+            total.entry(label(task)).or_default().push(time);
         }
     }
     let mut all_arches: std::collections::BTreeSet<String> = queue.keys().cloned().collect();
@@ -615,6 +631,7 @@ fn arch_stats_by(
                     .map_or(0, std::collections::BTreeSet::len),
                 queue_wait: queue.get(arch).cloned().and_then(|mut v| summarize(&mut v)),
                 build_time: build.get(arch).cloned().and_then(|mut v| summarize(&mut v)),
+                total_time: total.get(arch).cloned().and_then(|mut v| summarize(&mut v)),
                 builds_bottlenecked: sorted_delays.len(),
                 bottleneck_total_delay: sorted_delays.iter().sum(),
                 bottleneck_median_delay: median(&sorted_delays),
@@ -1184,8 +1201,8 @@ fn render_table(
     if rows.is_empty() {
         return;
     }
-    let columns = if with_attribution { 11 } else { 8 };
-    let headers: [String; 11] = [
+    let columns = if with_attribution { 13 } else { 10 };
+    let headers: [String; 13] = [
         first_column.to_string(),
         // Coverage first, because every column after it is
         // conditioned on how much this architecture was asked to
@@ -1197,13 +1214,18 @@ fn render_table(
         "built".to_string(),
         "med-time".to_string(),
         "p90-time".to_string(),
+        // Creation to completion. Not med-wait + med-time: medians
+        // do not add, and the slowest queues and the slowest builds
+        // are not the same tasks.
+        "med-total".to_string(),
+        "p90-total".to_string(),
         "bottleneck".to_string(),
         "med-delay".to_string(),
         "tot-delay".to_string(),
     ];
     let headers = &headers[..columns];
 
-    let mut cells: Vec<[String; 11]> = Vec::new();
+    let mut cells: Vec<[String; 13]> = Vec::new();
     let mut thin: Vec<String> = Vec::new();
     for row in rows {
         let samples = row
@@ -1228,6 +1250,7 @@ fn render_table(
         };
         let (queued, med_wait, p90_wait) = dist(&row.queue_wait);
         let (built, med_time, p90_time) = dist(&row.build_time);
+        let (_, med_total, p90_total) = dist(&row.total_time);
         cells.push([
             row.arch.clone(),
             row.packages.to_string(),
@@ -1237,6 +1260,8 @@ fn render_table(
             built,
             med_time,
             p90_time,
+            med_total,
+            p90_total,
             row.builds_bottlenecked.to_string(),
             row.bottleneck_median_delay
                 .map(fmt_duration)
