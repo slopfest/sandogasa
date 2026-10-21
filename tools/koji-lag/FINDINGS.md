@@ -19,8 +19,8 @@ F45's was announced across four weeks and submitted in four days.
 hardware, and because they turn out to be each other's control: they reach the
 same utilisation from opposite directions and only one of them queues.
 
-> **Figures regenerated 2026-08-22 against a complete store**, covering
-> 2024-12-24 to 2026-08-19 with no gaps — `koji-lag verify` finds none. Every
+> **Figures regenerated 2026-10-21 against a complete store**, covering
+> 2024-12-23 to 2026-10-20 with no gaps — `koji-lag verify` finds none. Every
 > one comes from `koji-lag report`, `koji-lag events` or their trend files, so
 > re-running those and pasting the tables back is all it takes to refresh
 > them; there are no queries to reconstruct.
@@ -28,6 +28,63 @@ same utilisation from opposite directions and only one of them queues.
 > Filling the February-to-June 2025 hole moved none of the rebuild figures,
 > since both ends of every comparison were already covered. What did move is
 > noted where it appears.
+
+## Errata
+
+What an earlier version of **this document** said, and what replaced it, so
+somebody who read the old version need not diff two revisions to find out
+which numbers moved. Newest first; corrections made inline in earlier rounds
+are noted where they appear rather than repeated here.
+
+Only claims this document actually made are listed. Figures that circulated
+elsewhere — in the ad hoc analysis prepared for the 2026-10-20 meeting, for
+instance — are not corrected here, because a reader of this has no reason to
+think they were ever part of it. Where this revision adds material the
+document did not have before, such as the October measurement, its limits
+are stated where that material appears rather than as an erratum against
+something never published.
+
+### 2026-10-21
+
+- **"Limiting s390x to ELN and EPEL frees 77.7% of its builder hours."** Now
+  **47-73%**. ELN is built from the Rawhide branch of dist-git, so a package
+  cannot build for ELN on s390x while being dropped from Rawhide: the
+  Rawhide builds of the 1,278-package ELN set have to stay too, and they are
+  2,031 of s390x's 4,571 builder hours in September 2026. Caught by
+  gotmax23. The comparison against hardware (~4.8x the fleet) is withdrawn
+  with it — at 47-73% the two levers are much closer than the old figure
+  implied.
+
+- **"Roughly 43% of the architecture's builder time produced nothing or
+  hung."** Now **15.3%**. That number added genuine waste (failed and
+  cancelled tasks) to the 27.2% spent on tasks over six hours, which are not
+  hangs: on s390x they are `llvm`, `gcc`, `vtk`, `webkitgtk`, `root` and
+  `libreoffice`, the largest packages in the distribution. They remain a
+  problem — they crowd out short builds — but they are not recoverable waste
+  and should never have been counted as such. The tool's own warning still
+  phrases this as a hang check and section 4a now says not to read it that
+  way.
+
+- **"What no amount of capacity will fix."** The section argued there were
+  two harms, service time and the rebuild queue, and concluded that in an
+  ordinary month s390x "needs nothing". There are three. The missing one is
+  that a few enormous builds occupy a small fleet and ordinary builds wait
+  behind them: in September 2026, 131 tasks (0.9%) took 48% of s390x's
+  capacity-hours while the 14,067 builds under an hour took 15%. Capacity
+  helps that one, and routing helps it more cheaply.
+
+- **"In an ordinary month s390x needs nothing."** It does. The claim read a
+  monthly-average utilisation of 0.41-0.49 and a median queue wait of a
+  minute, and both are true. Split out scratch builds and **one in seven
+  waits over ten minutes** in a month with no rebuild — on 17 of 31 days,
+  across 11 submitters — against one in 172 on ppc64le. The median was the
+  same on every architecture, which is what made it useless here.
+
+- **The capacity arithmetic is now conditional.** "+9 to +13 builders" means
+  more *guests*: every s390x builder is a `buildvm-`, not a `buildhw-`. If
+  they are guests on one mainframe with no headroom, adding them raises
+  Koji's `capacity` and subdivides the same cores, improving utilisation on
+  paper while no build finishes sooner. See Q1-Q3.
 
 ## 0. The two architectures, side by side
 
@@ -38,18 +95,31 @@ from a speed problem:
 |:--|--:|--:|--:|--:|
 | s390x utilisation | 0.54 | 0.72 | 0.78 | **1.19** |
 | s390x rebuild wait, median | 0.0h | 1.9h | 4.2h | **3.8h** |
+| s390x rebuild wait, p90 | 8m | 5.1h | 7.8h | **8.3h** |
 | ppc64le utilisation | 0.41 | 0.81 | 0.88 | **1.23** |
 | ppc64le rebuild wait, median | 0.0h | 0.0h | 0.1h | **0.1h** |
+| ppc64le rebuild wait, p90 | 1m | 1.2h | 40m | **54m** |
+
+The p90 rows are in the table rather than the prose because the medians
+alone invite the reading this document spends section 1 arguing against:
+ppc64le's median says it never queues, and its p90 says a tenth of its
+rebuild waits the better part of an hour. Both rows are the same
+architecture in the same week.
 
 ppc64le reaches *higher* utilisation than s390x in three of the four windows
-while its rebuild's **median** wait stays in single-digit minutes. Its p90 is
-not nothing — 54 minutes at F45 against s390x's 8.3 hours — so the contrast is
-an order of magnitude rather than an absence of queueing. During F45:
+while its rebuild's **median** wait stays in single-digit minutes, and its
+p90 stays an order of magnitude below s390x's. The contrast is a difference
+of degree, then, not an absence of queueing on one side. During F45:
 
-| | mean task weight | mean service time | concurrency sustained | capacity | hosts |
+| | mean task weight | mean service time | concurrency sustained | capacity | builders |
 |:--|--:|--:|--:|--:|--:|
 | ppc64le | 3.01 | **5.6m** | 21.7 | 58 | 29 |
 | s390x | 3.38 | **10.8m** | 26.3 | 92 | 19 |
+
+("Builders", not hosts: Koji's `host` is whatever runs kojid, and on both
+architectures that is a guest — `buildvm-`, never `buildhw-`. How many
+machines are behind those 29 and 19 is not something Koji records, and it
+matters enough to be Q1 and Q4 for infrastructure.)
 
 The weights are nearly the same, so this is not an accounting artefact:
 **ppc64le clears a task in half the time, so the same utilisation drains
@@ -188,7 +258,7 @@ Fedora's C flags):
 On s390x the two multiply: 1.16 × 1.31 = 1.52, against the 1.53x measured.
 
 **Capacity did not stand still — which makes it worse, not better.** s390x
-went from 57 weight across 26 hosts in January 2024 to 96 across 20 that
+went from 57 weight across 26 builders in January 2024 to 96 across 20 that
 December, including a March consolidation onto fewer, larger builders. F42
 ran on that new headroom at 54% utilisation and never queued. The regression
 then consumed the entire increase within six months. Meanwhile ppc64le lost
@@ -355,17 +425,56 @@ the distribution a build targeted:
 
 | arch | fedora | eln | epel |
 |:--|--:|--:|--:|
-| s390x | 77.7% | 19.7% | 2.6% |
-| ppc64le | 79.9% | 5.6% | 14.6% |
+| s390x | 90.2% | 4.7% | 5.1% |
+| ppc64le | 82.9% | 0.8% | 16.4% |
 
-(July 2026. s390x is ELN-heavy and EPEL-light; ppc64le is the reverse.)
+(September 2026, a month with no rebuild. s390x is ELN-heavy relative to its
+peers and EPEL-light; ppc64le is the reverse. The split moves with the
+calendar — July 2026 read 77.7 / 19.7 / 2.6 for s390x because F45's rebuild
+and the ELN resync that follows it both land in that month — so a scope
+argument should rest on an ordinary month rather than on whichever one is to
+hand.)
 
-So limiting s390x to ELN and EPEL would free **77.7%** of its builder hours
-and take utilisation from 0.72 to roughly 0.15. Reaching the same figure by
-hardware needs about **4.8x** the present fleet — 96 units of weight to
-about 460. The two are not close, and that is the point: this is a policy
-decision about whether s390x remains a Fedora architecture, not an efficiency
-measure, and it should be argued as one.
+Read naively, limiting s390x to ELN and EPEL frees 90% of its builder hours.
+**It does not, and the reason is packaging rather than arithmetic.** ELN is
+built from the Rawhide branch of dist-git: the same spec, the same sources.
+You cannot keep a package building for ELN on s390x while dropping it from
+Rawhide, so the work that must stay is ELN, plus EPEL, plus *the Rawhide
+builds of every package ELN needs*. (Thanks to gotmax23 for catching this.)
+
+Priced on the store rather than estimated — September 2026, successful
+`buildArch` tasks, against an ELN package set of 1,278 packages taken over
+twelve months:
+
+| what | tasks | builder hours |
+|:--|--:|--:|
+| Rawhide/fN, package not in ELN | 8,589 | 2,153 |
+| **Rawhide/fN, package in ELN** | 2,914 | **2,031** |
+| EPEL | 1,938 | 240 |
+| ELN | 384 | 147 |
+
+So the lever is worth between **47% and 73%** of s390x's builder hours, not
+90%:
+
+- Keep everything those 1,278 packages need: 2,418 hours of 4,571 stay, and
+  **47%** is freed.
+- Keep only their *official* Rawhide builds, dropping scratch: 1,232 hours
+  stay and **73%** is freed. The spread is scratch builds — 924 of the 2,031
+  hours — and whether maintainers still need to test those packages on s390x
+  is a policy question, not a measurement.
+
+Two things make the Rawhide half larger than it looks. ELN packages are
+**2.8x more expensive per build** than the rest — 21% of the tasks and 44%
+of the hours — which is what the RHEL content set is: toolchains and base
+libraries. And a package is built in Rawhide far more often than in ELN,
+2,914 times against 384 for the same set, so an estimate of "ELN work,
+doubled" understates the real figure by an order of magnitude.
+
+This still leaves scope as a larger lever than any plausible hardware
+purchase, and it is still a policy decision about whether s390x remains a
+Fedora architecture rather than an efficiency measure. But at 47-73% rather
+than 90% the two are closer than this document used to claim, and the
+argument has to be made on its merits rather than on the ratio.
 
 Trend: ELN and EPEL together were 11.9% of s390x's builder hours in 2025-Q1
 and 21.3% in 2026-Q3, so the Fedora share is falling slowly on its own.
@@ -403,6 +512,88 @@ with how many builds it takes to be counted, and the share barely does.
 Inside F45's rebuild window, 26 of the 28 hour-plus waits fell on a single
 person.
 
+### What the October 2026 LPAR work moved
+
+In early October 2026 the s390x builders were given more memory, more vCPUs
+and a higher LPAR CPU weight (infra#13141, fesco#3688, CLE-6650). This is
+the first intervention in this document's range with a measurable before and
+after, and the first evidence that any of it is fixable.
+
+**Koji could not see the change at all.** Fleet `capacity` was 90.5 in
+September and 90.5 in October. Koji records a guest's scheduling weight, not
+how much machine is behind it, so vCPUs added inside a VM are invisible —
+which is the same blindness that makes Q1-Q3 worth asking.
+
+Measured as a natural experiment: twelve days either side, 25 September to
+6 October against 8 to 19 October with the 7th dropped as the transition,
+official builds only, each package paired within its own build and banded by
+how long x86_64 took. Both other architectures serve as controls, so
+anything fleet-wide cancels.
+
+Each cell is that architecture's time for a package over x86_64's time for
+the same build, before and after, with the change beside it. **Every
+architecture improved**, because all three are measured against an x86_64
+that itself got slower — so the question is not whether s390x improved but
+whether it improved by more than the architectures that got no new hardware.
+
+| band | s390x | aarch64 (control) | ppc64le (control) |
+|:--|--:|--:|--:|
+| <5m | 1.13x → 0.95x (**0.84**) | 1.18x → 1.09x (0.92) | 1.61x → 1.47x (0.91) |
+| 5-30m | 2.11x → 1.49x (**0.71**) | 1.27x → 1.13x (0.89) | 1.64x → 1.38x (0.84) |
+| 30-60m | 2.79x → 2.03x (**0.73**) | 1.22x → 1.08x (0.89) | 1.59x → 1.73x (1.09) |
+| >1h | 1.71x → 1.20x (**0.70**) | 1.12x → 1.01x (0.90) | 1.50x → 1.00x (0.67) |
+
+The s390x-specific part is what is left after dividing out the control's own
+change. In the 5-30m band s390x improved by a factor 0.71 where aarch64
+improved by 0.89, so 0.71 ÷ 0.89 = 0.80 — a **20%** improvement that the
+control does not account for. Against ppc64le the same band gives 0.71 ÷
+0.84 = 0.85, or **15%**.
+
+Across the four bands that calculation yields 9%, 20%, 18% and 22% against
+aarch64, and 8%, 15%, 33% and -4% against ppc64le: **roughly 10-20%
+s390x-specific**, present in every band and somewhat larger on longer
+builds, which is what added vCPUs should do — they help a parallel compile
+and do nothing for a short one.
+
+The two controls agree closely except in the bands where they are thinnest.
+ppc64le's 30-60m cell went the *wrong way* (1.09) on 29 paired packages, and
+its >1h cell improved more than s390x did on 16, which is why those two
+rows disagree so widely and why no single band should carry the claim.
+
+> **The median improved and the tail did not.** On a fixed panel of the
+> 1,026 packages s390x built in both September and October, its median build
+> fell 5.1m to 4.7m while its **p90 rose 65.8m to 71.3m**. A median-only
+> reading of October therefore says the architecture got faster, and the
+> people whose builds sit in that p90 — the 7 of 47 regular submitters
+> section 2 identifies — had a worse month. Both statements come from the
+> same data and the median is the one that misleads, which is the warning
+> this document has been making since section 1: *the median describes an
+> experience nobody had.*
+
+That is the first thing to say about October, because it is the thing most
+easily got wrong: a quick pass over median build times shows improvement
+everywhere and invites the conclusion that the problem is solved.
+
+Two further things the measurement does **not** support, each of which an
+earlier reading of the same data did claim:
+
+- **The raw improvement is mostly not s390x's.** Every architecture's ratio
+  against x86_64 fell in October, because x86_64 itself got slower — its
+  median build went 1.4m to 1.6m and its p90 4.7m to 5.7m. A ratio whose
+  denominator is drifting is not a measurement of its numerator, and the
+  s390x-specific part is only what survives differencing against a control.
+- **No single headline figure survives.** The ad hoc analysis prepared for
+  the 2026-10-20 meeting put the long-build penalty at 3.18x falling to
+  2.29x. That number came from a comparison contaminated by SRPM tasks on
+  the reference side and is not reproducible now that compiles are paired
+  with compiles. It was never part of this document, and should not be
+  quoted from those working notes either.
+
+And the honest limits: n is 12 to 17 in the long bands, so the >1h row
+disagrees between the two controls and cannot carry the claim by itself;
+twelve days either side is short; and the gap **narrowed rather than
+closed** — s390x remains roughly twice x86_64 on a build of any length.
+
 ## 3. Recommended capacity
 
 **"Enough capacity" and "no longer the blocker" are two different asks, and
@@ -419,16 +610,21 @@ within a percent, so this is headroom and not throughput.
 | July 2026 | 45.2 | 0.49 | — (27 spare) | — (16 spare) |
 | **F45 rebuild** | **94.7** | **1.04** | **+44** | **+66** |
 
-In an ordinary month s390x needs **nothing**: it runs at 0.41 to 0.49, well
-under the knee, and its queue wait is a minute. The queue is a *mass rebuild*
-problem and only that. Clearing it needs +44 weight units to reach 0.70 or
+On a monthly average s390x looks comfortable in an ordinary month: 0.41 to
+0.49, well under the knee, with a median queue wait of a minute. An earlier
+version of this section concluded from that that an ordinary month "needs
+nothing" and that the queue was a mass-rebuild problem and only that. The
+next subsection shows that it is not, and the reason the average missed it
+is the reason averages usually do.
+
+Clearing the *rebuild* queue needs +44 weight units to reach 0.70 or
 +66 to reach 0.60 — about +48% to +73% of the fleet, or +9 to +13 builders at
 4.9 weight each — which would then sit at 0.4 utilisation for the other
 eleven months.
 
 In machines rather than weight: s390x runs **19 builders averaging 4.82
 weight each** (range 1.5 to 6.0), so 0.70 means going to **28** and 0.60 to
-**33**. For comparison ppc64le runs 29 builders at 2.0 each — Z hosts are
+**33**. For comparison ppc64le runs 29 builders at 2.0 each — Z builders are
 individually about 2.4x the weight, which is why s390x has more capacity than
 ppc64le from two thirds as many machines.
 
@@ -452,7 +648,60 @@ ppc64le is in the same position for a different reason: 63.5 offered against
 throughput but short of what it used to have — 58 weight against 132 in
 mid-2025 is a 56% reduction that nobody appears to have revisited.
 
-### What no amount of capacity will fix
+### The ordinary month is not fine: look at scratch builds alone
+
+Split the two populations and an ordinary month stops looking comfortable.
+September 2026 had no mass rebuild. Scratch builds, queue wait:
+
+| arch | packages | median wait | p90 wait | p90 end-to-end | spread |
+|:--|--:|--:|--:|--:|--:|
+| **s390x** | 990 | 53s | **27.7m** | **2.9h** | **20.7x** |
+| ppc64le | 24,046 | 58s | 1.8m | 7.9m | 2.7x |
+| aarch64 | 24,099 | 54s | 1.1m | 5.8m | 2.5x |
+| x86_64 | 24,143 | 54s | 1.1m | 4.1m | 2.2x |
+
+Every architecture has the same median — 53 to 58 seconds — and that median
+is what "an ordinary month is fine" was reading. The p90 is fifteen times
+the next architecture's, and the end-to-end p90 is 2.9 hours for a build
+somebody is sitting and waiting for.
+
+Counted as a frequency rather than a percentile, in that one month:
+
+| arch | scratch tasks | waited over 10m | share | days it happened on |
+|:--|--:|--:|--:|--:|
+| **s390x** | 3,505 | 500 | **14.3%** | **17 of 31** |
+| ppc64le | 138,340 | 801 | 0.58% | 21 |
+| x86_64 | 142,240 | 10 | 0.01% | 8 |
+| aarch64 | 140,711 | 3 | 0.00% | 2 |
+
+**One scratch build in seven waits more than ten minutes on s390x**, against
+one in 172 on ppc64le and one in fourteen thousand on x86_64. It is not one
+bad day and not one person: those 500 waits fall on 17 of the month's 31
+days and belong to 11 different submitters.
+
+Why the monthly utilisation figure of 0.40 does not show this is the point
+of the whole section. A month-average says how much of the fleet was busy
+*on average*; it cannot say whether the pool was full at the moment your
+build arrived, and with 16 builders serving an architecture where a handful
+of concurrent long builds is a large fraction of the pool, "full at that
+moment" happens on most days without troubling the average.
+
+Scratch is where it shows first for two reasons. These are the builds a
+person is waiting on interactively, so the wait is felt rather than
+absorbed. And they arrive in bursts — a maintainer testing a change fires
+several at once — which is exactly the arrival pattern an average smooths
+away.
+
+**The two populations are not separately provisioned, whatever this document
+used to imply.** All 16 s390x builders that served official builds in
+September also served scratch ones. They are the same pool and they compete,
+so a scratch build waits behind an official build and vice versa.
+
+This does not change the rebuild arithmetic above, which is about a
+different and larger problem. What it changes is the claim that there is no
+problem for the other eleven months of the year.
+
+### What capacity fixes, and what it cannot
 
 Being the last architecture to finish is a property of **service time**, and
 builders do not make a single build faster. In June 2026, with s390x at 0.41
@@ -471,10 +720,53 @@ finish last by minutes instead of by hours, which is the state ppc64le is
 already in: it comes last for 83.6% of builds in a quiet month and nobody
 notices, because the spread is 0.0h at the median.
 
-That is the honest answer to "what makes it stop being the blocker": **for
-the queue, +44 to +66 weight during rebuilds; for the wall clock, nothing you
-can order.** The wall clock needs the 2.8x baseline gap and the 1.24-1.66x
-regression since F42 investigated as platform faults.
+But "capacity will not fix it" is two answers run together, and splitting
+them matters because they have different fixes. There are **three** harms
+here, not two:
+
+1. **Each build is slower.** A property of service time; builders do not
+   make a single build faster, and nothing you can order will change it.
+   This is the 2.8x baseline gap and the 1.24-1.66x regression since F42,
+   and it needs investigating as a platform fault.
+2. **Builds queue behind each other under bulk load.** This is the rebuild
+   problem, it is what utilisation measures, and capacity is exactly the
+   right instrument: +44 to +66 weight units during rebuilds.
+3. **A few enormous builds occupy a small fleet, and ordinary builds wait
+   behind them.** This is the one the section used to miss by saying an
+   ordinary month "needs nothing", and it is the harm a maintainer actually
+   meets. In September 2026, a month with no rebuild, **131 tasks — 0.9% of
+   the architecture's work — took 48% of its capacity-hours, while the
+   14,067 builds under an hour took 15%.** The fleet an ordinary short build
+   competes for is a fraction of the nominal one. Utilisation averaged over
+   a month cannot see this; it is a property of what the pool is doing at
+   the moment your build arrives.
+
+Capacity helps the second and third and not the first. And the third has a
+lever the other two do not: **routing**, which costs nothing. Fedora already
+has the mechanism — a `heavybuilder` channel exists and on s390x is served
+by `buildvm-s390x-20` at capacity 1.5, low enough to take roughly one task
+at a time, which looks like exactly this idea already implemented. In
+September it ran 45 tasks while 109 of the architecture's 122 builds over
+six hours ran on `default` and `ci`. Whether that is a list needing
+revisiting or a deliberate choice we cannot see is Q8 in the questions
+section; it is not something to conclude from task records.
+
+**A caveat that may undo the arithmetic above.** The weight figures assume a
+builder is a machine. Every s390x builder is a guest — `buildvm-`, not
+`buildhw-` — so "+9 to +13 builders" means more guests, and whether that is
+more *hardware* depends on the LPAR they sit in and whether the mainframe
+has headroom. If it does not, adding them raises Koji's `capacity` and
+subdivides the same cores: utilisation would improve on paper and no build
+would finish sooner. Koji cannot answer this, which is why it is Q1-Q3 for
+infrastructure, and the capacity ask should be read as conditional on
+those answers.
+
+Routing is likewise bounded by the same unknown. Sending long builds to
+their own guest stops short builds *queueing* behind them, and does not stop
+them *contending* for the machine underneath: IBM documents partitions
+interfering through the CEC-wide memory cache even when defined as
+dedicated. The scheduling half is free; the contention half is not ours to
+fix.
 
 ### On reducing the other architectures' builders
 
@@ -539,15 +831,29 @@ capacity ask should rest on.
 
 ### Cheaper than either, and larger
 
-In June 2026, a quiet month, s390x spent **27.2% of its builder time on 140
-tasks that ran over six hours** and **15.3% on tasks that failed or were
-cancelled**. Roughly 43% of the architecture's builder time produced nothing
-or hung — which is *more* than the entire +48% the rebuild queue needs.
+In June 2026, a quiet month, s390x spent **15.3% of its builder time on
+tasks that failed or were cancelled**. That is pure loss, it needs no
+hardware to recover, and it is a large fraction of the +48% the rebuild
+queue needs.
+
+An earlier version of this section added to it the **27.2% spent on 140
+tasks running over six hours**, and called the sum of the two "builder time
+that produced nothing or hung". That was wrong, and worth stating plainly
+because the tool's own warning makes the same mistake — it fires on absolute
+duration and tells the reader to check for hangs. The long tasks are not
+hangs. In September 2026 they were `llvm` (43 tasks, 340 builder-hours),
+`gcc`, `vtk`, `llvm22`, `webkitgtk`, `root`, `libreoffice` and `cross-gcc`:
+the largest packages in the distribution, doing exactly what they are
+supposed to do. Counting them as waste sends somebody looking for a fault
+that is not there.
+
+They are still a problem, but a different one — they crowd out short builds,
+which is harm 3 above, and the answer is routing rather than recovery.
 
 **So the order of operations is:**
 
-1. **Hangs and failures.** ~43% of builder time in a quiet month, no hardware
-   required. Details below.
+1. **Failures and cancellations.** 15.3% of builder time in a quiet month,
+   no hardware required. Details below.
 2. **Rebuild burst capacity**, +44 to +66 weight units for about four days,
    twice a year — or pace the rebuild instead.
 3. **The service-time regression**, which is what actually makes s390x the
@@ -609,7 +915,7 @@ utilisation 0.78, above the 0.7 line" without anybody running a query.
 | the same, against a rust control population | divergence between the two | separates platform from compiler cost |
 | straggler share: which arch finished each multi-arch build last | one arch above 50% | the fleet property no per-arch row shows |
 | wasted builder-hours (failed + cancelled) | above 10% | pure loss, cheapest to recover |
-| long-build tail share (tasks over 6h) | above 15% | catches hangs while they are few |
+| long-build tail share (tasks over 6h) | above 15% | what crowds the pool — *not* a hang detector, see below |
 | per-class queue wait, never aggregated | maintainer p90 above 10m | the contributor-experience number |
 | the same split by submitter volume (top 10 / next 40 / rest) | top-10 p90 above 20m, or above 5x the next cohort | a population median hid this entirely for eighteen months |
 | single-arch stall events, congestion or outage | any outage | an event, not a trend |
@@ -617,8 +923,18 @@ utilisation 0.78, above the 0.7 line" without anybody running a query.
 Every one of these must be *per class*: a single aggregated utilisation
 figure is how the original "60,000 delay-hours" mistake happened.
 
-**All of the above are now implemented**, with two corrections that only
+**All of the above are now implemented**, with three corrections that only
 appeared once they ran against real data.
+
+The long-build tail share is **not a hang detector**, though the warning it
+emits says to check for hangs and this document used to read it that way. On
+s390x those tasks are `llvm`, `gcc`, `vtk`, `webkitgtk`, `root` and
+`libreoffice` — the largest packages in the distribution, behaving normally.
+The metric is worth keeping because those builds crowd out short ones (harm
+3 in section 3), which is a real problem with a different fix; but phrased
+as a hang warning it sends a reader after a fault that is not there, and
+the threshold should be read as "this pool is dominated by a few builds",
+never as "something is stuck".
 
 The rust control keys on the `rust-` name prefix rather than on
 `BuildRequires`, which keeps the report self-contained and is accurate enough
@@ -652,6 +968,116 @@ to 0.16.
 
 Everything else infrastructure could tell us is a question rather than a
 feed, and those are collected below.
+
+## 5. Judging an architecture, and reducing what it costs
+
+Everything above is about one architecture because that is where the
+question came from. The method is not about s390x at all, and the useful
+output of this work is probably a way to ask the question of **any**
+architecture — riscv64 on the way up, anything at all on the way down —
+without each occasion starting from scratch and arriving at a different
+answer.
+
+### 5a. What to measure before promoting or demoting one
+
+Six numbers, all computable from a `koji-lag` store with no new collection,
+and all of which this document got wrong at least once before getting right:
+
+| measure | what it answers | the trap |
+|:--|:--|:--|
+| same-package ratio against a reference, **banded** by the reference's time | how much slower per build | a single unbanded ratio describes no build that ran |
+| straggler share and marginal delay | how often it holds up everybody else, and by how long | a share without the delay beside it says nothing about cost |
+| utilisation **per builder pool** | whether it queues | per-architecture utilisation counts shared hosts twice |
+| coverage: distinct packages built | what it is actually asked to build | koschei and mass rebuilds swamp it |
+| failed and cancelled share | what it wastes | — |
+| spread (p90 over median) | whether the typical case describes anybody | a median alone always says the architecture is fine |
+
+The thresholds this data supports are weaker than the measurements. **Below
+about 0.6 utilisation waits are minutes and above about 0.7 they are hours**
+is the one real anchor, and even that comes from four rebuilds with a
+non-monotone ordering. A same-package ratio and a straggler share have no
+natural line: they are comparisons between architectures Fedora has already
+decided to carry, so the honest form of the question is "is this one an
+outlier among its peers, and is it getting better or worse" rather than "is
+it under 2.0x".
+
+**How** to measure matters more than the thresholds, because every number
+here was first computed wrongly:
+
+- Pair on the **build**, never on the package name over a window — the same
+  NEVR differing only in architecture.
+- Compare **compiles with compiles**. The source rebuild is a checkout, and
+  on whichever architecture the hub happens to pick.
+- Report **per class**. koschei is most of the task count and almost none of
+  the experience; CI, mass rebuilds and maintainer builds have different
+  priorities and different meanings when they are slow.
+- **Say whether the window contains a mass rebuild**, and never compare one
+  that does against one that does not.
+- Quote **median and p90 together**, always.
+
+### 5b. How often, and what a cadence has to survive
+
+Measure every release cycle, decide on several.
+
+One cycle is not evidence: a rebuild lands in some months and not others, an
+outage can own a fortnight, and this document has twice mistaken an artefact
+for a trend on a single-period comparison. **Three consecutive cycles moving
+the same way** is the weakest claim worth acting on, which at Fedora's
+cadence is about eighteen months.
+
+That is also roughly the granularity hardware moves at, and the two should
+be read together rather than separately. A fleet is replaced or
+reconfigured on a multi-year cycle, so an architecture can be measurably
+worse for a year because its hardware is at the end of its life and
+measurably better the month after it is replaced — which is precisely what
+October 2026 looks like here. An evaluation that lands at the wrong point in
+that cycle will be confidently wrong. So: re-measure after any known
+hardware or hypervisor change, treat the first cycle after one as
+establishing a new baseline rather than as a data point in the old series,
+and record what changed and when, because `capacity` will not show it.
+
+**Promotion and demotion are not symmetric and should not share a bar.**
+Promotion is a commitment to build everything, so it wants evidence across
+at least one mass rebuild — the only window where an architecture is asked
+for the whole distribution at once, and the only one where coverage and
+queueing are tested together. Demotion takes something away from people
+already relying on it, so it wants a longer horizon, a named alternative
+and a migration period; it should also distinguish *this architecture is
+slow* from *this architecture is holding up everybody else*, because the
+second has remedies in section 5c that do not involve demoting anything.
+
+### 5c. Lessening the pain without changing the hardware
+
+Two of these are not about builders at all, and both came out of the
+2026-10-20 discussion rather than this data. The data sizes them.
+
+**Do not gate every check on the slowest architecture.** A build is finished
+when its slowest architecture finishes, so anything waiting on "the build"
+waits on the worst case. During F45's rebuild, builds spent a median **4.0
+hours** with every architecture but s390x already done; across all work in
+that week, when s390x is last the others have been waiting a median **3.6
+hours**. Checks that are per-architecture by nature — installability,
+rpminspect — could run against each architecture's result as it lands
+rather than against the build as a whole, which would give a maintainer
+almost all of the signal in a fraction of the time. Whether Fedora CI can
+express that today is a question for the people who own it, not a claim
+that it cannot.
+
+**Stop paying for runs nobody is waiting for.** CI is a large consumer and
+a disproportionate one: in September 2026 it was **1,291 builder-hours on
+s390x, 28% of the architecture's total**, from 2,193 tasks — fewer tasks
+than x86_64 ran (2,745) for 2.3x the builder time. Of those, **25 were
+cancelled**, about 1%. So when a pull request lands, or is superseded by a
+new push, the run it obsoletes appears to burn to completion. Cancelling
+superseded runs would return capacity to the architecture that can least
+afford to spend it, and needs no hardware, no policy change about what
+Fedora builds, and nobody's permission but the CI system's.
+
+Both are worth more on s390x than anywhere else for the same reason
+everything in this document is: the costs are multiplied by a service time
+two to three times its peers'. That also means both get *less* valuable if
+the service-time gap closes, which is the right order of preference — fix
+the platform, and these stop mattering.
 
 ## Questions for Fedora Infrastructure
 

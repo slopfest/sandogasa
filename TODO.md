@@ -547,16 +547,35 @@ a standing property of a fleet, not a one-off, and the report should
 answer them without anyone writing SQL. Listed in the order they cost
 us most.
 
-- **Coverage, per architecture, month over month.** s390x stopped
-  building about 90% of the distribution between 2025-07 and 2025-09
-  — 23,733 distinct packages a month down to 2,459, while ppc64le and
-  x86_64 held at ~24,500 throughout — and **nothing in thirteen months
-  of reports said so**. A `COUNT(DISTINCT package)` per arch per
-  period, with the change against the previous period, would have
-  caught it the first month. This is the single most valuable addition
-  here: every lag figure is conditioned on what an architecture is
-  being asked to build, and a report that does not state the
-  denominator invites exactly the comparison that misleads.
+- **Coverage, per architecture, month over month.** Still worth
+  having — every lag figure is conditioned on what an architecture is
+  asked to build, and a report that does not state its denominator
+  invites exactly the comparison that misleads. But **the example
+  that motivated it was itself that mistake**, and the correction is
+  the design requirement.
+
+  The claim was that s390x stopped building about 90% of the
+  distribution between 2025-07 and 2025-09, 23,733 distinct packages
+  a month down to 2,459. Both ends are artefacts. 2025-07 contains
+  F43's mass rebuild (2025-07-23..26), which is the trap the last
+  bullet in this very list describes; and koschei was switched off on
+  s390x between 2025-08 and 2025-09 — 7,127 tasks that August, 14
+  that September, and 22 in 2026-09 against ~130,000 on each of the
+  other architectures. Koschei alone was 4,700-7,500 distinct
+  packages a month on s390x before that.
+
+  With koschei excluded and rebuild months set aside, s390x has built
+  **2,200 to 4,900 packages a month continuously since 2025-02** —
+  3,107 / 3,637 / 3,697 / 3,380 / 4,856 across 2025-02..06 against
+  4,168 / 2,631 / 2,546 / 2,178 / 4,064 / 2,491 / 2,803 across
+  2026-02..09. There is no collapse. There is a mild decline, about
+  20% over eighteen months, which is worth reporting as what it is.
+
+  So the metric must **exclude koschei and name rebuild months**, or
+  the first thing it reports is this artefact with a warning attached
+  to it. A bare `COUNT(DISTINCT package)` per period would have
+  announced a 90% collapse that never happened, which is worse than
+  the silence it was meant to fix.
 
 - **How slow this architecture is *for the same package*.** The
   existing warning fires on absolute duration — "131 task(s) over 6h
