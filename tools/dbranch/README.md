@@ -61,6 +61,82 @@ put `dbranch` on your `PATH`.
 The binaries are statically linked against musl, for x86_64 and
 aarch64 Linux, so they run on any distribution.
 
+### From Debusine, as a Debian package
+
+`dbranch` is not in Debian yet. Builds of it are published to a
+personal [Debusine](https://debusine.debian.net/) workspace, which is
+how it gets tested against *Debian's* dependency versions rather than
+the ones cargo resolves — the one thing neither our own CI nor
+Fedora's `%check` can do. They are unofficial: nobody has reviewed or
+sponsored them, and the suite exists so the packaging can be exercised
+before it is offered to the archive.
+
+Write this to `/etc/apt/sources.list.d/dbranch.sources`. The archive's
+signing key is carried inline, so there is no keyring file to place and
+no key to fetch separately:
+
+```
+Types: deb
+URIs: https://deb.debusine.debian.net/debian/r-michelin-dbranch
+Suites: sid-dbranch
+Components: main
+Signed-By:
+ -----BEGIN PGP PUBLIC KEY BLOCK-----
+ .
+ mDMEas+YhRYJKwYBBAHaRw8BAQdAQSCSaU0AJknKKxOXFHhmFNyXuwIdimz3YFjB
+ V52su2G0MUFyY2hpdmUgc2lnbmluZyBrZXkgZm9yIGRlYmlhbi9yLW1pY2hlbGlu
+ LWRicmFuY2iIkAQTFgoAOBYhBPGvxnoYayLDF5IMbCln3a/TPx/zBQJqz5iFAhsD
+ BQsJCAcCBhUKCQgLAgQWAgMBAh4BAheAAAoJECln3a/TPx/z9MQA/jHzy7EC4krs
+ +HFyPYTrVLI3tGPX+q5dhnJVUtIL3FtnAQCkL8QheeRB/S/Hykizau9/mrzM39Tt
+ ROzjKe2/LIr9AQ==
+ =ZUUl
+ -----END PGP PUBLIC KEY BLOCK-----
+```
+
+Then:
+
+```sh
+sudo apt update && sudo apt install dbranch
+```
+
+That key is `F1AFC67A186B22C317920C6C2967DDAFD33F1FF3`, "Archive
+signing key for debian/r-michelin-dbranch".
+
+A key copied out of a README is only as trustworthy as the README, and
+you do not have to take it from here. The workspace page publishes
+that same stanza, key and all, and needs no account to read:
+
+<https://debusine.debian.net/debian/r-michelin-dbranch/>
+
+That is the source to copy from, and where to pick the key up again
+if it is ever rotated. If you have the `debusine` client — a Debusine
+developer tool, so most people installing `dbranch` will not — it can
+fetch the key into a keyring file instead, with `Signed-By` pointing
+at the file rather than inlining it:
+
+```sh
+sudo mkdir -p /etc/apt/keyrings
+debusine asset list --workspace r-michelin-dbranch |
+  python3 -c 'import base64, re, sys
+m = re.search(r"public_key:\s*(\S+)", sys.stdin.read())
+sys.stdout.write(base64.b64decode(m.group(1)).decode())' |
+  sudo tee /etc/apt/keyrings/debusine-r-michelin-dbranch.asc >/dev/null
+```
+
+Then replace the inline block above with:
+
+```
+Signed-By: /etc/apt/keyrings/debusine-r-michelin-dbranch.asc
+```
+
+The suite is built for `amd64` and `arm64` against sid, and carries
+`dbranch` itself, `dbranch-dbgsym`, and the `librust-sandogasa-*-dev`
+crates it is built from.
+
+Being sid packages, they expect a sid or sid-tracking system. On a
+stable release the dependencies will not resolve and `cargo install`
+above is the better route.
+
 `dbranch` shells out to the standard Debian tooling; install what the
 stages you run need:
 
