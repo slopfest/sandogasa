@@ -140,6 +140,41 @@ are both larger. It supports "how much parallelism did this build get",
 never "how much machine" — comparing core counts across architectures as if
 they were equivalent is the same error as comparing their medians.
 
+## File: lintian checks descriptions only on binaries (2026-10-21)
+
+Not a sandogasa task — a Debian bug to file against `lintian` when there
+is time to follow it up, parked here so it is not lost.
+
+`using-first-person-in-description` and its siblings fire only when a
+`.deb` is linted. Linting a `.dsc` alone reports nothing about
+descriptions at all, which is exactly the case a mentors upload gets
+reviewed in: source-only, no binary to lint. It is how fnlfmt reached an
+AM with a description that drew `using-first-person-in-description` the
+moment a built `.deb` was passed alongside the `.dsc`.
+
+The data is there. `debian/control` is in the source package, Description
+fields included, and **lintian already reads them from source elsewhere**:
+
+- `Lintian/Check/Debian/Control/Field/Description/Duplicate.pm` implements
+  `sub source` and walks `$self->processable->debian_control`, pulling
+  `installable_fields($installable)->untrimmed_value('Description')`.
+- `Lintian/Check/Languages/Rust.pm` implements `sub source` and emits
+  `rust-boilerplate` against a binary package's description.
+
+`Lintian/Check/Fields/Description.pm`, which owns the interesting tags,
+implements only `sub installable`. There is no structural reason it could
+not take the same route; two sibling checks in the same tree already do.
+
+The honest complication to put in the report rather than discover in
+review: `debian/control` can be generated — `control.in`, dh-exec,
+debcargo — so a source-side Description is not always what ships. That
+argues for the source variants being info-level, or suppressed when a
+`control.in` is present, not for declining to look.
+
+Worth contrasting with Fedora in the report: rpmlint reads `%description`
+straight from the spec, so the equivalent problem is caught before
+anything is built.
+
 ## cpu-sig-tracker: automate the Proposed Updates paperwork (2026-09-09)
 
 When a Hyperscale change is worth upstreaming, the SIG builds it as a
