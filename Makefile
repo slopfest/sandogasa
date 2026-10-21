@@ -43,6 +43,10 @@ clippy: ## Lint the workspace, tests included; a warning fails the gate
 man: ## Regenerate every tool's man page from its clap definition
 	./scripts/gen-man.sh
 
+.PHONY: findings
+findings: ## Render FINDINGS to HTML and PDF (SRC=... for another file)
+	scripts/render-findings.sh $(SRC)
+
 .PHONY: cov
 cov: ## Report test coverage, failing under 81.5% lines
 	$(CARGO) cov
