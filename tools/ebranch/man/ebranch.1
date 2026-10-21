@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-10-15 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH ebranch 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS ebranch check-crate
-\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-features\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-copr\fR] [\fB\-\-package\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\-script\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR] 
+\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-features\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-copr\fR] [\fB\-\-package\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\-script\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR]
 .PP
 Analyze a crates.io crate\*(Aqs dependencies
 .TP
@@ -102,7 +102,7 @@ Crate name on crates.io
 [\fIVERSION\fR]
 Crate version (default: latest)
 .SS ebranch check-pkg-reviews
-\fBebranch check\-pkg\-reviews\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> 
+\fBebranch check\-pkg\-reviews\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR>
 .PP
 Find and link Bugzilla package review requests
 .TP
@@ -112,7 +112,7 @@ Bugzilla base URL
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (or set BUGZILLA_API_KEY env var)
 .RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
 .TP
 \fB\-\-dry\-run\fR
@@ -127,7 +127,7 @@ Print help
 <\fITOML\fR>
 Path to TOML analysis file from check\-crate \-\-toml
 .SS ebranch check-update
-\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-json\fR] [\fB\-\-detailed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-refresh\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-give\-karma\fR] [\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-submit\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-type\fR] [\fB\-\-severity\fR] [\fB\-\-bug\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-\-rpmfusion\-dry\-run\fR] [\fB\-\-rpmfusion\-file\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR> 
+\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-json\fR] [\fB\-\-detailed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-refresh\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-give\-karma\fR] [\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-submit\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-type\fR] [\fB\-\-severity\fR] [\fB\-\-bug\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-\-rpmfusion\-dry\-run\fR] [\fB\-\-rpmfusion\-file\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR>
 .PP
 Check if an update would break reverse dependencies
 .TP
@@ -315,7 +315,7 @@ afterwards, with every update linked — which is
 why a fan\-out belongs in one run: three EPEL
 minors are one rebuild for them, not three.
 .SS ebranch check-wip
-\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-side\-tag\fR] [\fB\-\-add\fR] [\fB\-\-forget\fR] [\fB\-\-set\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR> 
+\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-side\-tag\fR] [\fB\-\-add\fR] [\fB\-\-forget\fR] [\fB\-\-set\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR>
 .PP
 Track packages on their way into the distro
 .TP
@@ -371,7 +371,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fILEDGER\fR>
 Ledger file tracking the effort (created if absent)
 .SS ebranch close
-\fBebranch close\fR [\fB\-\-claim\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
+\fBebranch close\fR [\fB\-\-claim\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
 .PP
 Close branch requests whose package has landed
 .TP
@@ -384,7 +384,7 @@ Bugzilla base URL
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
 .RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
 .TP
 \fB\-\-fas\fR [\fI<FAS>\fR]
@@ -432,14 +432,14 @@ check\-crate or resolve report TOML with recorded branch requests
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch config
-\fBebranch config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+\fBebranch config\fR [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up Bugzilla API key and other settings
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS ebranch copr-prune
-\fBebranch copr\-prune\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICOPR\fR> 
+\fBebranch copr\-prune\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICOPR\fR>
 .PP
 Prune a staging COPR of what its target releases caught up on
 .TP
@@ -458,7 +458,7 @@ Print help
 <\fICOPR\fR>
 COPR project: owner/project, @group/project, or its URL
 .SS ebranch escalate
-\fBebranch escalate\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
+\fBebranch escalate\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
 .PP
 Escalate (needinfo) stale branch requests in a report
 .TP
@@ -468,7 +468,7 @@ Bugzilla base URL
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
 .RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
 .TP
 \fB\-\-fas\fR [\fI<FAS>\fR]
@@ -516,7 +516,7 @@ check\-crate or resolve report TOML with recorded branch requests
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch file-request
-\fBebranch file\-request\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-toml\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR> 
+\fBebranch file\-request\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-toml\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR>
 .PP
 File a branch request for one package
 .TP
@@ -526,7 +526,7 @@ Bugzilla base URL
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
 .RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
 .TP
 \fB\-\-fas\fR [\fI<FAS>\fR]
@@ -583,7 +583,7 @@ Source package to request a branch for
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch file-requests
-\fBebranch file\-requests\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR> 
+\fBebranch file\-requests\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
 .PP
 File branch requests for all missing packages in a report
 .TP
@@ -593,7 +593,7 @@ Bugzilla base URL
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
 .RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
 .TP
 \fB\-\-fas\fR [\fI<FAS>\fR]
@@ -644,7 +644,7 @@ check\-crate or resolve report TOML listing the missing packages
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch find-cycles
-\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
+\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
 .PP
 Detect dependency cycles in the build graph
 .TP
@@ -761,7 +761,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 [\fIPACKAGES\fR]
 Source RPM names to analyze
 .SS ebranch resolve
-\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR] 
+\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
 .PP
 Resolve the full dependency closure for porting
 .TP

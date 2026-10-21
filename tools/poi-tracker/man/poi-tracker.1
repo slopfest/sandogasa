@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH poi-tracker 1 2026-10-14 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH poi-tracker 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH SYNOPSIS
@@ -31,7 +31,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS poi-tracker act
-\fBpoi\-tracker act\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-pattern\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-personal\fR] [\fB\-\-branch\fR] [\fB\-\-api\-token\fR] [\fB\-\-refresh\-acls\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-user\fR> 
+\fBpoi\-tracker act\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-pattern\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-personal\fR] [\fB\-\-branch\fR] [\fB\-\-api\-token\fR] [\fB\-\-refresh\-acls\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-user\fR>
 .PP
 Enact the standing cull verdicts interactively: orphan, remove own ACL, or give each package away, adjusting the inventories as you go
 .TP
@@ -71,7 +71,7 @@ Branch(es) for the reverse\-dependency probe before an orphan (CSV or repeated).
 \fB\-\-api\-token\fR \fI<API_TOKEN>\fR
 Dist\-git API token (or PAGURE_API_TOKEN, or run `poi\-tracker config`)
 .RS
-May also be specified with the \fBPAGURE_API_TOKEN\fR environment variable. 
+May also be specified with the \fBPAGURE_API_TOKEN\fR environment variable.
 .RE
 .TP
 \fB\-\-refresh\-acls\fR
@@ -83,7 +83,7 @@ Log each access lookup
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker add
-\fBpoi\-tracker add\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-poc\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-reason\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-team\fR] [\fB\-\-task\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-rpm\fR] [\fB\-\-workload\fR] [\fB\-\-track\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
+\fBpoi\-tracker add\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-poc\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-reason\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-team\fR] [\fB\-\-task\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-rpm\fR] [\fB\-\-workload\fR] [\fB\-\-track\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR>
 .PP
 Add a package to the inventory
 .TP
@@ -129,7 +129,7 @@ Print help
 <\fINAME\fR>
 Source RPM name
 .SS poi-tracker adopt
-\fBpoi\-tracker adopt\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-\-api\-token\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker adopt\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-\-api\-token\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Adopt orphaned inventory packages on dist\-git
 .TP
@@ -154,7 +154,7 @@ Stop after this package (inclusive). Combine with `\-\-start\-from` to bound a s
 \fB\-\-api\-token\fR \fI<API_TOKEN>\fR
 Dist\-git API token with the `modify_project` ACL (or set PAGURE_API_TOKEN, or run `poi\-tracker config`)
 .RS
-May also be specified with the \fBPAGURE_API_TOKEN\fR environment variable. 
+May also be specified with the \fBPAGURE_API_TOKEN\fR environment variable.
 .RE
 .TP
 \fB\-w\fR, \fB\-\-workspace\fR \fI<PATH>\fR
@@ -175,7 +175,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker announce
-\fBpoi\-tracker announce\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-refresh\-acls\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-json\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-user\fR> 
+\fBpoi\-tracker announce\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-refresh\-acls\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-json\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-user\fR>
 .PP
 Render the standing cull verdicts as the grouped, announcement\-ready report with runnable ACL commands
 .TP
@@ -209,7 +209,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker config
-\fBpoi\-tracker config\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker config\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Configure poi\-tracker (Bugzilla API key, etc.)
 .TP
@@ -231,7 +231,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker dependents
-\fBpoi\-tracker dependents\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-json\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> 
+\fBpoi\-tracker dependents\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-json\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR>
 .PP
 Classify inventory packages by who depends on them, over a saved dependency graph: leaves, packages other keeps carry, externally needed ones
 .TP
@@ -259,7 +259,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker deps
-\fBpoi\-tracker deps\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-runtime\-only\fR] [\fB\-\-graph\fR] [\fB\-\-fixpoint\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-name\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-b\fR|\fB\-\-branch\fR> 
+\fBpoi\-tracker deps\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-runtime\-only\fR] [\fB\-\-graph\fR] [\fB\-\-fixpoint\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-name\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-b\fR|\fB\-\-branch\fR>
 .PP
 Inventory the dependencies pulled from other repos (e.g. EPEL)
 .TP
@@ -327,7 +327,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS poi-tracker derive
-\fBpoi\-tracker derive\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-apply\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fB\-\-owned\fR> <\fB\-o\fR|\fB\-\-output\fR> 
+\fBpoi\-tracker derive\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-apply\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fB\-\-owned\fR> <\fB\-o\fR|\fB\-\-output\fR>
 .PP
 Recompute a derived dependency inventory offline from a saved graph: owned packages the keeps reach
 .TP
@@ -386,7 +386,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker export content-resolver
-\fBpoi\-tracker export content\-resolver\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-workload\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker export content\-resolver\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-workload\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Export as content\-resolver YAML
 .TP
@@ -414,7 +414,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker export hs-relmon
-\fBpoi\-tracker export hs\-relmon\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-workload\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-distros\fR] [\fB\-\-track\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-prune\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker export hs\-relmon\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-workload\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-distros\fR] [\fB\-\-track\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-prune\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Export as hs\-relmon manifest TOML
 .TP
@@ -451,7 +451,7 @@ Remove manifest entries not in the inventory
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker find
-\fBpoi\-tracker find\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
+\fBpoi\-tracker find\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR>
 .PP
 Find which inventory file(s) contain a package
 .TP
@@ -476,7 +476,7 @@ Print help
 <\fINAME\fR>
 Source RPM name to search for
 .SS poi-tracker import
-\fBpoi\-tracker import\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-private\-fields\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-workload\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIJSON_FILE\fR> 
+\fBpoi\-tracker import\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-private\-fields\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-workload\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIJSON_FILE\fR>
 .PP
 Import from legacy JSON format
 .TP
@@ -510,7 +510,7 @@ Print help
 <\fIJSON_FILE\fR>
 Path to legacy JSON inventory file
 .SS poi-tracker intersect
-\fBpoi\-tracker intersect\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-json\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-with\fR> 
+\fBpoi\-tracker intersect\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-json\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-with\fR>
 .PP
 Keep only the inventory packages also present in other inventories, optionally merging them into a file
 .TP
@@ -541,7 +541,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker keep
-\fBpoi\-tracker keep\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-into\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-deps\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-runtime\-only\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fB\-\-owned\fR> <\fB\-b\fR|\fB\-\-branch\fR> <\fIPACKAGE\fR> 
+\fBpoi\-tracker keep\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-into\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-deps\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-from\fR] [\fB\-\-base\-repo\fR] [\fB\-\-runtime\-only\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fB\-\-owned\fR> <\fB\-b\fR|\fB\-\-branch\fR> <\fIPACKAGE\fR>
 .PP
 Start keeping packages: walk them against the saved graph (fedrq only for what it lacks), merge, recompute the derived inventory
 .TP
@@ -606,7 +606,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fIPACKAGE\fR>
 Packages to start keeping
 .SS poi-tracker kondo
-\fBpoi\-tracker kondo\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-explain\-into\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-acls\fR] [\fB\-\-reason\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-essential\fR> <\fB\-\-user\fR> 
+\fBpoi\-tracker kondo\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-explain\-into\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-acls\fR] [\fB\-\-reason\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-essential\fR> <\fB\-\-user\fR>
 .PP
 Triage packages no essential inventory needs: keep as a cull candidate, file into an inventory, or drop
 .TP
@@ -664,7 +664,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker prune-retired
-\fBpoi\-tracker prune\-retired\fR [\fB\-\-branch\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-pattern\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-dry\-run\fR] [\fB\-\-remove\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker prune\-retired\fR [\fB\-\-branch\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-pattern\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-dry\-run\fR] [\fB\-\-remove\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Mark (or remove) packages no longer carried on any active branch (dist\-git project gone or retired everywhere)
 .TP
@@ -713,7 +713,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker reconcile
-\fBpoi\-tracker reconcile\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-into\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-refresh\-acls\fR] [\fB\-\-dry\-run\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker reconcile\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-into\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-refresh\-acls\fR] [\fB\-\-dry\-run\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Bring the workspace\*(Aqs inventories up to date with its keeps: walk new keeps, recompute the derived inventories, ask the decisions a program cannot make, then triage what nothing justifies
 .TP
@@ -753,7 +753,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker remove
-\fBpoi\-tracker remove\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-rpm\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR> 
+\fBpoi\-tracker remove\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-rpm\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fINAME\fR>
 .PP
 Remove a package from the inventory
 .TP
@@ -781,7 +781,7 @@ Print help
 <\fINAME\fR>
 Source RPM name to remove
 .SS poi-tracker semver-audit
-\fBpoi\-tracker semver\-audit\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-\-batch\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-non\-breaking\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker semver\-audit\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-\-batch\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-non\-breaking\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Audit pending upstream updates by semver impact, flagging which are non\-breaking, breaking, or need review
 .TP
@@ -824,7 +824,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker show
-\fBpoi\-tracker show\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-workload\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-json\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker show\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-workload\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-json\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Show inventory contents
 .TP
@@ -852,7 +852,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker sync-distgit
-\fBpoi\-tracker sync\-distgit\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-fast\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-no\-groups\fR] [\fB\-\-include\-group\fR] [\fB\-\-exclude\-group\fR] [\fB\-\-exclude\fR] [\fB\-\-pattern\fR] [\fB\-\-start\-pattern\fR] [\fB\-\-end\-pattern\fR] [\fB\-\-auto\-prefix\fR] [\fB\-\-no\-auto\-prefix\fR] [\fB\-\-prune\fR] [\fB\-\-mark\-unshipped\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-per\-page\fR] [\fB\-\-workload\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-user\fR|\fB\-\-group\fR> 
+\fBpoi\-tracker sync\-distgit\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-fast\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-no\-groups\fR] [\fB\-\-include\-group\fR] [\fB\-\-exclude\-group\fR] [\fB\-\-exclude\fR] [\fB\-\-pattern\fR] [\fB\-\-start\-pattern\fR] [\fB\-\-end\-pattern\fR] [\fB\-\-auto\-prefix\fR] [\fB\-\-no\-auto\-prefix\fR] [\fB\-\-prune\fR] [\fB\-\-mark\-unshipped\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-per\-page\fR] [\fB\-\-workload\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-user\fR|\fB\-\-group\fR>
 .PP
 Sync inventory from Fedora dist\-git (Pagure) access
 .TP
@@ -931,7 +931,7 @@ Inventory name (default: user/group)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker sync-gitlab
-\fBpoi\-tracker sync\-gitlab\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-exclude\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-prune\fR] [\fB\-\-workload\fR] [\fB\-\-mark\-unshipped\fR] [\fB\-\-centos\-release\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-url\fR|\fB\-\-preset\fR> 
+\fBpoi\-tracker sync\-gitlab\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-exclude\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-prune\fR] [\fB\-\-workload\fR] [\fB\-\-mark\-unshipped\fR] [\fB\-\-centos\-release\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-url\fR|\fB\-\-preset\fR>
 .PP
 Sync inventory from a GitLab RPM group
 .TP
@@ -980,7 +980,7 @@ Inventory name (default: derived from group)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker sync-rpmfusion
-\fBpoi\-tracker sync\-rpmfusion\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-repo\fR] [\fB\-\-prune\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-r\fR|\fB\-\-release\fR> 
+\fBpoi\-tracker sync\-rpmfusion\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-repo\fR] [\fB\-\-prune\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-\-name\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-r\fR|\fB\-\-release\fR>
 .PP
 Sync inventory from RPM Fusion\*(Aqs repositories, one workload per release
 .TP
@@ -1017,7 +1017,7 @@ Inventory name (default: rpmfusion)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker triage-retired
-\fBpoi\-tracker triage\-retired\fR [\fB\-\-branch\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-pattern\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-batch\fR] [\fB\-\-closure\fR] [\fB\-\-all\-reporters\fR] [\fB\-\-mark\fR] [\fB\-\-api\-key\fR] [\fB\-\-claim\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker triage\-retired\fR [\fB\-\-branch\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-pattern\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-start\-from\fR] [\fB\-\-end\-with\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-batch\fR] [\fB\-\-closure\fR] [\fB\-\-all\-reporters\fR] [\fB\-\-mark\fR] [\fB\-\-api\-key\fR] [\fB\-\-claim\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Close open release\-monitoring bugs as CANTFIX for any inventoried package that is retired on a dist\-git branch
 .TP
@@ -1060,7 +1060,7 @@ Record results in the inventory\*(Aqs `retired_on` markers (adds and removes; ne
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (or set BUGZILLA_API_KEY env var, or run `poi\-tracker config`)
 .RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
 .TP
 \fB\-\-claim\fR
@@ -1078,7 +1078,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker triage-updates
-\fBpoi\-tracker triage\-updates\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-\-batch\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-close\-stale\fR] [\fB\-\-closure\fR] [\fB\-\-skip\-stale\fR] [\fB\-\-api\-key\fR] [\fB\-\-claim\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker triage\-updates\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-pattern\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-start\-from\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-end\-with\fR] [\fB\-\-batch\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-close\-stale\fR] [\fB\-\-closure\fR] [\fB\-\-skip\-stale\fR] [\fB\-\-api\-key\fR] [\fB\-\-claim\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Triage open release\-monitoring bugs for inventoried packages by bumping their Bugzilla priority to match the inventory
 .TP
@@ -1118,7 +1118,7 @@ Skip the Bodhi check for already\-built updates
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (or set BUGZILLA_API_KEY env var, or run `poi\-tracker config`)
 .RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable. 
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
 .TP
 \fB\-\-claim\fR
@@ -1136,7 +1136,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker unkeep
-\fBpoi\-tracker unkeep\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-deps\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-apply\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-json\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fIPACKAGE\fR> 
+\fBpoi\-tracker unkeep\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-deps\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-apply\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-\-json\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-graph\fR> <\fIPACKAGE\fR>
 .PP
 Stop keeping packages: over a saved dependency graph, report what the removal frees, and optionally edit the inventories
 .TP
@@ -1173,7 +1173,7 @@ Print help
 <\fIPACKAGE\fR>
 Packages to stop keeping
 .SS poi-tracker validate
-\fBpoi\-tracker validate\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBpoi\-tracker validate\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Validate inventory consistency
 .TP

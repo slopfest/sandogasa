@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH dbranch 1 2026-10-19 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH dbranch 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 dbranch \- Propagate a Debian package across its Ubuntu PPA and Debian branches
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS dbranch autopkgtest
-\fBdbranch autopkgtest\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-deb\fR> 
+\fBdbranch autopkgtest\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-deb\fR>
 .PP
 Write an autopkgtest that runs the programs a package installs. A
 package can build, lint clean, and install a program that does not
@@ -47,7 +47,7 @@ Run, but narrate each step + command first (follow along)
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch check
-\fBdbranch check\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-deb\fR] [\fB\-\-json\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdbranch check\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-deb\fR] [\fB\-\-json\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Check packaging files instead of trusting them. debian/ is often
 adopted rather than written \-\- from upstream, from an older release,
@@ -79,7 +79,7 @@ Run, but narrate each step + command first (follow along)
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch clone
-\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-salsa\fR] [\fB\-\-wrap\-and\-sort\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR] 
+\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-salsa\fR] [\fB\-\-wrap\-and\-sort\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR]
 .PP
 Clone upstream\*(Aqs git to package it straight from its tags (gbp\*(Aqs
 "upstream uses git, no tarballs" flow): clone with upstream as
@@ -141,7 +141,7 @@ Upstream git URL
 [\fIDIR\fR]
 Directory to clone into (default: the repository\*(Aqs name)
 .SS dbranch debusine-repo
-\fBdbranch debusine\-repo\fR [\fB\-\-suite\fR] [\fB\-y\fR|\fB\-\-assume\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-owner\fR> <\fB\-\-project\fR> 
+\fBdbranch debusine\-repo\fR [\fB\-\-suite\fR] [\fB\-y\fR|\fB\-\-assume\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-owner\fR> <\fB\-\-project\fR>
 .PP
 Create a Debusine personal repository, if it is not there.
 .PP
@@ -168,7 +168,7 @@ Run, but narrate each step + command first (follow along)
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch dep3-template
-\fBdbranch dep3\-template\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-print\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBdbranch dep3\-template\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-print\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Write the DEP\-3 commit template a patch is written with. On a
 3.0 (quilt) package a fix to a file outside debian/ cannot be a
@@ -202,7 +202,7 @@ Run, but narrate each step + command first (follow along)
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch fixup
-\fBdbranch fixup\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
+\fBdbranch fixup\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
 .PP
 Fix up gbp.conf / salsa\-ci.yml on existing branch(es)
 .TP
@@ -224,7 +224,7 @@ Print help
 [\fIBRANCH\fR]
 Branch(es) to fix up (default: the current branch)
 .SS dbranch rebuild
-\fBdbranch rebuild\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-source\fR] [\fB\-\-remote\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-include\-eol\fR] [\fB\-\-ppa\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
+\fBdbranch rebuild\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-source\fR] [\fB\-\-remote\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-include\-eol\fR] [\fB\-\-ppa\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
 .PP
 Rebuild a Debian package across its Ubuntu/PPA branches
 .TP
@@ -322,7 +322,7 @@ Run, but narrate each step + command first (follow along)
 \fB\-q\fR, \fB\-\-quiet\fR
 Suppress tool output, showing it only when a step fails
 .SS dbranch update
-\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-nowait\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
+\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-nowait\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
 .PP
 Update the Debian branch to a new upstream release
 .TP
@@ -413,7 +413,7 @@ Run, but narrate each step + command first (follow along)
 \fB\-q\fR, \fB\-\-quiet\fR
 Suppress tool output, showing it only when a step fails
 .SS dbranch watch-ci
-\fBdbranch watch\-ci\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR] 
+\fBdbranch watch\-ci\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
 .PP
 Watch a branch\*(Aqs GitLab CI pipeline via glab
 .TP

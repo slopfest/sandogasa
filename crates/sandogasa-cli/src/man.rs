@@ -87,7 +87,28 @@ pub fn render_dated(cmd: Command, date: &str, crate_version: &str) -> Vec<u8> {
             render_subcommand(&mut out, &name, sub);
         }
     }
-    out
+    trim_trailing(out)
+}
+
+/// Strip trailing whitespace from every line of a rendered page.
+///
+/// clap_mangen writes a space after each element of a SYNOPSIS line,
+/// including the last, so every page ends a dozen lines in one. Roff
+/// collapses whitespace and renders them identically, which is why it
+/// went unnoticed; the cost is in the diff and in anybody grepping a
+/// committed page. Stripping here rather than in the generator script
+/// keeps the committed pages and `man_page_matches_cli` agreeing.
+fn trim_trailing(out: Vec<u8>) -> Vec<u8> {
+    let text = String::from_utf8(out).expect("clap_mangen writes UTF-8");
+    let mut trimmed: String = text
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        trimmed.push('\n');
+    }
+    trimmed.into_bytes()
 }
 
 /// Render `cmd` as a man page dated today.
@@ -295,6 +316,27 @@ mod tests {
         // Hidden subcommands and the built-in `help` stay out.
         assert!(!page.contains("secret"), "{page}");
         assert!(!page.contains(".SS demo help"), "{page}");
+    }
+
+    #[test]
+    fn a_rendered_page_never_ends_a_line_in_whitespace() {
+        // clap_mangen writes a space after every SYNOPSIS element,
+        // the last one included. Roff collapses it, so the page
+        // renders the same either way and only the diff suffers --
+        // which is why 129 such lines survived across sixteen pages
+        // until somebody grepped for them.
+        let page = String::from_utf8(render(cmd(), "1.2.3")).unwrap();
+        for (i, line) in page.lines().enumerate() {
+            assert_eq!(
+                line.trim_end(),
+                line,
+                "line {} ends in whitespace: {line:?}",
+                i + 1
+            );
+        }
+        // And the stripping has not eaten the content either side.
+        assert!(page.contains("SYNOPSIS"), "{page}");
+        assert!(page.ends_with('\n'), "a page ends with a newline");
     }
 
     #[test]

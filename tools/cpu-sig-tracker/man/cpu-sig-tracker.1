@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-10-15 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates SIG package state across Koji, GitLab and JIRA
 .SH SYNOPSIS
@@ -16,14 +16,14 @@ Print help
 Print version
 .SH COMMANDS
 .SS cpu-sig-tracker config
-\fBcpu\-sig\-tracker config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+\fBcpu\-sig\-tracker config\fR [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up GitLab and JIRA authentication tokens
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker dump-inventory
-\fBcpu\-sig\-tracker dump\-inventory\fR [\fB\-r\fR|\fB\-\-release\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-prune\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-o\fR|\fB\-\-output\fR> 
+\fBcpu\-sig\-tracker dump\-inventory\fR [\fB\-r\fR|\fB\-\-release\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-prune\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-o\fR|\fB\-\-output\fR>
 .PP
 Enumerate packages in a proposed_updates Koji tag and emit a sandogasa\-inventory TOML file
 .TP
@@ -45,7 +45,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker file-issue
-\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-note\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR> 
+\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-note\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR>
 .PP
 File a tracking issue in the proposed_updates GitLab group for a given Merge Request URL
 .TP
@@ -93,7 +93,7 @@ Print help
 <\fIMR_URL\fR>
 Full Merge Request URL to track, e.g. `gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42` (with the https:// scheme)
 .SS cpu-sig-tracker list-issues
-\fBcpu\-sig\-tracker list\-issues\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-adopt\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBcpu\-sig\-tracker list\-issues\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-adopt\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 List the SIG\*(Aqs tracking issues per release and package, with the MR each names; with an inventory, the packages missing one
 .TP
@@ -118,7 +118,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker ping
-\fBcpu\-sig\-tracker ping\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-days\fR] [\fB\-\-reping\-days\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBcpu\-sig\-tracker ping\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-days\fR] [\fB\-\-reping\-days\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Nudge upstream merge requests that have gone quiet, and show the last response on those that have not
 .TP
@@ -152,7 +152,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker retire
-\fBcpu\-sig\-tracker retire\fR [\fB\-\-release\fR] [\fB\-\-reason\fR] [\fB\-\-stock\-fix\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE\fR> 
+\fBcpu\-sig\-tracker retire\fR [\fB\-\-release\fR] [\fB\-\-reason\fR] [\fB\-\-stock\-fix\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-\-claim\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIISSUE\fR>
 .PP
 Close a tracking issue for a reason — landed, superseded or abandoned — labelling it, telling the MR, closing the MR of an abandoned change
 .TP
@@ -195,7 +195,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fIISSUE\fR>
 Tracking issue URL (`/\-/issues/<n>` or `/\-/work_items/<n>`), or a package name, resolved through the SIG\*(Aqs open tracking issues (`list\-issues`)
 .SS cpu-sig-tracker status
-\fBcpu\-sig\-tracker status\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-p\fR|\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-\-refresh\fR] [\fB\-\-include\-closed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBcpu\-sig\-tracker status\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-release\fR] [\fB\-p\fR|\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-\-refresh\fR] [\fB\-\-include\-closed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Report JIRA status and suggested next action for each active tracking issue
 .TP
@@ -223,7 +223,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker timeline
-\fBcpu\-sig\-tracker timeline\fR [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-open\-only\fR] [\fB\-\-json\fR] [\fB\-\-csv\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBcpu\-sig\-tracker timeline\fR [\fB\-\-release\fR] [\fB\-\-package\fR] [\fB\-\-open\-only\fR] [\fB\-\-json\fR] [\fB\-\-csv\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 How long each Proposed Update took and where the time went: filed, covered, fixed in stock, RHEL\*(Aqs advisory, shadowed
 .TP
@@ -248,7 +248,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker untag
-\fBcpu\-sig\-tracker untag\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-release\fR> <\fITARGET\fR> 
+\fBcpu\-sig\-tracker untag\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-release\fR> <\fITARGET\fR>
 .PP
 Untag a proposed_updates build from its CBS \-release tag after verifying the JIRA is resolved
 .TP

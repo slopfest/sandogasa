@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-intake 1 2026-10-14 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH hs-intake 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 hs\-intake \- Hyperscale package intake tool — compare RPM package metadata between branches
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS hs-intake compare-build-requires
-\fBhs\-intake compare\-build\-requires\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR> 
+\fBhs\-intake compare\-build\-requires\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR>
 .PP
 Compare the BuildRequires of a source package between two branches
 .TP
@@ -38,7 +38,7 @@ Branch to compare from (e.g. "rawhide")
 <\fITARGET_BRANCH\fR>
 Branch to compare to (e.g. "c10s\-hyperscale")
 .SS hs-intake compare-provides
-\fBhs\-intake compare\-provides\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR> 
+\fBhs\-intake compare\-provides\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR>
 .PP
 Compare the Provides of a source package between two branches
 .TP
@@ -60,7 +60,7 @@ Branch to compare from (e.g. "rawhide")
 <\fITARGET_BRANCH\fR>
 Branch to compare to (e.g. "c10s\-hyperscale")
 .SS hs-intake compare-requires
-\fBhs\-intake compare\-requires\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR> 
+\fBhs\-intake compare\-requires\fR [\fB\-\-json\fR] [\fB\-\-show\-unchanged\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fISOURCE_BRANCH\fR> <\fITARGET_BRANCH\fR>
 .PP
 Compare the Requires of a source package between two branches
 .TP
@@ -82,7 +82,7 @@ Branch to compare from (e.g. "rawhide")
 <\fITARGET_BRANCH\fR>
 Branch to compare to (e.g. "c10s\-hyperscale")
 .SS hs-intake safe-to-backport
-\fBhs\-intake safe\-to\-backport\fR [\fB\-\-json\fR] [\fB\-\-also\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fITARGET_BRANCH\fR> <\fISOURCE_BRANCH\fR> 
+\fBhs\-intake safe\-to\-backport\fR [\fB\-\-json\fR] [\fB\-\-also\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fISRPM\fR> <\fITARGET_BRANCH\fR> <\fISOURCE_BRANCH\fR>
 .PP
 Check if a source package is safe to backport between branches
 .TP

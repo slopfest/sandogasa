@@ -1,6 +1,27 @@
 # Changelog
 
-## Unreleased
+## v0.27.0
+
+### Man pages no longer end a line in whitespace
+
+Every committed man page carried trailing whitespace -- 129 lines
+across the sixteen of them, every one a SYNOPSIS. clap_mangen writes
+a space after each element of that line including the last, and roff
+collapses whitespace, so the pages rendered identically and nothing
+ever complained.
+
+What it cost was the diff and anybody grepping a page. It is also
+invisible to review: trailing whitespace cannot be seen in a terminal
+unless the line happens to be selected, so it survives indefinitely
+once introduced.
+
+`sandogasa_cli::man` now strips it from each line as it renders,
+which keeps the committed pages and the `man_page_matches_cli` test
+agreeing -- doing it in `scripts/gen-man.sh` instead would have left
+the test comparing against unstripped output. The one-off churn rides
+along with this release's `.TH` rewrite, which touches every page
+anyway.
+
 
 ### Security: certificate verification accepted distrusted intermediates
 

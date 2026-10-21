@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fedora-review-digest 1 2026-10-14 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH fedora-review-digest 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 fedora\-review\-digest \- Condense a fedora\-review run of an auto\-generated spec into a review comment
 .SH SYNOPSIS
@@ -34,14 +34,14 @@ Print version
 fedora\-review result dir, or a bug id under \-\-reviews\-dir
 .SH COMMANDS
 .SS fedora-review-digest config
-\fBfedora\-review\-digest config\fR [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfedora\-review\-digest config\fR [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up or verify the Bugzilla API key used by `\-\-post`
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fedora-review-digest run
-\fBfedora\-review\-digest run\fR [\fB\-\-copr\fR] [\fB\-\-repo\fR] [\fB\-m\fR|\fB\-\-mock\-config\fR] [\fB\-\-mock\-option\fR] [\fB\-\-uniqueext\fR] [\fB\-\-dry\-run\fR] [\fB\-\-no\-digest\fR] [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-reviews\-dir\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUGID\fR> 
+\fBfedora\-review\-digest run\fR [\fB\-\-copr\fR] [\fB\-\-repo\fR] [\fB\-m\fR|\fB\-\-mock\-config\fR] [\fB\-\-mock\-option\fR] [\fB\-\-uniqueext\fR] [\fB\-\-dry\-run\fR] [\fB\-\-no\-digest\fR] [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-reviews\-dir\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUGID\fR>
 .PP
 Run fedora\-review on a bug, then digest the result
 .TP

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-pkg-acl 1 2026-10-14 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH sandogasa-pkg-acl 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 sandogasa\-pkg\-acl \- View and manage Fedora package ACLs via the Pagure dist\-git API
 .SH SYNOPSIS
@@ -19,7 +19,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS sandogasa-pkg-acl apply
-\fBsandogasa\-pkg\-acl apply\fR [\fB\-\-json\fR] [\fB\-\-strict\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICONFIG\fR> <\fIPACKAGES\fR> 
+\fBsandogasa\-pkg\-acl apply\fR [\fB\-\-json\fR] [\fB\-\-strict\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICONFIG\fR> <\fIPACKAGES\fR>
 .PP
 Apply ACLs from a TOML config file
 .TP
@@ -38,7 +38,7 @@ Path to TOML config file
 <\fIPACKAGES\fR>
 Package name(s)
 .SS sandogasa-pkg-acl config
-\fBsandogasa\-pkg\-acl config\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBsandogasa\-pkg\-acl config\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up or verify stored API token
 .TP
@@ -48,7 +48,7 @@ Output machine\-readable JSON
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS sandogasa-pkg-acl give
-\fBsandogasa\-pkg\-acl give\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSER\fR> <\fIPACKAGES\fR> 
+\fBsandogasa\-pkg\-acl give\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSER\fR> <\fIPACKAGES\fR>
 .PP
 Give package ownership to another user
 .TP
@@ -64,7 +64,7 @@ Username of new owner
 <\fIPACKAGES\fR>
 Package name(s)
 .SS sandogasa-pkg-acl remove
-\fBsandogasa\-pkg\-acl remove\fR [\fB\-\-json\fR] [\fB\-\-user\fR] [\fB\-\-group\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> 
+\fBsandogasa\-pkg\-acl remove\fR [\fB\-\-json\fR] [\fB\-\-user\fR] [\fB\-\-group\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR>
 .PP
 Remove all ACLs for a user or group
 .TP
@@ -83,7 +83,7 @@ Print help
 <\fIPACKAGE\fR>
 Package name
 .SS sandogasa-pkg-acl set
-\fBsandogasa\-pkg\-acl set\fR [\fB\-\-json\fR] [\fB\-\-user\fR] [\fB\-\-group\fR] [\fB\-\-strict\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-level\fR> <\fIPACKAGE\fR> 
+\fBsandogasa\-pkg\-acl set\fR [\fB\-\-json\fR] [\fB\-\-user\fR] [\fB\-\-group\fR] [\fB\-\-strict\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-level\fR> <\fIPACKAGE\fR>
 .PP
 Set an ACL level for a user or group
 .TP
@@ -108,7 +108,7 @@ Print help
 <\fIPACKAGE\fR>
 Package name
 .SS sandogasa-pkg-acl show
-\fBsandogasa\-pkg\-acl show\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> 
+\fBsandogasa\-pkg\-acl show\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR>
 .PP
 Show current ACLs for a package
 .TP
@@ -121,7 +121,7 @@ Print help
 <\fIPACKAGE\fR>
 Package name
 .SS sandogasa-pkg-acl take
-\fBsandogasa\-pkg\-acl take\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGES\fR> 
+\fBsandogasa\-pkg\-acl take\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGES\fR>
 .PP
 Take ownership of an orphaned package
 .TP

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-meetings 1 2026-10-15 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH hs-meetings 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 hs\-meetings \- Chair CentOS Hyperscale SIG meetings: day\-of script and meetbot archive sync
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS hs-meetings list
-\fBhs\-meetings list\fR [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBhs\-meetings list\fR [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 List SIG meetings recorded on meetbot
 .TP
@@ -38,7 +38,7 @@ Emit JSON instead of the human\-readable table
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS hs-meetings script
-\fBhs\-meetings script\fR [\fB\-\-date\fR] [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBhs\-meetings script\fR [\fB\-\-date\fR] [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Print the day\-of zodbot script for chairing a SIG meeting
 .TP
@@ -54,7 +54,7 @@ Emit JSON (the script plus what it was built from)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS hs-meetings sync
-\fBhs\-meetings sync\fR [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-f\fR|\fB\-\-file\fR> 
+\fBhs\-meetings sync\fR [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-f\fR|\fB\-\-file\fR>
 .PP
 Sync SIG meetings into a tool\-managed markdown list file
 .TP
