@@ -82,6 +82,64 @@ Three pieces, in increasing order of churn:
 Order matters only in that the script will fail until the man pages
 are fixed, so land that piece first or wire the script in after.
 
+## koji-lag: Koji does record builder hardware — in hw_info.log (2026-10-21)
+
+Every build publishes a `hw_info.log` beside its other logs, per
+architecture, and it carries exactly what this project has spent months
+saying Koji does not expose:
+
+    https://kojipkgs.fedoraproject.org/packages/<n>/<v>/<r>/data/logs/<arch>/hw_info.log
+
+`lscpu` in full (CPU count, model, machine type, cache sizes, hypervisor,
+dispatching mode), `free -h`, and the chroot filesystem. FINDINGS says in
+several places that Koji records no CPU count and that vCPUs added inside a
+VM are invisible to it. That is true of the *hub API*, and wrong about Koji
+as a whole. The data was in the build logs the entire time.
+
+**It already settles something the rest of this document could not.** The
+October 2026 s390x intervention, which `capacity` could not see at all:
+
+| build | date | s390x vCPUs | memory |
+|---|---|---:|---:|
+| sandogasa 0.25.2 | 2026-10-01 | 2 | 22Gi |
+| sandogasa 0.25.3 | 2026-10-06 | 2 | 22Gi |
+| sandogasa 0.26.0 | 2026-10-14 | **3** | **46Gi** |
+
+A 1.5x core bump and a 2.1x memory bump, straddling 2026-10-07. Measured
+independently from build times alone, the s390x-specific gain was 10-20%,
+concentrated in the bands with parallel work and absent on short builds —
+which is what Amdahl predicts of 1.5x cores. Two methods, no shared
+assumptions, same answer.
+
+It also reframes the standing gap: x86_64 builders run **8** vCPUs against
+s390x's **3**. Much of what this document calls a platform regression may be
+provisioning, which is a different conversation with different remedies.
+
+### What to do with it, in order
+
+1. **Trace the vCPU count backwards.** These logs exist for old builds, so
+   `lscpu` for s390x at F42, F43, F44 and F45 is four fetches. If the count
+   fell, the "platform regression" of unknown cause has a mundane
+   explanation that has been sitting in Koji's logs since it started — and
+   the CPU Measurement Facility ask to infrastructure (Q5) may be
+   unnecessary. Do this before anything else here: it is cheap and it
+   could retire a whole section.
+2. **Sample rather than sweep.** One log per build per architecture is far
+   too many to collect wholesale, and the content changes only when a
+   builder is reconfigured. A handful of builds per month per architecture
+   is enough to date every change.
+3. **Then decide whether it belongs in the store.** A `builder_hw` table
+   keyed by (arch, date) with cores, memory and model would let the report
+   state *tasks per core* rather than per scheduling weight — which is the
+   denominator section 3 actually wants, and the one `capacity` only
+   approximates.
+
+**Caveat on reading them.** The log reports the *guest*: three vCPUs on an
+IBM z16 are not three cores of an EPYC, and s390x's per-core clock and cache
+are both larger. It supports "how much parallelism did this build get",
+never "how much machine" — comparing core counts across architectures as if
+they were equivalent is the same error as comparing their medians.
+
 ## cpu-sig-tracker: automate the Proposed Updates paperwork (2026-09-09)
 
 When a Hyperscale change is worth upstreaming, the SIG builds it as a
