@@ -15,6 +15,12 @@ pub const REMINDER_COMMAND: &str = "!group members fesco";
 
 #[derive(clap::Args)]
 pub struct ScriptArgs {
+    /// An announced agenda to build the script from: a list-archive
+    /// link, or a file on disk. Without one the script is built from
+    /// the tracker, as the agenda itself is.
+    #[arg(value_name = "URL|FILE")]
+    pub agenda_from: Option<String>,
+
     // The script is generated from the same ticket classification as
     // the agenda, so it takes the same knobs.
     #[command(flatten)]
@@ -34,6 +40,12 @@ pub fn run(args: &ScriptArgs) -> ExitCode {
     // this meeting date — no refetching, no re-asking about docs
     // items. Any override flag signals a re-decide, so it reassembles
     // (and re-saves) instead.
+    // An announced agenda wins over everything: it is what the
+    // meeting was told would be discussed, and the tracker can move
+    // between the mail going out and the meeting starting.
+    if let Some(from) = &args.agenda_from {
+        return from_agenda(args, from);
+    }
     let date = crate::agenda::target_date(&args.agenda);
     let sections = match crate::state::load(date) {
         Some(state) if !crate::agenda::has_overrides(&args.agenda) => {
@@ -57,6 +69,40 @@ pub fn run(args: &ScriptArgs) -> ExitCode {
             }
         },
     };
+    emit(args, date, &sections)
+}
+
+/// Build the script from an agenda that has already gone out.
+///
+/// The date comes from the agenda itself unless `--date` says
+/// otherwise, so a script generated from last week's mail is dated
+/// last week rather than today. Nothing is saved: the announced
+/// agenda is the record, and overwriting the saved state with a
+/// re-read of it would lose the docs-item answers it holds.
+fn from_agenda(args: &ScriptArgs, from: &str) -> ExitCode {
+    let body = match crate::sources::read_location(from) {
+        Ok(body) => body,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let sections = crate::sources::parse_agenda(&body);
+    let date = args
+        .agenda
+        .date
+        .or_else(|| crate::sources::agenda_date(&body))
+        .unwrap_or_else(|| crate::agenda::target_date(&args.agenda));
+    if sections.discussion().is_empty() {
+        eprintln!(
+            "warning: {from} has no Followups or New business entries;              the script will carry only the standing topics"
+        );
+    }
+    emit(args, date, &sections)
+}
+
+/// Print the script, or the JSON standing in for it.
+fn emit(args: &ScriptArgs, date: NaiveDate, sections: &crate::sources::Sections) -> ExitCode {
     let discussion = sections.discussion();
     let script = render_script(date, &discussion);
     if args.agenda.json {

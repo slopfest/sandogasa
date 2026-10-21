@@ -120,6 +120,7 @@ the next meeting on …") is printed to stderr.
 
 ```sh
 fesco-chair announced <url>            # the archive link to the mail
+fesco-chair announced summary.txt      # or a copy of it on disk
 fesco-chair announced <url> --dry-run  # show the edits, write nothing
 fesco-chair announced <url> -y         # do not prompt
 fesco-chair announced <url> --all      # every pending ticket, named or not
@@ -150,6 +151,12 @@ is still there.
 The decision each ticket closes with is shown with the `AGREED` line
 it was read from, and is editable at the prompt (`e`) before anything
 is written.
+
+Wherever a mail is taken — here, and the agenda `script` can be given
+— it may be a list-archive link or a path on disk. The archive serves
+no raw view, so a link is read as the page it renders and the message
+body is taken out of it; a file may be that page saved, or the plain
+text of the mail.
 
 ### `changes`
 
@@ -237,20 +244,29 @@ validates it against forge.fedoraproject.org, and stores it at
 
 ```sh
 fesco-chair script > meeting.txt       # same knobs as agenda
+fesco-chair script <url>               # from the agenda that went out
+fesco-chair script agenda.txt          # or from a copy on disk
 ```
 
 Prints the day-of checklist to stderr (the spam-filter-safe
 `!group members fesco` reminder for #devel:fedoraproject.org, quorum,
 the 15-minute topic rule) and the meetbot command script to stdout:
 `!startmeeting FESCO (date)` through per-ticket
-`!topic`/`!forge`/`!agreed` blocks (Followups first, then New
+`!topic`/`!fesco`/`!agreed` blocks (Followups first, then New
 business), then the standing topics that close every meeting — next
 week's chair, Council happenings, Open Floor — to `!endmeeting`.
-Lookups match the item: tracker tickets
-use `!forge issue fesco tickets NNNN`, fesco/docs issues
-`!forge issue fesco docs NNNN`, and fesco/docs pull requests
-`!forge pr fesco docs NNNN`. Copy/paste lines as the meeting
-progresses. Accepts the same flags as `agenda`.
+Lookups match the item: a plain tracker ticket uses the `!fesco NNNN`
+alias, fesco/docs issues `!forge issue fesco docs NNNN`, and
+fesco/docs pull requests `!forge pr fesco docs NNNN`. Copy/paste
+lines as the meeting progresses.
+
+Given an agenda — the list-archive link to the one that went out, or
+a file holding it — the script is built from that instead of from the
+tracker, and the meeting date is read from the agenda unless `--date`
+says otherwise. This is what the meeting was told would be discussed,
+so it holds even if the tracker has moved since the mail was sent.
+Nothing is saved in this mode. Without an agenda the script is built
+from the tracker, taking the same flags as `agenda`.
 
 `agenda` saves the assembled result to
 `$XDG_STATE_HOME/fesco-chair/agenda.json` (default
@@ -260,11 +276,6 @@ questions aren't asked again. Passing any override flag
 (`--voted`/`--followup`/`--new`/`--docs`) signals a re-decide:
 `script` then reassembles from the tracker and re-saves. `summary`
 deletes the state once the meeting is over.
-
-> The ticket lookup is emitted as `!forge issue fesco tickets NNNN`
-> for now: the `!fesco NNNN` alias is broken until
-> [maubot-fedora#154](https://github.com/fedora-infra/maubot-fedora/pull/154)
-> is merged and deployed.
 
 ### `summary`
 

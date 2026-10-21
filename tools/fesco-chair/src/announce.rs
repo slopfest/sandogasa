@@ -252,8 +252,8 @@ fn tag_meeting(
 /// `announced` — record that the announcement went out.
 #[derive(clap::Args)]
 pub struct AnnouncedArgs {
-    /// Link to the announcement in the list archive.
-    #[arg(value_name = "URL")]
+    /// The announcement: a list-archive link, or a file on disk.
+    #[arg(value_name = "URL|FILE")]
     pub url: String,
 
     /// Show what would be written without writing it.
@@ -295,13 +295,12 @@ pub fn announced_tickets(body: &str) -> std::collections::BTreeSet<u64> {
 }
 
 /// Fetch an announcement so its tickets can be read back.
+///
+/// A path on disk is read as readily as a URL: the mail is often to
+/// hand as a file -- a draft, a saved message -- before the archive
+/// has published it.
 fn fetch_announcement(url: &str) -> Result<String, String> {
-    let resp = sources::http_client()
-        .get(url)
-        .send()
-        .map_err(|e| format!("fetching {url}: {e}"))?;
-    let resp = sandogasa_cli::http::blocking_ok(resp, "announcement")?;
-    resp.text().map_err(|e| format!("reading {url}: {e}"))
+    sources::read_location(url)
 }
 
 /// The meetbot minutes an announcement links to.
@@ -429,16 +428,10 @@ fn assemble(args: &AnnouncedArgs) -> Result<(), Box<dyn std::error::Error>> {
     // a mail", and the summary of the meeting is their mail. Read
     // from the minutes the announcement itself links to.
     let decided = match announcement.as_deref().and_then(minutes_url) {
-        Some(url) => match sources::http_client().get(&url).send() {
-            Ok(resp) => match resp.text() {
-                Ok(text) => sources::extract_decisions(&text),
-                Err(e) => {
-                    eprintln!("warning: reading {url}: {e}");
-                    Default::default()
-                }
-            },
+        Some(url) => match sources::read_location(&url) {
+            Ok(text) => sources::extract_decisions(&text),
             Err(e) => {
-                eprintln!("warning: fetching {url}: {e}");
+                eprintln!("warning: {e}");
                 Default::default()
             }
         },

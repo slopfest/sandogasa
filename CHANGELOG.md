@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+### fesco-chair: build the meeting script from the agenda that went out
+
+`script` was the last subcommand that did not key off the actual
+agenda. It rebuilt the topic list from the tracker (or replayed the
+state `agenda` had saved), so a ticket relabelled between the mail
+going out and the meeting starting moved the script out of step with
+what everybody was reading — and the chair would find out by reading
+a topic nobody had been told about.
+
+It now takes the agenda as an optional argument: the list-archive
+link to the mail, or a file holding it. The topic list is then
+whatever that mail announced, in the order it announced it, and the
+meeting date is read from the agenda rather than the calendar unless
+`--date` overrides it. Nothing is saved in this mode, so a script
+generated from an old agenda cannot overwrite the state belonging to
+the coming meeting.
+
+Without an argument the old behaviour is unchanged.
+
+### fesco-chair: a mail can be a link or a file
+
+Every subcommand that reads a mail now accepts a path on disk as
+readily as a URL. A mail is routinely to hand as a file — a draft, a
+saved message, the output of a previous run — before the archive has
+published it, and waiting for a link in order to act on it is a delay
+with nothing behind it.
+
+The list archive serves no raw view (`/message/<id>/raw/` is a 404),
+so a link is read as the page it renders and the message body is
+taken out of that. The conversion is faithful rather than a best
+effort at scraping: HyperKitty renders each paragraph of the mail as
+one `<p>`, which is exactly the blank-line-separated block the agenda
+parser reads.
+
+Two things this turned up, both of which were wrong before:
+
+- A long URL is **truncated in the visible text** and kept whole only
+  in the `href` — the 2026-10-20 summary shows its minutes link as
+  `https://meetbot.fedoraproject.org/...2026-10-2...`. Links are
+  therefore read from the `href`.
+- `announced` scanned the whole page for `tickets/issues/NNNN`, which
+  matched an HTML comment in the archive's own chrome
+  (`infra/tickets/issues/10741`) and took it for a ticket the
+  announcement named. Reading is now scoped to the message body, so
+  a mail that names no ticket is correctly reported as naming none.
+
+`announced`'s argument is displayed as `<URL|FILE>` rather than
+`<URL>`; it takes everything it took before, so no existing
+invocation changes.
+
+
 ### fesco-chair: `announced` closes the tickets the meeting decided
 
 A ticket approved at a meeting stayed open. `announced` closed out

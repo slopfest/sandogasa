@@ -364,6 +364,257 @@ pub fn extract_decisions(minutes: &str) -> BTreeMap<u64, MeetingDecision> {
     out
 }
 
+/// The agenda's section headings, as `render_body` writes them.
+pub const VOTED_HEADING: &str = "Discussed and Voted in the Ticket";
+pub const FOLLOWUPS_HEADING: &str = "Followups";
+pub const NEW_BUSINESS_HEADING: &str = "New business";
+
+/// Read an agenda or a summary, from a URL or a path on disk.
+///
+/// Anything that is not an `http://` or `https://` URL is a file.
+/// A mail is often to hand as a file before it is to hand as a
+/// link -- a draft, a saved `.eml`, the output of a previous run --
+/// and waiting for the archive to publish it in order to act on it
+/// is a delay with nothing behind it.
+pub fn read_location(location: &str) -> Result<String, String> {
+    let raw = if location.starts_with("http://") || location.starts_with("https://") {
+        let resp = http_client()
+            .get(location)
+            .send()
+            .map_err(|e| format!("fetching {location}: {e}"))?;
+        let resp = sandogasa_cli::http::blocking_ok(resp, "mail")?;
+        resp.text()
+            .map_err(|e| format!("reading {location}: {e}"))?
+    } else {
+        std::fs::read_to_string(location).map_err(|e| format!("reading {location}: {e}"))?
+    };
+    Ok(plain_text(&raw))
+}
+
+/// How much of `rest` belongs to the `<div>` it starts inside.
+///
+/// Counted by nesting, not by the first `</div>`: HyperKitty opens a
+/// `<div class="quoted-switch">` immediately inside the message body
+/// of any reply, so stopping at the first close cut the 2026-10-20
+/// summary down to its opening line and lost every ticket it named.
+fn div_len(rest: &str) -> usize {
+    let (mut depth, mut at) = (1usize, 0usize);
+    while depth > 0 {
+        let open = rest[at..].find("<div").map(|i| at + i);
+        let Some(close) = rest[at..].find("</div>").map(|i| at + i) else {
+            return rest.len();
+        };
+        match open {
+            Some(o) if o < close => {
+                depth += 1;
+                at = o + "<div".len();
+            }
+            _ => {
+                depth -= 1;
+                if depth == 0 {
+                    return close;
+                }
+                at = close + "</div>".len();
+            }
+        }
+    }
+    rest.len()
+}
+
+/// Replace each `<a>` with the URL it points at, not the text it
+/// shows.
+///
+/// HyperKitty truncates a long URL in the visible text -- the
+/// 2026-10-20 summary renders its minutes link as
+/// `https://meetbot.fedoraproject.org/...2026-10-2...` -- and keeps
+/// the whole one in the `href`. Reading the text would hand
+/// `minutes_url` an address that 404s, so the href wins wherever it
+/// is an http URL the text is a truncated form of. Any other anchor
+/// keeps its text: the archive's own `<a href="#">...</a>` controls
+/// are not links to anything.
+fn unlink(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some(at) = rest.find("<a ") {
+        out.push_str(&rest[..at]);
+        let Some(open_end) = rest[at..].find('>').map(|i| at + i + 1) else {
+            break;
+        };
+        let Some(close) = rest[open_end..].find("</a>").map(|i| open_end + i) else {
+            break;
+        };
+        let href = rest[at..open_end]
+            .split_once("href=\"")
+            .and_then(|(_, r)| r.split_once('"'))
+            .map(|(u, _)| u);
+        let text = &rest[open_end..close];
+        match href {
+            Some(h) if h.starts_with("http") && h.starts_with(text.trim_end_matches('.')) => {
+                out.push_str(h)
+            }
+            _ => out.push_str(text),
+        }
+        rest = &rest[close + "</a>".len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The plain text of a mail, whether or not it arrived as a page.
+///
+/// The list archive serves no raw view -- `/message/<id>/raw/` is a
+/// 404 -- so the link a person has to hand is the rendered page, and
+/// that is the link they will paste. HyperKitty wraps the message in
+/// `<div class="email-body">` and renders each paragraph of the mail
+/// as one `<p>`, which is exactly the blank-line-separated block
+/// [`parse_agenda`] reads, so the conversion is faithful rather than
+/// a best effort at scraping.
+///
+/// Anything that does not look like a page is returned unchanged:
+/// meetbot's `.txt` minutes and a mail saved to disk both arrive
+/// here as plain text already.
+pub fn plain_text(raw: &str) -> String {
+    if !raw.contains("<html") && !raw.contains("<!DOCTYPE") {
+        return raw.to_string();
+    }
+    // Scoped to the message when the page has one, so the archive's
+    // own navigation and footer cannot contribute a block.
+    const BODY: &str = "class=\"email-body";
+    let scoped = match raw
+        .find(BODY)
+        .and_then(|at| raw[at..].find('>').map(|i| at + i + 1))
+    {
+        Some(start) => &raw[start..start + div_len(&raw[start..])],
+        None => raw,
+    };
+    let broken = unlink(scoped)
+        .replace("</p>", "\n\n")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in broken.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    // `&amp;` last, so a literal "&amp;quot;" is not double-decoded.
+    for (from, to) in [
+        ("&quot;", "\""),
+        ("&#x27;", "'"),
+        ("&#39;", "'"),
+        ("&apos;", "'"),
+        ("&nbsp;", " "),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&amp;", "&"),
+    ] {
+        out = out.replace(from, to);
+    }
+    out
+}
+
+/// The meeting date an agenda announces.
+///
+/// Taken from the `date -d 'TZ="Europe/London" YYYY-MM-DD 18:00'`
+/// line the body prints for readers converting the time, which is
+/// the only place the date appears in a machine-readable form.
+pub fn agenda_date(body: &str) -> Option<NaiveDate> {
+    const MARK: &str = "TZ=\"Europe/London\" ";
+    let at = body.find(MARK)? + MARK.len();
+    NaiveDate::parse_from_str(body.get(at..at + 10)?, "%Y-%m-%d").ok()
+}
+
+/// Read an agenda body back into the sections it was rendered from.
+///
+/// The inverse of [`crate::agenda::render_body`], so that what was
+/// announced is what drives the meeting: the tracker can move
+/// between the agenda going out and the meeting starting, and a
+/// topic list rebuilt from it would then disagree with the mail
+/// everybody is reading.
+///
+/// Only the three ticket sections are read. `Council happenings`
+/// and `Open Floor` are standing topics the script emits itself,
+/// and the boilerplate before the first heading and after the last
+/// carries no entry.
+pub fn parse_agenda(body: &str) -> Sections {
+    let mut blocks: Vec<(Placement, Vec<&str>)> = Vec::new();
+    let mut place: Option<Placement> = None;
+    let mut block: Vec<&str> = Vec::new();
+    for line in body.lines().chain(std::iter::once("")) {
+        let line = line.trim();
+        let heading = line
+            .strip_prefix("= ")
+            .and_then(|h| h.strip_suffix(" ="))
+            .map(str::trim);
+        if heading.is_some() || line.is_empty() {
+            if let (Some(p), false) = (place, block.is_empty()) {
+                blocks.push((p, std::mem::take(&mut block)));
+            }
+            block.clear();
+        }
+        match heading {
+            Some(VOTED_HEADING) => place = Some(Placement::Voted),
+            Some(FOLLOWUPS_HEADING) => place = Some(Placement::Followup),
+            Some(NEW_BUSINESS_HEADING) => place = Some(Placement::NewBusiness),
+            // Any other heading ends the ticket sections.
+            Some(_) => place = None,
+            None if !line.is_empty() && place.is_some() => block.push(line),
+            None => {}
+        }
+    }
+    let mut sections = Sections {
+        voted: Vec::new(),
+        followups: Vec::new(),
+        new_business: Vec::new(),
+    };
+    for (p, lines) in blocks {
+        let Some(ticket) = parse_entry(&lines, p == Placement::Voted) else {
+            continue;
+        };
+        match p {
+            Placement::Voted => sections.voted.push(ticket),
+            Placement::Followup => sections.followups.push(ticket),
+            Placement::NewBusiness => sections.new_business.push(ticket),
+        }
+    }
+    sections
+}
+
+/// One agenda entry: the wrapped `#NNNN Title` line(s), its URL, and
+/// for a voted entry the decision under it.
+///
+/// A block with no URL is not an entry -- a chair's note added to
+/// the mail by hand lands in a section like anything else -- and is
+/// dropped rather than guessed at.
+fn parse_entry(lines: &[&str], voted: bool) -> Option<Ticket> {
+    let url_at = lines.iter().position(|l| l.starts_with("http"))?;
+    // Rejoined because `wrap_line` may have split the title across
+    // lines, and it wraps on whitespace with no continuation indent.
+    let heading = lines[..url_at].join(" ");
+    let (label, title) = heading.split_once(' ')?;
+    let (repo, number) = label.split_once('#')?;
+    let url = lines[url_at].to_string();
+    Some(Ticket {
+        number: number.parse().ok()?,
+        title: title.to_string(),
+        pull: url.contains("/pulls/"),
+        url,
+        decision: if voted {
+            lines.get(url_at + 1).map(|d| d.to_string())
+        } else {
+            None
+        },
+        repo: (!repo.is_empty()).then(|| repo.to_string()),
+        created: None,
+        updated: None,
+    })
+}
+
 /// Fail if any line of `text` ends in whitespace.
 ///
 /// Nothing else catches this: trailing whitespace is invisible in a
@@ -664,6 +915,91 @@ mod tests {
         ] {
             assert_eq!(wrap_line(short), short);
         }
+    }
+
+    /// Shaped on a HyperKitty message page: chrome outside the
+    /// body, a `quoted-switch` div opening immediately inside it,
+    /// a truncated link text, and escaped entities.
+    const PAGE: &str = "<!DOCTYPE html>\n<html>\n\
+         <!-- https://forge.fedoraproject.org/infra/tickets/issues/10741 -->\n\
+         <div class=\"email-body \">\n\
+         <p>or run:\n  date -d 'TZ=&quot;Europe/London&quot; 2026-10-20 18:00'</p>\n\
+         <div class=\"quoted-switch\"><a href=\"#\">...</a></div>\n\
+         <p>= Followups =</p>\n\
+         <p>#3693 removal of NetworkManager-{vpnc,fortisslvpn}\n\
+         <a target=\"_blank\" href=\"https://forge.fedoraproject.org/fesco/tickets/issues/3693\">\
+         https://forge.fedoraproject.org/fesco/tickets/i...</a></p>\n\
+         </div>\n\
+         <div class=\"footer\">nothing here</div>\n</html>\n";
+
+    #[test]
+    fn a_page_becomes_the_text_of_the_mail_it_shows() {
+        let text = plain_text(PAGE);
+        // Entities decoded, so the date line is readable again.
+        assert_eq!(agenda_date(&text), NaiveDate::from_ymd_opt(2026, 10, 20));
+        // The link is the href, not the truncated text it showed.
+        assert!(
+            text.contains("https://forge.fedoraproject.org/fesco/tickets/issues/3693\n"),
+            "{text}"
+        );
+        assert!(!text.contains("issues/i..."), "{text}");
+        // Scoped to the message: the archive's own chrome is not part
+        // of the mail, and its comment names a ticket of its own.
+        assert!(!text.contains("10741"), "{text}");
+        assert!(!text.contains("nothing here"), "{text}");
+    }
+
+    #[test]
+    fn a_quoted_switch_does_not_end_the_message_body() {
+        // The reply's `quoted-switch` div opens immediately inside
+        // the body; stopping at the first `</div>` lost everything
+        // after it.
+        let got = parse_agenda(&plain_text(PAGE));
+        assert_eq!(got.followups.len(), 1, "{:?}", got.followups);
+        assert_eq!(got.followups[0].number, 3693);
+    }
+
+    #[test]
+    fn plain_text_leaves_plain_text_alone() {
+        let minutes = "* TOPIC: #3696 A ticket (chair, 19:05:11)\n  * AGREED: x\n";
+        assert_eq!(plain_text(minutes), minutes);
+    }
+
+    #[test]
+    fn a_location_is_a_file_unless_it_is_a_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agenda.txt");
+        std::fs::write(&path, "= Followups =\n").unwrap();
+        assert_eq!(
+            read_location(path.to_str().unwrap()).unwrap(),
+            "= Followups =\n"
+        );
+        // A path that is not there is reported as such, naming it,
+        // rather than being attempted as a URL.
+        let missing = dir.path().join("nope.txt");
+        let err = read_location(missing.to_str().unwrap()).expect_err("no such file");
+        assert!(err.contains("nope.txt"), "{err}");
+    }
+
+    #[test]
+    fn a_block_without_a_url_is_not_an_entry() {
+        // A chair's note typed into the mail by hand sits in a
+        // section like anything else; it is not a ticket.
+        let body = "= Followups =\n\nPlease read the thread before Tuesday.\n\n\
+                    #3628 A real one\nhttps://forge.example/3628\n\n\
+                    = Council happenings =\n";
+        let got = parse_agenda(body);
+        assert_eq!(got.followups.len(), 1, "{:?}", got.followups);
+        assert_eq!(got.followups[0].number, 3628);
+    }
+
+    #[test]
+    fn sections_after_the_ticket_sections_are_not_read() {
+        let body = "= New business =\n\n#1 One\nhttps://forge.example/1\n\n\
+                    = Open Floor =\n\n#2 Two\nhttps://forge.example/2\n";
+        let got = parse_agenda(body);
+        assert_eq!(got.new_business.len(), 1);
+        assert_eq!(got.new_business[0].number, 1);
     }
 
     #[test]

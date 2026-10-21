@@ -706,6 +706,67 @@ mod tests {
     }
 
     #[test]
+    fn an_announced_agenda_parses_back_to_the_sections_it_was_rendered_from() {
+        // The round trip is the contract: `parse_agenda` has to read
+        // whatever `render_body` writes, including a title long
+        // enough to have been wrapped and an entry on another repo.
+        let mut voted = ticket(3656, "Proposal: gate stable updates on rmdepcheck");
+        voted.decision = Some("APPROVED (+8, 0, -0)".to_string());
+        let mut docs = ticket(28, "Clarify the updates policy");
+        docs.repo = Some("fesco/docs".to_string());
+        docs.url = "https://forge.fedoraproject.org/fesco/docs/pulls/28".to_string();
+        docs.pull = true;
+        // An issue on the same repo, which the mail distinguishes
+        // from the pull request only by the URL path -- and that
+        // distinction is what picks `!forge issue` over `!forge pr`.
+        let mut docs_issue = ticket(31, "Write down the quorum rule");
+        docs_issue.repo = Some("fesco/docs".to_string());
+        docs_issue.url = "https://forge.fedoraproject.org/fesco/docs/issues/31".to_string();
+        let sections = Sections {
+            voted: vec![voted],
+            followups: vec![ticket(
+                3628,
+                "Change: libxml2 15, with a deliberately overlong title that forces a wrap",
+            )],
+            new_business: vec![
+                ticket(3636, "Change: Enable Shadow Stack by Default"),
+                docs,
+                docs_issue,
+            ],
+        };
+        let back = sources::parse_agenda(&render_body(date(), &sections));
+        assert_eq!(back.voted, sections.voted);
+        assert_eq!(back.followups, sections.followups);
+        assert_eq!(back.new_business, sections.new_business);
+    }
+
+    #[test]
+    fn an_agenda_carries_the_date_it_announces() {
+        let sections = Sections {
+            voted: vec![],
+            followups: vec![],
+            new_business: vec![],
+        };
+        let body = render_body(date(), &sections);
+        assert_eq!(sources::agenda_date(&body), Some(date()));
+    }
+
+    #[test]
+    fn an_empty_agenda_parses_to_no_tickets() {
+        // The boilerplate alone: the preamble carries a URL and the
+        // closing paragraphs carry two more, and none is an entry.
+        let sections = Sections {
+            voted: vec![],
+            followups: vec![],
+            new_business: vec![],
+        };
+        let back = sources::parse_agenda(&render_body(date(), &sections));
+        assert!(back.voted.is_empty(), "{:?}", back.voted);
+        assert!(back.followups.is_empty(), "{:?}", back.followups);
+        assert!(back.new_business.is_empty(), "{:?}", back.new_business);
+    }
+
+    #[test]
     fn the_agenda_body_never_ends_a_line_in_whitespace() {
         // Every section populated, so the static template and the
         // wrapped entries are both covered; an empty section is

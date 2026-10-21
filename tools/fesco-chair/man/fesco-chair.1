@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fesco-chair 1 2026-10-20 "sandogasa 0.26.0" "Sandogasa Manual"
+.TH fesco-chair 1 2026-10-21 "sandogasa 0.26.0" "Sandogasa Manual"
 .SH NAME
 fesco\-chair \- FESCo meeting chair helper — agenda, day\-of script, summary email, ticket votes
 .SH SYNOPSIS
@@ -59,7 +59,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair announced
-\fBfesco\-chair announced\fR [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-all\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> 
+\fBfesco\-chair announced\fR [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-all\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL|FILE\fR> 
 .PP
 Record that the announcement went out, and close its tickets
 .TP
@@ -78,8 +78,8 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIURL\fR>
-Link to the announcement in the list archive
+<\fIURL|FILE\fR>
+The announcement: a list\-archive link, or a file on disk
 .SS fesco-chair changes
 \fBfesco\-chair changes\fR [\fB\-\-ticket\fR] [\fB\-\-json\fR] [\fB\-\-script\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
@@ -107,7 +107,7 @@ Store the Forgejo API token (interactive)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair script
-\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-dry\-run\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-dry\-run\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIURL|FILE\fR] 
 .PP
 Day\-of checklist plus the meetbot command script
 .TP
@@ -149,6 +149,9 @@ Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.TP
+[\fIURL|FILE\fR]
+An announced agenda to build the script from: a list\-archive link, or a file on disk. Without one the script is built from the tracker, as the agenda itself is
 .SS fesco-chair summary
 \fBfesco\-chair summary\fR [\fB\-\-date\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .PP
