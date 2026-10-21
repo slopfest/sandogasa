@@ -612,6 +612,32 @@ even if a sync is running, verifies the snapshot before compressing it, and
 writes a `.sha256` beside it. The file is named for the last day it covers
 rather than the day it was packed, so two runs over the same data agree.
 
+### Attaching it to a release
+
+The artefact goes on a `koji-lag-store-*` release of this repository,
+tagged for the last day the store covers rather than the day it was packed,
+so the tag and the asset name agree:
+
+```sh
+gh release create koji-lag-store-2026-10-20 \
+  --title "koji-lag store, 2024-12-23 to 2026-10-20" \
+  --notes-file notes.txt \
+  dist/lag-*.sqlite.zst dist/lag-*.sqlite.zst.sha256 \
+  tools/koji-lag/FINDINGS.pdf
+```
+
+**`FINDINGS.pdf` goes up with it**, rendered by `make findings` from the
+`FINDINGS.md` at that tag. The store and the document that says what was
+found in it are no use apart: somebody handed a gigabyte of task metadata
+needs to know what has already been asked of it, and somebody reading the
+findings needs the data to check them against. The PDF rather than the
+markdown because the audience is not necessarily in this repository.
+
+The notes should say the span, the task count, the compressed and restored
+sizes, and the oldest `koji-lag` that can read the schema — see the previous
+release for the shape. Link `FINDINGS.md` **at the tag** rather than at
+`main`, so the figures quoted in it match the store attached beside it.
+
 `fetch-store.sh` downloads, checks that checksum, and decompresses. It
 *refuses* if the checksum is missing or does not match, rather than warning:
 a truncated store opens and queries perfectly well, with rows quietly absent,

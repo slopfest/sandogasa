@@ -20,7 +20,7 @@ hardware, and because they turn out to be each other's control: they reach the
 same utilisation from opposite directions and only one of them queues.
 
 > **Figures regenerated 2026-10-21 against a complete store**, covering
-> 2024-12-23 to 2026-10-20 with no gaps — `koji-lag verify` finds none. Every
+> 2024-12-24 to 2026-10-19 with no gaps — `koji-lag verify` finds none. Every
 > one comes from `koji-lag report`, `koji-lag events` or their trend files, so
 > re-running those and pasting the tables back is all it takes to refresh
 > them; there are no queries to reconstruct.
