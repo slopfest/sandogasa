@@ -649,48 +649,131 @@ to 0.16.
   `ready`, the live kojid check-in. That gap is exactly what made
   2026-05-07 ambiguous from the data alone: 18 hosts enabled, none serving.
   Only a poller catches that, and only going forward.
-- **Storage and hypervisor metrics for the s390x fleet**, since the
-  regression's shape points there and build wall-clock cannot distinguish
-  the causes.
-- **Physical host placement.** Configuration history implies
-  `buildvm-s390x-01..14` are maintained together and hold 82% of enabled
-  capacity, but that is shared handling rather than proof of shared
-  hardware. Infrastructure can confirm it in a minute and it matters: if
-  that group is one machine, losing it costs four fifths of the
-  architecture.
+
+Everything else infrastructure could tell us is a question rather than a
+feed, and those are collected below.
+
+## Questions for Fedora Infrastructure
+
+One place to look, so that answering any of this does not mean reading the
+rest of the document. Each question says what it would change, because a
+question whose answer changes nothing is not worth anybody's time. A
+sentence is a complete answer to most of them; none of this needs a report
+written for it.
+
+**These are questions, not recommendations in disguise.** Where one carries
+a suggestion, the likeliest answer is that it is already configured that way
+and we cannot see it from here, so the ask is to confirm rather than to
+adopt. Task records show what the scheduler did, never what anybody
+intended, and several things that look like gaps from the outside are
+settled policy on the inside.
+
+**None of it can be answered from Koji**, which is why it is asked here.
+Koji's `host` is a guest — every s390x builder is a `buildvm-`, not a
+`buildhw-` — its `capacity` is that guest's scheduling weight, and the
+machine underneath is invisible. That is exactly why the October 2026 LPAR
+work moved build times by 10-20% while `capacity` never moved at all: it
+happened below the layer Koji can see.
+
+### The machine behind the builders
+
+**Q1. Which CEC and LPAR hosts each `buildvm-s390x-NN`?** Without it we
+cannot tell scheduling contention from hardware contention, and those have
+different fixes — one is a Koji channel change costing nothing, the other is
+hardware. Every recommendation about isolating long builds depends on this
+answer.
+
+**Q2. Does the builder LPAR run on dedicated or shared processors, and at
+what weight?** The October change being described as "LPAR CPU weight"
+reads as shared from out here, but that is an inference from a phrase. If
+they are shared, is the weight where you want it, and was the October change
+intended as the end of that work or the start? Dedicated processors trade
+contention away for idle capacity, which may well have been considered and
+rejected for good reasons.
+
+**Q3. Is there physical headroom to grow the builder LPAR at all?** This is
+the one that decides whether section 3 means anything. That section prices
+the rebuild queue at +44 to +66 weight units, about +9 to +13 builders — but
+if those builders are guests on a single mainframe with no spare capacity,
+adding them raises Koji's `capacity` figure and subdivides the same cores.
+Throughput would not move and the report would not notice.
+
+**Q4. Is `buildvm-s390x-01..14` one physical machine?** Configuration
+history shows those fourteen maintained together thirty times over, holding
+82% of enabled capacity. That is shared *handling*, and inferring shared
+hardware from it would be overreach. If it is one machine, losing it costs
+four fifths of the architecture.
+
+### Measurement we cannot take from outside
+
+**Q5. CPU Measurement Facility data for the builder LPAR — specifically
+Relative Nest Intensity and cache-miss cycles per instruction.** This is the
+instrument for the question this data cannot settle. IBM documents that
+partitions on one machine interfere through the CEC-wide memory cache *even
+when defined as dedicated*, and that it shows up as an unexplained rise in
+CPU utilisation. The regression's shape here — sparing cargo and rustc,
+punishing fork- and I/O-heavy autotools and C++ — is what nest contention
+looks like and is not what CPU starvation looks like. RNI would tell the two
+apart; build wall-clock never will.
+
+**Q6. Storage and hypervisor metrics for the s390x fleet**, for the same
+reason and at the same layer.
+
+### Configuration
+
+**Q7. What is Fedora's per-task build limit, if any?** Four tasks ran past
+50 hours in F45, so either there is no cap or it is higher than that.
+
+**Q8. What is `heavybuilder` for on s390x, and is it behaving as you
+expect?** It is served by one host, `buildvm-s390x-20`, carrying the lowest
+capacity in the fleet at 1.5 — which looks deliberate, since a low capacity
+means roughly one task at a time, and somebody clearly thought about this
+before we did. What we cannot tell from task records is what the channel is
+*for*. In September 2026 it ran 45 tasks while 109 of the architecture's 122
+builds over six hours ran on `default` and `ci`. That might mean routing is
+by package and the list has not been revisited; it might equally mean the
+channel is for memory-hungry builds rather than long ones, or that moving
+more onto one guest would make things worse rather than better. We are
+asking which, not suggesting the number is wrong.
+
+**Q9. Which hosts belong to which channel?** Asked because we cannot
+currently answer it ourselves: koji-lag stores `channels` and `host_config`
+but not the mapping between them, so the figures in Q8 are "which hosts
+*served* each channel in September", not membership — a host can belong to a
+channel and have taken no task from it. `listChannels`/`listHosts` would
+close this, and that is our collection gap to fix rather than a question for
+anybody else. It is listed here so the Q8 numbers are not read as firmer
+than they are.
 
 ## Open questions, and where other expertise would help
 
 Stated as questions rather than caveats on purpose: each is something this
 data cannot settle, and most of them somebody else can — the point of
-publishing them is to find that person rather than to hedge.
+publishing them is to find that person rather than to hedge. The ones
+Fedora Infrastructure is the right people to answer are in the section
+above, so that they are not spread over two lists.
 
 - **When did the platform regression start?** Bracketed between 2025-01-19
-  and 2025-07-23, because F42 is the only rebuild predating it. Collecting
-  2025-02 to 2025-06 closes this to within a month and is in progress. Once
-  it is dated, whoever knows what changed on those builders that month can
+  and 2025-07-23, because F42 is the only rebuild predating it. The
+  2025-02 to 2025-06 collection this was waiting on is **now complete and
+  verifies clean**, so this is answerable from the store rather than from
+  anybody's recollection; it has not been narrowed here yet. Once it is
+  dated, whoever knows what changed on those builders that month can
   probably name the cause in a sentence.
 - **Why did it start?** Build wall-clock cannot separate slower hardware
   from storage contention or a hypervisor or kernel change. The shape is a
   clue rather than an answer: it spares cargo and rustc, which are CPU-bound
   and spawn few processes, and doubles autotools and C++ builds, which fork
   constantly and hammer the filesystem. Somebody who administers those
-  machines will read that differently from us.
-- **Is `buildvm-s390x-01..14` one physical machine?** Configuration history
-  shows those fourteen maintained together thirty times over, holding 82% of
-  enabled capacity. That is shared *handling*, and inferring shared hardware
-  from it would be overreach. Infrastructure can confirm or deny it quickly,
-  and the answer matters: if it is one machine, losing it costs four fifths
-  of the architecture.
+  machines will read that differently from us — and Q5 names the measurement
+  that would settle it, since IBM documents partitions interfering through
+  the machine's shared memory cache even when defined as dedicated.
 - **How exact are the utilisation figures?** The weight integral reads above
   100% at F45, and F44 at 0.79 measured *worse* than F45 at 1.24 — so the
   ordering is not perfectly monotone and the absolute values are
   approximate. The threshold framing (minutes below 0.6, hours above 0.7) is
   what the measured anchors support; a queueing theorist could probably do
   better with the same data.
-- **What is Fedora's actual per-task build limit?** Four tasks ran past 50
-  hours in F45, so either there is no cap or it is higher than that. This is
-  a configuration question we could not answer from the outside.
 - **Did the SRPM-on-s390x misconfiguration recur?** It ran for about ten
   months to 2025-10-24 and is absent from 2026-08-11..19, but those episodes
   came in bursts tied to rebuilds, so nine ordinary days prove little. The
