@@ -539,8 +539,13 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         // architecture: scratch capacity is provisioned separately,
         // so mixing them lets a large, cheaply-served scratch volume
         // hide an official queue problem behind it.
+        // `per_arch`, not `selected`: the source rebuild is one task
+        // per build on an arch of the hub's choosing, so pairing it
+        // against another architecture's compile compares a checkout
+        // with a build. It is the same reason it stays out of every
+        // other per-arch table.
         same_package: crate::compare::against(
-            &selected,
+            &per_arch,
             SAME_PACKAGE_REFERENCE,
             opts.include_failed,
         ),
@@ -1537,6 +1542,41 @@ mod tests {
         assert_eq!(s390x.bottleneck_total_delay, 300.0);
         // And the rebuild is absent from the per-arch tables.
         assert!(!out.multi_arch.iter().any(|r| r.arch == "noarch"));
+    }
+
+    #[test]
+    fn the_srpm_step_is_not_paired_against_another_architecture() {
+        // The source rebuild is one task per build, on an arch of the
+        // hub's choosing, and is a checkout rather than a compile.
+        // Folded into the reference it drags that package's median
+        // down, which both inflates every other architecture's ratio
+        // and bands the package by a time nothing actually took. It
+        // is the same reason it stays out of the per-arch tables --
+        // and for ten months of 2025 the hub recorded this work
+        // against s390x, which reported s390x at 0.01x of x86_64.
+        let ratios = |ds: &Dataset| {
+            run(ds, &ReportOpts::default())
+                .same_package
+                .iter()
+                .find(|c| c.arch == "s390x")
+                .expect("an s390x comparison")
+                .bands
+                .iter()
+                .map(|b| (b.band, b.packages, b.ratio))
+                .collect::<Vec<_>>()
+        };
+        let plain = dataset();
+        let mut with_srpm = dataset();
+        for (id, method) in [(14, REBUILD_SRPM), (15, BUILD_SRPM_FROM_SCM)] {
+            let mut t = task(id, 1, "x86_64", 10.0, 20.0);
+            t.method = method.to_string();
+            with_srpm.tasks.insert(t.key(), t);
+        }
+        assert_eq!(
+            ratios(&plain),
+            ratios(&with_srpm),
+            "an SRPM step must not move the comparison"
+        );
     }
 
     #[test]

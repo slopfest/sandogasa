@@ -105,19 +105,20 @@ Same package against x86_64, by how long x86_64 took:
 
 | arch | <5m | 5-30m | 30-60m | >1h |
 |---|---:|---:|---:|---:|
-| aarch64 | 1.43x (22531) | 1.49x (727) | 1.47x (63) | 1.36x (51) |
-| ppc64le | 1.79x (22510) | 1.64x (724) | 1.65x (63) | 1.44x (49) |
-| s390x | 1.50x (2397) | 2.75x (286) | 2.70x (24) | 2.52x (23) |
+| aarch64 | 1.41x (19730) | 1.47x (813) | 1.40x (76) | 1.43x (53) |
+| ppc64le | 1.81x (19598) | 1.72x (788) | 1.77x (70) | 1.53x (47) |
+| s390x | 1.39x (2365) | 2.57x (307) | 2.54x (29) | 1.88x (27) |
 ```
 
 Banding matters as much as pairing. A single ratio averages opposite
-effects into a number true of no build at all: across every package
-s390x against ppc64le comes out at 1.06, parity, while it is in fact
-faster on short builds and twice as slow on long ones. Banded, the
-shape is plain — and it shows that **s390x is the only architecture
-whose penalty grows with build length**, where aarch64 and ppc64le
-are flat across all four bands. That is the signature of a per-build
-compute shortfall rather than a scheduling one.
+effects into a number true of no build at all: nine tenths of the
+packages s390x pairs on are in the shortest band, so one unbanded
+median would land near 1.4 and hide the 2.5x it pays in the middle
+two. Banded, the shape is plain — **s390x is the only architecture
+whose penalty rises with build length**, nearly doubling from the
+shortest band, where aarch64 is flat across all four and ppc64le
+falls slightly. That is the signature of a per-build compute
+shortfall rather than a scheduling one.
 
 Each cell is the median of the per-package ratios, not the ratio of
 the medians, so one enormous package moves the figure by one
