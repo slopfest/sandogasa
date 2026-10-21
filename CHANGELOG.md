@@ -97,17 +97,18 @@ what each was asked to build as about how fast it did it. Nothing in
 the report let a reader get past that, and the question it blocks is
 the one people actually ask.
 
-A new table pairs on the package and bands by how long the reference
-took:
+A new table pairs each build's own per-arch tasks — the same NEVR
+differing only in the architecture — and bands by how long the
+reference took:
 
 ```
 Same package against x86_64, by how long x86_64 took:
 
 | arch | <5m | 5-30m | 30-60m | >1h |
 |---|---:|---:|---:|---:|
-| aarch64 | 1.41x (19730) | 1.47x (813) | 1.40x (76) | 1.43x (53) |
-| ppc64le | 1.81x (19598) | 1.72x (788) | 1.77x (70) | 1.53x (47) |
-| s390x | 1.39x (2365) | 2.57x (307) | 2.54x (29) | 1.88x (27) |
+| aarch64 | 1.42x (14013) | 1.45x (745) | 1.40x (72) | 1.38x (54) |
+| ppc64le | 1.77x (13844) | 1.70x (713) | 1.81x (65) | 1.55x (48) |
+| s390x | 1.29x (2338) | 2.51x (326) | 2.63x (30) | 2.02x (27) |
 ```
 
 Banding matters as much as pairing. A single ratio averages opposite
@@ -122,7 +123,9 @@ shortfall rather than a scheduling one.
 
 Each cell is the median of the per-package ratios, not the ratio of
 the medians, so one enormous package moves the figure by one
-package's worth rather than by its size. Bands thinner than
+package's worth rather than by its size. A package built several
+times in the window contributes a pairing per build and then one
+vote, so a nightly rebuild does not outweigh a package built once. Bands thinner than
 `--min-samples` are withheld under the same guard as every other
 table, and an architecture with nothing left to show is dropped
 rather than rendered as a row of dashes.

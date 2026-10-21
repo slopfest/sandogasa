@@ -68,28 +68,71 @@ pub struct BandRatio {
     pub ratio: Option<f64>,
 }
 
-/// Median build time per `(package, arch)`, which is the unit a
-/// comparison pairs on.
-fn per_package(tasks: &[&TaskRecord], include_failed: bool) -> BTreeMap<(String, String), f64> {
-    let mut gathered: BTreeMap<(String, String), Vec<f64>> = BTreeMap::new();
+/// Every pairing a window holds: for each `(package, arch)`, one
+/// `(ratio, reference seconds)` per build that produced both.
+///
+/// The **build** is the pairing unit, not the package name. A
+/// build's per-arch children are the same source at the same
+/// version, submitted together and compiled from the same SRPM --
+/// the same NEVR differing only in architecture, which is the only
+/// comparison that isolates the architecture. Pairing on the name
+/// across a window does not give that: a package built twice in a
+/// month can pair one architecture's build of one version against
+/// another's build of the next, and a figure that moves with what
+/// landed between them is not a property of either machine.
+fn paired(
+    tasks: &[&TaskRecord],
+    reference: &str,
+    include_failed: bool,
+) -> BTreeMap<(String, String), Vec<(f64, f64)>> {
+    let mut builds: BTreeMap<String, Vec<&TaskRecord>> = BTreeMap::new();
     for task in tasks {
         if !in_build_time_population(task, include_failed) {
             continue;
         }
-        if let (Some(pkg), Some(secs)) = (task.package.as_deref(), task.build_time()) {
-            gathered
-                .entry((pkg.to_string(), task.arch.clone()))
+        if let Some(parent) = task.parent {
+            builds
+                .entry(format!("{}:{parent}", task.instance))
                 .or_default()
-                .push(secs);
+                .push(task);
         }
     }
-    gathered
-        .into_iter()
-        .filter_map(|(k, mut v)| {
-            v.sort_by(f64::total_cmp);
-            median(&v).map(|m| (k, m))
-        })
-        .collect()
+    let mut out: BTreeMap<(String, String), Vec<(f64, f64)>> = BTreeMap::new();
+    for children in builds.values() {
+        // A median over the arch's tasks in this one build, which is
+        // normally a single task; more than one means a retry.
+        let mut by_arch: BTreeMap<&str, Vec<f64>> = BTreeMap::new();
+        let mut package = None;
+        for task in children {
+            if let Some(secs) = task.build_time() {
+                by_arch.entry(task.arch.as_str()).or_default().push(secs);
+                package = package.or(task.package.as_deref());
+            }
+        }
+        let Some(package) = package else { continue };
+        let per_arch: BTreeMap<&str, f64> = by_arch
+            .into_iter()
+            .filter_map(|(a, mut v)| {
+                v.sort_by(f64::total_cmp);
+                median(&v).map(|m| (a, m))
+            })
+            .collect();
+        let Some(&base) = per_arch.get(reference) else {
+            continue;
+        };
+        if base <= 0.0 {
+            continue;
+        }
+        for (arch, secs) in &per_arch {
+            if *arch == reference || *arch == NOT_AN_ARCH {
+                continue;
+            }
+            out.entry((package.to_string(), (*arch).to_string()))
+                .or_default()
+                .push((secs / base, base));
+        }
+    }
+    out
 }
 
 /// Compare every architecture against `reference`, band by band.
@@ -102,33 +145,34 @@ pub fn against(
     reference: &str,
     include_failed: bool,
 ) -> Vec<ArchComparison> {
-    let per = per_package(tasks, include_failed);
-    let arches: std::collections::BTreeSet<&str> = per
-        .keys()
-        .map(|(_, a)| a.as_str())
-        .filter(|a| *a != reference && *a != NOT_AN_ARCH)
-        .collect();
+    let per = paired(tasks, reference, include_failed);
+    let arches: std::collections::BTreeSet<&str> = per.keys().map(|(_, a)| a.as_str()).collect();
 
     let mut out = Vec::new();
     for arch in arches {
         // Ratios collected per band, keyed by the band's index so the
         // output order is the band order rather than alphabetical.
         let mut by_band: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
-        for ((pkg, a), secs) in &per {
+        for ((_, a), pairs) in &per {
             if a != arch {
                 continue;
             }
-            let Some(base) = per.get(&(pkg.clone(), reference.to_string())) else {
+            // One vote per package, however often it was built: the
+            // pairing is per build so the comparison stays
+            // like-for-like, but a package rebuilt nightly must not
+            // outweigh one built once.
+            let mut ratios: Vec<f64> = pairs.iter().map(|(r, _)| *r).collect();
+            let mut bases: Vec<f64> = pairs.iter().map(|(_, b)| *b).collect();
+            ratios.sort_by(f64::total_cmp);
+            bases.sort_by(f64::total_cmp);
+            let (Some(ratio), Some(base)) = (median(&ratios), median(&bases)) else {
                 continue;
             };
-            if *base <= 0.0 {
-                continue;
-            }
             if let Some(at) = BANDS
                 .iter()
-                .position(|(_, lo, hi)| *base >= *lo && *base < *hi)
+                .position(|(_, lo, hi)| base >= *lo && base < *hi)
             {
-                by_band.entry(at).or_default().push(secs / base);
+                by_band.entry(at).or_default().push(ratio);
             }
         }
         let bands = BANDS
@@ -166,12 +210,18 @@ mod tests {
     use super::*;
     use crate::dataset::BUILD_ARCH;
 
-    /// A completed build of `pkg` on `arch` taking `secs`.
-    fn task(id: i64, pkg: &str, arch: &str, secs: f64) -> TaskRecord {
+    /// One `buildArch` child of a build, taking `secs` on `arch`.
+    ///
+    /// `build` is the parent task, which is what the comparison
+    /// pairs on -- so two packages must never share one, and two
+    /// builds of the same package must not share one either. Koji
+    /// gives each build its own task; a fixture that did otherwise
+    /// would be testing something that cannot happen.
+    fn task(id: i64, build: i64, pkg: &str, arch: &str, secs: f64) -> TaskRecord {
         TaskRecord {
             instance: "fedora".into(),
             task_id: id,
-            parent: Some(1),
+            parent: Some(build),
             method: BUILD_ARCH.into(),
             arch: arch.into(),
             package: Some(pkg.into()),
@@ -197,8 +247,8 @@ mod tests {
         // each architecture banded itself the row would compare
         // different packages in each cell.
         let rows = vec![
-            task(1, "slow", "x86_64", 2400.0),
-            task(2, "slow", "s390x", 4800.0),
+            task(1, 10, "slow", "x86_64", 2400.0),
+            task(2, 10, "slow", "s390x", 4800.0),
         ];
         let out = compare(&rows);
         assert_eq!(out.len(), 1);
@@ -214,7 +264,7 @@ mod tests {
     fn a_package_the_reference_did_not_build_is_not_compared() {
         // Nothing to divide by, so it is dropped rather than
         // contributing a one-sided figure.
-        let rows = vec![task(1, "only-s390x", "s390x", 60.0)];
+        let rows = vec![task(1, 10, "only-s390x", "s390x", 60.0)];
         // Nothing pairs, so nothing is reported at all.
         assert!(compare(&rows).is_empty());
     }
@@ -225,9 +275,9 @@ mod tests {
         // reference's build of the same package compares different
         // work and produced ratios near 0.01x on real data.
         let rows = vec![
-            task(1, "doc", "x86_64", 600.0),
-            task(2, "doc", "noarch", 6.0),
-            task(3, "doc", "s390x", 900.0),
+            task(1, 10, "doc", "x86_64", 600.0),
+            task(2, 10, "doc", "noarch", 6.0),
+            task(3, 10, "doc", "s390x", 900.0),
         ];
         let out = compare(&rows);
         let arches: Vec<&str> = out.iter().map(|a| a.arch.as_str()).collect();
@@ -239,16 +289,42 @@ mod tests {
         // Two packages is not an answer; printing one invites it
         // being quoted.
         let rows = vec![
-            task(1, "a", "x86_64", 60.0),
-            task(2, "a", "s390x", 120.0),
-            task(3, "b", "x86_64", 60.0),
-            task(4, "b", "s390x", 120.0),
+            task(1, 10, "a", "x86_64", 60.0),
+            task(2, 10, "a", "s390x", 120.0),
+            task(3, 11, "b", "x86_64", 60.0),
+            task(4, 11, "b", "s390x", 120.0),
         ];
         // Both pairings are reported with their count; it is the
         // renderer that decides two is too few to show.
         let out = compare(&rows);
         assert_eq!(out[0].bands[0].packages, 2);
         assert_eq!(out[0].bands[0].ratio, Some(2.0));
+    }
+
+    #[test]
+    fn a_package_built_twice_pairs_inside_each_build() {
+        // The same package, two builds, with the architectures
+        // moving apart between them. Pairing on the name across the
+        // window mixes one build's x86_64 with the other's s390x and
+        // reports a ratio no build ran; pairing inside each build
+        // gives 2.0 and 1.0, and the package still votes once.
+        // Three builds, so the answer does not turn on how an
+        // even-length median is defined. Ratios 2.0, 1.0, 3.0.
+        let rows = vec![
+            task(1, 10, "p", "x86_64", 60.0),
+            task(2, 10, "p", "s390x", 120.0),
+            task(3, 11, "p", "x86_64", 600.0),
+            task(4, 11, "p", "s390x", 600.0),
+            task(5, 12, "p", "x86_64", 100.0),
+            task(6, 12, "p", "s390x", 300.0),
+        ];
+        let out = compare(&rows);
+        let counted: usize = out[0].bands.iter().map(|b| b.packages).sum();
+        assert_eq!(counted, 1, "one package is one vote, however often built");
+        let ratio = out[0].bands.iter().find_map(|b| b.ratio);
+        // Pairing on the name would take the median x86_64 (100s)
+        // against the median s390x (300s) and report 3.0.
+        assert_eq!(ratio, Some(2.0), "the median of 2.0, 1.0 and 3.0");
     }
 
     #[test]
@@ -262,8 +338,9 @@ mod tests {
             .enumerate()
         {
             let id = i as i64 * 2;
-            rows.push(task(id + 1, pkg, "x86_64", 60.0));
-            rows.push(task(id + 2, pkg, "s390x", *s390x));
+            let build = 100 + i as i64;
+            rows.push(task(id + 1, build, pkg, "x86_64", 60.0));
+            rows.push(task(id + 2, build, pkg, "s390x", *s390x));
         }
         let out = compare(&rows);
         assert_eq!(out[0].bands[0].ratio, Some(2.0));

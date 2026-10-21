@@ -509,7 +509,12 @@ what was built, not who built it.
 Koji records two kinds of task against a host's architecture that have
 nothing to do with that architecture:
 
-- **`buildSRPMFromSCM`** — a checkout and a tarball, seconds not minutes.
+- **`buildSRPMFromSCM` and `rebuildSRPM`** — a checkout and a tarball,
+  seconds not minutes. Both, always: `rebuildSRPM` is the larger of the two
+  by an order of magnitude (March 2025 recorded 49,341 against 3,829 on
+  s390x), so a filter that names only the one this list used to name leaves
+  almost all of the contamination in place. `dataset::is_srpm_step` covers
+  both and is the only thing to test against.
 - **a noarch build's `buildArch` task** — one task for the whole build,
   filed under whichever host the hub picked. `python-requests` is aarch64 in
   one rebuild and something else in the next.
@@ -525,6 +530,41 @@ builder hours, queue wait and the cohorts.
 a build is noarch is a fact about the build. Counting the selected tasks made
 `report --arch s390x` see every build as single-architecture and silently
 emptied the whole table — a filter must not change what a build *is*.
+
+## Pair on the build: the same NEVR, differing only in architecture
+
+A cross-architecture comparison is only ever between **one build's own
+per-arch children**. They are the same source at the same version, compiled
+from the same SRPM, submitted together — the same NEVR differing only in the
+`A`. Nothing else isolates the architecture, because nothing else holds
+everything but the architecture still.
+
+Pairing on the *package name* over a window looks equivalent and is not. A
+package built twice in a month can have one architecture's build of one
+version weighed against another's build of the next, so the figure moves with
+whatever landed in between — a dependency bump, a patch, a `%check` added —
+and that movement is reported as a property of a machine. The window makes it
+worse the longer it is, which is exactly backwards: a wider window should buy
+more confidence, not less.
+
+So `compare::paired` groups by the parent task, takes each architecture's time
+within that build, and divides there. A package built many times contributes
+many pairings and then **one vote**: the median of its own ratios, so a
+package rebuilt nightly does not outweigh one built once. Bands are decided by
+the reference's time for the same reason — every cell of a row then describes
+the same packages.
+
+The same rule governs what may be paired at all. A checkout is not a compile
+(above), so the source rebuild is excluded before any of this; pairing it
+against another architecture's compile reported s390x at 0.01x of x86_64 for
+March 2025, which is the shape this mistake takes — a number too good to be
+true, in a direction nobody was looking.
+
+**The counts are the check.** A pairing count that exceeds what the
+architecture could possibly have built is the cheapest available proof that
+the population is wrong: s390x paired 20,976 packages in a month it built
+about 7,900. Read the count before the ratio, every time — see "Check the
+population counts before believing a ratio".
 
 ## Compare a family with itself, never with another family
 
