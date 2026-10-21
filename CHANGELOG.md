@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Security: certificate verification accepted distrusted intermediates
+
+Two RUSTSEC advisories landed against the TLS stack every tool here
+uses to reach Bugzilla, Koji, Bodhi, GitHub and the rest, and both
+weaken the check that decides whether the server on the other end is
+who it claims to be.
+
+- [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382):
+  `rustls-webpki` before 0.103.16 may accept a certificate chain
+  through an intermediate that has been distrusted.
+- [RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383):
+  `webpki-root-certs` before 1.0.10 bundles roots that allow trust in
+  distrusted emSign intermediates.
+
+Both are on the path of every request these tools make, rather than
+behind a feature nobody enables, so this is a lockfile bump rather
+than a judgement about exposure. Pinned to each advisory's **minimum**
+fixed version — 0.103.16 and 1.0.10, not the latest — so a distribution
+build can still satisfy the requirement with what it packages.
+
+
 ### fesco-chair: build the meeting script from the agenda that went out
 
 `script` was the last subcommand that did not key off the actual
