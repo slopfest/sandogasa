@@ -468,6 +468,14 @@ pub(crate) trait RepoQuery: Sync {
 
     /// The source packages requiring any of these capabilities.
     fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, String>;
+
+    /// The source packages providing a capability, constraint included.
+    ///
+    /// The constraint is passed through rather than stripped, so the
+    /// repository decides whether a version satisfies it. Repeating
+    /// RPM's comparison here would be a second implementation to keep
+    /// right.
+    fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String>;
 }
 
 /// Where a check gets its repository views.
@@ -534,6 +542,10 @@ impl RepoQuery for sandogasa_fedrq::Fedrq {
 
     fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, String> {
         sandogasa_fedrq::Fedrq::whatrequires(self, packages).map_err(|e| e.to_string())
+    }
+
+    fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String> {
+        sandogasa_fedrq::Fedrq::resolve_to_source(self, dep).map_err(|e| e.to_string())
     }
 }
 
@@ -1969,6 +1981,36 @@ fn requirement_survives_update(
     })
 }
 
+/// Whether something outside the update still satisfies `dep`.
+///
+/// [`requirement_survives_update`] can only see what the update
+/// provides, so a capability that several packages provide at
+/// different versions looks broken the moment the one being updated
+/// moves past the required version. Rust compat packages are built to
+/// do exactly that: on f44 `crate(webpki-roots)` is provided by
+/// `rust-webpki-roots` at 1.0.9, `rust-webpki-roots0.25` at 0.25.4 and
+/// `rust-webpki-roots0.26` at 0.26.11, and updating the first was
+/// reported as breaking a requirement on the third.
+///
+/// So before calling a requirement broken, ask the repository which
+/// sources provide it — constraint included, so RPM does the version
+/// comparison — and discount the ones this update is replacing. A
+/// query that fails answers "no": inventing a survival would hide a
+/// real breakage, which is the one error this check must not make.
+fn satisfied_outside_update(
+    dep: &str,
+    repo: &(dyn RepoQuery + Send + Sync),
+    updated: &BTreeSet<&str>,
+) -> bool {
+    dep_satisfiable(dep, &|term: &str| {
+        repo.resolve_to_source(term).is_ok_and(|sources| {
+            sources
+                .iter()
+                .any(|src| src != "(none)" && !updated.contains(src.as_str()))
+        })
+    })
+}
+
 /// Extract the name part of a Provide string.
 ///
 /// E.g. "tor = 0.4.9.5-1.el9" → "tor",
@@ -2842,6 +2884,12 @@ fn run_provides_analysis(
                     if requirement_survives_update(&dep, &changed_names, &new_by_name) {
                         return None;
                     }
+                    // The update does not satisfy it; something else
+                    // in the repository may, and usually does when the
+                    // capability has a compat package behind it.
+                    if satisfied_outside_update(&dep, stable_fedrq, &updated_set) {
+                        return None;
+                    }
                     let changed: Vec<String> = extract_capability_names(&dep)
                         .into_iter()
                         .filter(|c| changed_names.contains(c) || new_by_name.contains_key(c))
@@ -3529,6 +3577,90 @@ mod tests {
         // bar absent → foo required.
         assert!(!dep_satisfiable(dep, &|_: &str| false));
         assert!(dep_satisfiable(dep, &|c: &str| c == "foo"));
+    }
+
+    /// A repository where one capability has several providers at
+    /// different versions, as f44 has for `crate(webpki-roots)`.
+    struct CompatRepo;
+
+    impl RepoQuery for CompatRepo {
+        fn repolist(&self) -> Result<Vec<String>, String> {
+            Ok(vec!["fixture".to_string()])
+        }
+        fn src_nvrs(&self, _: &[String]) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_names(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_nvrs(&self, _: &str) -> Result<Vec<(String, String, String)>, String> {
+            Ok(vec![])
+        }
+        fn pkgs_source_vr(&self, _: &[&str]) -> Result<Vec<(String, String)>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_provides(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn pkg_provides(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn provides_of_provider(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn pkg_requires(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn subpkgs_requires(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn src_requires(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn whatrequires(&self, _: &[String]) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        // What `fedrq pkgs -P -S -F source_name <dep>` answers on f44.
+        fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String> {
+            Ok(match dep.trim() {
+                "crate(webpki-roots) = 0.26.11" => vec!["rust-webpki-roots0.26".to_string()],
+                "crate(webpki-roots) = 0.25.4" => vec!["rust-webpki-roots0.25".to_string()],
+                // The updated package itself, and nothing else.
+                "crate(webpki-roots) = 1.0.9" => vec!["rust-webpki-roots".to_string()],
+                _ => vec![],
+            })
+        }
+    }
+
+    #[test]
+    fn a_requirement_met_by_a_compat_package_is_not_a_break() {
+        // FEDORA-2026-8eeffa4c43: rust-webpki-roots goes 1.0.9 -> 1.0.10,
+        // and rust-webpki-roots0.26 requires crate(webpki-roots) = 0.26.11
+        // which it provides itself. The capability's *name* changed, so
+        // the in-update check alone calls it broken.
+        let updated: BTreeSet<&str> = ["rust-webpki-roots"].into();
+        assert!(
+            satisfied_outside_update("crate(webpki-roots) = 0.26.11", &CompatRepo, &updated),
+            "the compat package still provides it"
+        );
+    }
+
+    #[test]
+    fn a_requirement_met_only_by_the_updated_package_is_still_a_break() {
+        // The guard must not excuse everything: when the one source
+        // providing a capability is the one being updated past it,
+        // there is nothing else to fall back on.
+        let updated: BTreeSet<&str> = ["rust-webpki-roots"].into();
+        assert!(
+            !satisfied_outside_update("crate(webpki-roots) = 1.0.9", &CompatRepo, &updated),
+            "only the updated package provides this"
+        );
+        // And a capability nothing provides is not rescued either.
+        assert!(!satisfied_outside_update(
+            "crate(webpki-roots) = 9.9.9",
+            &CompatRepo,
+            &updated
+        ));
     }
 
     #[test]
@@ -4738,6 +4870,9 @@ mod tests {
             Ok(vec![])
         }
         fn whatrequires(&self, _packages: &[String]) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn resolve_to_source(&self, _dep: &str) -> Result<Vec<String>, String> {
             Ok(vec![])
         }
     }

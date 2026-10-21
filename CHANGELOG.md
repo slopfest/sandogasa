@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: a requirement a compat package satisfies is not a break
+
+`check-update` reported `rust-webpki-roots0.26` as failing to install
+against an update of `rust-webpki-roots`, on a requirement for
+`crate(webpki-roots) = 0.26.11`. The update moves the *main* package
+from 1.0.9 to 1.0.10, which never provided 0.26.11; the compat package
+provides it itself and is not in the update at all.
+
+The check judged a requirement only against what the update provides,
+so a capability with several providers at different versions looked
+broken the moment the one being updated moved past the required
+version. That is precisely what compat packages exist to do, and f44
+carries three providers of this one capability — 1.0.9, 0.25.4 and
+0.26.11.
+
+It now asks the repository which sources provide the requirement and
+discounts the ones being replaced, passing the version constraint
+through so RPM does the comparison. A capability provided only by the
+updated package is still reported as a break; a failed query answers
+"no", since inventing a survival would hide real breakage.
+
 ## v0.27.0
 
 ### Man pages no longer end a line in whitespace
