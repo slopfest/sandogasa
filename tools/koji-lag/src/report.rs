@@ -188,11 +188,17 @@ pub struct ReportOutput {
     /// The architecture `same_package` compares against.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub same_package_reference: Option<String>,
-    /// The same signals over scratch builds only. Separate because
-    /// scratch capacity is provisioned separately: on s390x in
-    /// 2026-09 scratch builds waited 27.7m at p90 against official's
-    /// 15.0m, which is a fact about scratch builders, not about the
-    /// architecture.
+    /// The same signals over scratch builds only.
+    ///
+    /// Separate not because the builders are separate -- they are
+    /// not, every s390x host serving official builds in 2026-09
+    /// served scratch ones too -- but because the two populations
+    /// queue differently and are waited on differently. Scratch
+    /// builds arrive in bursts from somebody sitting watching them,
+    /// so they meet a full pool more often and feel it when they do:
+    /// that month s390x scratch waited 27.7m at p90 against
+    /// official's 15.0m, and one scratch build in seven waited over
+    /// ten minutes. Combined, that is invisible.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_scratch: Option<crate::health::Health>,
     /// The source rebuild that starts every build, by the arch of the
@@ -534,11 +540,12 @@ pub fn run(dataset: &Dataset, opts: &ReportOpts) -> ReportOutput {
         // are not filtered twice. Utilisation needs a window length, so
         // without one it is simply not computed.
         health: crate::health::assess(dataset, &selected, health_window, cohorts_wanted),
-        // Assessed again over each population on its own. A queue
-        // figure read across both is not a fact about an
-        // architecture: scratch capacity is provisioned separately,
-        // so mixing them lets a large, cheaply-served scratch volume
-        // hide an official queue problem behind it.
+        // Assessed again over each population on its own, because
+        // they queue differently: a large, cheaply-served scratch
+        // volume hides an official queue problem behind it, and a
+        // scratch tail that only bursty interactive work meets is
+        // hidden the other way round. They share builders, so
+        // neither is a fact about separate hardware.
         // `per_arch`, not `selected`: the source rebuild is one task
         // per build on an arch of the hub's choosing, so pairing it
         // against another architecture's compile compares a checkout
@@ -781,11 +788,11 @@ pub fn render(output: &ReportOutput, min_samples: usize) -> String {
     // of a long report is a threshold nobody read.
     //
     // Tagged by population where the split was made. A queue warning
-    // read across both says nothing about an architecture — scratch
-    // capacity is provisioned separately — and the untagged form hid
-    // that ppc64le's official p90 wait was 11.8m while its combined
-    // figure was 2.2m. A warning that fires on both populations is
-    // printed once, untagged, since it is a property of the fleet.
+    // read across both says little about an architecture: the
+    // untagged form hid that ppc64le's official p90 wait was 11.8m
+    // while its combined figure was 2.2m. A warning that fires on
+    // both populations is printed once, untagged, since it is a
+    // property of the fleet.
     let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for (tag, health) in [
         ("", Some(&output.health)),
