@@ -38,6 +38,50 @@ Re-run the feature check before reusing this reasoning — enabling
 `aws-lc-rs` or a certificate-compression feature would make 0348 or
 0349 real.
 
+## Generalize the trailing-whitespace check beyond fesco-chair (2026-10-21)
+
+fesco-chair now asserts that nothing it composes ends a line in
+whitespace (`sources::assert_no_trailing_whitespace`, the rule in
+DEVELOPMENT.md). The reasoning is not fesco-chair's: trailing
+whitespace is invisible in a terminal, so only an assertion catches
+it, and under RFC 3676 `format=flowed` it can reflow a mail in
+somebody else's client. Fifteen other tools print text with no such
+check, and koji-lag writes committed Markdown reports where a stray
+space is also diff noise.
+
+Three pieces, in increasing order of churn:
+
+- **Share the helper.** Move it to `sandogasa-cli` behind a
+  `testing` feature, exactly parallel to `man`: off by default,
+  enabled in each tool's `[dev-dependencies]`, so the renderer never
+  reaches a shipped binary. All 16 tools already dev-depend on
+  `sandogasa-cli` for `man_page_matches_cli`, so this costs one line
+  per `Cargo.toml`. It cannot stay `#[cfg(test)]` — that is invisible
+  to a dependent crate's tests — so it becomes a plain `pub fn` under
+  the feature, which is new public surface on a library crate and so
+  a patch bump pre-1.0.
+
+- **A `make check` script over tracked text.** `git grep -nIE ' +$'`
+  over `*.md`, `*.rs`, `*.toml`, `*.sh` and `*.1`, in the shape of
+  `scripts/check-non-exhaustive.sh`. This catches committed
+  artefacts, which the test helper cannot: generated reports, man
+  pages, and the docs themselves.
+
+- **Fix the man pages, which are the one real offender found.** All
+  16 pages carry it — 129 lines, every one a SYNOPSIS, from
+  clap_mangen emitting a space after each element including the last
+  (`Man::render_synopsis_section`, passed through our `push_body` in
+  `sandogasa-cli/src/man.rs`). Harmless in roff, which collapses
+  whitespace, so this is diff noise rather than a rendering bug. The
+  fix is to strip trailing whitespace per line in `man::render_dated`
+  before writing — and **fold it into a release that regenerates the
+  pages anyway**, since every `.TH` line is rewritten on a version
+  bump regardless. Doing it standalone means a 129-line churn commit
+  for nothing. Worth reporting upstream to clap_mangen either way.
+
+Order matters only in that the script will fail until the man pages
+are fixed, so land that piece first or wire the script in after.
+
 ## cpu-sig-tracker: automate the Proposed Updates paperwork (2026-09-09)
 
 When a Hyperscale change is worth upstreaming, the SIG builds it as a
@@ -1361,7 +1405,7 @@ the error message from a sync against an unknown branch says.
 
 - (2026-06-26) add retire command to archive repo and untag builds. Test with sqlite
 - (2026-06-26) check-latest tar --file-issue and check-manifest both
-  do not close the issue even though it's up to date. 
+  do not close the issue even though it's up to date.
   This is likely because it is not built for hs.el10 but that's because
   CentOS 10 is already up to date. Figure out how to handle it
 
