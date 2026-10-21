@@ -706,6 +706,24 @@ mod tests {
     }
 
     #[test]
+    fn the_agenda_body_never_ends_a_line_in_whitespace() {
+        // Every section populated, so the static template and the
+        // wrapped entries are both covered; an empty section is
+        // covered by the sibling test that omits one.
+        let mut voted = ticket(3656, "Proposal: gate stable updates on rmdepcheck");
+        voted.decision = Some("APPROVED (+8, 0, -0)".to_string());
+        let sections = Sections {
+            voted: vec![voted],
+            followups: vec![ticket(
+                3628,
+                "Change: libxml2 15, with a deliberately overlong title to force a wrap",
+            )],
+            new_business: vec![ticket(3636, "Change: Enable Shadow Stack by Default")],
+        };
+        sources::assert_no_trailing_whitespace("agenda body", &render_body(date(), &sections));
+    }
+
+    #[test]
     fn subject_embeds_date() {
         assert_eq!(
             subject(date()),

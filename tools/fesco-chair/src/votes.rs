@@ -1519,6 +1519,22 @@ mod tests {
     }
 
     #[test]
+    fn the_vote_report_never_ends_a_line_in_whitespace() {
+        let meeting = NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        // Each outcome prints a different hint block, and the
+        // padded vote lines ("    -1: -") are where a stray space
+        // would hide.
+        for outcome in [Outcome::Approved, Outcome::Meeting, Outcome::Waiting] {
+            let report = outcome_report(outcome, Some("2026-10-20T13:00:00Z"));
+            crate::sources::assert_no_trailing_whitespace(
+                "votes render",
+                &render(&report, meeting),
+            );
+            crate::sources::assert_no_trailing_whitespace("votes brief", &brief(&report, meeting));
+        }
+    }
+
+    #[test]
     fn a_decided_vote_is_pointed_at_the_label() {
         let meeting = NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
         for outcome in [Outcome::Approved, Outcome::Rejected] {

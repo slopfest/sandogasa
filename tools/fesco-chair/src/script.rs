@@ -217,6 +217,26 @@ mod tests {
     }
 
     #[test]
+    fn the_script_and_checklist_never_end_a_line_in_whitespace() {
+        let date = NaiveDate::from_ymd_opt(2026, 7, 7).unwrap();
+        let ticket = Ticket {
+            number: 3623,
+            title: "Planning for the Forgejo distgit migration".to_string(),
+            url: "https://forge.fedoraproject.org/fesco/tickets/issues/3623".to_string(),
+            decision: None,
+            repo: None,
+            pull: false,
+            created: None,
+            updated: None,
+        };
+        crate::sources::assert_no_trailing_whitespace(
+            "meeting script",
+            &render_script(date, &[&ticket]),
+        );
+        crate::sources::assert_no_trailing_whitespace("checklist", &checklist(date));
+    }
+
+    #[test]
     fn checklist_mentions_reminder_and_quorum() {
         let text = checklist(NaiveDate::from_ymd_opt(2026, 7, 7).unwrap());
         assert!(text.contains(REMINDER_COMMAND), "{text}");

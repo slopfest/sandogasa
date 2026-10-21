@@ -289,6 +289,29 @@ Meeting summary
     }
 
     #[test]
+    fn the_summary_body_never_ends_a_line_in_whitespace() {
+        let voted = vec![sources::Ticket {
+            number: 3696,
+            title: "[FastTrack] Incompatible update exception for gedit and libgedit-*".to_string(),
+            url: "https://forge.fedoraproject.org/fesco/tickets/issues/3696".to_string(),
+            decision: Some("APPROVED (+6, 0, -0)".to_string()),
+            repo: None,
+            pull: false,
+            created: None,
+            updated: None,
+        }];
+        let body = render_body(
+            "https://m/f.html",
+            "https://m/f.txt",
+            "https://m/f.log.html",
+            "https://m/f.log.txt",
+            &voted,
+            "Meeting summary\n---------------\n* TOPIC: Init Process\n",
+        );
+        sources::assert_no_trailing_whitespace("summary body", &body);
+    }
+
+    #[test]
     fn render_body_announces_pending_tickets() {
         // A ticket tagged after the schedule went out (the real
         // ticket-3656 shape), announced with the minutes.

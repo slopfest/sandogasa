@@ -364,6 +364,27 @@ pub fn extract_decisions(minutes: &str) -> BTreeMap<u64, MeetingDecision> {
     out
 }
 
+/// Fail if any line of `text` ends in whitespace.
+///
+/// Nothing else catches this: trailing whitespace is invisible in a
+/// terminal unless the line is selected. In a plain-text mail it is
+/// not cosmetic either -- under [RFC 3676][] `format=flowed` a line
+/// ending in a space is a *soft* break, which a receiving client may
+/// join to the line after it. The agenda and the summary are mails.
+///
+/// [RFC 3676]: https://www.rfc-editor.org/rfc/rfc3676#section-4.1
+#[cfg(test)]
+pub fn assert_no_trailing_whitespace(what: &str, text: &str) {
+    for (i, line) in text.lines().enumerate() {
+        assert_eq!(
+            line.trim_end(),
+            line,
+            "{what}: line {} ends in whitespace: {line:?}",
+            i + 1
+        );
+    }
+}
+
 /// Split the open docs items into those forced onto the agenda by
 /// `--docs` and the rest (offered interactively).
 pub fn partition_forced(items: Vec<Ticket>, forced: &[u64]) -> (Vec<Ticket>, Vec<Ticket>) {
@@ -643,6 +664,25 @@ mod tests {
         ] {
             assert_eq!(wrap_line(short), short);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "ends in whitespace")]
+    fn the_trailing_whitespace_check_is_not_vacuous() {
+        assert_no_trailing_whitespace("fixture", "fine\npadded \nalso fine");
+    }
+
+    #[test]
+    fn a_rendered_entry_never_ends_a_line_in_whitespace() {
+        let mut long = ticket(3628);
+        long.title = "Change: libxml2 15, with a deliberately overlong title that \
+                      has to be wrapped across several lines"
+            .to_string();
+        long.decision = Some("APPROVED (+8, 0, -0)".to_string());
+        assert_no_trailing_whitespace("entry", &entry(&long));
+        // The wrapper is where a stray space would come from: it
+        // splits on whitespace and re-joins with an indent.
+        assert_no_trailing_whitespace("wrap_line", &wrap_line(&long.title));
     }
 
     #[test]

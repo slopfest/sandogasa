@@ -949,6 +949,9 @@ Latest Info: **Deferred to F46**\n";
             },
         ];
         let text = render(&reports, 45, NaiveDate::from_ymd_opt(2026, 9, 22).unwrap());
+        // Checked here rather than in a test of its own: the fixture
+        // is a local closure, and this is the fullest one.
+        crate::sources::assert_no_trailing_whitespace("changes report", &text);
         assert!(
             text.starts_with(
                 "## Needs a decision — still open against F45 (1, in the ticket's order)\n\n\
@@ -1203,6 +1206,7 @@ Latest Info: **Deferred to F46**\n";
         assert!(text.contains("- Flatpaks: decided in the ticket (AGREED: This Change is completed. (+5, 0, -0); bug needs to be updated), bz [#7]"), "{text}");
         assert!(text.contains("  - FESCo ticket [#3606](https://forge.fedoraproject.org/fesco/tickets/issues/3606)"), "{text}");
         let script = render_script(&reports, 45);
+        crate::sources::assert_no_trailing_whitespace("changes script", &script);
         assert!(
             script.starts_with("!topic F45 Change: Relocate\n!fesco 3606\n"),
             "{script}"

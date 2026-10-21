@@ -255,6 +255,35 @@ ships keeps its tree pure Rust and the runner free of a C toolchain.
 `dist plan` shows what a release would produce and
 `dist build --artifacts=local --target=<triple>` builds one for real.
 
+## Nothing we print ends a line in whitespace
+
+Trailing whitespace is the one defect a person cannot review: it is
+invisible in a terminal unless the line happens to be selected, and
+it survives a copy-paste into a bug report or a review comment
+looking exactly like a clean line. So it has to be asserted, not
+read.
+
+It is not merely untidy in a mail. Under [RFC 3676][] `format=flowed`
+a line ending in a space is a **soft** line break, which a receiving
+client is entitled to join to the line after it — so a stray space in
+`fesco-chair agenda` or `summary` can reflow a carefully wrapped
+announcement in somebody else's mail reader, and never in ours.
+
+`sources::assert_no_trailing_whitespace` (a `#[cfg(test)]` helper, so
+it is reachable from every module's tests) checks one rendered string
+and names the offending line. Every function that composes text for a
+human — a mail body, a terminal report, a generated script, a comment
+posted to the tracker — has a test that runs its output through it,
+and a new one should get the same treatment.
+
+The usual source is an indent applied to a line that is empty: the
+blank line separating two paragraphs becomes four spaces. `announce`'s
+dry-run indent (`indented`) is written to leave an empty line empty
+for exactly this reason, and a `#[should_panic]` test on the helper
+itself keeps the sweep from quietly becoming vacuous.
+
+[RFC 3676]: https://www.rfc-editor.org/rfc/rfc3676#section-4.1
+
 ## A prompt is a thin shell around something testable
 
 Code that reads the terminal cannot be reached by `cargo test`, so

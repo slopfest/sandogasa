@@ -505,6 +505,25 @@ fn assemble(args: &AnnouncedArgs) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// A comment body as the dry run shows it, indented under the
+/// `would comment:` line that introduces it.
+///
+/// A blank line is left blank rather than indented: the blank
+/// separating a decision from its archive link is part of the
+/// comment, and four spaces is not a blank line.
+fn indented(body: &str) -> String {
+    body.lines()
+        .map(|l| {
+            if l.is_empty() {
+                String::new()
+            } else {
+                format!("    {l}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Comment, untag, tag the status, close — in that order.
 ///
 /// The comment first for the same reason as a decision: it is the
@@ -527,17 +546,7 @@ fn record(
 ) -> Result<(), String> {
     let (owner, repo) = (sources::TRACKER_OWNER, sources::TRACKER_REPO);
     if dry_run {
-        eprintln!("  would comment:");
-        for line in body.lines() {
-            // Not indented when empty: the blank line separating a
-            // decision from its archive link is part of the comment,
-            // and four spaces is not a blank line.
-            if line.is_empty() {
-                eprintln!();
-            } else {
-                eprintln!("    {line}");
-            }
-        }
+        eprintln!("  would comment:\n{}", indented(body));
         for label in drop {
             eprintln!("  would untag `{label}`");
         }
@@ -1021,6 +1030,29 @@ mod tests {
         assert_eq!(
             minutes_url(body).as_deref(),
             Some("https://meetbot.fedoraproject.org/x/fesco.txt")
+        );
+    }
+
+    #[test]
+    fn a_shown_comment_is_indented_but_its_blank_line_is_not_padded() {
+        let body = meeting_decision_comment("APPROVED (+6, 0, -0)", "https://lists.example/m/");
+        let shown = indented(&body);
+        assert!(shown.starts_with("    APPROVED (+6, 0, -0)"), "{shown:?}");
+        assert!(shown.contains("\n\n    Announced:"), "{shown:?}");
+        sources::assert_no_trailing_whitespace("dry-run comment", &shown);
+    }
+
+    #[test]
+    fn the_comments_posted_never_end_a_line_in_whitespace() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        sources::assert_no_trailing_whitespace("meeting comment", &meeting_comment(date));
+        sources::assert_no_trailing_whitespace(
+            "announced comment",
+            &announced_comment("https://lists.example/m/"),
+        );
+        sources::assert_no_trailing_whitespace(
+            "meeting decision comment",
+            &meeting_decision_comment("APPROVED (+6, 0, -0)", "https://lists.example/m/"),
         );
     }
 
