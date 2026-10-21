@@ -1031,6 +1031,55 @@ that is wrong rather than missing. A missing one means the repository
 was not made by dbranch at all, which is a bigger question than this
 one.
 
+## dbranch: update symbols files from the per-arch build logs (2026-10-21)
+
+A shared library's `debian/<pkg>.symbols` records, per exported symbol,
+the version a reverse dependency needs -- and refreshing it is a
+per-architecture job. One build sees one architecture's symbol set, so
+a correct file needs the diff from every release architecture, with
+`(arch=...)` tags where they diverge. With source-only uploads none of
+those diffs exist locally: they are in the buildd logs, or in a
+Debusine run's artifacts.
+
+Fetching them is the part dbranch is already placed to do, since it
+knows how to reach both. The merge is not worth reimplementing --
+`pkgkde-symbolshelper` (`pkg-kde-tools`) merges from build logs
+already, so shell out to it and probe for it at startup like the other
+external tools.
+
+Detection needs nothing new: `dh_makeshlibs` runs `dpkg-gensymbols` on
+every build, and its check levels decide what fails -- 1 (the default)
+on a disappeared symbol, 2 on a new one, 3 and 4 on libraries. The
+level can be forced from the environment with
+`DPKG_GENSYMBOLS_CHECK_LEVEL`, which overrides even an explicit `-c`,
+so a run can demand a hard failure without editing `debian/rules`.
+Regenerating one architecture's file is documented too: `-O <file>`
+takes the existing file as its basis, `-t` keeps the tags.
+
+What a tool must not absorb silently is the part Policy leaves to a
+human:
+
+- A symbol that *disappeared* is either an ABI break needing a SONAME
+  bump -- upstream's call, not the packager's -- or a symbol that was
+  never meant to be public. Added symbols can be taken automatically;
+  this one has to stop and ask.
+- A symbol whose *behaviour* changed keeps its name, so no diff shows
+  it. Policy 8.6.2: "there is no automated method of determining
+  such changes", and getting it wrong yields dependencies too weak,
+  failing at runtime. libkdumpfile 0.5.5 is a specimen -- its NEWS
+  lists incompatible API changes to `kdump_get_typed_attr()` and
+  `kdump_attr_ref_get()` behind unchanged symbol names.
+- The minimal version for a new symbol is the upstream version it
+  appeared in, not the Debian version of the build that noticed it.
+
+Parked for want of a subject to build it against. libkdumpfile is the
+only package here with symbols files; it is C with explicit linker
+version scripts, so its export list cannot change without a visible
+`.map` diff, and both files are correct and static today. Every
+interesting branch -- architecture divergence, C++ mangling, optional
+symbols, a real disappearance -- would be written blind. Pick it up
+when a package turns up that has one of them.
+
 ## dbranch: lrc checks licences, not copyright holders (2026-10-13)
 
 `update` runs `lrc` before the source stage and offers `cme update
