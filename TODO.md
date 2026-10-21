@@ -1031,6 +1031,46 @@ that is wrong rather than missing. A missing one means the repository
 was not made by dbranch at all, which is a bigger question than this
 one.
 
+## A friendlier front end to the Debian BTS (2026-10-21)
+
+Finding that an ITP was never closed took reading a tracker page by
+eye: netconsd has been in unstable since 2024-05-04 and in testing
+since 2024-05-10, and #1065462 ("ITP: netconsd -- The Netconsole
+Daemon") was still open on 2026-10-21 because the sponsored upload
+never carried a `Closes:`. The tracker even says so -- its ITP action
+item reads "probably an error because the package is already
+packaged" -- but nothing asks that question across a maintainer's
+packages at once.
+
+The read side of the BTS is already machine-friendly (SOAP, UDD,
+pkgreport.cgi), and `bts` covers single-bug operations well. The gap
+is synthesis over everything one maintainer owns, and ergonomics on
+the write side, where the interface is email with pseudo-headers.
+
+Queries worth having, all of them answerable without judgement:
+
+- Open ITPs whose package is already in the archive -- the netconsd
+  case.
+- Bugs on my packages grouped by severity, with the RC ones that
+  block testing migration called out.
+- Bugs closed in unstable but not yet migrated, so a stable-bound fix
+  is not assumed done.
+- Packages whose Standards-Version has fallen behind the current one
+  (netconsd is at 4.6.2 against 4.7.4).
+
+Writes go by mail to `<nnn>-done@bugs.debian.org` with a `Version:`
+pseudo-header on the first line of the body. Credentials need not be
+a problem: `bts --smtp-reportbug` relays through
+reportbug.debian.org:587 with no account or authentication, rate
+limited to a couple of submissions an hour, which is the right shape
+for a tool that sends a handful of mails a session.
+
+Two house rules apply from the start. A tool that closes bugs must
+offer to reassign them to the person running it, as the Bugzilla
+tools do. And the tests must not reach the network: the SOAP/UDD
+reads go through wiremock on loopback, and the mail path is a
+`--dry-run` that prints the message it would send.
+
 ## dbranch: update symbols files from the per-arch build logs (2026-10-21)
 
 A shared library's `debian/<pkg>.symbols` records, per exported symbol,
