@@ -614,15 +614,32 @@ fn confirm_plan(
     sandogasa_cli::confirm("Post this comment?", true).map_err(|e| e.to_string())
 }
 
+/// The bodhi CLI command that drives a login: a harmless read-only
+/// query whose only relevant effect is making bodhi-client run its
+/// OIDC browser flow and cache the tokens we then reuse.
+///
+/// `--mine` is what forces authentication. The page is past the end
+/// of any user's overrides, which Bodhi answers with an empty list,
+/// so the query prints a one-line count instead of every override
+/// the user ever filed. Its stdout cannot simply be discarded: the
+/// login URL and the out-of-band code prompt are printed there too.
+const LOGIN_ARGS: &[&str] = &[
+    "overrides",
+    "query",
+    "--mine",
+    "--rows",
+    "1",
+    "--page",
+    "1000000",
+];
+
 /// Ensure a usable bodhi CLI session exists, driving an
 /// interactive login through the bodhi CLI if there is none.
 ///
 /// Called before the (potentially long) update analysis so a
 /// missing session is caught up front rather than after minutes
-/// of fedrq queries. The login itself is delegated to
-/// `bodhi overrides query --mine` — a harmless read-only command
-/// whose only relevant effect is making bodhi-client run its
-/// OIDC browser flow and cache the tokens we then reuse.
+/// of fedrq queries. The login itself is delegated to the bodhi
+/// CLI; see [`LOGIN_ARGS`].
 pub fn ensure_session() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {
@@ -638,9 +655,9 @@ pub fn ensure_session() -> Result<(), String> {
             Some("--version"),
         )])?;
         eprintln!("{first_err}");
-        eprintln!("starting a bodhi CLI login (`bodhi overrides query --mine`)...");
+        eprintln!("starting a bodhi CLI login...");
         let status = std::process::Command::new("bodhi")
-            .args(["overrides", "query", "--mine"])
+            .args(LOGIN_ARGS)
             .status()
             .map_err(|e| format!("cannot run bodhi: {e}"))?;
         if !status.success() {
@@ -1842,5 +1859,19 @@ mod tests {
             components.get(&200).and_then(|f| f.component.as_deref()),
             Some("rust-md-5")
         );
+    }
+
+    #[test]
+    fn login_args_authenticate_without_listing_overrides() {
+        let arg = |flag: &str| {
+            let i = LOGIN_ARGS.iter().position(|a| *a == flag)?;
+            LOGIN_ARGS.get(i + 1).copied()
+        };
+        assert_eq!(&LOGIN_ARGS[..2], &["overrides", "query"]);
+        // --mine is what makes bodhi-client log in.
+        assert!(LOGIN_ARGS.contains(&"--mine"));
+        assert_eq!(arg("--rows"), Some("1"));
+        let page: u64 = arg("--page").unwrap().parse().unwrap();
+        assert!(page >= 100_000, "page {page} could land on real overrides");
     }
 }

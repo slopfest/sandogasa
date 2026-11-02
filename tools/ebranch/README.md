@@ -738,7 +738,7 @@ per-bug feedback is still posted. Voting
 requires a Bodhi update (not a bare side tag) and reuses the
 `bodhi` CLI's login session. The session is validated before the
 analysis starts: if there is none, an interactive login is run
-for you (via `bodhi overrides query --mine`), and expired tokens
+for you through the `bodhi` CLI, and expired tokens
 are refreshed automatically.
 
 ```sh

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### ebranch: logging in to Bodhi no longer lists every override you own
+
+When `check-update --submit` or `--give-karma` found no Bodhi session,
+the login it ran on the user's behalf printed every buildroot override
+they had ever filed: twenty of them, going back years, plus a total,
+all before the analysis started. The login goes through
+`bodhi overrides query --mine`, because `--mine` is what makes the
+bodhi CLI authenticate, and the query's results were part of the deal.
+
+It now asks for a page past the end of the results, which Bodhi
+answers with an empty list, so the login prints its prompts and one
+line of count. Discarding the command's output instead is not an
+option: bodhi prints the login URL, and the code prompt for
+out-of-band logins, on the same stream.
+
 ### ebranch: a requirement a compat package satisfies is not a break
 
 `check-update` reported `rust-webpki-roots0.26` as failing to install
