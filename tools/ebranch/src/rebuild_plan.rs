@@ -77,22 +77,26 @@ pub struct RebuildPlan {
     /// Packages rebuilt in the side tag that do not use the library.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rebuilt_not_needed: Vec<String>,
+    /// The packages still to rebuild, in rounds: a round needs only
+    /// packages from earlier rounds in its buildroot.
+    pub rounds: Vec<Vec<String>>,
+    /// Package → the packages still to rebuild that its buildroot
+    /// needs first.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub waits_for: BTreeMap<String, Vec<String>>,
+    /// Package → the packages that cannot be rebuilt but which its
+    /// buildroot needs: it cannot be built until they are fixed.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub blocked_by: BTreeMap<String, Vec<String>>,
+    /// Packages still to rebuild that need each other's rebuilds in
+    /// their buildroots. Each cycle is one round in `rounds`, and has to
+    /// be broken by hand (a bootstrap build, or a temporary
+    /// BuildRequires change).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cycles: Vec<Vec<String>>,
 }
 
 impl RebuildPlan {
-    fn is_unbuildable(&self, package: &str) -> bool {
-        self.unbuildable.iter().any(|u| u.package == package)
-    }
-
-    /// Runtime dependents not yet rebuilt and able to be.
-    pub fn pending(&self) -> Vec<&Dependent> {
-        self.dependents
-            .iter()
-            .filter(|d| d.link == Link::Runtime && d.rebuilt.is_none())
-            .filter(|d| !self.is_unbuildable(&d.package))
-            .collect()
-    }
-
     /// Dependents the side tag already has, whatever their link.
     pub fn rebuilt(&self) -> Vec<&Dependent> {
         self.dependents
@@ -213,7 +217,10 @@ pub(crate) fn plan(
         .filter(|d| d.link == Link::Runtime && d.rebuilt.is_none())
         .map(|d| d.package.as_str())
         .collect();
-    let unbuildable = find_unbuildable(&to_check, q, verbose)?;
+    let brs = fetch_brs(&to_check, q)?;
+    let unbuildable = find_unbuildable(&brs, q, verbose)?;
+    let cannot: BTreeSet<String> = unbuildable.iter().map(|u| u.package.clone()).collect();
+    let order = build_order(&brs, &cannot, &sonames, q, verbose)?;
 
     Ok(RebuildPlan {
         library: library.to_string(),
@@ -223,6 +230,10 @@ pub(crate) fn plan(
         dependents,
         unbuildable,
         rebuilt_not_needed,
+        rounds: order.rounds,
+        waits_for: order.waits_for,
+        blocked_by: order.blocked_by,
+        cycles: order.cycles,
     })
 }
 
@@ -240,18 +251,24 @@ pub fn render(plan: &RebuildPlan) -> String {
     let sonames: Vec<String> = plan.sonames.iter().map(|s| format!("`{s}`")).collect();
     let _ = writeln!(out, "SONAMEs on {}: {}\n", plan.branch, sonames.join(", "));
 
-    let pending = plan.pending();
     let heading = if plan.side_tag.is_some() {
         "Still to rebuild"
     } else {
         "Needs a rebuild"
     };
-    let _ = writeln!(out, "## {heading} ({})\n", pending.len());
-    if pending.is_empty() {
-        let _ = writeln!(out, "Nothing.\n");
-    } else {
-        for d in &pending {
-            let _ = writeln!(out, "- {}", d.package);
+    let ready: usize = plan.rounds.iter().map(Vec::len).sum();
+    let _ = writeln!(out, "## {heading} ({ready})\n");
+    render_rounds(&mut out, plan);
+
+    if !plan.blocked_by.is_empty() {
+        let _ = writeln!(out, "## Blocked ({})\n", plan.blocked_by.len());
+        let _ = writeln!(
+            out,
+            "Their buildroots need a package that cannot be rebuilt (below), \
+             so they cannot be built until it is fixed:\n"
+        );
+        for (p, by) in &plan.blocked_by {
+            let _ = writeln!(out, "- {p}: needs {}", by.join(", "));
         }
         out.push('\n');
     }
@@ -334,6 +351,49 @@ pub fn render(plan: &RebuildPlan) -> String {
          whether any did."
     );
     out
+}
+
+/// The packages still to rebuild, by round, saying what each waits for.
+fn render_rounds(out: &mut String, plan: &RebuildPlan) {
+    match plan.rounds.as_slice() {
+        [] => {
+            let _ = writeln!(out, "Nothing.\n");
+        }
+        [only] => {
+            let _ = writeln!(
+                out,
+                "None of these needs another in its buildroot, so they can all be built at once:\n"
+            );
+            for p in only {
+                let _ = writeln!(out, "- {p}");
+            }
+            out.push('\n');
+        }
+        rounds => {
+            for (i, round) in rounds.iter().enumerate() {
+                let _ = writeln!(out, "### Round {} ({})\n", i + 1, round.len());
+                for p in round {
+                    match plan.waits_for.get(p) {
+                        Some(w) => {
+                            let _ = writeln!(out, "- {p} (after {})", w.join(", "));
+                        }
+                        None => {
+                            let _ = writeln!(out, "- {p}");
+                        }
+                    }
+                }
+                out.push('\n');
+            }
+        }
+    }
+    for c in &plan.cycles {
+        let _ = writeln!(
+            out,
+            "Cycle: {} need each other's rebuilds in their buildroots; break it by hand \
+             (a bootstrap build, or a temporary BuildRequires change).\n",
+            c.join(", ")
+        );
+    }
 }
 
 /// Plan the rebuilds and print the result.
@@ -426,7 +486,24 @@ fn is_answerable(dep: &str) -> bool {
     !dep.starts_with("rpmlib(")
 }
 
-/// The packages among `packages` whose BuildRequires do not all
+/// Each package's BuildRequires, less those rpm answers itself.
+fn fetch_brs(
+    packages: &[&str],
+    q: &dyn PlanQuery,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let mut brs = BTreeMap::new();
+    for p in packages {
+        let deps: Vec<String> = q
+            .src_requires(p)?
+            .into_iter()
+            .filter(|d| is_answerable(d))
+            .collect();
+        brs.insert(p.to_string(), deps);
+    }
+    Ok(brs)
+}
+
+/// The packages among those in `brs` whose BuildRequires do not all
 /// resolve, each with the packages it would strand.
 ///
 /// Capability dependencies are asked in one batch and attributed with
@@ -434,19 +511,10 @@ fn is_answerable(dep: &str) -> bool {
 /// file dependency is asked on its own: a provider's Provides do not
 /// list its files, so a batched answer cannot be attributed to it.
 fn find_unbuildable(
-    packages: &[&str],
+    brs: &BTreeMap<String, Vec<String>>,
     q: &dyn PlanQuery,
     verbose: bool,
 ) -> Result<Vec<Unbuildable>, String> {
-    let mut brs: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for p in packages {
-        let deps: Vec<String> = q
-            .src_requires(p)?
-            .into_iter()
-            .filter(|d| is_answerable(d))
-            .collect();
-        brs.insert(p, deps);
-    }
     let caps: Vec<String> = brs
         .values()
         .flatten()
@@ -459,7 +527,7 @@ fn find_unbuildable(
         eprintln!(
             "[rebuild-plan] checking {} BuildRequires of {} package(s)",
             caps.len(),
-            packages.len()
+            brs.len()
         );
     }
     let providers = q.providers(&caps)?;
@@ -467,7 +535,7 @@ fn find_unbuildable(
     let mut out = Vec::new();
     for (p, deps) in brs {
         let mut unresolved = Vec::new();
-        for d in deps {
+        for d in deps.iter().cloned() {
             let resolves = if d.starts_with('/') {
                 !q.providers(std::slice::from_ref(&d))?.is_empty()
             } else {
@@ -496,6 +564,203 @@ fn find_unbuildable(
     Ok(out)
 }
 
+/// Give up following Requires after this many waves; a real
+/// buildroot settles within a dozen.
+const MAX_WAVES: usize = 64;
+
+/// Dependency answers shared by every package's buildroot walk, so a
+/// capability is asked once however many buildroots need it.
+#[derive(Default)]
+struct Closure {
+    /// dependency → names of the binary packages providing it.
+    providers: BTreeMap<String, Vec<String>>,
+    /// binary package name → what it requires and its source.
+    pkgs: BTreeMap<String, PkgInfo>,
+}
+
+impl Closure {
+    /// Ask about the dependencies not answered yet, in one batch.
+    fn resolve(&mut self, deps: &[String], q: &dyn PlanQuery) -> Result<(), String> {
+        let unknown: Vec<String> = deps
+            .iter()
+            .filter(|d| !self.providers.contains_key(*d))
+            .cloned()
+            .collect();
+        if unknown.is_empty() {
+            return Ok(());
+        }
+        let infos = q.providers(&unknown)?;
+        for d in unknown {
+            let names = infos
+                .iter()
+                .filter(|pi| pi.satisfies(&d))
+                .map(|pi| pi.name.clone())
+                .collect();
+            self.providers.insert(d, names);
+        }
+        for pi in infos {
+            self.pkgs.entry(pi.name.clone()).or_insert(pi);
+        }
+        Ok(())
+    }
+
+    /// The binary packages a buildroot for `brs` installs: the
+    /// BuildRequires' providers and, transitively, what those require.
+    ///
+    /// File dependencies are not followed, since a batched answer
+    /// cannot be attributed to a path; one that leads to the library
+    /// only through a file path is missed.
+    fn buildroot(&mut self, brs: &[String], q: &dyn PlanQuery) -> Result<BTreeSet<String>, String> {
+        let mut seen_deps: BTreeSet<String> = BTreeSet::new();
+        let mut installed: BTreeSet<String> = BTreeSet::new();
+        let mut frontier: Vec<String> = brs.to_vec();
+        for _ in 0..MAX_WAVES {
+            frontier.retain(|d| is_answerable(d) && !d.starts_with('/'));
+            frontier.retain(|d| seen_deps.insert(d.clone()));
+            if frontier.is_empty() {
+                break;
+            }
+            self.resolve(&frontier, q)?;
+            let mut next = Vec::new();
+            for d in &frontier {
+                for name in self.providers.get(d).into_iter().flatten() {
+                    if installed.insert(name.clone())
+                        && let Some(pi) = self.pkgs.get(name)
+                    {
+                        next.extend(pi.requires.iter().cloned());
+                    }
+                }
+            }
+            frontier = next;
+        }
+        Ok(installed)
+    }
+}
+
+/// How the packages still to rebuild order among themselves.
+struct Order {
+    rounds: Vec<Vec<String>>,
+    waits_for: BTreeMap<String, Vec<String>>,
+    blocked_by: BTreeMap<String, Vec<String>>,
+    cycles: Vec<Vec<String>>,
+}
+
+/// Order the packages in `brs` by what their buildroots need.
+///
+/// Until a package is rebuilt, its binaries that require one of the
+/// old SONAMEs cannot be installed beside the new library. So a
+/// package whose buildroot installs such a binary has to wait for that
+/// binary's source to be rebuilt first, or, when the source cannot be
+/// rebuilt, is blocked behind it. Binaries without a SONAME
+/// requirement of their own are not a reason to wait.
+fn build_order(
+    brs: &BTreeMap<String, Vec<String>>,
+    cannot: &BTreeSet<String>,
+    sonames: &[String],
+    q: &dyn PlanQuery,
+    verbose: bool,
+) -> Result<Order, String> {
+    let stale: BTreeSet<&str> = brs.keys().map(String::as_str).collect();
+    let mut closure = Closure::default();
+    let mut needs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (p, deps) in brs {
+        if cannot.contains(p) {
+            continue;
+        }
+        let installed = closure.buildroot(deps, q)?;
+        let sources: BTreeSet<String> = installed
+            .iter()
+            .filter_map(|name| closure.pkgs.get(name))
+            .filter(|pi| {
+                pi.requires
+                    .iter()
+                    .any(|r| sonames.iter().any(|s| s == sandogasa_fedrq::dep_name(r)))
+            })
+            .filter_map(|pi| pi.source_name.clone())
+            .filter(|src| src != p && stale.contains(src.as_str()))
+            .collect();
+        if verbose {
+            eprintln!(
+                "[rebuild-plan] {p}: buildroot of {} package(s), waits for {}",
+                installed.len(),
+                if sources.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    sources.iter().cloned().collect::<Vec<_>>().join(", ")
+                }
+            );
+        }
+        needs.insert(p.clone(), sources);
+    }
+
+    // A package needing one that cannot be rebuilt is blocked, and so
+    // is anything waiting for a blocked package.
+    let mut blocked_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    loop {
+        let mut grew = false;
+        for (p, srcs) in &needs {
+            if blocked_by.contains_key(p) {
+                continue;
+            }
+            let by: Vec<String> = srcs
+                .iter()
+                .filter(|s| cannot.contains(*s) || blocked_by.contains_key(*s))
+                .cloned()
+                .collect();
+            if !by.is_empty() {
+                blocked_by.insert(p.clone(), by);
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    let edges: BTreeMap<String, BTreeSet<String>> = needs
+        .iter()
+        .filter(|(p, _)| !blocked_by.contains_key(*p))
+        .map(|(p, srcs)| {
+            let waits = srcs
+                .iter()
+                .filter(|s| !cannot.contains(*s) && !blocked_by.contains_key(*s))
+                .cloned()
+                .collect();
+            (p.clone(), waits)
+        })
+        .collect();
+    let cycles: Vec<Vec<String>> = crate::dag::find_cycles(&edges)
+        .into_iter()
+        .map(|c| c.packages)
+        .collect();
+    // Build each cycle as one round: drop the edges inside it so the
+    // rest can still be layered.
+    let mut layered = edges.clone();
+    for c in &cycles {
+        for p in c {
+            if let Some(w) = layered.get_mut(p) {
+                w.retain(|x| !c.contains(x));
+            }
+        }
+    }
+    let rounds = crate::dag::topological_layers(&layered)
+        .map_err(|left| format!("build order did not settle for: {}", left.join(", ")))?
+        .into_iter()
+        .map(|phase| phase.packages)
+        .collect();
+    let waits_for = edges
+        .into_iter()
+        .filter(|(_, w)| !w.is_empty())
+        .map(|(p, w)| (p, w.into_iter().collect()))
+        .collect();
+    Ok(Order {
+        rounds,
+        waits_for,
+        blocked_by,
+        cycles,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,12 +776,27 @@ mod tests {
         /// capability → source packages whose BuildRequires name it.
         building: BTreeMap<String, Vec<String>>,
         brs: BTreeMap<String, Vec<String>>,
-        /// Capabilities that resolve, as (provider, its provides).
-        available: Vec<(String, Vec<String>)>,
+        /// Binary packages on the branch, as the providers query
+        /// returns them.
+        available: Vec<PkgInfo>,
     }
 
     fn strs(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A binary package: its name, source, Provides and Requires. Its
+    /// own name is provided, as every RPM provides its name.
+    fn bin(name: &str, source: &str, provides: &[&str], requires: &[&str]) -> PkgInfo {
+        let mut pr = strs(provides);
+        pr.push(name.to_string());
+        PkgInfo::new(
+            name,
+            strs(requires),
+            pr,
+            Some(source.to_string()),
+            "rawhide",
+        )
     }
 
     fn union(map: &BTreeMap<String, Vec<String>>, keys: &[String]) -> Vec<String> {
@@ -547,10 +827,8 @@ mod tests {
             Ok(self
                 .available
                 .iter()
-                .map(|(name, provides)| {
-                    PkgInfo::new(name.clone(), vec![], provides.clone(), None, "rawhide")
-                })
                 .filter(|pi| deps.iter().any(|d| pi.satisfies(d)))
+                .cloned()
                 .collect())
         }
     }
@@ -669,13 +947,21 @@ mod tests {
             strs(&["(pkgconfig(gtk4) >= 4.12 with pkgconfig(gtk4) < 5)"]),
         );
         r.available = vec![
-            ("cmake".into(), strs(&["cmake = 3.31.6-1.fc46"])),
-            (
-                "libical-devel".into(),
-                strs(&["libical-devel = 3.0.20-11.fc46"]),
+            bin("cmake", "cmake", &["cmake = 3.31.6-1.fc46"], &[]),
+            bin(
+                "libical-devel",
+                "libical",
+                &["libical-devel = 3.0.20-11.fc46"],
+                &["libical"],
             ),
-            ("gtk4-devel".into(), strs(&["pkgconfig(gtk4) = 4.20.1"])),
-            ("libxslt".into(), strs(&["libxslt = 1.1.43-1.fc46"])),
+            bin(
+                "libical",
+                "libical",
+                &["libical = 3.0.20-11.fc46", "libical.so.3()(64bit)"],
+                &[],
+            ),
+            bin("gtk4-devel", "gtk4", &["pkgconfig(gtk4) = 4.20.1"], &[]),
+            bin("libxslt", "libxslt", &["libxslt = 1.1.43-1.fc46"], &[]),
         ];
         r.subpkgs.insert(
             "kdepimlibs".into(),
@@ -691,7 +977,7 @@ mod tests {
     /// answers `/usr/bin/xsltproc` by name.
     impl Recorded {
         fn with_file(mut self, path: &str, provider: &str) -> Self {
-            self.available.push((provider.into(), strs(&[path])));
+            self.available.push(bin(provider, provider, &[path], &[]));
             self
         }
     }
@@ -713,6 +999,10 @@ mod tests {
         ds.iter().map(|d| d.package.clone()).collect()
     }
 
+    fn unbuildable(p: &RebuildPlan, package: &str) -> bool {
+        p.unbuildable.iter().any(|u| u.package == package)
+    }
+
     #[test]
     fn soname_provides_are_told_from_build_capabilities() {
         assert!(is_soname("libical.so.3()(64bit)"));
@@ -732,8 +1022,11 @@ mod tests {
     #[test]
     fn libical_leaves_thirteen_to_rebuild() {
         let p = libical_plan();
+        // None of them needs another in its buildroot: one round.
+        assert_eq!(p.rounds.len(), 1, "{:?}", p.rounds);
+        assert!(p.waits_for.is_empty() && p.blocked_by.is_empty());
         assert_eq!(
-            names(&p.pending()),
+            p.rounds[0],
             strs(&[
                 "GoldenCheetah",
                 "asterisk",
@@ -767,8 +1060,8 @@ mod tests {
         // kmymoney's rpmlib() and file dependency, and phosh's boolean
         // one, all resolve; neither may be reported as unbuildable.
         let p = libical_plan();
-        assert!(!p.is_unbuildable("kmymoney"));
-        assert!(!p.is_unbuildable("phosh"));
+        assert!(!unbuildable(&p, "kmymoney"));
+        assert!(!unbuildable(&p, "phosh"));
     }
 
     #[test]
@@ -800,7 +1093,7 @@ mod tests {
     fn a_build_only_dependent_is_listed_apart() {
         let p = libical_plan();
         assert_eq!(names(&p.build_only()), strs(&["cyrus-timezones"]));
-        assert!(!names(&p.pending()).contains(&"cyrus-timezones".to_string()));
+        assert!(!p.rounds.concat().contains(&"cyrus-timezones".to_string()));
     }
 
     #[test]
@@ -808,7 +1101,7 @@ mod tests {
         let q = libical().with_file("/usr/bin/xsltproc", "libxslt");
         let p = plan("libical", "rawhide", None, &q, false).unwrap();
         // 26 runtime dependents, less kdepimlibs, which cannot build.
-        assert_eq!(p.pending().len(), 25);
+        assert_eq!(p.rounds.concat().len(), 25);
         assert!(p.rebuilt_not_needed.is_empty());
         assert!(render(&p).contains("## Needs a rebuild (25)"));
     }
@@ -831,6 +1124,7 @@ mod tests {
             "# Rebuild plan for libical (rawhide)",
             "Side tag: `f46-build-side-158330`",
             "## Still to rebuild (13)",
+            "None of these needs another in its buildroot, so they can all be built at once:",
             "## Cannot be rebuilt (1)",
             "- kdepimlibs: `pkgconfig(QJson)`. Once the new libical lands, these become \
              uninstallable with it: kuser",
@@ -855,5 +1149,104 @@ mod tests {
         assert_eq!(shell["link"], "runtime");
         assert_eq!(shell["rebuilt"], "gnome-shell-51.1-2.fc46");
         assert_eq!(v["unbuildable"][0]["stranded"][0], "kuser");
+    }
+
+    /// A library `libfoo` whose dependents reach each other through
+    /// their buildroots, the way gnome-shell reached bluez through
+    /// gnome-bluetooth during the libical 4 rebuild.
+    fn chain() -> Recorded {
+        let mut r = Recorded::default();
+        r.provides.insert(
+            "libfoo".into(),
+            strs(&["libfoo.so.1()(64bit)", "libfoo-devel = 1.0-1.fc46"]),
+        );
+        r.requiring.insert(
+            "libfoo.so.1()(64bit)".into(),
+            strs(&[
+                "bluez",
+                "gnome-shell",
+                "app",
+                "loop-a",
+                "loop-b",
+                "kuser",
+                "oldlib",
+            ]),
+        );
+        // gnome-shell builds against gnome-bluetooth, which is not
+        // rebuilt (it does not link libfoo) but pulls in bluez, which
+        // does.
+        r.brs
+            .insert("gnome-shell".into(), strs(&["gnome-bluetooth-libs-devel"]));
+        r.brs.insert("bluez".into(), strs(&["libfoo-devel"]));
+        // app needs gnome-shell's -devel, two hops from libfoo.
+        r.brs.insert("app".into(), strs(&["gnome-shell-devel"]));
+        // loop-a and loop-b need each other's rebuilds.
+        r.brs.insert("loop-a".into(), strs(&["loop-b-devel"]));
+        r.brs.insert("loop-b".into(), strs(&["loop-a-devel"]));
+        // kuser needs oldlib, whose own BuildRequires are gone.
+        r.brs.insert("kuser".into(), strs(&["oldlib-devel"]));
+        r.brs.insert("oldlib".into(), strs(&["pkgconfig(QJson)"]));
+        r.available = vec![
+            bin("libfoo-devel", "libfoo", &[], &["libfoo"]),
+            bin("libfoo", "libfoo", &["libfoo.so.1()(64bit)"], &[]),
+            bin(
+                "gnome-bluetooth-libs-devel",
+                "gnome-bluetooth",
+                &[],
+                &["gnome-bluetooth-libs"],
+            ),
+            bin("gnome-bluetooth-libs", "gnome-bluetooth", &[], &["bluez"]),
+            bin("bluez", "bluez", &[], &["libfoo.so.1()(64bit)"]),
+            bin("gnome-shell-devel", "gnome-shell", &[], &["gnome-shell"]),
+            bin("gnome-shell", "gnome-shell", &[], &["libfoo.so.1()(64bit)"]),
+            bin("loop-a-devel", "loop-a", &[], &["loop-a"]),
+            bin("loop-a", "loop-a", &[], &["libfoo.so.1()(64bit)"]),
+            bin("loop-b-devel", "loop-b", &[], &["loop-b"]),
+            bin("loop-b", "loop-b", &[], &["libfoo.so.1()(64bit)"]),
+            bin("oldlib-devel", "oldlib", &[], &["oldlib"]),
+            bin("oldlib", "oldlib", &[], &["libfoo.so.1()(64bit)"]),
+        ];
+        r.subpkgs
+            .insert("oldlib".into(), strs(&["oldlib", "oldlib-devel"]));
+        r.requiring.insert("oldlib".into(), strs(&["kuser"]));
+        r
+    }
+
+    fn chain_plan() -> RebuildPlan {
+        plan("libfoo", "rawhide", None, &chain(), false).unwrap()
+    }
+
+    #[test]
+    fn a_buildroot_reaches_a_stale_binary_through_a_package_not_rebuilt() {
+        let p = chain_plan();
+        assert_eq!(p.waits_for["gnome-shell"], strs(&["bluez"]));
+        let round = |pkg: &str| p.rounds.iter().position(|r| r.iter().any(|x| x == pkg));
+        assert!(round("bluez") < round("gnome-shell"), "{:?}", p.rounds);
+        assert!(round("gnome-shell") < round("app"), "{:?}", p.rounds);
+    }
+
+    #[test]
+    fn a_package_needing_one_that_cannot_be_rebuilt_is_blocked() {
+        let p = chain_plan();
+        assert!(unbuildable(&p, "oldlib"));
+        assert_eq!(p.blocked_by["kuser"], strs(&["oldlib"]));
+        assert!(!p.rounds.concat().contains(&"kuser".to_string()));
+        assert!(render(&p).contains("- kuser: needs oldlib"));
+    }
+
+    #[test]
+    fn packages_needing_each_other_are_one_round_and_reported_as_a_cycle() {
+        let p = chain_plan();
+        assert_eq!(p.cycles, vec![strs(&["loop-a", "loop-b"])]);
+        let round = |pkg: &str| p.rounds.iter().position(|r| r.iter().any(|x| x == pkg));
+        assert_eq!(round("loop-a"), round("loop-b"));
+        assert!(render(&p).contains("Cycle: loop-a, loop-b"));
+    }
+
+    #[test]
+    fn rounds_are_rendered_with_what_each_waits_for() {
+        let out = render(&chain_plan());
+        assert!(out.contains("### Round 1"), "{out}");
+        assert!(out.contains("- gnome-shell (after bluez)"), "{out}");
     }
 }

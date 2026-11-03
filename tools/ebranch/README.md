@@ -1034,6 +1034,8 @@ SONAMEs on rawhide: `libical-glib.so.3()(64bit)`, `libical.so.3()(64bit)`, ...
 
 ## Still to rebuild (13)
 
+None of these needs another in its buildroot, so they can all be built at once:
+
 - GoldenCheetah
 - asterisk
 ...
@@ -1063,6 +1065,15 @@ linking it are listed separately. Each package still to rebuild has its
 BuildRequires checked on the branch: one whose BuildRequires already fail
 cannot be rebuilt, and the packages requiring it at runtime become
 uninstallable once the new library lands.
+
+The packages still to rebuild are put in build rounds. Until a package is
+rebuilt, its binaries that require an old SONAME cannot be installed next
+to the new library, so a package whose buildroot would install one (its
+BuildRequires, or anything they require in turn) builds in a later round
+than that binary's source; a package whose buildroot needs one that
+cannot be rebuilt is listed as blocked. Packages that need each other are
+reported as a cycle, to be broken by hand. File dependencies are not
+followed when working out a buildroot.
 
 Only packages that use the library directly are listed. A package further
 down a dependency chain needs a rebuild only if a rebuilt package changes

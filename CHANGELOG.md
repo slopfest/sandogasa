@@ -19,9 +19,19 @@ there don't use the library. Each package still to rebuild has its
 BuildRequires checked first: one that already fails, like libical's
 `kdepimlibs` on `pkgconfig(QJson)`, is reported as unable to be rebuilt,
 with the packages it leaves uninstallable. Output is Markdown, or JSON
-with `--json`. On the libical side tag it reproduces the hand analysis
-in about 15 seconds. Tracked in #58; build order and following a
-rebuilt package's own SONAME changes come next.
+with `--json`.
+
+The packages still to rebuild come in build rounds. Until a package is
+rebuilt, its binaries requiring an old SONAME cannot be installed next
+to the new library, so a package whose buildroot would pull one in
+waits for that one's rebuild; one whose buildroot needs a package that
+cannot be rebuilt is listed as blocked, and packages needing each other
+as a cycle. Planned from scratch, libical's 25 rebuildable dependents
+come out in 3 rounds, with gnome-shell after bluez and
+evolution-data-server, the ordering the devel@ thread found by hand. On
+the side tag, the 13 left need no ordering among themselves. A run
+takes about two and a half minutes. Tracked in #58; following a rebuilt
+package's own SONAME changes comes next.
 
 ### sandogasa-fedrq: `Fedrq::whatrequires_src`
 

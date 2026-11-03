@@ -775,7 +775,11 @@ builds there do not use the library at all.
 .PP
 Packages still to rebuild are checked for BuildRequires that already
 fail on the branch: those cannot be rebuilt, and the packages
-requiring them become uninstallable once the new library lands.
+requiring them become uninstallable once the new library lands. The
+rest are put in build rounds: until a package is rebuilt, its binaries
+that require an old SONAME cannot be installed next to the new
+library, so a package whose buildroot would install one builds in a
+later round. Packages needing each other are reported as a cycle.
 .PP
 Packages further down a dependency chain need a rebuild only if a
 rebuilt package changes a SONAME of its own; check\-update on the side
