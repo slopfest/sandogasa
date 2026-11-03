@@ -622,6 +622,27 @@ impl Fedrq {
             .collect())
     }
 
+    /// Return the source packages whose BuildRequires name any of the
+    /// given capabilities (`whatrequires -A src -F name`).
+    ///
+    /// The build-side counterpart of [`Self::whatrequires`], which only
+    /// sees binary packages and so misses a package that builds against
+    /// a library without linking it at runtime. A source package's name
+    /// is its own `name` field; `-F source` would print the source RPM
+    /// of a source RPM, which is not what a caller wants.
+    pub fn whatrequires_src(&self, capabilities: &[String]) -> Result<Vec<String>, Error> {
+        if capabilities.is_empty() {
+            return Ok(vec![]);
+        }
+        Self::run(&mut self.whatrequires_src_command(capabilities))
+    }
+
+    /// The command [`Self::whatrequires_src`] runs, separate so a test
+    /// can assert that it asks about source packages only.
+    fn whatrequires_src_command(&self, capabilities: &[String]) -> Command {
+        self.query_command(&["whatrequires", "-A", "src", "-F", "name"], capabilities)
+    }
+
     /// Return the Requires of a *source* package — its BuildRequires —
     /// via `fedrq pkgs --src -F requires`. Complements
     /// [`Self::subpkgs_requires`] (the binary subpackages' install-time
@@ -1112,6 +1133,21 @@ mod tests {
             dir.ends_with("fedrq"),
             "cache_dir should end with 'fedrq', got: {dir:?}"
         );
+    }
+
+    #[test]
+    fn whatrequires_src_asks_about_source_packages_by_name() {
+        let f = Fedrq {
+            branch: Some("rawhide".to_string()),
+            repo: None,
+        };
+        let args = argv(&f.whatrequires_src_command(&["pkgconfig(libical)".to_string()]));
+        let sep = args.iter().position(|a| a == "--").expect("separator");
+        let before = &args[..sep];
+        assert!(before.windows(2).any(|w| w == ["-A", "src"]), "{args:?}");
+        assert!(before.windows(2).any(|w| w == ["-F", "name"]), "{args:?}");
+        assert_eq!(args[sep + 1], "pkgconfig(libical)", "{args:?}");
+        assert!(f.whatrequires_src(&[]).unwrap().is_empty());
     }
 
     #[test]

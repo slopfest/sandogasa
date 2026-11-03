@@ -7,6 +7,7 @@ for querying Fedora and EPEL RPM repositories.
 
 - Query subpackage provides, requires, and names for a source RPM
 - Find reverse dependencies (whatrequires) for a set of packages
+- Find source packages that BuildRequire a set of capabilities
 - Query BuildRequires for source packages
 
 ## Usage

@@ -12,7 +12,8 @@ Beyond dependency resolution, ebranch files and escalates branch
 requests (`branch-request`), analyzes crates.io dependencies
 (`check-crate`), links Bugzilla package review requests
 (`check-pkg-reviews`), tracks a packaging effort's progress into the
-distro (`check-wip`), and checks whether a Koji side tag or
+distro (`check-wip`), plans the rebuilds a library's SONAME bump
+calls for (`rebuild-plan`), and checks whether a Koji side tag or
 Bodhi update would break reverse dependencies (`check-update`) —
 optionally casting Bodhi karma with per-bug feedback based on the
 result (`--give-karma`), or submitting a passing side tag to Bodhi
@@ -1016,6 +1017,60 @@ the plan as data and, like a non-terminal run, never deletes.
 ebranch find-cycles systemd util-linux \
     --source rawhide --target c10s --target-repo '@epel'
 ```
+
+### Plan rebuilds after a SONAME bump
+
+When a library bumps its SONAME, `rebuild-plan` lists the packages that
+have to be rebuilt against it. With the side tag the rebuilds go into, it
+also shows which are done:
+
+```console
+$ ebranch rebuild-plan libical -s f46-build-side-158330
+# Rebuild plan for libical (rawhide)
+
+Side tag: `f46-build-side-158330`
+
+SONAMEs on rawhide: `libical-glib.so.3()(64bit)`, `libical.so.3()(64bit)`, ...
+
+## Still to rebuild (13)
+
+- GoldenCheetah
+- asterisk
+...
+
+## Cannot be rebuilt (1)
+
+BuildRequires that already fail to resolve on rawhide, independently of libical:
+
+- kdepimlibs: `pkgconfig(QJson)`. Once the new libical lands, these become uninstallable with it: kuser
+
+## Already rebuilt in f46-build-side-158330 (12)
+
+- almanah (`almanah-0.12.4-8.fc46`)
+...
+
+## Build-time only (1)
+...
+
+## Rebuilt but not using libical (13)
+...
+```
+
+A package needs a rebuild when one of its binary packages requires a
+SONAME of the library on the branch (`-b`, default `rawhide`). Source
+packages that BuildRequire the library's development files without
+linking it are listed separately. Each package still to rebuild has its
+BuildRequires checked on the branch: one whose BuildRequires already fail
+cannot be rebuilt, and the packages requiring it at runtime become
+uninstallable once the new library lands.
+
+Only packages that use the library directly are listed. A package further
+down a dependency chain needs a rebuild only if a rebuilt package changes
+a SONAME of its own; `ebranch check-update <side-tag>` shows whether any
+did. Queries use the repositories of the architecture fedrq runs on.
+
+The output is Markdown, for a mailing list post or a Bodhi comment;
+`--json` prints the same plan as JSON.
 
 ### Resolve the full dependency closure
 

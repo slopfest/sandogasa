@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan lists what a library's SONAME bump has to rebuild
+
+Rebuilding everything that depends on a library after its SONAME bump
+meant working the list out by hand, and a hand-made list mixes what
+needs a rebuild with what merely sits downstream of it. For libical 4
+(the `f46-build-side-158330` side tag), the list posted to devel@ named
+133 packages in 11 build levels; 26 of them link libical, and 13 of
+those were still to be rebuilt.
+
+`ebranch rebuild-plan <library> [-s <side-tag>]` lists the packages
+whose binaries require one of the library's SONAMEs on the branch, and
+apart from them, packages that only BuildRequire its development files.
+With a side tag it shows which are already rebuilt and which builds
+there don't use the library. Each package still to rebuild has its
+BuildRequires checked first: one that already fails, like libical's
+`kdepimlibs` on `pkgconfig(QJson)`, is reported as unable to be rebuilt,
+with the packages it leaves uninstallable. Output is Markdown, or JSON
+with `--json`. On the libical side tag it reproduces the hand analysis
+in about 15 seconds. Tracked in #58; build order and following a
+rebuilt package's own SONAME changes come next.
+
+### sandogasa-fedrq: `Fedrq::whatrequires_src`
+
+The source packages whose BuildRequires name any of a set of
+capabilities (`fedrq whatrequires -A src -F name`). `whatrequires`
+only sees binary packages, so a package that builds against a library
+without linking it at runtime was invisible to it.
+
 ### ebranch: logging in to Bodhi no longer lists every override you own
 
 When `check-update --submit` or `--give-karma` found no Bodhi session,

@@ -13,6 +13,7 @@ mod copr_prune;
 mod dag;
 mod discover;
 mod karma;
+mod rebuild_plan;
 mod resolve;
 mod review_deps;
 mod rpmfusion;
@@ -652,6 +653,26 @@ enum Command {
     FileRequests(FileRequestsArgs),
     /// Detect dependency cycles in the build graph.
     FindCycles(ResolveArgs),
+    /// Plan the rebuilds a library's SONAME bump calls for.
+    #[command(long_about = "\
+Plan the rebuilds a library's SONAME bump calls for.
+
+When a library bumps its SONAME, every package linking it has to be
+rebuilt against the new one. This lists those packages: binary
+packages requiring one of the library's SONAMEs on the branch, and
+source packages building against its development files without
+linking it (listed apart, as they rarely need a rebuild). Given the
+side tag the rebuilds go into, it also says which are done, and which
+builds there do not use the library at all.
+
+Packages still to rebuild are checked for BuildRequires that already
+fail on the branch: those cannot be rebuilt, and the packages
+requiring them become uninstallable once the new library lands.
+
+Packages further down a dependency chain need a rebuild only if a
+rebuilt package changes a SONAME of its own; check-update on the side
+tag shows whether any did.")]
+    RebuildPlan(RebuildPlanArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
 }
@@ -676,6 +697,28 @@ struct CoprPruneArgs {
     yes: bool,
 
     /// Print the plan as JSON (never deletes).
+    #[arg(long)]
+    json: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args)]
+struct RebuildPlanArgs {
+    /// The library's source package (e.g. libical).
+    library: String,
+
+    /// Branch the library is bumped on.
+    #[arg(short = 'b', long, default_value = "rawhide")]
+    branch: String,
+
+    /// Side tag the rebuilds go into, to show what is done.
+    #[arg(short = 's', long)]
+    side_tag: Option<String>,
+
+    /// Print the plan as JSON.
     #[arg(long)]
     json: bool,
 
@@ -1248,6 +1291,16 @@ fn main() -> ExitCode {
                 use std::io::IsTerminal;
                 !a.json && std::io::stdin().is_terminal()
             },
+        }));
+    }
+
+    if let Command::RebuildPlan(a) = &cli.command {
+        return exit_code(rebuild_plan::run(&rebuild_plan::Options {
+            library: a.library.clone(),
+            branch: a.branch.clone(),
+            side_tag: a.side_tag.clone(),
+            json: a.json,
+            verbose: a.verbose,
         }));
     }
 
@@ -1850,7 +1903,8 @@ fn main() -> ExitCode {
         | Command::CoprPrune(_)
         | Command::Escalate(_)
         | Command::FileRequest(_)
-        | Command::FileRequests(_) => unreachable!(),
+        | Command::FileRequests(_)
+        | Command::RebuildPlan(_) => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),
     };

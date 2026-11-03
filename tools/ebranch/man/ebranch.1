@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
+.TH ebranch 1 2026-11-03 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -760,6 +760,44 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 [\fIPACKAGES\fR]
 Source RPM names to analyze
+.SS ebranch rebuild-plan
+\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
+.PP
+Plan the rebuilds a library\*(Aqs SONAME bump calls for.
+.PP
+When a library bumps its SONAME, every package linking it has to be
+rebuilt against the new one. This lists those packages: binary
+packages requiring one of the library\*(Aqs SONAMEs on the branch, and
+source packages building against its development files without
+linking it (listed apart, as they rarely need a rebuild). Given the
+side tag the rebuilds go into, it also says which are done, and which
+builds there do not use the library at all.
+.PP
+Packages still to rebuild are checked for BuildRequires that already
+fail on the branch: those cannot be rebuilt, and the packages
+requiring them become uninstallable once the new library lands.
+.PP
+Packages further down a dependency chain need a rebuild only if a
+rebuilt package changes a SONAME of its own; check\-update on the side
+tag shows whether any did.
+.TP
+\fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR [default: rawhide]
+Branch the library is bumped on
+.TP
+\fB\-s\fR, \fB\-\-side\-tag\fR \fI<SIDE_TAG>\fR
+Side tag the rebuilds go into, to show what is done
+.TP
+\fB\-\-json\fR
+Print the plan as JSON
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fILIBRARY\fR>
+The library\*(Aqs source package (e.g. libical)
 .SS ebranch resolve
 \fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
 .PP
