@@ -146,13 +146,11 @@
   worse than none: check whether an existing section now describes something
   that is no longer true
 
-## fedrq quirks
-- Koji side tag repos (`-r @koji:<tag>`) only index binary RPMs, not source RPMs. `fedrq subpkgs -S` returns nothing for side tags. To query side tag contents, use `fedrq pkgs -r @koji:<tag> '*'` (but this includes inherited packages) or resolve binary RPM names via `koji buildinfo <nvr>` first
-- Use `@koji-src:<tag>` to query source RPMs in a Koji repo (e.g. BuildRequires). ebranch's resolve command does this automatically when given `--source-repo @koji:<tag>`
-- Side tag repos are standalone — do not pass `-b` with `-r @koji:<tag>`
-- `fedrq whatrequires` requires `-F source` (not `-F source_name`)
-- `fedrq` may return `(none)` as a result — always filter it out
-- EPEL 10+ `@testing` repos are not yet supported by fedrq (the metalink URLs don't exist for `epel10`). The `@testing` probe will fail silently and fall back to side tag or reverse dep listing
+## fedrq in this workspace
+General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--forcearch`, EPEL 10 `@testing`) are in review-prompts, `rpm/dependencies.md`, "fedrq Pitfalls". What is specific to the tools here:
+- ebranch's resolve command queries `@koji-src:<tag>` for source RPMs automatically when given `--source-repo @koji:<tag>`
+- To list a side tag's own binaries without the inherited ones, resolve binary RPM names via `koji buildinfo <nvr>` rather than `fedrq pkgs -r @koji:<tag> '*'`
+- For EPEL 10+, ebranch's `@testing` probe fails silently and falls back to side tag or reverse dependency listing
 
 ## Toolchain (MSRV)
 - The workspace declares its minimum supported Rust in `[workspace.package] rust-version` (every member inherits it), and `make msrv-check` — part of `make release-checks` — builds the whole workspace, tests included, with exactly that toolchain (`rustup toolchain install <msrv>` once). It is the only check that catches *syntax* newer than the MSRV: clippy's `incompatible_msrv` lint reads `rust-version` and flags std APIs, but a language feature such as an `if let` guard passes every lint and fails only under the old compiler. v0.24.1 shipped with one and failed to build for EPEL 9 that way
