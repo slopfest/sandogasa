@@ -500,3 +500,60 @@ rawhide repository keeps whatever was last built, and on 2026-10-12 it
 held 292 `fc45` against 131 `fc46` with stragglers to `fc37`. The
 first package said f45, the mode said f45, the maximum said f46.
 Stragglers are behind, never ahead.
+
+## rebuild-plan's contacts describe packages, never people
+
+`--contacts` exists so the person driving a rebuild can reach the
+people who can act on a package. It must not grade them. Fedora's AI
+policy rules out using a tool to judge a person's standing in the
+community, and Fedora has its own non-responsive maintainer process for
+that. So:
+
+- Name addresses and groups, never individuals: the
+  `<package>-maintainers@fedoraproject.org` alias, which reaches
+  everyone with access, group members included, and the groups with
+  commit or admin access with their Matrix rooms.
+- Never a group's own email address. Those exist because Bugzilla needs
+  one, and many are unmonitored or accept mail from members only.
+- Activity hints are about the package, as counts and dates, with no
+  verdict. The release number already shown is one: a high one means
+  many builds since the last version update.
+
+A fuller hint, how much of a package's recent history came from people
+with access, is tracked as exploratory in #60, and is not built because
+its data is not reliable yet:
+
+- dist-git has no commit log API (`git/log`, `log`, `commits` all 404),
+  so the history means a request per commit or a shallow clone.
+- A commit names its author, not a Fedora account. Matching on
+  `<user>@fedoraproject.org` emails and on dist-git's display names
+  misses personal emails and differently spelled names, and every miss
+  counts against the maintainer. That skew is the wrong way round for a
+  hint about people.
+- The message bus records which account pushed, which would be
+  reliable, but the topic it is under now has not been found.
+
+Do not ship an approximate count without saying it is approximate,
+and do not let a miss read as inactivity.
+
+## rebuild-plan reads local mock results, and never builds
+
+`--sidetag-results` and `--baseline-results` read `mock --chain
+--localrepo` result directories that the person running the rebuild
+builds themselves. rebuild-plan must not run mock or anything else
+that builds: the builds take hours, belong to the packager's own
+setup, and are already done by the time a report is wanted. Reading is
+the whole point.
+
+- A directory's `repodata` indexes binary RPMs only (`fedrq -A src`
+  finds none of its SRPMs), so anything about sources comes from the
+  build directories themselves.
+- The newest build per package is chosen by RPM version comparison,
+  never file times: a failed `-7` rebuilt as `-8` must resolve to `-8`
+  whatever order they finished in.
+- Each build's `installed_pkgs.log` is checked for the library version
+  its buildroot got, and a mismatch is listed before any verdict. A
+  side tag build that silently used the branch's library looks exactly
+  like a pass, and that happened during the libical 4 rebuild.
+- Compare releases without the dist tag: a branch's `-4.fc45` and a
+  local `-4.fc46` come from the same commit.
