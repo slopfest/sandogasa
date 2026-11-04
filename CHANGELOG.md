@@ -29,9 +29,48 @@ cannot be rebuilt is listed as blocked, and packages needing each other
 as a cycle. Planned from scratch, libical's 25 rebuildable dependents
 come out in 3 rounds, with gnome-shell after bluez and
 evolution-data-server, the ordering the devel@ thread found by hand. On
-the side tag, the 13 left need no ordering among themselves. A run
-takes about two and a half minutes. Tracked in #58; following a rebuilt
-package's own SONAME changes comes next.
+the side tag, the 13 left need no ordering among themselves. Tracked in
+#58.
+
+### ebranch: rebuild-plan says how each dependent uses the library, and what else to check
+
+Eight of libical's dependents (almanah, gnome-shell, phosh, ...) link it
+without a BuildRequires on it, so a search of BuildRequires misses them,
+and the plan listed them without saying why they were there. The Change
+owner found almanah by hand. Each such dependent now comes with the route
+its build takes to the library's development files, e.g.
+`pkgconfig(libedataserver-1.2)` → evolution-data-server-devel →
+libical-glib-devel; `--json` carries it as `reach`.
+
+A package can also be affected without linking the library, by
+compiling its headers in through another package's development files.
+Nothing records that, so the fallback was to scratch-build everything
+downstream. The plan now follows the `-devel` packages requiring the
+library's, and lists the packages building against them that neither use
+the library nor are rebuilt, grouped by the development package each
+group starts from. For libical that is 36 packages, against the roughly
+107 "scratch-build the rest" meant: 3 through evolution-data-server-devel
+(bubblemail, gnome-phone-manager, libreoffice) and 33 KDE PIM packages
+through kf6-kcalendarcore-devel, a group that one look at
+kf6-kcalendarcore's headers rules out, since they do not include
+libical's. The list matches the one worked out by hand for the libical
+rebuild.
+
+And with `--side-tag`, a rebuild there that dropped a SONAME of its own
+is now followed: the packages linking that SONAME join the plan, in the
+build rounds like the library's own dependents, and the change is
+listed. Builds the side tag's repository does not carry for the
+architecture fedrq runs on are listed as not checked, rather than
+counted as unchanged. Before, the plan only pointed at `check-update`.
+
+### sandogasa-fedrq: `whatrequires_notsrc` and `subpkgs_provides_info`
+
+`Fedrq::whatrequires_notsrc` returns the binary packages (as binary and
+source names) requiring any of the given packages, leaving out source
+packages, which require what they BuildRequire;
+`Fedrq::whatrequires_binaries` includes them. `Fedrq::subpkgs_provides_info`
+returns a batch of source packages' binary packages with their Provides,
+where `subpkgs_info` carries Requires.
 
 ### sandogasa-fedrq: `Fedrq::whatrequires_src`
 

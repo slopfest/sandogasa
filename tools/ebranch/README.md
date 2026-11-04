@@ -1051,11 +1051,35 @@ BuildRequires that already fail to resolve on rawhide, independently of libical:
 - almanah (`almanah-0.12.4-8.fc46`)
 ...
 
+## Linking libical without a BuildRequires on it (8)
+
+They get its development files through another package's, so a search of BuildRequires misses them:
+
+- almanah: `pkgconfig(libedataserver-1.2) >= 3.45.1` → evolution-data-server-devel → libical-glib-devel (rebuilt)
+...
+
 ## Build-time only (1)
 ...
 
 ## Rebuilt but not using libical (13)
 ...
+
+## May compile in libical's headers (36)
+
+...
+
+### Through evolution-data-server-devel (3)
+
+And the development packages requiring it: evolution-devel, folks-devel
+
+- bubblemail (folks-devel)
+- gnome-phone-manager
+- libreoffice
+
+### Through kf6-kcalendarcore-devel (33)
+...
+
+No rebuild in the side tag changed a SONAME of its own, so nothing further down a dependency chain needs rebuilding. Rerun this as rebuilds land.
 ```
 
 A package needs a rebuild when one of its binary packages requires a
@@ -1075,10 +1099,32 @@ cannot be rebuilt is listed as blocked. Packages that need each other are
 reported as a cycle, to be broken by hand. File dependencies are not
 followed when working out a buildroot.
 
-Only packages that use the library directly are listed. A package further
-down a dependency chain needs a rebuild only if a rebuilt package changes
-a SONAME of its own; `ebranch check-update <side-tag>` shows whether any
-did. Queries use the repositories of the architecture fedrq runs on.
+Each package linking the library without a BuildRequires on it is shown
+with the way its build gets the library's development files: the
+BuildRequire it starts from, then each package on the way. Such packages
+are found through the SONAME their binaries require, not through their
+BuildRequires.
+
+A package further down a dependency chain needs a rebuild only if a
+rebuilt package changes a SONAME of its own. With a side tag, each
+rebuild's SONAMEs there are compared with the branch's; when one drops a
+SONAME, the packages linking it join the plan like the library's own
+dependents, and the change is listed. Rebuilds whose binaries the side
+tag's repository does not have for this architecture are listed as not
+checked.
+
+Packages may also be affected without linking the library, by compiling
+its headers in (inline functions, macros, struct layouts) through another
+package's development files. Starting from the library's development
+packages, the plan follows the `-devel` packages requiring them, and lists
+the source packages that BuildRequire any of those and neither use the
+library nor are rebuilt, grouped by the development package that first
+brings the library's in. These are candidates for a scratch build: a
+development package requiring the library's does not show that its
+headers include them, and checking that for the package a group starts
+from can rule the whole group out.
+
+Queries use the repositories of the architecture fedrq runs on.
 
 The output is Markdown, for a mailing list post or a Bodhi comment;
 `--json` prints the same plan as JSON.

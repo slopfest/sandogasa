@@ -613,13 +613,26 @@ impl Fedrq {
             return Ok(vec![]);
         }
         let rows = self.query(&["whatrequires", "-F", "line:name,source"], packages)?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|row| {
-                let (name, source) = row.split_once(" : ")?;
-                Some((name.trim().to_string(), source.trim().to_string()))
-            })
-            .collect())
+        Ok(binary_source_pairs(rows))
+    }
+
+    /// Like [`Self::whatrequires_binaries`], but binary packages only
+    /// (`whatrequires -S`): source packages, which require what they
+    /// BuildRequire, are left out. Answers "which built packages
+    /// depend on this one", e.g. which `-devel` packages pull in a
+    /// library's headers.
+    pub fn whatrequires_notsrc(&self, packages: &[String]) -> Result<Vec<(String, String)>, Error> {
+        if packages.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows = Self::run(&mut self.whatrequires_notsrc_command(packages))?;
+        Ok(binary_source_pairs(rows))
+    }
+
+    /// The command [`Self::whatrequires_notsrc`] runs, separate so a
+    /// test can assert that it leaves source packages out.
+    fn whatrequires_notsrc_command(&self, packages: &[String]) -> Command {
+        self.query_command(&["whatrequires", "-S", "-F", "line:name,source"], packages)
     }
 
     /// Return the source packages whose BuildRequires name any of the
@@ -740,6 +753,25 @@ impl Fedrq {
     /// Uses `-P` to search by Provides rather than package name.
     pub fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, Error> {
         self.query(&["pkgs", "-P", "-F", "provides"], &[capability])
+    }
+
+    /// Batched: the binary subpackages of the given source packages,
+    /// each with its Provides and source attribution — one fedrq
+    /// invocation for the whole batch. [`Self::subpkgs_info`] carries
+    /// Requires instead.
+    pub fn subpkgs_provides_info(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if srpms.is_empty() {
+            return Ok(vec![]);
+        }
+        self.query_json(
+            &[
+                "subpkgs",
+                "-S",
+                "-F",
+                "json:name,provides,source_name,repoid",
+            ],
+            srpms,
+        )
     }
 
     /// Batched: the binary subpackages of the given source packages,
@@ -907,6 +939,17 @@ fn parse_3col(raw: Vec<String>) -> Vec<(String, String, String)> {
 /// `(source, "version-release")` pairs, dropping `(none)` and malformed
 /// lines. Shared by [`Fedrq::pkgs_source_vr`] and
 /// [`Fedrq::resolve_source_vr`].
+/// `name : source` rows, as `-F line:name,source` prints them, as
+/// pairs; a row without the separator (`(none)`) is dropped.
+fn binary_source_pairs(rows: Vec<String>) -> Vec<(String, String)> {
+    rows.into_iter()
+        .filter_map(|row| {
+            let (name, source) = row.split_once(" : ")?;
+            Some((name.trim().to_string(), source.trim().to_string()))
+        })
+        .collect()
+}
+
 fn parse_source_vr_lines(raw: Vec<String>) -> Vec<(String, String)> {
     parse_3col(raw)
         .into_iter()
@@ -1021,6 +1064,7 @@ mod tests {
     fn empty_inputs_skip_the_spawn() {
         let f = Fedrq::default();
         assert!(f.subpkgs_info(&[]).unwrap().is_empty());
+        assert!(f.subpkgs_provides_info(&[]).unwrap().is_empty());
         assert!(f.providers_info(&[]).unwrap().is_empty());
     }
 
@@ -1148,6 +1192,39 @@ mod tests {
         assert!(before.windows(2).any(|w| w == ["-F", "name"]), "{args:?}");
         assert_eq!(args[sep + 1], "pkgconfig(libical)", "{args:?}");
         assert!(f.whatrequires_src(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn whatrequires_notsrc_asks_about_binary_packages_only() {
+        let f = Fedrq {
+            branch: Some("rawhide".to_string()),
+            repo: None,
+        };
+        let args = argv(&f.whatrequires_notsrc_command(&["libical-devel".to_string()]));
+        let sep = args.iter().position(|a| a == "--").expect("separator");
+        let before = &args[..sep];
+        assert!(before.iter().any(|a| a == "-S"), "{args:?}");
+        assert!(
+            before.windows(2).any(|w| w == ["-F", "line:name,source"]),
+            "{args:?}"
+        );
+        assert_eq!(args[sep + 1], "libical-devel", "{args:?}");
+        assert!(f.whatrequires_notsrc(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn binary_source_rows_are_split_and_malformed_ones_dropped() {
+        let rows = vec![
+            "evolution-data-server-devel : evolution-data-server".to_string(),
+            "(none)".to_string(),
+        ];
+        assert_eq!(
+            binary_source_pairs(rows),
+            vec![(
+                "evolution-data-server-devel".to_string(),
+                "evolution-data-server".to_string()
+            )]
+        );
     }
 
     #[test]

@@ -673,9 +673,13 @@ that require an old SONAME cannot be installed next to the new
 library, so a package whose buildroot would install one builds in a
 later round. Packages needing each other are reported as a cycle.
 
-Packages further down a dependency chain need a rebuild only if a
-rebuilt package changes a SONAME of its own; check-update on the side
-tag shows whether any did.")]
+Packages linking the library without a BuildRequires on it are shown
+with the route by which their build gets its development files. With a
+side tag, rebuilds there that dropped a SONAME of their own are listed,
+and the packages linking that SONAME join the plan. Packages that
+neither use the library nor are rebuilt but BuildRequire development
+packages requiring the library's are listed as candidates for a scratch
+build, as they may compile its headers in.")]
     RebuildPlan(RebuildPlanArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),

@@ -41,11 +41,31 @@ pub enum Link {
     BuildOnly,
 }
 
+/// How a dependent's build gets the library's development files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Reach {
+    /// Its BuildRequires name them.
+    Declared,
+    /// Through another package's development files. `path` starts at
+    /// the BuildRequire and names each binary package on the way to
+    /// the library's (`pkgconfig(libecal-2.0)`,
+    /// `evolution-data-server-devel`, `libical-glib-devel`).
+    Through { path: Vec<String> },
+    /// None of its BuildRequires leads to them as far as the plan
+    /// follows dependencies (it does not follow file dependencies).
+    Unexplained,
+    /// It does not link the library, but links a SONAME that
+    /// `package`'s rebuild in the side tag dropped.
+    Relinks { package: String },
+}
+
 /// One package that uses the library.
 #[derive(Debug, Clone, Serialize)]
 pub struct Dependent {
     pub package: String,
     pub link: Link,
+    pub reach: Reach,
     /// The build in the side tag, once the package has been rebuilt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rebuilt: Option<String>,
@@ -61,6 +81,42 @@ pub struct Unbuildable {
     /// Packages requiring it at runtime, which become uninstallable
     /// along with it once the new library lands.
     pub stranded: Vec<String>,
+}
+
+/// The side tag the rebuilds go into, as a plan reads it.
+pub(crate) struct SideTag {
+    pub name: String,
+    /// The builds tagged into it.
+    pub nvrs: Vec<String>,
+    /// Source package → the SONAMEs its build in the side tag provides,
+    /// for each build whose binaries could be read.
+    pub sonames: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// A rebuild in the side tag that dropped SONAMEs of its own, so its
+/// runtime dependents need rebuilding as well.
+#[derive(Debug, Clone, Serialize)]
+pub struct SonameChange {
+    pub package: String,
+    /// SONAMEs the branch has and the rebuild no longer provides.
+    pub removed: Vec<String>,
+    /// Packages requiring them, which join the plan's dependents.
+    pub dependents: Vec<String>,
+}
+
+/// Packages that may compile the library's headers in without linking
+/// it, through development packages that require the library's.
+#[derive(Debug, Clone, Serialize)]
+pub struct HeaderExposure {
+    /// A development package requiring one of the library's directly.
+    pub through: String,
+    /// Development packages requiring `through`, directly or further
+    /// down.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub further: Vec<String>,
+    /// Source package → the development packages among `through` and
+    /// `further` that it BuildRequires.
+    pub packages: BTreeMap<String, Vec<String>>,
 }
 
 /// The whole plan, as `--json` prints it.
@@ -94,6 +150,19 @@ pub struct RebuildPlan {
     /// BuildRequires change).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cycles: Vec<Vec<String>>,
+    /// Rebuilds in the side tag that dropped SONAMEs of their own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub soname_changes: Vec<SonameChange>,
+    /// Rebuilds in the side tag whose SONAMEs could not be compared:
+    /// its repository had none of their binaries for this architecture.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_compared: Vec<String>,
+    /// Packages that neither use the library nor are rebuilt, but
+    /// BuildRequire development packages that bring its headers, by
+    /// the development package of the library's first reached. Worth a
+    /// scratch build.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub header_exposed: Vec<HeaderExposure>,
 }
 
 impl RebuildPlan {
@@ -110,6 +179,15 @@ impl RebuildPlan {
         self.dependents
             .iter()
             .filter(|d| d.link == Link::BuildOnly && d.rebuilt.is_none())
+            .collect()
+    }
+
+    /// Dependents linking the library whose BuildRequires do not name
+    /// it.
+    pub fn undeclared(&self) -> Vec<&Dependent> {
+        self.dependents
+            .iter()
+            .filter(|d| matches!(d.reach, Reach::Through { .. } | Reach::Unexplained))
             .collect()
     }
 }
@@ -136,6 +214,14 @@ pub(crate) trait PlanQuery: Sync {
 
     /// The binary packages providing any of the dependencies.
     fn providers(&self, deps: &[String]) -> Result<Vec<PkgInfo>, String>;
+
+    /// Binary packages requiring any of the packages, as
+    /// `(binary, source)`; source packages are left out.
+    fn bin_requirers(&self, packages: &[String]) -> Result<Vec<(String, String)>, String>;
+
+    /// The binary packages of the source packages, with their
+    /// Provides, in one batch.
+    fn subpkgs_provides_info(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String>;
 }
 
 /// Work out the plan for `library` on the branch `q` reads, with the
@@ -143,7 +229,7 @@ pub(crate) trait PlanQuery: Sync {
 pub(crate) fn plan(
     library: &str,
     branch: &str,
-    side_tag: Option<(&str, &[String])>,
+    side_tag: Option<&SideTag>,
     q: &dyn PlanQuery,
     verbose: bool,
 ) -> Result<RebuildPlan, String> {
@@ -165,10 +251,42 @@ pub(crate) fn plan(
         );
     }
 
-    let runtime: BTreeSet<String> = q
+    let tagged: BTreeMap<String, String> = side_tag
+        .map(|st| {
+            st.nvrs
+                .iter()
+                .filter_map(|nvr| {
+                    sandogasa_koji::parse_nvr_name(nvr).map(|n| (n.to_string(), nvr.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut runtime: BTreeSet<String> = q
         .whatrequires(&sonames)?
         .into_iter()
         .filter(|p| p != library)
+        .collect();
+    let (soname_changes, not_compared) = match side_tag {
+        Some(st) => soname_changes(library, st, &tagged, q, verbose)?,
+        None => (Vec::new(), Vec::new()),
+    };
+    // Packages that only follow a rebuild's SONAME change, with it.
+    let mut relinks: BTreeMap<String, String> = BTreeMap::new();
+    for c in &soname_changes {
+        for d in &c.dependents {
+            if !runtime.contains(d) {
+                relinks
+                    .entry(d.clone())
+                    .or_insert_with(|| c.package.clone());
+            }
+        }
+    }
+    runtime.extend(relinks.keys().cloned());
+    let stale: Vec<String> = sonames
+        .iter()
+        .chain(soname_changes.iter().flat_map(|c| &c.removed))
+        .cloned()
         .collect();
     let build: BTreeSet<String> = q
         .whatrequires_src(&build_caps)?
@@ -183,28 +301,58 @@ pub(crate) fn plan(
         );
     }
 
-    let tagged: BTreeMap<String, String> = side_tag
-        .map(|(_, nvrs)| {
-            nvrs.iter()
-                .filter_map(|nvr| {
-                    sandogasa_koji::parse_nvr_name(nvr).map(|n| (n.to_string(), nvr.clone()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let undeclared: Vec<&str> = runtime
+        .difference(&build)
+        .filter(|p| !relinks.contains_key(*p))
+        .map(String::as_str)
+        .collect();
+    let to_check: Vec<&str> = runtime
+        .iter()
+        .filter(|p| !tagged.contains_key(*p))
+        .map(String::as_str)
+        .collect();
+    let all_brs = fetch_brs(
+        &undeclared
+            .iter()
+            .chain(&to_check)
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        q,
+    )?;
 
-    let dependents: Vec<Dependent> = runtime
-        .union(&build)
-        .map(|p| Dependent {
+    let mut closure = Closure::default();
+    let dev = closure.development_packages(library, &build_caps, q)?;
+    let mut dependents = Vec::new();
+    for p in runtime.union(&build) {
+        let reach = if build.contains(p) {
+            Reach::Declared
+        } else if let Some(package) = relinks.get(p) {
+            Reach::Relinks {
+                package: package.clone(),
+            }
+        } else {
+            let brs = all_brs.get(p).map(Vec::as_slice).unwrap_or_default();
+            match closure.route(brs, &dev, q)? {
+                Some(path) => Reach::Through { path },
+                None => Reach::Unexplained,
+            }
+        };
+        if verbose && reach != Reach::Declared {
+            eprintln!("[rebuild-plan] {p} does not BuildRequire {library}: {reach:?}");
+        }
+        dependents.push(Dependent {
             package: p.clone(),
             link: if runtime.contains(p) {
                 Link::Runtime
             } else {
                 Link::BuildOnly
             },
+            reach,
             rebuilt: tagged.get(p).cloned(),
-        })
-        .collect();
+        });
+    }
 
     let rebuilt_not_needed: Vec<String> = tagged
         .keys()
@@ -212,20 +360,23 @@ pub(crate) fn plan(
         .cloned()
         .collect();
 
-    let to_check: Vec<&str> = dependents
-        .iter()
-        .filter(|d| d.link == Link::Runtime && d.rebuilt.is_none())
-        .map(|d| d.package.as_str())
+    let brs: BTreeMap<String, Vec<String>> = all_brs
+        .into_iter()
+        .filter(|(p, _)| to_check.contains(&p.as_str()))
         .collect();
-    let brs = fetch_brs(&to_check, q)?;
     let unbuildable = find_unbuildable(&brs, q, verbose)?;
     let cannot: BTreeSet<String> = unbuildable.iter().map(|u| u.package.clone()).collect();
-    let order = build_order(&brs, &cannot, &sonames, q, verbose)?;
+    let order = build_order(&brs, &cannot, &stale, &mut closure, q, verbose)?;
+
+    let mut settled: BTreeSet<String> = runtime.union(&build).cloned().collect();
+    settled.extend(tagged.keys().cloned());
+    settled.insert(library.to_string());
+    let header_exposed = header_exposure(library, &dev, &settled, q, verbose)?;
 
     Ok(RebuildPlan {
         library: library.to_string(),
         branch: branch.to_string(),
-        side_tag: side_tag.map(|(t, _)| t.to_string()),
+        side_tag: side_tag.map(|st| st.name.clone()),
         sonames,
         dependents,
         unbuildable,
@@ -234,6 +385,9 @@ pub(crate) fn plan(
         waits_for: order.waits_for,
         blocked_by: order.blocked_by,
         cycles: order.cycles,
+        soname_changes,
+        not_compared,
+        header_exposed,
     })
 }
 
@@ -310,6 +464,69 @@ pub fn render(plan: &RebuildPlan) -> String {
         }
     }
 
+    if !plan.soname_changes.is_empty() {
+        let _ = writeln!(
+            out,
+            "## Rebuilds that changed a SONAME of their own ({})\n",
+            plan.soname_changes.len()
+        );
+        let _ = writeln!(
+            out,
+            "Their rebuilds in the side tag dropped these SONAMEs, so what links them \
+             needs rebuilding too; those packages are in the plan above:\n"
+        );
+        for c in &plan.soname_changes {
+            let removed: Vec<String> = c.removed.iter().map(|s| format!("`{s}`")).collect();
+            let _ = write!(out, "- {}: drops {}", c.package, removed.join(", "));
+            if !c.dependents.is_empty() {
+                let _ = write!(out, "; linked by {}", c.dependents.join(", "));
+            }
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
+    let undeclared = plan.undeclared();
+    if !undeclared.is_empty() {
+        let _ = writeln!(
+            out,
+            "## Linking {} without a BuildRequires on it ({})\n",
+            plan.library,
+            undeclared.len()
+        );
+        let _ = writeln!(
+            out,
+            "They get its development files through another package's, so a search of \
+             BuildRequires misses them:\n"
+        );
+        for d in &undeclared {
+            match &d.reach {
+                Reach::Through { path } => {
+                    let (br, rest) = path
+                        .split_first()
+                        .expect("a route starts at a BuildRequire");
+                    let _ = write!(out, "- {}: `{br}`", d.package);
+                    for name in rest {
+                        let _ = write!(out, " → {name}");
+                    }
+                }
+                _ => {
+                    let _ = write!(
+                        out,
+                        "- {}: none of its BuildRequires leads to {} as far as the plan \
+                         follows them (file dependencies are not followed)",
+                        d.package, plan.library
+                    );
+                }
+            }
+            if d.rebuilt.is_some() {
+                out.push_str(" (rebuilt)");
+            }
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+
     let build_only = plan.build_only();
     if !build_only.is_empty() {
         let _ = writeln!(out, "## Build-time only ({})\n", build_only.len());
@@ -344,12 +561,77 @@ pub fn render(plan: &RebuildPlan) -> String {
         out.push('\n');
     }
 
-    let _ = writeln!(
-        out,
-        "Packages further down a dependency chain need a rebuild only if a rebuilt \
-         package changes a SONAME of its own. `ebranch check-update <side-tag>` shows \
-         whether any did."
-    );
+    if !plan.header_exposed.is_empty() {
+        let n: BTreeSet<&String> = plan
+            .header_exposed
+            .iter()
+            .flat_map(|e| e.packages.keys())
+            .collect();
+        let _ = writeln!(
+            out,
+            "## May compile in {}'s headers ({})\n",
+            plan.library,
+            n.len()
+        );
+        let _ = writeln!(
+            out,
+            "These neither link {lib} nor are rebuilt, but BuildRequire development files that \
+             require {lib}'s, so its headers may reach them (inline functions, macros, struct \
+             layouts) without a dependency on its SONAME. Worth a scratch build. A development \
+             package requiring {lib}'s is only a sign: if its own headers do not include {lib}'s, \
+             the whole group below it can be ruled out at once.\n",
+            lib = plan.library
+        );
+        for e in &plan.header_exposed {
+            let _ = writeln!(out, "### Through {} ({})\n", e.through, e.packages.len());
+            if !e.further.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "And the development packages requiring it: {}\n",
+                    e.further.join(", ")
+                );
+            }
+            for (p, via) in &e.packages {
+                if via.len() == 1 && via[0] == e.through {
+                    let _ = writeln!(out, "- {p}");
+                } else {
+                    let _ = writeln!(out, "- {p} ({})", via.join(", "));
+                }
+            }
+            out.push('\n');
+        }
+    }
+
+    if plan.side_tag.is_some() {
+        if !plan.not_compared.is_empty() {
+            let _ = writeln!(
+                out,
+                "Not checked for SONAME changes, as the side tag's repository has none of \
+                 their binaries for this architecture (an ExcludeArch, or a repository not \
+                 regenerated since the build): {}\n",
+                plan.not_compared.join(", ")
+            );
+        }
+        if plan.soname_changes.is_empty() {
+            let checked = if plan.not_compared.is_empty() {
+                "No rebuild"
+            } else {
+                "No other rebuild"
+            };
+            let _ = writeln!(
+                out,
+                "{checked} in the side tag changed a SONAME of its own, so nothing further \
+                 down a dependency chain needs rebuilding. Rerun this as rebuilds land."
+            );
+        }
+    } else {
+        let _ = writeln!(
+            out,
+            "Packages further down a dependency chain need a rebuild only if a rebuilt \
+             package changes a SONAME of its own. With `--side-tag`, the plan checks the \
+             rebuilds there and adds what follows."
+        );
+    }
     out
 }
 
@@ -399,15 +681,16 @@ fn render_rounds(out: &mut String, plan: &RebuildPlan) {
 /// Plan the rebuilds and print the result.
 pub fn run(opts: &Options) -> Result<(), String> {
     sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
-    let tagged = match &opts.side_tag {
+    let side_tag = match &opts.side_tag {
         Some(tag) => {
             // `koji` has no `--version`, and `koji version` asks the hub, so
             // only its presence is checked, as check-update does.
             sandogasa_cli::require_tools(&[("koji", "sudo dnf install koji", None)])?;
-            if opts.verbose {
-                eprintln!("[rebuild-plan] listing {tag}");
-            }
-            Some(KojiCli { profile: None }.list_tagged(tag)?)
+            Some(read_side_tag(
+                tag,
+                &KojiCli { profile: None },
+                opts.verbose,
+            )?)
         }
         None => None,
     };
@@ -415,8 +698,13 @@ pub fn run(opts: &Options) -> Result<(), String> {
         branch: Some(opts.branch.clone()),
         repo: None,
     };
-    let side_tag = opts.side_tag.as_deref().zip(tagged.as_deref());
-    let plan = plan(&opts.library, &opts.branch, side_tag, &fedrq, opts.verbose)?;
+    let plan = plan(
+        &opts.library,
+        &opts.branch,
+        side_tag.as_ref(),
+        &fedrq,
+        opts.verbose,
+    )?;
     if opts.json {
         println!(
             "{}",
@@ -452,6 +740,14 @@ impl PlanQuery for sandogasa_fedrq::Fedrq {
     fn providers(&self, deps: &[String]) -> Result<Vec<PkgInfo>, String> {
         sandogasa_fedrq::Fedrq::providers_info(self, deps).map_err(|e| e.to_string())
     }
+
+    fn bin_requirers(&self, packages: &[String]) -> Result<Vec<(String, String)>, String> {
+        sandogasa_fedrq::Fedrq::whatrequires_notsrc(self, packages).map_err(|e| e.to_string())
+    }
+
+    fn subpkgs_provides_info(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
+        sandogasa_fedrq::Fedrq::subpkgs_provides_info(self, srpms).map_err(|e| e.to_string())
+    }
 }
 
 /// Whether a provide is a shared library's SONAME, like
@@ -478,6 +774,87 @@ fn split_provides(provides: &[String]) -> (Vec<String>, Vec<String>) {
         }
     }
     (sonames.into_iter().collect(), build.into_iter().collect())
+}
+
+/// Source package → the SONAMEs its build among `nvrs` provides, read
+/// from `infos`. A binary counts only when its version and release are
+/// the tagged build's: a side tag's repository also carries what it
+/// inherits.
+fn sonames_by_source(nvrs: &[String], infos: &[PkgInfo]) -> BTreeMap<String, BTreeSet<String>> {
+    let builds: BTreeMap<&str, (&str, &str)> = nvrs
+        .iter()
+        .filter_map(|nvr| sandogasa_koji::parse_nvr(nvr).map(|(n, v, r)| (n, (v, r))))
+        .collect();
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for pi in infos {
+        let Some(src) = pi.source_name.as_deref() else {
+            continue;
+        };
+        let Some((v, r)) = builds.get(src) else {
+            continue;
+        };
+        if pi.version.as_deref() != Some(*v) || pi.release.as_deref() != Some(*r) {
+            continue;
+        }
+        let entry = out.entry(src.to_string()).or_default();
+        entry.extend(
+            pi.provides
+                .iter()
+                .map(|p| sandogasa_fedrq::dep_name(p))
+                .filter(|n| is_soname(n))
+                .map(str::to_string),
+        );
+    }
+    out
+}
+
+/// The side tag's builds, and the SONAMEs each provides there: the
+/// binary package names from Koji, then their Provides from the side
+/// tag's repository in one query.
+fn read_side_tag(tag: &str, koji: &dyn KojiQuery, verbose: bool) -> Result<SideTag, String> {
+    if verbose {
+        eprintln!("[rebuild-plan] listing {tag}");
+    }
+    let nvrs = koji.list_tagged(tag)?;
+    let rpms: BTreeMap<String, Vec<String>> = nvrs
+        .iter()
+        .map(|nvr| (nvr.clone(), koji.build_rpms(nvr)))
+        .collect();
+    let names: Vec<String> = rpms
+        .values()
+        .flatten()
+        .filter(|n| !n.ends_with("-debuginfo") && !n.ends_with("-debugsource"))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if verbose {
+        eprintln!(
+            "[rebuild-plan] reading the Provides of {} binary package(s) in {tag}",
+            names.len()
+        );
+    }
+    // The side tag's repository changes as builds land, and its
+    // metadata is small: refetch it every run, as check-update does,
+    // or builds tagged since the last run look absent.
+    match sandogasa_fedrq::expire_repo_cache(&sandogasa_fedrq::koji_repoid_prefix(tag)) {
+        Ok(n) if verbose => {
+            eprintln!("[rebuild-plan] expired {n} cached metadata file(s) of {tag}")
+        }
+        Err(e) => eprintln!("warning: could not expire the cached metadata of {tag}: {e}"),
+        _ => {}
+    }
+    let side = sandogasa_fedrq::Fedrq {
+        branch: None,
+        repo: Some(format!("@koji:{tag}")),
+    };
+    let infos = side.providers_vr_info(&names).map_err(|e| e.to_string())?;
+    let sonames = sonames_by_source(&nvrs, &infos);
+    Ok(SideTag {
+        name: tag.to_string(),
+        nvrs,
+        sonames,
+    })
 }
 
 /// Whether a BuildRequire is one a repository can answer: `rpmlib()`
@@ -604,6 +981,79 @@ impl Closure {
         Ok(())
     }
 
+    /// The library's binary packages that carry its development files:
+    /// those providing one of its build capabilities whose name ends in
+    /// `-devel` or which provide a `pkgconfig()` or `cmake()` module.
+    fn development_packages(
+        &mut self,
+        library: &str,
+        build_caps: &[String],
+        q: &dyn PlanQuery,
+    ) -> Result<BTreeSet<String>, String> {
+        self.resolve(build_caps, q)?;
+        Ok(self
+            .pkgs
+            .values()
+            .filter(|pi| pi.source_name.as_deref() == Some(library))
+            .filter(|pi| {
+                pi.name.ends_with("-devel")
+                    || pi.provides.iter().any(|p| {
+                        let n = sandogasa_fedrq::dep_name(p);
+                        n.starts_with("pkgconfig(") || n.starts_with("cmake(")
+                    })
+            })
+            .map(|pi| pi.name.clone())
+            .collect())
+    }
+
+    /// The shortest way from one of `brs` to one of the `targets`
+    /// binary packages: the BuildRequire, then each binary package on
+    /// the way. `None` when no BuildRequire leads there.
+    fn route(
+        &mut self,
+        brs: &[String],
+        targets: &BTreeSet<String>,
+        q: &dyn PlanQuery,
+    ) -> Result<Option<Vec<String>>, String> {
+        let followed = |d: &String| is_answerable(d) && !d.starts_with('/');
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut frontier: Vec<(String, Vec<String>)> = brs
+            .iter()
+            .filter(|d| followed(d))
+            .map(|d| (d.clone(), vec![d.clone()]))
+            .collect();
+        for _ in 0..MAX_WAVES {
+            if frontier.is_empty() {
+                break;
+            }
+            let deps: Vec<String> = frontier.iter().map(|(d, _)| d.clone()).collect();
+            self.resolve(&deps, q)?;
+            let mut next = Vec::new();
+            for (d, path) in &frontier {
+                for name in self.providers.get(d).into_iter().flatten() {
+                    if !seen.insert(name.clone()) {
+                        continue;
+                    }
+                    let mut to = path.clone();
+                    to.push(name.clone());
+                    if targets.contains(name) {
+                        return Ok(Some(to));
+                    }
+                    if let Some(pi) = self.pkgs.get(name) {
+                        next.extend(
+                            pi.requires
+                                .iter()
+                                .filter(|r| followed(r))
+                                .map(|r| (r.clone(), to.clone())),
+                        );
+                    }
+                }
+            }
+            frontier = next;
+        }
+        Ok(None)
+    }
+
     /// The binary packages a buildroot for `brs` installs: the
     /// BuildRequires' providers and, transitively, what those require.
     ///
@@ -657,11 +1107,11 @@ fn build_order(
     brs: &BTreeMap<String, Vec<String>>,
     cannot: &BTreeSet<String>,
     sonames: &[String],
+    closure: &mut Closure,
     q: &dyn PlanQuery,
     verbose: bool,
 ) -> Result<Order, String> {
     let stale: BTreeSet<&str> = brs.keys().map(String::as_str).collect();
-    let mut closure = Closure::default();
     let mut needs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (p, deps) in brs {
         if cannot.contains(p) {
@@ -761,6 +1211,138 @@ fn build_order(
     })
 }
 
+/// The rebuilds in the side tag that dropped SONAMEs the branch has,
+/// and the packages linking them. The library's own build is left out:
+/// its SONAMEs are the bump being planned.
+///
+/// Only builds whose binaries the side tag answered for are compared,
+/// so a lookup that failed reads as "unknown", not as every SONAME
+/// dropped.
+fn soname_changes(
+    library: &str,
+    st: &SideTag,
+    tagged: &BTreeMap<String, String>,
+    q: &dyn PlanQuery,
+    verbose: bool,
+) -> Result<(Vec<SonameChange>, Vec<String>), String> {
+    let (compared, not_compared): (Vec<String>, Vec<String>) = tagged
+        .keys()
+        .filter(|p| *p != library)
+        .cloned()
+        .partition(|p| st.sonames.contains_key(p));
+    if verbose && !not_compared.is_empty() {
+        eprintln!(
+            "[rebuild-plan] not in the side tag's repository, so not compared: {}",
+            not_compared.join(", ")
+        );
+    }
+    let mut on_branch: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for pi in q.subpkgs_provides_info(&compared)? {
+        if let Some(src) = pi.source_name {
+            on_branch.entry(src).or_default().extend(pi.provides);
+        }
+    }
+    let mut out = Vec::new();
+    for package in &compared {
+        let new = &st.sonames[package];
+        let (old, _) = split_provides(
+            on_branch
+                .get(package)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
+        let removed: Vec<String> = old.into_iter().filter(|s| !new.contains(s)).collect();
+        if removed.is_empty() {
+            continue;
+        }
+        let dependents: Vec<String> = q
+            .whatrequires(&removed)?
+            .into_iter()
+            .filter(|d| d != package && d != library)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if verbose {
+            eprintln!(
+                "[rebuild-plan] {package} dropped {}; linked by {}",
+                removed.join(", "),
+                dependents.len()
+            );
+        }
+        out.push(SonameChange {
+            package: package.clone(),
+            removed,
+            dependents,
+        });
+    }
+    Ok((out, not_compared))
+}
+
+/// Packages that may compile the library's headers in: walk from the
+/// library's development packages (`dev`) to the development packages
+/// requiring them, then on to those requiring those, and take the
+/// source packages BuildRequiring any of them that are not `settled`
+/// (using the library, rebuilt, or the library itself).
+///
+/// Only `-devel` packages are followed. Following every requirer would
+/// reach most of the distribution through runtime libraries, while
+/// headers travel through development packages.
+fn header_exposure(
+    library: &str,
+    dev: &BTreeSet<String>,
+    settled: &BTreeSet<String>,
+    q: &dyn PlanQuery,
+    verbose: bool,
+) -> Result<Vec<HeaderExposure>, String> {
+    let devel_requirers = |names: &[String]| -> Result<BTreeSet<String>, String> {
+        Ok(q.bin_requirers(names)?
+            .into_iter()
+            .filter(|(bin, src)| src != library && bin.ends_with("-devel"))
+            .map(|(bin, _)| bin)
+            .collect())
+    };
+    let first = devel_requirers(&dev.iter().cloned().collect::<Vec<_>>())?;
+    let mut out = Vec::new();
+    for through in first {
+        let mut further = BTreeSet::new();
+        let mut frontier = vec![through.clone()];
+        for _ in 0..MAX_WAVES {
+            let next: Vec<String> = devel_requirers(&frontier)?
+                .into_iter()
+                .filter(|b| *b != through && further.insert(b.clone()))
+                .collect();
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+
+        let mut packages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for d in std::iter::once(&through).chain(&further) {
+            for src in q.whatrequires_src(std::slice::from_ref(d))? {
+                if !settled.contains(&src) {
+                    packages.entry(src).or_default().push(d.clone());
+                }
+            }
+        }
+        if verbose {
+            eprintln!(
+                "[rebuild-plan] through {through}: {} more development package(s), {} package(s) to scratch-build",
+                further.len(),
+                packages.len()
+            );
+        }
+        if !packages.is_empty() {
+            out.push(HeaderExposure {
+                through,
+                further: further.into_iter().collect(),
+                packages,
+            });
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -779,6 +1361,8 @@ mod tests {
         /// Binary packages on the branch, as the providers query
         /// returns them.
         available: Vec<PkgInfo>,
+        /// package → binary packages requiring it, as `(binary, source)`.
+        bin_requiring: BTreeMap<String, Vec<(String, String)>>,
     }
 
     fn strs(v: &[&str]) -> Vec<String> {
@@ -831,6 +1415,34 @@ mod tests {
                 .cloned()
                 .collect())
         }
+        fn bin_requirers(&self, packages: &[String]) -> Result<Vec<(String, String)>, String> {
+            Ok(packages
+                .iter()
+                .flat_map(|p| self.bin_requiring.get(p).cloned().unwrap_or_default())
+                .collect())
+        }
+        /// One binary package per source, carrying all its Provides.
+        fn subpkgs_provides_info(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String> {
+            Ok(srpms
+                .iter()
+                .filter_map(|s| {
+                    let provides = self.provides.get(s)?;
+                    Some(PkgInfo::new(
+                        s,
+                        vec![],
+                        provides.clone(),
+                        Some(s.clone()),
+                        "rawhide",
+                    ))
+                })
+                .collect())
+        }
+    }
+
+    fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+        v.iter()
+            .map(|(b, s)| (b.to_string(), s.to_string()))
+            .collect()
     }
 
     const RUNTIME: &[&str] = &[
@@ -946,6 +1558,11 @@ mod tests {
             "phosh".into(),
             strs(&["(pkgconfig(gtk4) >= 4.12 with pkgconfig(gtk4) < 5)"]),
         );
+        // almanah links libical but only BuildRequires
+        // evolution-data-server's development files, which bring
+        // libical-glib's in.
+        r.brs
+            .insert("almanah".into(), strs(&["pkgconfig(libecal-2.0)"]));
         r.available = vec![
             bin("cmake", "cmake", &["cmake = 3.31.6-1.fc46"], &[]),
             bin(
@@ -961,6 +1578,18 @@ mod tests {
                 &[],
             ),
             bin("gtk4-devel", "gtk4", &["pkgconfig(gtk4) = 4.20.1"], &[]),
+            bin(
+                "libical-glib-devel",
+                "libical",
+                &["pkgconfig(libical-glib) = 3.0.20"],
+                &[],
+            ),
+            bin(
+                "evolution-data-server-devel",
+                "evolution-data-server",
+                &["pkgconfig(libecal-2.0) = 3.62.1"],
+                &["pkgconfig(libical-glib)"],
+            ),
             bin("libxslt", "libxslt", &["libxslt = 1.1.43-1.fc46"], &[]),
         ];
         r.subpkgs.insert(
@@ -969,6 +1598,45 @@ mod tests {
         );
         r.requiring
             .insert("kdepimlibs-akonadi".into(), strs(&["kuser", "kdepimlibs"]));
+
+        // Development packages bringing libical's headers along, and
+        // what builds against them.
+        r.bin_requiring.insert(
+            "libical-devel".into(),
+            pairs(&[
+                ("libical-glib-devel", "libical"),
+                ("kf6-kcalendarcore-devel", "kf6-kcalendarcore"),
+            ]),
+        );
+        r.bin_requiring.insert(
+            "libical-glib-devel".into(),
+            pairs(&[("evolution-data-server-devel", "evolution-data-server")]),
+        );
+        r.bin_requiring.insert(
+            "evolution-data-server-devel".into(),
+            pairs(&[
+                ("folks-devel", "folks"),
+                // A runtime package requiring it is not followed.
+                ("evolution-data-server-ui", "evolution-data-server"),
+            ]),
+        );
+        r.bin_requiring.insert(
+            "kf6-kcalendarcore-devel".into(),
+            pairs(&[("kf6-akonadi-calendar-devel", "akonadi-calendar")]),
+        );
+        r.building.insert(
+            "evolution-data-server-devel".into(),
+            // almanah links libical; folks is rebuilt in the side tag.
+            strs(&["almanah", "folks", "gnome-phone-manager", "libreoffice"]),
+        );
+        r.building
+            .insert("folks-devel".into(), strs(&["bubblemail", "libreoffice"]));
+        r.building.insert(
+            "kf6-kcalendarcore-devel".into(),
+            strs(&["akonadi-calendar", "korganizer"]),
+        );
+        r.building
+            .insert("kf6-akonadi-calendar-devel".into(), strs(&["korganizer"]));
         r
     }
 
@@ -982,17 +1650,30 @@ mod tests {
         }
     }
 
+    /// The libical side tag. evolution-data-server's rebuild keeps its
+    /// SONAMEs; the other builds' binaries are not recorded, so they
+    /// are not compared.
+    fn libical_side_tag() -> SideTag {
+        SideTag {
+            name: "f46-build-side-158330".into(),
+            nvrs: strs(SIDE_TAG),
+            sonames: BTreeMap::from([(
+                "evolution-data-server".to_string(),
+                BTreeSet::from(["libecal-2.0.so.3()(64bit)".to_string()]),
+            )]),
+        }
+    }
+
     fn libical_plan() -> RebuildPlan {
-        let tagged = strs(SIDE_TAG);
-        let q = libical().with_file("/usr/bin/xsltproc", "libxslt");
-        plan(
-            "libical",
-            "rawhide",
-            Some(("f46-build-side-158330", &tagged)),
-            &q,
-            false,
-        )
-        .unwrap()
+        let mut q = libical().with_file("/usr/bin/xsltproc", "libxslt");
+        q.provides.insert(
+            "evolution-data-server".into(),
+            strs(&[
+                "libecal-2.0.so.3()(64bit)",
+                "pkgconfig(libecal-2.0) = 3.62.1",
+            ]),
+        );
+        plan("libical", "rawhide", Some(&libical_side_tag()), &q, false).unwrap()
     }
 
     fn names(ds: &[&Dependent]) -> Vec<String> {
@@ -1107,6 +1788,82 @@ mod tests {
     }
 
     #[test]
+    fn a_dependent_not_declaring_the_library_says_how_it_gets_it() {
+        let p = libical_plan();
+        let reach = |pkg: &str| {
+            p.dependents
+                .iter()
+                .find(|d| d.package == pkg)
+                .map(|d| d.reach.clone())
+                .unwrap()
+        };
+        assert_eq!(reach("asterisk"), Reach::Declared);
+        assert_eq!(
+            reach("almanah"),
+            Reach::Through {
+                path: strs(&[
+                    "pkgconfig(libecal-2.0)",
+                    "evolution-data-server-devel",
+                    "libical-glib-devel",
+                ])
+            }
+        );
+        // No BuildRequires recorded for bluez: nothing leads to libical.
+        assert_eq!(reach("bluez"), Reach::Unexplained);
+        let out = render(&p);
+        for want in [
+            "## Linking libical without a BuildRequires on it",
+            "- almanah: `pkgconfig(libecal-2.0)` → evolution-data-server-devel → \
+             libical-glib-devel (rebuilt)",
+            "- bluez: none of its BuildRequires leads to libical",
+        ] {
+            assert!(out.contains(want), "missing {want:?} in:\n{out}");
+        }
+    }
+
+    #[test]
+    fn packages_that_may_compile_the_headers_in_are_grouped() {
+        let p = libical_plan();
+        let groups: Vec<&str> = p
+            .header_exposed
+            .iter()
+            .map(|e| e.through.as_str())
+            .collect();
+        assert_eq!(
+            groups,
+            ["evolution-data-server-devel", "kf6-kcalendarcore-devel"]
+        );
+        let eds = &p.header_exposed[0];
+        assert_eq!(eds.further, strs(&["folks-devel"]));
+        // almanah (links libical) and folks (rebuilt) are settled.
+        assert_eq!(
+            eds.packages.keys().cloned().collect::<Vec<_>>(),
+            strs(&["bubblemail", "gnome-phone-manager", "libreoffice"])
+        );
+        assert_eq!(
+            eds.packages["libreoffice"],
+            strs(&["evolution-data-server-devel", "folks-devel"])
+        );
+        let kde = &p.header_exposed[1];
+        assert_eq!(kde.further, strs(&["kf6-akonadi-calendar-devel"]));
+        assert_eq!(
+            kde.packages["korganizer"],
+            strs(&["kf6-kcalendarcore-devel", "kf6-akonadi-calendar-devel"])
+        );
+        let out = render(&p);
+        for want in [
+            "## May compile in libical's headers (5)",
+            "### Through evolution-data-server-devel (3)",
+            "And the development packages requiring it: folks-devel",
+            "- gnome-phone-manager\n",
+            "- bubblemail (folks-devel)",
+            "### Through kf6-kcalendarcore-devel (2)",
+        ] {
+            assert!(out.contains(want), "missing {want:?} in:\n{out}");
+        }
+    }
+
+    #[test]
     fn a_library_without_a_soname_is_refused() {
         let mut q = Recorded::default();
         q.provides
@@ -1132,6 +1889,7 @@ mod tests {
             "- gnome-shell (`gnome-shell-51.1-2.fc46`)",
             "## Build-time only (1)",
             "## Rebuilt but not using libical (13)",
+            "No other rebuild in the side tag changed a SONAME of its own",
         ] {
             assert!(out.contains(want), "missing {want:?} in:\n{out}");
         }
@@ -1147,6 +1905,15 @@ mod tests {
             .find(|d| d["package"] == "gnome-shell")
             .unwrap();
         assert_eq!(shell["link"], "runtime");
+        assert_eq!(shell["reach"]["kind"], "unexplained");
+        let almanah = v["dependents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["package"] == "almanah")
+            .unwrap();
+        assert_eq!(almanah["reach"]["kind"], "through");
+        assert_eq!(almanah["reach"]["path"][1], "evolution-data-server-devel");
         assert_eq!(shell["rebuilt"], "gnome-shell-51.1-2.fc46");
         assert_eq!(v["unbuildable"][0]["stranded"][0], "kuser");
     }
@@ -1214,6 +1981,124 @@ mod tests {
 
     fn chain_plan() -> RebuildPlan {
         plan("libfoo", "rawhide", None, &chain(), false).unwrap()
+    }
+
+    /// The chain, with bluez rebuilt in a side tag that dropped
+    /// `libbluetooth.so.3`, which blueman links without linking libfoo.
+    fn chain_with_soname_change() -> RebuildPlan {
+        let mut q = chain();
+        q.provides.insert(
+            "bluez".into(),
+            strs(&["libbluetooth.so.3()(64bit)", "bluez = 5.87-1.fc46"]),
+        );
+        q.requiring.insert(
+            "libbluetooth.so.3()(64bit)".into(),
+            strs(&["blueman", "bluez"]),
+        );
+        let st = SideTag {
+            name: "f46-build-side-1".into(),
+            nvrs: strs(&["bluez-5.87-2.fc46"]),
+            sonames: BTreeMap::from([(
+                "bluez".to_string(),
+                BTreeSet::from(["libbluetooth.so.4()(64bit)".to_string()]),
+            )]),
+        };
+        plan("libfoo", "rawhide", Some(&st), &q, false).unwrap()
+    }
+
+    #[test]
+    fn a_rebuild_dropping_a_soname_brings_in_what_links_it() {
+        let p = chain_with_soname_change();
+        assert_eq!(p.soname_changes.len(), 1, "{:?}", p.soname_changes);
+        let c = &p.soname_changes[0];
+        assert_eq!(c.package, "bluez");
+        assert_eq!(c.removed, strs(&["libbluetooth.so.3()(64bit)"]));
+        assert_eq!(c.dependents, strs(&["blueman"]));
+        let blueman = p
+            .dependents
+            .iter()
+            .find(|d| d.package == "blueman")
+            .unwrap();
+        assert_eq!(
+            blueman.reach,
+            Reach::Relinks {
+                package: "bluez".into()
+            }
+        );
+        assert!(p.rounds.concat().contains(&"blueman".to_string()));
+        // It is not a package linking libfoo without declaring it.
+        assert!(!names(&p.undeclared()).contains(&"blueman".to_string()));
+        let out = render(&p);
+        for want in [
+            "## Rebuilds that changed a SONAME of their own (1)",
+            "- bluez: drops `libbluetooth.so.3()(64bit)`; linked by blueman",
+        ] {
+            assert!(out.contains(want), "missing {want:?} in:\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_rebuild_keeping_its_sonames_adds_nothing() {
+        let p = libical_plan();
+        assert!(p.soname_changes.is_empty(), "{:?}", p.soname_changes);
+        // Only evolution-data-server's binaries were recorded; every
+        // other build is reported as not compared, not as unchanged.
+        assert!(
+            !p.not_compared
+                .contains(&"evolution-data-server".to_string())
+        );
+        assert!(!p.not_compared.contains(&"libical".to_string()));
+        assert!(p.not_compared.contains(&"gnome-shell".to_string()));
+        let out = render(&p);
+        assert!(out.contains("Not checked for SONAME changes"), "{out}");
+        assert!(
+            out.contains("No other rebuild in the side tag changed a SONAME of its own"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn side_tag_sonames_come_from_the_tagged_build_only() {
+        let info = |name: &str, src: &str, vr: (&str, &str), provides: &[&str]| {
+            let mut pi = bin(name, src, provides, &[]);
+            pi.version = Some(vr.0.into());
+            pi.release = Some(vr.1.into());
+            pi
+        };
+        let infos = vec![
+            info(
+                "bluez-libs",
+                "bluez",
+                ("5.87", "2.fc46"),
+                &[
+                    "libbluetooth.so.4()(64bit)",
+                    "libbluetooth.so.4(BLUEZ_4)(64bit)",
+                ],
+            ),
+            // Inherited from the branch: not the tagged build.
+            info(
+                "bluez-libs",
+                "bluez",
+                ("5.87", "1.fc46"),
+                &["libbluetooth.so.3()(64bit)"],
+            ),
+            info("bluez-obexd", "bluez", ("5.87", "2.fc46"), &[]),
+            // Not tagged at all.
+            info(
+                "gtk4",
+                "gtk4",
+                ("4.20.1", "1.fc46"),
+                &["libgtk-4.so.1()(64bit)"],
+            ),
+        ];
+        let got = sonames_by_source(&strs(&["bluez-5.87-2.fc46"]), &infos);
+        assert_eq!(
+            got,
+            BTreeMap::from([(
+                "bluez".to_string(),
+                BTreeSet::from(["libbluetooth.so.4()(64bit)".to_string()])
+            )])
+        );
     }
 
     #[test]
