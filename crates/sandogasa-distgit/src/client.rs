@@ -263,7 +263,7 @@ impl DistGitClient {
             "{}/rpms/{}/raw/{}/f/{}.spec",
             self.base_url, package, branch, package
         );
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let body = resp.text().await?;
         Ok(body)
     }
@@ -290,7 +290,7 @@ impl DistGitClient {
             "{}/api/0/rpms/{}/git/branches?with_commits=1",
             self.base_url, package
         );
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.get_transient_retry(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -330,7 +330,7 @@ impl DistGitClient {
         validate_segment(package, "package name")?;
         validate_segment(hash, "commit hash")?;
         let url = format!("{}/api/0/rpms/{}/c/{}/info", self.base_url, package, hash);
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.get_transient_retry(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -357,7 +357,7 @@ impl DistGitClient {
             "{}/rpms/{}/raw/{}/f/dead.package",
             self.base_url, package, branch
         );
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.get_transient_retry(&url).await?;
         match resp.status().as_u16() {
             200 => Ok(Some(resp.text().await?.trim().to_string())),
             404 => Ok(None),
@@ -376,7 +376,7 @@ impl DistGitClient {
             "{}/rpms/{}/raw/{}/f/dead.package",
             self.base_url, package, branch
         );
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.get_transient_retry(&url).await?;
         match resp.status().as_u16() {
             200 => Ok(true),
             404 => Ok(false),
@@ -408,7 +408,7 @@ impl DistGitClient {
     ) -> Result<Option<Vec<String>>, Box<dyn std::error::Error>> {
         validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/git/branches", self.base_url, package);
-        let resp = self.client.get(&url).send().await?;
+        let resp = self.get_transient_retry(&url).await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -425,7 +425,7 @@ impl DistGitClient {
     pub async fn get_acls(&self, package: &str) -> Result<ProjectAcls, Box<dyn std::error::Error>> {
         validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}", self.base_url, package);
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let acls: ProjectAcls = resp.json().await?;
         Ok(acls)
     }
@@ -439,7 +439,7 @@ impl DistGitClient {
     ) -> Result<Contributors, Box<dyn std::error::Error>> {
         validate_segment(package, "package name")?;
         let url = format!("{}/api/0/rpms/{}/contributors", self.base_url, package);
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let contributors: Contributors = resp.json().await?;
         Ok(contributors)
     }
@@ -591,7 +591,7 @@ impl DistGitClient {
     ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         validate_segment(group, "group name")?;
         let url = format!("{}/api/0/group/{}", self.base_url, group);
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         #[derive(serde::Deserialize)]
         struct GroupInfo {
             members: Vec<String>,
@@ -641,7 +641,7 @@ impl DistGitClient {
     ) -> Result<HashMap<String, u64>, Box<dyn std::error::Error>> {
         validate_segment(username, "username")?;
         let url = format!("{}/api/0/user/{}/activity/stats", self.base_url, username);
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let stats: HashMap<String, u64> = resp.json().await?;
         Ok(stats)
     }
@@ -660,7 +660,7 @@ impl DistGitClient {
             "{}/api/0/user/{}/requests/filed?per_page={}&status={}&page=1",
             self.base_url, username, limit, status
         );
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let data: PullRequestsResponse = resp.json().await?;
         Ok(data.requests)
     }
@@ -685,7 +685,7 @@ impl DistGitClient {
             validate_segment(author, "username")?;
             url.push_str(&format!("&author={author}"));
         }
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let data: PullRequestsResponse = resp.json().await?;
         Ok(data.requests)
     }
@@ -702,7 +702,7 @@ impl DistGitClient {
             "{}/api/0/rpms/{}/pull-request/{}/flag",
             self.base_url, package, id
         );
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         #[derive(Deserialize)]
         struct Flags {
             #[serde(default)]
@@ -726,7 +726,7 @@ impl DistGitClient {
             "{}/api/0/user/{}/requests/actionable?per_page={}&page=1",
             self.base_url, username, limit
         );
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let data: PullRequestsResponse = resp.json().await?;
         // Pagure's total_requests is capped to per_page; use pagination
         // metadata for a better estimate.
@@ -900,7 +900,8 @@ impl DistGitClient {
         Ok(self.get_transient_retry(url).await?.error_for_status()?)
     }
 
-    /// GET with retry on transient server errors (500/502/503/504),
+    /// GET with retry on transient failures (transport errors, 429,
+    /// 500/502/503/504),
     /// returning the final response without judging its status —
     /// callers decide what a non-2xx status means.
     async fn get_transient_retry(
@@ -919,6 +920,7 @@ impl DistGitClient {
                         || status == reqwest::StatusCode::BAD_GATEWAY
                         || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
                         || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
                     {
                         format!("{status}")
                     } else {
@@ -2303,6 +2305,41 @@ mod tests {
         let result = client.user_projects("salimma", 100, None).await;
         let err = result.unwrap_err().to_string();
         assert!(err.contains("127.0.0.1:1"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn pull_request_listing_retries_transient_failures() {
+        // A 503 then a 429 (dist-git briefly unavailable, then
+        // rate-limiting) must not lose the listing: a package whose
+        // pull requests silently went missing made a rebuild report
+        // look complete when it was not.
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        for status in [503, 429] {
+            Mock::given(method("GET"))
+                .and(path("/api/0/rpms/gnome-panel/pull-requests"))
+                .respond_with(ResponseTemplate::new(status))
+                .up_to_n_times(1)
+                .with_priority(if status == 503 { 1 } else { 2 })
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/gnome-panel/pull-requests"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"requests": [], "total_requests": 0})),
+            )
+            .with_priority(3)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let prs = client
+            .project_pull_requests("gnome-panel", "all", Some("salimma"))
+            .await
+            .unwrap();
+        assert!(prs.is_empty());
     }
 
     // ---- user_packages_fast ----

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### sandogasa-distgit: retry every GET on transient failures
+
+Most of `DistGitClient`'s GET requests made a single attempt, so a
+dropped connection or a brief outage failed the call outright; only
+the project listings and existence checks retried. Every GET now
+retries transport errors and 429/500/502/503/504 with backoff, as
+those did. 429 is newly treated as transient.
+
 ### ebranch: rebuild-plan tells a failed install check from a failed build
 
 A local build of asterisk was reported as failing although it had built
