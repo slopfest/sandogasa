@@ -679,7 +679,12 @@ side tag, rebuilds there that dropped a SONAME of their own are listed,
 and the packages linking that SONAME join the plan. Packages that
 neither use the library nor are rebuilt but BuildRequire development
 packages requiring the library's are listed as candidates for a scratch
-build, as they may compile its headers in.")]
+build, as they may compile its headers in.
+
+With --pr-author, the dist-git pull requests those accounts opened
+against the branch are listed per package: merged but not yet built
+in the side tag, open (with the CI results on the head commit), merged
+and built, and packages still to rebuild with none.")]
     RebuildPlan(RebuildPlanArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
@@ -725,6 +730,11 @@ struct RebuildPlanArgs {
     /// Side tag the rebuilds go into, to show what is done.
     #[arg(short = 's', long)]
     side_tag: Option<String>,
+
+    /// CSV of dist-git accounts whose pull requests carry the fixes
+    /// (the change owners); lists them per package, with CI results.
+    #[arg(long, value_name = "FAS", value_delimiter = ',')]
+    pr_author: Vec<String>,
 
     /// Print the plan as JSON.
     #[arg(long)]
@@ -1314,6 +1324,7 @@ fn main() -> ExitCode {
             library: a.library.clone(),
             branch: a.branch.clone(),
             side_tag: a.side_tag.clone(),
+            pr_authors: a.pr_author.clone(),
             json: a.json,
             verbose: a.verbose,
         }));

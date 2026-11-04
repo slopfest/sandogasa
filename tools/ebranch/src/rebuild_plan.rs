@@ -25,6 +25,9 @@ pub struct Options {
     pub branch: String,
     /// The side tag the rebuilds go into, to say which are done.
     pub side_tag: Option<String>,
+    /// Accounts whose dist-git pull requests carry the fixes (the
+    /// change owners); empty skips the pull request lookup.
+    pub pr_authors: Vec<String>,
     pub json: bool,
     pub verbose: bool,
 }
@@ -119,6 +122,27 @@ pub struct HeaderExposure {
     pub packages: BTreeMap<String, Vec<String>>,
 }
 
+/// Where a pull request stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrState {
+    Open,
+    Merged,
+}
+
+/// A pull request against the branch carrying a package's fix.
+#[derive(Debug, Clone, Serialize)]
+pub struct PullRequestStatus {
+    pub number: u64,
+    pub url: String,
+    pub author: String,
+    pub state: PrState,
+    /// CI results on its head commit, open pull requests only: status
+    /// (`success`, `failure`, ...) → the checks reporting it.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub checks: BTreeMap<String, Vec<String>>,
+}
+
 /// The whole plan, as `--json` prints it.
 #[derive(Debug, Clone, Serialize)]
 pub struct RebuildPlan {
@@ -163,6 +187,13 @@ pub struct RebuildPlan {
     /// scratch build.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub header_exposed: Vec<HeaderExposure>,
+    /// Whose pull requests were looked up.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pr_authors: Vec<String>,
+    /// Package → its open and merged pull requests by `pr_authors`
+    /// against the branch, newest first.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub pull_requests: BTreeMap<String, Vec<PullRequestStatus>>,
 }
 
 impl RebuildPlan {
@@ -222,6 +253,25 @@ pub(crate) trait PlanQuery: Sync {
     /// The binary packages of the source packages, with their
     /// Provides, in one batch.
     fn subpkgs_provides_info(&self, srpms: &[String]) -> Result<Vec<PkgInfo>, String>;
+}
+
+/// What the plan asks dist-git about pull requests.
+///
+/// Behind a trait so a test answers from recorded data.
+pub(crate) trait PrQuery {
+    /// A package's pull requests opened by `author`, in any state.
+    fn pull_requests(
+        &self,
+        package: &str,
+        author: &str,
+    ) -> Result<Vec<sandogasa_distgit::PullRequest>, String>;
+
+    /// The CI flags on a pull request.
+    fn flags(
+        &self,
+        package: &str,
+        id: u64,
+    ) -> Result<Vec<sandogasa_distgit::PullRequestFlag>, String>;
 }
 
 /// Work out the plan for `library` on the branch `q` reads, with the
@@ -388,7 +438,85 @@ pub(crate) fn plan(
         soname_changes,
         not_compared,
         header_exposed,
+        pr_authors: Vec::new(),
+        pull_requests: BTreeMap::new(),
     })
+}
+
+/// Look up the pull requests by `authors` for every package the plan
+/// lists, against its branch. A package whose lookup fails is reported
+/// on stderr and left out, so one bad answer does not cost the plan.
+pub(crate) fn pull_requests(
+    plan: &RebuildPlan,
+    authors: &[String],
+    q: &dyn PrQuery,
+    verbose: bool,
+) -> BTreeMap<String, Vec<PullRequestStatus>> {
+    let packages: BTreeSet<&String> = plan
+        .dependents
+        .iter()
+        .map(|d| &d.package)
+        .chain(plan.unbuildable.iter().map(|u| &u.package))
+        .collect();
+    let mut found = BTreeMap::new();
+    for pkg in packages {
+        if verbose {
+            eprintln!("[rebuild-plan] pull requests for {pkg}");
+        }
+        let mut statuses: Vec<PullRequestStatus> = Vec::new();
+        for author in authors {
+            let prs = match q.pull_requests(pkg, author) {
+                Ok(prs) => prs,
+                Err(e) => {
+                    eprintln!("warning: could not list {pkg}'s pull requests by {author}: {e}");
+                    continue;
+                }
+            };
+            for pr in prs {
+                if pr.branch.as_deref() != Some(plan.branch.as_str())
+                    || statuses.iter().any(|s| s.number == pr.id)
+                {
+                    continue;
+                }
+                let state = match pr.status.as_str() {
+                    "Open" => PrState::Open,
+                    "Merged" => PrState::Merged,
+                    _ => continue,
+                };
+                let checks = if state == PrState::Open {
+                    match q.flags(pkg, pr.id) {
+                        Ok(flags) => checks_on_head(&flags, pr.commit_stop.as_deref()),
+                        Err(e) => {
+                            eprintln!("warning: could not read CI results of {pkg}#{}: {e}", pr.id);
+                            BTreeMap::new()
+                        }
+                    }
+                } else {
+                    BTreeMap::new()
+                };
+                statuses.push(PullRequestStatus {
+                    number: pr.id,
+                    url: pr.full_url.clone().unwrap_or_else(|| {
+                        format!(
+                            "https://src.fedoraproject.org/rpms/{pkg}/pull-request/{}",
+                            pr.id
+                        )
+                    }),
+                    author: pr
+                        .user
+                        .as_ref()
+                        .map_or_else(|| author.clone(), |u| u.name.clone()),
+                    state,
+                    checks,
+                });
+            }
+        }
+        if !statuses.is_empty() {
+            statuses.sort_by_key(|s| std::cmp::Reverse(s.number));
+            found.insert(pkg.clone(), statuses);
+        }
+    }
+    found
 }
 
 /// The plan as Markdown, for a mailing list post or a Bodhi comment.
@@ -413,6 +541,7 @@ pub fn render(plan: &RebuildPlan) -> String {
     let ready: usize = plan.rounds.iter().map(Vec::len).sum();
     let _ = writeln!(out, "## {heading} ({ready})\n");
     render_rounds(&mut out, plan);
+    render_pull_requests(&mut out, plan);
 
     if !plan.blocked_by.is_empty() {
         let _ = writeln!(out, "## Blocked ({})\n", plan.blocked_by.len());
@@ -635,6 +764,144 @@ pub fn render(plan: &RebuildPlan) -> String {
     out
 }
 
+/// The pull requests by the change owners, grouped by what is left
+/// to do about each package.
+fn render_pull_requests(out: &mut String, plan: &RebuildPlan) {
+    if plan.pr_authors.is_empty() {
+        return;
+    }
+    let rebuilt: BTreeMap<&str, &str> = plan
+        .dependents
+        .iter()
+        .filter_map(|d| Some((d.package.as_str(), d.rebuilt.as_deref()?)))
+        .collect();
+    let mut open = Vec::new();
+    let mut merged_unbuilt = Vec::new();
+    let mut merged_built = Vec::new();
+    for (pkg, prs) in &plan.pull_requests {
+        if prs.iter().any(|p| p.state == PrState::Open) {
+            open.push((pkg, prs));
+        } else if let Some(nvr) = rebuilt.get(pkg.as_str()) {
+            merged_built.push((pkg, prs, *nvr));
+        } else {
+            merged_unbuilt.push((pkg, prs));
+        }
+    }
+    // Unbuildable packages have their own section; a pull request
+    // fixing one is still listed above.
+    let to_rebuild: Vec<&String> = plan
+        .rounds
+        .iter()
+        .flatten()
+        .filter(|p| !plan.pull_requests.contains_key(*p))
+        .collect();
+
+    let _ = writeln!(
+        out,
+        "## Pull requests by {} against {}\n",
+        plan.pr_authors.join(", "),
+        plan.branch
+    );
+    if !merged_unbuilt.is_empty() {
+        let where_ = plan
+            .side_tag
+            .as_deref()
+            .map_or_else(String::new, |t| format!(" in {t}"));
+        let _ = writeln!(
+            out,
+            "### Merged, not yet built{where_} ({})\n",
+            merged_unbuilt.len()
+        );
+        for (pkg, prs) in &merged_unbuilt {
+            let _ = writeln!(out, "- {pkg}: {}", pr_links(prs));
+        }
+        out.push('\n');
+    }
+    if !open.is_empty() {
+        let _ = writeln!(out, "### Open ({})\n", open.len());
+        for (pkg, prs) in &open {
+            let _ = write!(out, "- {pkg}: {}", pr_links(prs));
+            for pr in prs.iter().filter(|p| p.state == PrState::Open) {
+                if !pr.checks.is_empty() {
+                    let _ = write!(
+                        out,
+                        "; CI on #{}: {}",
+                        pr.number,
+                        checks_summary(&pr.checks)
+                    );
+                }
+            }
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    if !merged_built.is_empty() {
+        let _ = writeln!(out, "### Merged and built ({})\n", merged_built.len());
+        for (pkg, prs, nvr) in &merged_built {
+            let _ = writeln!(
+                out,
+                "- {pkg}: {}, built as [{nvr}](https://koji.fedoraproject.org/koji/search?type=build&match=exact&terms={})",
+                pr_links(prs),
+                crate::discover::urlencode(nvr)
+            );
+        }
+        out.push('\n');
+    }
+    if !to_rebuild.is_empty() {
+        let _ = writeln!(
+            out,
+            "### Still to rebuild, with no pull request ({})\n",
+            to_rebuild.len()
+        );
+        for p in &to_rebuild {
+            let _ = writeln!(out, "- {p}");
+        }
+        out.push('\n');
+    }
+}
+
+/// `[#4](url) (open)`, joined.
+fn pr_links(prs: &[PullRequestStatus]) -> String {
+    prs.iter()
+        .map(|p| {
+            let state = match p.state {
+                PrState::Open => "open",
+                PrState::Merged => "merged",
+            };
+            format!("[#{}]({}) ({state})", p.number, p.url)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `4 passed, 1 failed (rpmlint), 1 errored (rmdepcheck)`.
+fn checks_summary(checks: &BTreeMap<String, Vec<String>>) -> String {
+    let mut parts = Vec::new();
+    if let Some(ok) = checks.get("success") {
+        parts.push(format!("{} passed", ok.len()));
+    }
+    for (status, word) in [
+        ("failure", "failed"),
+        ("error", "errored"),
+        ("pending", "pending"),
+        ("running", "running"),
+        ("canceled", "canceled"),
+    ] {
+        if let Some(names) = checks.get(status) {
+            parts.push(format!("{} {word} ({})", names.len(), names.join(", ")));
+        }
+    }
+    for (status, names) in checks {
+        let known = [
+            "success", "failure", "error", "pending", "running", "canceled",
+        ];
+        if !known.contains(&status.as_str()) {
+            parts.push(format!("{} {status} ({})", names.len(), names.join(", ")));
+        }
+    }
+    parts.join(", ")
+}
+
 /// The packages still to rebuild, by round, saying what each waits for.
 fn render_rounds(out: &mut String, plan: &RebuildPlan) {
     match plan.rounds.as_slice() {
@@ -705,6 +972,12 @@ pub fn run(opts: &Options) -> Result<(), String> {
         &fedrq,
         opts.verbose,
     )?;
+    let mut plan = plan;
+    if !opts.pr_authors.is_empty() {
+        let distgit = DistGitPrs::new()?;
+        plan.pull_requests = pull_requests(&plan, &opts.pr_authors, &distgit, opts.verbose);
+        plan.pr_authors = opts.pr_authors.clone();
+    }
     if opts.json {
         println!(
             "{}",
@@ -754,6 +1027,84 @@ impl PlanQuery for sandogasa_fedrq::Fedrq {
 /// `libical.so.3()(64bit)` — not a symbol-version provide such as
 /// `libfoo.so.1(FOO_1.0)(64bit)`, which every package needing it also
 /// pairs with the plain SONAME.
+/// dist-git's pull requests, asked from a run's own runtime.
+struct DistGitPrs {
+    rt: tokio::runtime::Runtime,
+    client: sandogasa_distgit::DistGitClient,
+}
+
+impl DistGitPrs {
+    fn new() -> Result<Self, String> {
+        Ok(Self {
+            rt: tokio::runtime::Runtime::new()
+                .map_err(|e| format!("failed to create async runtime: {e}"))?,
+            client: sandogasa_distgit::DistGitClient::new(),
+        })
+    }
+}
+
+impl PrQuery for DistGitPrs {
+    fn pull_requests(
+        &self,
+        package: &str,
+        author: &str,
+    ) -> Result<Vec<sandogasa_distgit::PullRequest>, String> {
+        self.rt
+            .block_on(
+                self.client
+                    .project_pull_requests(package, "all", Some(author)),
+            )
+            .map_err(|e| e.to_string())
+    }
+
+    fn flags(
+        &self,
+        package: &str,
+        id: u64,
+    ) -> Result<Vec<sandogasa_distgit::PullRequestFlag>, String> {
+        self.rt
+            .block_on(self.client.pull_request_flags(package, id))
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The flags reported on a pull request's head commit, by status. CI
+/// names the commit it tested (`Packit - rpmlint - rawhide [832eae5]`),
+/// so flags left by earlier pushes are dropped; when none names the
+/// head, all are kept. A check's name is the middle of a
+/// `<system> - <check> - <branch>` flag, or the whole flag otherwise.
+fn checks_on_head(
+    flags: &[sandogasa_distgit::PullRequestFlag],
+    head: Option<&str>,
+) -> BTreeMap<String, Vec<String>> {
+    let tag = head.map(|h| format!("[{}]", &h[..h.len().min(7)]));
+    let on_head: Vec<&sandogasa_distgit::PullRequestFlag> = match &tag {
+        Some(tag) if flags.iter().any(|f| f.username.contains(tag.as_str())) => flags
+            .iter()
+            .filter(|f| f.username.contains(tag.as_str()))
+            .collect(),
+        _ => flags.iter().collect(),
+    };
+    let mut checks: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for f in on_head {
+        let name = match f.username.rsplit_once(" [") {
+            Some((name, _)) => name,
+            None => f.username.as_str(),
+        };
+        let parts: Vec<&str> = name.split(" - ").collect();
+        let name = if parts.len() >= 3 { parts[1] } else { name };
+        checks
+            .entry(f.status.clone())
+            .or_default()
+            .push(name.to_string());
+    }
+    for names in checks.values_mut() {
+        names.sort();
+        names.dedup();
+    }
+    checks
+}
+
 fn is_soname(name: &str) -> bool {
     let base = name.strip_suffix("(64bit)").unwrap_or(name);
     base.ends_with("()") && base.contains(".so")
@@ -2126,6 +2477,173 @@ mod tests {
         let round = |pkg: &str| p.rounds.iter().position(|r| r.iter().any(|x| x == pkg));
         assert_eq!(round("loop-a"), round("loop-b"));
         assert!(render(&p).contains("Cycle: loop-a, loop-b"));
+    }
+
+    /// dist-git's answers about pull requests, recorded.
+    #[derive(Default)]
+    struct RecordedPrs {
+        /// (package, author) → the pull requests, as JSON.
+        prs: BTreeMap<(String, String), serde_json::Value>,
+        /// (package, id) → the flags, as JSON.
+        flags: BTreeMap<(String, u64), serde_json::Value>,
+    }
+
+    impl PrQuery for RecordedPrs {
+        fn pull_requests(
+            &self,
+            package: &str,
+            author: &str,
+        ) -> Result<Vec<sandogasa_distgit::PullRequest>, String> {
+            match self.prs.get(&(package.to_string(), author.to_string())) {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string()),
+                None => Ok(Vec::new()),
+            }
+        }
+        fn flags(
+            &self,
+            package: &str,
+            id: u64,
+        ) -> Result<Vec<sandogasa_distgit::PullRequestFlag>, String> {
+            match self.flags.get(&(package.to_string(), id)) {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|e| e.to_string()),
+                None => Ok(Vec::new()),
+            }
+        }
+    }
+
+    fn pr_json(id: u64, status: &str, branch: &str, head: &str, author: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "title": "Rebuild for libical 4",
+            "status": status,
+            "branch": branch,
+            "commit_stop": head,
+            "user": {"name": author},
+        })
+    }
+
+    /// From the libical 4 rebuild on 2026-11-04: bluez's fix merged and
+    /// built, osmo's open with CI partly failing, and gnome-panel's
+    /// merged by its maintainer but, in this recording, not yet built.
+    fn libical_prs() -> RecordedPrs {
+        let mut r = RecordedPrs::default();
+        let key = |p: &str, a: &str| (p.to_string(), a.to_string());
+        r.prs.insert(
+            key("bluez", "salimma"),
+            serde_json::json!([pr_json(11, "Merged", "rawhide", "aaaaaaa", "salimma")]),
+        );
+        r.prs.insert(
+            key("asterisk", "mcrha"),
+            serde_json::json!([
+                pr_json(7, "Merged", "rawhide", "bbbbbbb", "mcrha"),
+                // Another branch's, and a closed one: neither counts.
+                pr_json(6, "Open", "f43", "ccccccc", "mcrha"),
+                pr_json(5, "Closed", "rawhide", "ddddddd", "mcrha"),
+            ]),
+        );
+        r.prs.insert(
+            key("osmo", "salimma"),
+            serde_json::json!([pr_json(
+                4,
+                "Open",
+                "rawhide",
+                "832eae5c368c3dac991d547096c62ebf55947a7a",
+                "salimma"
+            )]),
+        );
+        r.flags.insert(
+            ("osmo".to_string(), 4),
+            serde_json::json!([
+                {"username": "Packit - scratch build - rawhide [832eae5]", "status": "success"},
+                {"username": "Packit - rpmlint - rawhide [832eae5]", "status": "failure"},
+                {"username": "Packit - rmdepcheck - rawhide [832eae5]", "status": "error"},
+                // From an earlier push: dropped.
+                {"username": "Packit - rpmlint - rawhide [0000000]", "status": "success"},
+            ]),
+        );
+        r
+    }
+
+    fn libical_plan_with_prs() -> RebuildPlan {
+        let mut p = libical_plan();
+        let authors = strs(&["salimma", "mcrha"]);
+        p.pull_requests = pull_requests(&p, &authors, &libical_prs(), false);
+        p.pr_authors = authors;
+        p
+    }
+
+    #[test]
+    fn pull_requests_against_the_branch_are_found_for_each_author() {
+        let p = libical_plan_with_prs();
+        let bluez = &p.pull_requests["bluez"];
+        assert_eq!((bluez[0].number, bluez[0].state), (11, PrState::Merged));
+        assert_eq!(
+            bluez[0].url,
+            "https://src.fedoraproject.org/rpms/bluez/pull-request/11"
+        );
+        // Only the merged rawhide one: not f43's, not the closed one.
+        let asterisk: Vec<u64> = p.pull_requests["asterisk"]
+            .iter()
+            .map(|s| s.number)
+            .collect();
+        assert_eq!(asterisk, vec![7]);
+        assert_eq!(p.pull_requests["asterisk"][0].author, "mcrha");
+    }
+
+    #[test]
+    fn ci_results_are_read_from_the_head_commit_only() {
+        let p = libical_plan_with_prs();
+        let osmo = &p.pull_requests["osmo"][0];
+        assert_eq!(osmo.checks["success"], strs(&["scratch build"]));
+        assert_eq!(osmo.checks["failure"], strs(&["rpmlint"]));
+        assert_eq!(osmo.checks["error"], strs(&["rmdepcheck"]));
+    }
+
+    #[test]
+    fn pull_requests_are_rendered_by_what_is_left_to_do() {
+        let out = render(&libical_plan_with_prs());
+        let section = out
+            .split("## Pull requests by salimma, mcrha against rawhide")
+            .nth(1)
+            .expect("the section is there");
+        let section = section.split("\n## ").next().unwrap();
+        // Merged but not in the side tag comes first: it is the step
+        // that is easy to forget.
+        assert!(
+            section.contains(
+                "### Merged, not yet built in f46-build-side-158330 (1)\n\n\
+                 - asterisk: [#7](https://src.fedoraproject.org/rpms/asterisk/pull-request/7) (merged)"
+            ),
+            "{section}"
+        );
+        assert!(
+            section.contains(
+                "- osmo: [#4](https://src.fedoraproject.org/rpms/osmo/pull-request/4) (open); \
+                 CI on #4: 1 passed, 1 failed (rpmlint), 1 errored (rmdepcheck)"
+            ),
+            "{section}"
+        );
+        assert!(
+            section.contains("### Merged and built (1)\n\n- bluez: [#11]"),
+            "{section}"
+        );
+        assert!(
+            section.contains("search?type=build&match=exact&terms="),
+            "{section}"
+        );
+        // Packages still to rebuild with nothing open are listed too.
+        assert!(
+            section.contains("### Still to rebuild, with no pull request"),
+            "{section}"
+        );
+        assert!(!section.contains("- osmo\n"), "{section}");
+        // Listed under "Cannot be rebuilt" instead.
+        assert!(!section.contains("- kdepimlibs\n"), "{section}");
+    }
+
+    #[test]
+    fn without_authors_there_is_no_pull_request_section() {
+        assert!(!render(&libical_plan()).contains("## Pull requests"));
     }
 
     #[test]

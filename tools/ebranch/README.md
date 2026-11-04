@@ -1124,6 +1124,40 @@ development package requiring the library's does not show that its
 headers include them, and checking that for the package a group starts
 from can rule the whole group out.
 
+To follow the fixes, pass the change owners' dist-git accounts with
+`--pr-author salimma,mcrha`. For every package in the plan, the open and
+merged pull requests they opened against the branch are listed, grouped
+by what is left to do: merged but not yet built in the side tag, open
+(with the results of the CI checks on the head commit), and merged and
+built (with a link to the Koji build). Packages still to rebuild with no
+such pull request are listed too.
+
+```console
+## Pull requests by salimma, mcrha against rawhide
+
+### Open (2)
+
+- orage: [#1](https://src.fedoraproject.org/rpms/orage/pull-request/1) (open); CI on #1: 5 passed, 1 failed (rpmlint)
+- osmo: [#4](https://src.fedoraproject.org/rpms/osmo/pull-request/4) (open); CI on #4: 4 passed, 1 failed (rpmlint), 1 errored (rmdepcheck)
+
+### Merged and built (4)
+
+- bluez: [#11](https://src.fedoraproject.org/rpms/bluez/pull-request/11) (merged), built as [bluez-5.87^20260918gitb5ed56d8c-4.fc46](https://koji.fedoraproject.org/koji/search?type=build&match=exact&terms=bluez-5.87%5E20260918gitb5ed56d8c-4.fc46)
+- gnokii: [#3](https://src.fedoraproject.org/rpms/gnokii/pull-request/3) (merged), built as [gnokii-0.6.31-49.fc46](https://koji.fedoraproject.org/koji/search?type=build&match=exact&terms=gnokii-0.6.31-49.fc46)
+- gnome-panel: [#2](https://src.fedoraproject.org/rpms/gnome-panel/pull-request/2) (merged), built as [gnome-panel-3.58.1-8.fc46](https://koji.fedoraproject.org/koji/search?type=build&match=exact&terms=gnome-panel-3.58.1-8.fc46)
+- gnome-shell: [#30](https://src.fedoraproject.org/rpms/gnome-shell/pull-request/30) (merged), built as [gnome-shell-51.1-2.fc46](https://koji.fedoraproject.org/koji/search?type=build&match=exact&terms=gnome-shell-51.1-2.fc46)
+
+### Still to rebuild, with no pull request (7)
+
+- GoldenCheetah
+- asterisk
+- claws-mail
+- cyrus-imapd
+- noctalia
+- phosh
+- redwax-tool
+```
+
 Queries use the repositories of the architecture fedrq runs on.
 
 The output is Markdown, for a mailing list post or a Bodhi comment;

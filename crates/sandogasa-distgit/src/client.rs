@@ -42,12 +42,45 @@ pub struct PullRequest {
     pub last_updated: Option<String>,
     #[serde(default)]
     pub project: Option<PullRequestProject>,
+    /// The branch it asks to merge into (`rawhide`).
+    #[serde(default)]
+    pub branch: Option<String>,
+    /// The head commit, which CI flags name.
+    #[serde(default)]
+    pub commit_stop: Option<String>,
+    /// Its page on dist-git.
+    #[serde(default)]
+    pub full_url: Option<String>,
+    /// Who opened it.
+    #[serde(default)]
+    pub user: Option<PullRequestUser>,
 }
 
 #[derive(Debug, Deserialize)]
 #[non_exhaustive]
 pub struct PullRequestProject {
     pub fullname: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+pub struct PullRequestUser {
+    pub name: String,
+}
+
+/// A CI result on a pull request (`Packit - rpmlint - rawhide
+/// [832eae5]`, `failure`).
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct PullRequestFlag {
+    /// What reported it; CI systems put the commit they tested in it.
+    pub username: String,
+    /// `success`, `failure`, `error`, `pending` or `canceled`.
+    pub status: String,
+    #[serde(default)]
+    pub comment: String,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// A package's orphan state from the dist-git plugin
@@ -630,6 +663,52 @@ impl DistGitClient {
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         let data: PullRequestsResponse = resp.json().await?;
         Ok(data.requests)
+    }
+
+    /// A package's pull requests, optionally only those `author` opened.
+    ///
+    /// `status` can be "all", "Open", "Merged", or "Closed". Up to 100,
+    /// newest first.
+    pub async fn project_pull_requests(
+        &self,
+        package: &str,
+        status: &str,
+        author: Option<&str>,
+    ) -> Result<Vec<PullRequest>, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        validate_segment(status, "status")?;
+        let mut url = format!(
+            "{}/api/0/rpms/{}/pull-requests?status={}&per_page=100",
+            self.base_url, package, status
+        );
+        if let Some(author) = author {
+            validate_segment(author, "username")?;
+            url.push_str(&format!("&author={author}"));
+        }
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let data: PullRequestsResponse = resp.json().await?;
+        Ok(data.requests)
+    }
+
+    /// The CI flags on a package's pull request, for every commit it
+    /// has had.
+    pub async fn pull_request_flags(
+        &self,
+        package: &str,
+        id: u64,
+    ) -> Result<Vec<PullRequestFlag>, Box<dyn std::error::Error>> {
+        validate_segment(package, "package name")?;
+        let url = format!(
+            "{}/api/0/rpms/{}/pull-request/{}/flag",
+            self.base_url, package, id
+        );
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        #[derive(Deserialize)]
+        struct Flags {
+            #[serde(default)]
+            flags: Vec<PullRequestFlag>,
+        }
+        Ok(resp.json::<Flags>().await?.flags)
     }
 
     /// Fetch pull requests actionable by a user (awaiting their review).
@@ -1783,6 +1862,65 @@ mod tests {
 
         let result = client.user_activity_stats("nonexistent").await;
         assert!(result.is_err());
+    }
+
+    // ---- project_pull_requests / pull_request_flags ----
+
+    #[tokio::test]
+    async fn a_packages_pull_requests_by_one_author() {
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/osmo/pull-requests"))
+            .and(query_param("status", "all"))
+            .and(query_param("author", "salimma"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "requests": [{
+                    "id": 4,
+                    "title": "Fix build with libical 4",
+                    "status": "Open",
+                    "branch": "rawhide",
+                    "commit_stop": "832eae5c368c3dac991d547096c62ebf55947a7a",
+                    "full_url": "https://src.fedoraproject.org/rpms/osmo/pull-request/4",
+                    "user": {"name": "salimma"}
+                }],
+                "total_requests": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/osmo/pull-request/4/flag"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "flags": [{
+                    "username": "Packit - rpmlint - rawhide [832eae5]",
+                    "status": "failure",
+                    "comment": "1 plan failed",
+                    "url": "https://artifacts.dev.testing-farm.io/c9bf28a5"
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let prs = client
+            .project_pull_requests("osmo", "all", Some("salimma"))
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].branch.as_deref(), Some("rawhide"));
+        assert_eq!(prs[0].user.as_ref().unwrap().name, "salimma");
+        assert!(
+            prs[0]
+                .commit_stop
+                .as_deref()
+                .unwrap()
+                .starts_with("832eae5")
+        );
+
+        let flags = client.pull_request_flags("osmo", 4).await.unwrap();
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].status, "failure");
     }
 
     // ---- user_pull_requests ----

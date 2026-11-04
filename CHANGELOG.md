@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan lists the change owners' pull requests for each package
+
+A status update on a SONAME bump's rebuilds had to be put together by
+hand, package by package, from dist-git: which fixes are up for review,
+which have CI failing, which were merged but never built into the side
+tag (the step that is easy to forget), and which packages have nothing
+proposed yet. For the libical 4 rebuild that meant going through some
+26 packages' pull request pages before each post to the Change thread.
+
+`rebuild-plan --pr-author salimma,mcrha` looks up the pull requests
+those accounts opened against the branch for every package in the plan,
+and lists them in that order: merged but not yet built in the side tag,
+open with the results of the CI checks on the head commit (flags from
+earlier pushes are left out), merged and built with a link to the Koji
+build, and packages still to rebuild with none. dist-git filters on who
+opened a pull request, not who wrote its commits, so a fix carrying a
+maintainer's commit still shows up under the owner who proposed it. A
+package whose lookup fails is reported and skipped rather than costing
+the plan. `--json` carries the same under `pull_requests`. Refs #58.
+
+### sandogasa-distgit: a package's pull requests and their CI flags
+
+`DistGitClient::project_pull_requests` lists a package's pull requests,
+optionally by author, and `pull_request_flags` returns the CI flags on
+one as `PullRequestFlag`. `PullRequest` gains `branch`, `commit_stop`,
+`full_url` and `user` (`PullRequestUser`).
+
 ### ebranch: file-request can ask for the build from an older commit
 
 When the tip of rawhide needs something newer than the target branch
