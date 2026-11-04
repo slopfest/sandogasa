@@ -33,7 +33,12 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   (or an environment variable), where the 600 enforcement applies.
 - **prompt_field** — prompt the user for a config value with support for
   sensitive (hidden) input and optional sync validation.
-- **validate_email** — basic email address validation for config fields.
+  `prompt_optional_field` and `prompt_optional_field_validated` take
+  an empty answer as "none". All of them apply ^H and DEL characters
+  that reach them as erases, for terminals whose backspace sends the
+  one the tty does not erase on.
+- **validate_email** — basic email address validation for config
+  fields; spaces and control characters are refused.
 
 ## License
 

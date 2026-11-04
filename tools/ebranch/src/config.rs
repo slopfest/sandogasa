@@ -408,10 +408,11 @@ pub async fn cmd_config() -> Result<(), String> {
     // Bugzilla account: optional, and only ever used to assign a
     // request the asker files about their own work to themselves.
     if config.bugzilla.email.is_empty()
-        && let Some(email) = sandogasa_config::prompt_optional_field(
+        && let Some(email) = sandogasa_config::prompt_optional_field_validated(
             "Bugzilla",
             "account e-mail (optional, to claim your own requests)",
             false,
+            Some(&sandogasa_config::validate_email),
         )
         .map_err(|e| format!("failed to read e-mail: {e}"))?
     {

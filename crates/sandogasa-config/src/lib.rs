@@ -232,18 +232,7 @@ pub fn prompt_field(
     validate: Validator<'_>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     loop {
-        print!("Enter {section} {label}: ");
-        io::stdout().flush()?;
-
-        let raw = if sensitive {
-            rpassword::read_password()?
-        } else {
-            let mut buf = String::new();
-            io::stdin().read_line(&mut buf)?;
-            buf
-        };
-
-        let value = raw.trim().to_string();
+        let value = read_answer(section, label, sensitive)?;
         if value.is_empty() {
             return Err(format!("{label} cannot be empty").into());
         }
@@ -270,23 +259,40 @@ pub fn prompt_optional_field(
     label: &str,
     sensitive: bool,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    print!("Enter {section} {label}: ");
-    io::stdout().flush()?;
-    let raw = if sensitive {
-        rpassword::read_password()?
-    } else {
-        let mut buf = String::new();
-        io::stdin().read_line(&mut buf)?;
-        buf
-    };
-    let value = raw.trim().to_string();
-    Ok((!value.is_empty()).then_some(value))
+    prompt_optional_field_validated(section, label, sensitive, None)
+}
+
+/// [`prompt_optional_field`] with a check: an answer that fails
+/// `validate` is reported and asked for again, while an empty one is
+/// still a clean "no".
+pub fn prompt_optional_field_validated(
+    section: &str,
+    label: &str,
+    sensitive: bool,
+    validate: Validator<'_>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    loop {
+        let value = read_answer(section, label, sensitive)?;
+        if value.is_empty() {
+            return Ok(None);
+        }
+        if let Some(validate) = validate
+            && let Err(e) = validate(&value)
+        {
+            eprintln!("Invalid {label}: {e}");
+            continue;
+        }
+        return Ok(Some(value));
+    }
 }
 
 /// Validate that a string looks like an email address.
 ///
 /// Suitable for use as a `validate` callback in [`prompt_field`].
 pub fn validate_email(value: &str) -> Result<(), String> {
+    if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("must not contain spaces or control characters".to_string());
+    }
     if !value.contains('@') {
         return Err("must contain '@'".to_string());
     }
@@ -300,6 +306,43 @@ pub fn validate_email(value: &str) -> Result<(), String> {
 /// Recursively merge two TOML tables: `over` wins per key;
 /// nested tables merge, everything else (scalars, arrays) is
 /// replaced whole.
+/// Apply the backspaces a terminal passed through as characters.
+///
+/// A tty in canonical mode erases on one character, usually DEL; a
+/// terminal whose backspace sends the other (^H) has it handed to
+/// `read_line` as it is, so the typo it meant to remove is kept too.
+fn apply_erasures(raw: &str) -> String {
+    let mut out = String::new();
+    for c in raw.chars() {
+        match c {
+            '\u{8}' | '\u{7f}' => {
+                out.pop();
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Print the prompt and read one answer, hidden if `sensitive`, with
+/// passed-through backspaces applied and surrounding space trimmed.
+fn read_answer(
+    section: &str,
+    label: &str,
+    sensitive: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    print!("Enter {section} {label}: ");
+    io::stdout().flush()?;
+    let raw = if sensitive {
+        rpassword::read_password()?
+    } else {
+        let mut buf = String::new();
+        io::stdin().read_line(&mut buf)?;
+        buf
+    };
+    Ok(apply_erasures(&raw).trim().to_string())
+}
+
 fn merge_tables(mut base: toml::Table, over: toml::Table) -> toml::Table {
     for (key, over_value) in over {
         match (base.remove(&key), over_value) {
@@ -753,6 +796,32 @@ mod tests {
     #[test]
     fn validate_email_rejects_domain_without_dot() {
         assert!(validate_email("user@localhost").is_err());
+    }
+
+    #[test]
+    fn validate_email_rejects_control_characters_and_spaces() {
+        // What a ^H-sending terminal left in a typo'd address (#56).
+        assert!(validate_email("bob@exampel\u{8}\u{8}\u{8}ple.com").is_err());
+        assert!(validate_email("bob smith@example.com").is_err());
+    }
+
+    // ---- apply_erasures ----
+
+    #[test]
+    fn passed_through_backspaces_erase_what_came_before() {
+        // ^H from a terminal whose tty erases on DEL (#56), and DEL
+        // from one reading in non-canonical mode, are both erases.
+        assert_eq!(
+            apply_erasures("bob@exampel\u{8}\u{8}\u{8}ple.com\n"),
+            "bob@example.com\n"
+        );
+        assert_eq!(apply_erasures("ab\u{7f}c"), "ac");
+    }
+
+    #[test]
+    fn erasing_past_the_start_leaves_nothing_rather_than_failing() {
+        assert_eq!(apply_erasures("a\u{8}\u{8}\u{8}b"), "b");
+        assert_eq!(apply_erasures(""), "");
     }
 
     // ---- ConfigFile::edit ----

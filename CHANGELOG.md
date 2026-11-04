@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch, and every tool's config prompts: backspace works on terminals that send ^H
+
+At `ebranch config`'s e-mail prompt, backspace did not erase a typo on a
+terminal whose backspace key sends ^H while the tty erases on DEL (or
+the other way round): the ^H characters were read as part of the
+answer, and the typo'd address was saved with them. Shells accept
+either character, so nothing looked wrong until a tool read a plain
+line. The prompt helpers in `sandogasa-config`, which every tool's
+`config` command uses, now apply passed-through ^H and DEL as erases
+before trimming the answer, for hidden prompts too. `ebranch config`
+also checks the e-mail address and asks again if it is malformed, and
+`validate_email` now refuses spaces and control characters. Refs #56.
+
+### sandogasa-config: `prompt_optional_field_validated`
+
+An optional prompt that checks its answer and asks again on a bad one,
+while an empty answer still means "none", as with
+`prompt_optional_field`.
+
 ### ebranch: file-request marks a request filed against Fedora as a feature request
 
 A branch request for a package not yet in EPEL is filed against
