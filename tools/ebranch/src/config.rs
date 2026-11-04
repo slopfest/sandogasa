@@ -364,8 +364,11 @@ pub fn resolve_api_key(cli_key: Option<&str>) -> Result<String, String> {
         .to_string())
 }
 
-/// Interactive config setup.
-pub async fn cmd_config() -> Result<(), String> {
+/// Interactive config setup: asks for what is missing, or with `all`
+/// for every setting, with the saved value as the default.
+pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
+    use sandogasa_config::{Setting, ask};
+    let review = args.all;
     let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
     let mut config: EbranchConfig = cf.load_user().unwrap_or_default();
 
@@ -379,17 +382,15 @@ pub async fn cmd_config() -> Result<(), String> {
     println!("Bugzilla URL: {}", config.bugzilla.url);
 
     // API key.
-    if config.bugzilla.api_key.is_empty() {
-        println!(
+    config.bugzilla.api_key = ask(
+        &Setting::new("Bugzilla", "API key").sensitive().hint(
             "\nGenerate an API key at:\n  \
-             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey\n"
-        );
-        let key = sandogasa_config::prompt_field("Bugzilla", "API key", true, None)
-            .map_err(|e| format!("failed to read API key: {e}"))?;
-        config.bugzilla.api_key = key;
-    } else {
-        println!("Bugzilla API key: (set)");
-    }
+             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey\n",
+        ),
+        &config.bugzilla.api_key,
+        review,
+    )
+    .map_err(|e| format!("failed to read API key: {e}"))?;
 
     let url = config.bugzilla.url.clone();
     config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
@@ -426,31 +427,27 @@ pub async fn cmd_config() -> Result<(), String> {
 
     // Bugzilla account: optional, and only ever used to assign a
     // request the asker files about their own work to themselves.
-    if config.bugzilla.email.is_empty()
-        && let Some(email) = sandogasa_config::prompt_optional_field_validated(
+    config.bugzilla.email = ask(
+        &Setting::new(
             "Bugzilla",
             "account e-mail (optional, to claim your own requests)",
-            false,
-            Some(&sandogasa_config::validate_email),
         )
-        .map_err(|e| format!("failed to read e-mail: {e}"))?
-    {
-        config.bugzilla.email = email;
-    }
+        .optional()
+        .validated(&sandogasa_config::validate_email),
+        &config.bugzilla.email,
+        review,
+    )
+    .map_err(|e| format!("failed to read e-mail: {e}"))?;
 
     // FAS: who is asking. Everything dist-git is asked about a
     // package needs this, so it is worth having in the file rather
     // than on every command line.
-    if config.packager.fas.is_empty()
-        && let Some(fas) = sandogasa_config::prompt_optional_field(
-            "FAS",
-            "username (optional, the default for --fas)",
-            false,
-        )
-        .map_err(|e| format!("failed to read FAS username: {e}"))?
-    {
-        config.packager.fas = fas;
-    }
+    config.packager.fas = ask(
+        &Setting::new("FAS", "username (optional, the default for --fas)").optional(),
+        &config.packager.fas,
+        review,
+    )
+    .map_err(|e| format!("failed to read FAS username: {e}"))?;
 
     // Provenpackager: looked up rather than asked cold, since few
     // people think of themselves in those terms day to day. The
@@ -473,24 +470,19 @@ pub async fn cmd_config() -> Result<(), String> {
 
     // NVD API key: optional, for judging CVE trackers against the
     // fix NVD records.
-    if config.nvd.api_key.is_empty() {
-        println!(
-            "\nAn NVD API key raises the rate limit from 5 to 50 requests per 30 s when \
-             check-update judges CVE bugs. Request one free at \
-             https://nvd.nist.gov/developers/request-an-api-key, or leave empty to skip."
-        );
-        if let Some(key) = sandogasa_config::prompt_optional_field(
-            "NVD",
-            "API key (optional, empty to skip)",
-            true,
-        )
-        .map_err(|e| format!("failed to read NVD API key: {e}"))?
-        {
-            config.nvd.api_key = key;
-        }
-    } else {
-        println!("NVD API key: (set)");
-    }
+    config.nvd.api_key = ask(
+        &Setting::new("NVD", "API key (optional, empty to skip)")
+            .sensitive()
+            .optional()
+            .hint(
+                "\nAn NVD API key raises the rate limit from 5 to 50 requests per 30 s \
+                 when check-update judges CVE bugs. Request one free at \
+                 https://nvd.nist.gov/developers/request-an-api-key, or leave empty to skip.",
+            ),
+        &config.nvd.api_key,
+        review,
+    )
+    .map_err(|e| format!("failed to read NVD API key: {e}"))?;
     if !config.nvd.api_key.is_empty() {
         config.nvd.api_key = sandogasa_cli::credential::validated_key("NVD", "API key", config.nvd.api_key.clone(), |k| {
             Box::pin(async move {
@@ -524,26 +516,22 @@ pub async fn cmd_config() -> Result<(), String> {
     // who maintains a package RPM Fusion also builds. Skipping it
     // leaves check-update holding auto-push and filing nothing,
     // which is the safe half of the guard.
-    if config.rpmfusion_bugzilla.api_key.is_empty() {
-        println!(
-            "\nRPM Fusion runs its own Bugzilla. A key there lets check-update \
-             file the rebuild request for a counterpart (libheif -> \
-             libheif-freeworld) instead of only holding the update's auto-push. \
-             Generate one at {}/userprefs.cgi?tab=apikey, or leave empty to skip.",
-            config.rpmfusion_bugzilla.url
-        );
-        if let Some(key) = sandogasa_config::prompt_optional_field(
-            "RPM Fusion Bugzilla",
-            "API key (optional, empty to skip)",
-            true,
-        )
-        .map_err(|e| format!("failed to read RPM Fusion API key: {e}"))?
-        {
-            config.rpmfusion_bugzilla.api_key = key;
-        }
-    } else {
-        println!("RPM Fusion Bugzilla API key: (set)");
-    }
+    let hint = format!(
+        "\nRPM Fusion runs its own Bugzilla. A key there lets check-update \
+         file the rebuild request for a counterpart (libheif -> \
+         libheif-freeworld) instead of only holding the update's auto-push. \
+         Generate one at {}/userprefs.cgi?tab=apikey, or leave empty to skip.",
+        config.rpmfusion_bugzilla.url
+    );
+    config.rpmfusion_bugzilla.api_key = ask(
+        &Setting::new("RPM Fusion Bugzilla", "API key (optional, empty to skip)")
+            .sensitive()
+            .optional()
+            .hint(&hint),
+        &config.rpmfusion_bugzilla.api_key,
+        review,
+    )
+    .map_err(|e| format!("failed to read RPM Fusion API key: {e}"))?;
     // Two checks, because they catch different things. The shape
     // check is local and names the actual mistake: a hidden prompt
     // shows nothing when a paste lands twice, and the result is a key

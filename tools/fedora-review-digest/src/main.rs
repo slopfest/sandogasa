@@ -36,7 +36,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Set up or verify the Bugzilla API key used by `--post`.
-    Config,
+    Config(sandogasa_cli::ConfigArgs),
     /// Run fedora-review on a bug, then digest the result.
     Run(Box<RunArgs>),
 }
@@ -117,7 +117,7 @@ struct DigestOpts {
 fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let result = match cli.command {
-        Some(Command::Config) => cmd_config(),
+        Some(Command::Config(args)) => cmd_config(&args),
         Some(Command::Run(args)) => cmd_run(&args),
         None => run(&cli.digest).map(|text| print!("{text}")),
     };
@@ -132,26 +132,26 @@ fn main() -> ExitCode {
 
 /// Set up / verify the Bugzilla API key (and email, for validation)
 /// stored at `~/.config/fedora-review-digest/config.toml`.
-fn cmd_config() -> Result<(), String> {
+fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
+    use sandogasa_config::{Setting, ask};
     let cf = ConfigFile::for_tool("fedora-review-digest");
-    let mut cfg: config::Config = cf.load().unwrap_or_default();
-    if cfg.bugzilla.api_key.trim().is_empty() {
-        eprintln!(
+    // The user file alone, so saving does not copy /etc's values into it.
+    let mut cfg: config::Config = cf.load_user().unwrap_or_default();
+    cfg.bugzilla.api_key = ask(
+        &Setting::new("Bugzilla", "API key").sensitive().hint(
             "Create an API key at \
-             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey"
-        );
-        cfg.bugzilla.api_key = sandogasa_config::prompt_field("Bugzilla", "API key", true, None)
-            .map_err(|e| e.to_string())?;
-    }
-    if cfg.bugzilla.email.trim().is_empty() {
-        cfg.bugzilla.email = sandogasa_config::prompt_field(
-            "Bugzilla",
-            "email",
-            false,
-            Some(&sandogasa_config::validate_email),
-        )
-        .map_err(|e| e.to_string())?;
-    }
+             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey",
+        ),
+        cfg.bugzilla.api_key.trim(),
+        args.all,
+    )
+    .map_err(|e| e.to_string())?;
+    cfg.bugzilla.email = ask(
+        &Setting::new("Bugzilla", "email").validated(&sandogasa_config::validate_email),
+        cfg.bugzilla.email.trim(),
+        args.all,
+    )
+    .map_err(|e| e.to_string())?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let email = cfg.bugzilla.email.clone();
     // `valid_login` sends the key and asks whether it belongs to this

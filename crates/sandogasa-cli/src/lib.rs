@@ -44,6 +44,19 @@ use std::process::{Command, Stdio};
 
 use url::{Host, Url};
 
+/// The arguments every tool's `config` command takes, so the flag and
+/// its help read the same everywhere. Flatten it into the command:
+/// `Config(sandogasa_cli::ConfigArgs)`.
+#[derive(Debug, Clone, Default, clap::Args)]
+#[non_exhaustive]
+pub struct ConfigArgs {
+    /// Ask for every setting again, with the saved value as the
+    /// default: Enter keeps it, a new value replaces it, and - clears
+    /// an optional one.
+    #[arg(long)]
+    pub all: bool,
+}
+
 /// Standard process-wide initialization for sandogasa tools.
 ///
 /// Call this once as the first statement of `main()` in every

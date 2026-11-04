@@ -1481,7 +1481,6 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
- "rpassword",
  "sandogasa-bodhi",
  "sandogasa-bugclass",
  "sandogasa-bugzilla",

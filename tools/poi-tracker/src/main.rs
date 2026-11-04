@@ -81,7 +81,7 @@ enum Command {
     /// announcement-ready report with runnable ACL commands.
     Announce(AnnounceArgs),
     /// Configure poi-tracker (Bugzilla API key, etc.).
-    Config,
+    Config(sandogasa_cli::ConfigArgs),
     /// Classify inventory packages by who depends on them, over a
     /// saved dependency graph: leaves, packages other keeps carry,
     /// externally needed ones.
@@ -1131,7 +1131,7 @@ fn main() -> ExitCode {
     // inventory paths. `Config` doesn't touch inventories at all.
     let needs_paths = !matches!(
         cli.command,
-        Command::Config
+        Command::Config(_)
             | Command::Import(_)
             | Command::Reconcile(_)
             | Command::SyncDistgit(_)
@@ -1151,7 +1151,7 @@ fn main() -> ExitCode {
         Command::Act(args) => cmd_act(&paths, args),
         Command::Adopt(args) => cmd_adopt(&paths, args),
         Command::Announce(args) => cmd_announce(&paths, args),
-        Command::Config => cmd_config(),
+        Command::Config(args) => cmd_config(args),
         Command::Deps(args) => cmd_deps(&paths, args),
         Command::Export(args) => cmd_export(&paths, args),
         Command::Find(args) => cmd_find(&paths, args),
@@ -2507,9 +2507,9 @@ fn cmd_unkeep(paths: &[String], args: &UnkeepArgs) -> CmdResult {
     Ok(ExitCode::SUCCESS)
 }
 
-fn cmd_config() -> CmdResult {
+fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> CmdResult {
     let rt = new_runtime()?;
-    rt.block_on(config::cmd_config())?;
+    rt.block_on(config::cmd_config(args))?;
     Ok(ExitCode::SUCCESS)
 }
 

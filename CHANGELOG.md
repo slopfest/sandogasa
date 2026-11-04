@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### config commands can re-enter, fix and clear saved settings
+
+Once a setting was saved, the tools' `config` commands never asked for
+it again, so changing or clearing one meant editing the TOML file. A
+saved value was not re-checked either: in #56 an e-mail address saved
+with the `^H` of a backspace in it would never have been asked for
+again. Resolves #64.
+
+The `config` commands of ebranch, fedora-cve-triage,
+fedora-review-digest, fesco-chair, poi-tracker and sandogasa-pkg-acl
+now:
+
+- ask, as before, only for what is missing;
+- report a saved value that fails its check (such as that e-mail
+  address) and ask for it again;
+- with `--all`, ask for every setting with the saved value as the
+  default: Enter keeps it, a new value replaces it, and `-` clears an
+  optional one. A saved secret is shown only as "set".
+
+Also:
+- fedora-review-digest's `config` now loads the user file alone, as
+  the other tools do, so saving no longer copies settings from
+  `/etc/fedora-review-digest/` into it.
+- poi-tracker's `config` now asks for the e-mail only when it is
+  missing or with `--all`, rather than on every run, and checks it like
+  the other tools do.
+
+### sandogasa-config: `Setting` and `ask`
+
+`ask(setting, saved, review)` is the decision every `config` command
+needs for a setting that may already be saved: keep it, ask for it,
+re-ask because it no longer validates, or with `review` offer it as
+the default. `Setting` describes the setting: section and label,
+sensitive, optional, a hint printed before asking, and a validator.
+`-` clears an optional setting unless its validator accepts a lone
+`-`, so no real value can be lost to it. The existing `prompt_*`
+functions are unchanged.
+
+### sandogasa-cli: `ConfigArgs`
+
+The arguments every tool's `config` command takes (today `--all`),
+for flattening into its `Config` subcommand so the flag reads the same
+everywhere.
+
 ### ebranch: rebuild-plan offers to regenerate a stale side tag repository
 
 A rebuild report said noctalia was "not checked for SONAME changes (an

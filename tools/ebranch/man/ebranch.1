@@ -432,9 +432,12 @@ check\-crate or resolve report TOML with recorded branch requests
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch config
-\fBebranch config\fR [\fB\-h\fR|\fB\-\-help\fR]
+\fBebranch config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up Bugzilla API key and other settings
+.TP
+\fB\-\-all\fR
+Ask for every setting again, with the saved value as the default: Enter keeps it, a new value replaces it, and \- clears an optional one
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH poi-tracker 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
+.TH poi-tracker 1 2026-11-04 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH SYNOPSIS
@@ -209,9 +209,12 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker config
-\fBpoi\-tracker config\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBpoi\-tracker config\fR [\fB\-\-all\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Configure poi\-tracker (Bugzilla API key, etc.)
+.TP
+\fB\-\-all\fR
+Ask for every setting again, with the saved value as the default: Enter keeps it, a new value replaces it, and \- clears an optional one
 .TP
 \fB\-i\fR, \fB\-\-inventory\fR \fI<INVENTORY>\fR
 Exactly these inventory TOML file(s) (repeatable) — the most specific of the three ways to name inventories, and always honoured: it overrides whatever a workspace file would supply

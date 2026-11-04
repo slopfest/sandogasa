@@ -41,7 +41,7 @@ enum Command {
     /// Where each Change on the Incomplete Changes Report stands.
     Changes(changes::ChangesArgs),
     /// Store the Forgejo API token (interactive).
-    Config,
+    Config(sandogasa_cli::ConfigArgs),
     /// Day-of checklist plus the meetbot command script.
     Script(script::ScriptArgs),
     /// Compose the post-meeting summary email from the minutes.
@@ -56,7 +56,7 @@ fn main() -> ExitCode {
         Command::Agenda(args) => agenda::run(&args),
         Command::Announced(args) => announce::run(&args),
         Command::Changes(args) => changes::run(&args),
-        Command::Config => match config::cmd_config() {
+        Command::Config(args) => match config::cmd_config(&args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");

@@ -650,7 +650,7 @@ enum Command {
     /// Close branch requests whose package has landed.
     Close(CloseArgs),
     /// Set up Bugzilla API key and other settings.
-    Config,
+    Config(sandogasa_cli::ConfigArgs),
     /// Prune a staging COPR of what its target releases caught up on.
     CoprPrune(CoprPruneArgs),
     /// Escalate (needinfo) stale branch requests in a report.
@@ -1336,9 +1336,9 @@ fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
 
     // config and check-pkg-reviews don't need fedrq.
-    if matches!(cli.command, Command::Config) {
+    if let Command::Config(a) = &cli.command {
         let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
-        return exit_code(rt.block_on(config::cmd_config()));
+        return exit_code(rt.block_on(config::cmd_config(a)));
     }
 
     if let Command::CoprPrune(a) = &cli.command {
@@ -1982,7 +1982,7 @@ fn main() -> ExitCode {
         | Command::CheckUpdate(_)
         | Command::CheckWip(_)
         | Command::Close(_)
-        | Command::Config
+        | Command::Config(_)
         | Command::CoprPrune(_)
         | Command::Escalate(_)
         | Command::FileRequest(_)

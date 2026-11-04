@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-pkg-acl 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
+.TH sandogasa-pkg-acl 1 2026-11-04 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 sandogasa\-pkg\-acl \- View and manage Fedora package ACLs via the Pagure dist\-git API
 .SH SYNOPSIS
@@ -38,9 +38,12 @@ Path to TOML config file
 <\fIPACKAGES\fR>
 Package name(s)
 .SS sandogasa-pkg-acl config
-\fBsandogasa\-pkg\-acl config\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-pkg\-acl config\fR [\fB\-\-all\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up or verify stored API token
+.TP
+\fB\-\-all\fR
+Ask for every setting again, with the saved value as the default: Enter keeps it, a new value replaces it, and \- clears an optional one
 .TP
 \fB\-\-json\fR
 Output machine\-readable JSON

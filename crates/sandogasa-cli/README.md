@@ -9,6 +9,12 @@ stays clean for piped or `--json` output). `confirm_each` asks the
 same way about a list the caller has already printed: all of it, none
 of it, or `each` to walk it item by item, returning the indices taken.
 
+`ConfigArgs` holds the arguments every tool's `config` command takes
+(`Config(sandogasa_cli::ConfigArgs)`), so the flags and their help read
+the same everywhere. Today that is `--all`, which asks for every
+setting again with the saved value as the default (see
+`sandogasa_config::ask`).
+
 The optional `http` feature adds an `http` module with the plumbing
 sandogasa's API clients share: `builder`/`blocking_builder` return a
 reqwest client builder with the crypto provider installed and the

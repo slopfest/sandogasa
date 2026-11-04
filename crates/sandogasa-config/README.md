@@ -37,8 +37,17 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   an empty answer as "none". All of them apply ^H and DEL characters
   that reach them as erases, for terminals whose backspace sends the
   one the tty does not erase on.
+- **Setting** and **ask** — the way a `config` command asks for each
+  setting. A `Setting` names it and says whether it is sensitive
+  (hidden, and a saved value is never shown), optional, what hint to
+  print first, and how to validate it. `ask(setting, saved, review)`
+  keeps a saved value without asking; asks for a missing one; reports
+  a saved value its validator refuses and asks again; and with
+  `review`, asks with the saved value as the default, where an empty
+  answer keeps it, an answer replaces it, and `-` clears an optional
+  one (unless the validator accepts a lone `-`).
 - **validate_email** — basic email address validation for config
-  fields; spaces and control characters are refused.
+  fields; spaces, control characters and a lone `-` are refused.
 
 ## License
 

@@ -9,6 +9,35 @@ use serde::de::DeserializeOwned;
 /// Validator function for [`prompt_field`].
 type Validator<'a> = Option<&'a dyn Fn(&str) -> Result<(), String>>;
 
+/// A setting a `config` command asks for, for [`ask`].
+///
+/// ```no_run
+/// # use sandogasa_config::{Setting, ask, validate_email};
+/// let email = Setting::new("Bugzilla", "account e-mail")
+///     .optional()
+///     .validated(&validate_email);
+/// let saved = String::new();
+/// let value = ask(&email, &saved, false).unwrap();
+/// ```
+#[non_exhaustive]
+pub struct Setting<'a> {
+    /// Where the setting belongs, as the prompt names it (`Bugzilla`).
+    pub section: &'a str,
+    /// What it is (`API key`).
+    pub label: &'a str,
+    /// Typed or pasted input is hidden, and a saved value is never
+    /// shown.
+    pub sensitive: bool,
+    /// It may be left empty, and a saved value may be cleared with `-`
+    /// (unless the validator accepts a lone `-` as a value).
+    pub optional: bool,
+    /// Printed before the setting is asked for, e.g. where to create a
+    /// key; not printed when a saved value is kept without asking.
+    pub hint: Option<&'a str>,
+    /// Checks an answer, and a saved value as well.
+    pub validate: Validator<'a>,
+}
+
 /// Manages a TOML config file at `~/.config/{tool}/config.toml`,
 /// layered over an optional system-wide file at
 /// `/etc/{tool}/config.toml`.
@@ -218,6 +247,44 @@ impl ConfigFile {
     }
 }
 
+impl<'a> Setting<'a> {
+    /// A required, visible setting with no hint and no check.
+    pub fn new(section: &'a str, label: &'a str) -> Self {
+        Self {
+            section,
+            label,
+            sensitive: false,
+            optional: false,
+            hint: None,
+            validate: None,
+        }
+    }
+
+    /// Hide what is typed, and never show the saved value.
+    pub fn sensitive(mut self) -> Self {
+        self.sensitive = true;
+        self
+    }
+
+    /// Allow it to be left empty, or cleared with `-`.
+    pub fn optional(mut self) -> Self {
+        self.optional = true;
+        self
+    }
+
+    /// Print `hint` before asking.
+    pub fn hint(mut self, hint: &'a str) -> Self {
+        self.hint = Some(hint);
+        self
+    }
+
+    /// Check answers, and the saved value, with `validate`.
+    pub fn validated(mut self, validate: &'a dyn Fn(&str) -> Result<(), String>) -> Self {
+        self.validate = Some(validate);
+        self
+    }
+}
+
 /// Prompt the user for a config field value.
 ///
 /// Prints `"Enter {section} {label}: "` and reads input.  If `sensitive`
@@ -303,9 +370,28 @@ pub fn validate_email(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Recursively merge two TOML tables: `over` wins per key;
-/// nested tables merge, everything else (scalars, arrays) is
-/// replaced whole.
+/// Ask for a setting whose saved value is `saved` (empty for none),
+/// and return the value to save (empty for none).
+///
+/// - With no saved value, it is asked for; a required setting cannot
+///   be left empty, an optional one can.
+/// - A saved value the setting's validator refuses is reported and
+///   asked for again, as if there were none.
+/// - Otherwise the saved value is kept and shown (or said to be set,
+///   for a sensitive one) without asking, unless `review` is true.
+///   Then it is asked for with the saved value as the default: an
+///   empty answer keeps it, an answer replaces it, and for an optional
+///   setting `-` clears it.
+pub fn ask(
+    setting: &Setting<'_>,
+    saved: &str,
+    review: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    ask_with(setting, saved, review, &mut |prompt, sensitive| {
+        read_line_from_terminal(prompt, sensitive)
+    })
+}
+
 /// Apply the backspaces a terminal passed through as characters.
 ///
 /// A tty in canonical mode erases on one character, usually DEL; a
@@ -324,14 +410,10 @@ fn apply_erasures(raw: &str) -> String {
     out
 }
 
-/// Print the prompt and read one answer, hidden if `sensitive`, with
+/// Print `prompt` and read one answer, hidden if `sensitive`, with
 /// passed-through backspaces applied and surrounding space trimmed.
-fn read_answer(
-    section: &str,
-    label: &str,
-    sensitive: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
-    print!("Enter {section} {label}: ");
+fn read_line_from_terminal(prompt: &str, sensitive: bool) -> io::Result<String> {
+    print!("{prompt}");
     io::stdout().flush()?;
     let raw = if sensitive {
         rpassword::read_password()?
@@ -343,6 +425,97 @@ fn read_answer(
     Ok(apply_erasures(&raw).trim().to_string())
 }
 
+/// Print the prompt for a missing value and read one answer.
+fn read_answer(
+    section: &str,
+    label: &str,
+    sensitive: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(read_line_from_terminal(
+        &format!("Enter {section} {label}: "),
+        sensitive,
+    )?)
+}
+
+/// Whether `-` clears an optional setting: only when its validator,
+/// if any, refuses a lone `-`, so that no value is lost to it.
+fn clears(setting: &Setting<'_>) -> bool {
+    setting.optional && setting.validate.is_none_or(|v| v("-").is_err())
+}
+
+/// The prompt for a setting that has a saved value, which an empty
+/// answer keeps.
+fn review_prompt(setting: &Setting<'_>, saved: &str) -> String {
+    let shown = if setting.sensitive { "set" } else { saved };
+    let clear = if clears(setting) { ", - clears" } else { "" };
+    format!(
+        "Enter {} {} [{shown}; Enter keeps{clear}]: ",
+        setting.section, setting.label
+    )
+}
+
+/// [`ask`], reading answers through `read` (prompt, hidden?), so the
+/// decisions can be tested without a terminal.
+fn ask_with(
+    setting: &Setting<'_>,
+    saved: &str,
+    review: bool,
+    read: &mut dyn FnMut(&str, bool) -> io::Result<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let name = format!("{} {}", setting.section, setting.label);
+    let saved_error = if saved.is_empty() {
+        None
+    } else {
+        setting.validate.and_then(|v| v(saved).err())
+    };
+    let keep = !saved.is_empty() && saved_error.is_none();
+    if let Some(e) = &saved_error {
+        eprintln!("The saved {name} is not valid ({e}), so it is asked for again.");
+    }
+    if keep && !review {
+        if setting.sensitive {
+            println!("{name}: (set)");
+        } else {
+            println!("{name}: {saved}");
+        }
+        return Ok(saved.to_string());
+    }
+    if let Some(hint) = setting.hint {
+        println!("{hint}");
+    }
+    let prompt = if keep {
+        review_prompt(setting, saved)
+    } else {
+        format!("Enter {name}: ")
+    };
+    loop {
+        let answer = read(&prompt, setting.sensitive)?;
+        if answer.is_empty() {
+            if keep {
+                return Ok(saved.to_string());
+            }
+            if setting.optional {
+                return Ok(String::new());
+            }
+            eprintln!("{name} cannot be empty.");
+            continue;
+        }
+        if keep && answer == "-" && clears(setting) {
+            return Ok(String::new());
+        }
+        if let Some(validate) = setting.validate
+            && let Err(e) = validate(&answer)
+        {
+            eprintln!("Invalid {}: {e}", setting.label);
+            continue;
+        }
+        return Ok(answer);
+    }
+}
+
+/// Recursively merge two TOML tables: `over` wins per key;
+/// nested tables merge, everything else (scalars, arrays) is
+/// replaced whole.
 fn merge_tables(mut base: toml::Table, over: toml::Table) -> toml::Table {
     for (key, over_value) in over {
         match (base.remove(&key), over_value) {
@@ -803,6 +976,102 @@ mod tests {
         // What a ^H-sending terminal left in a typo'd address (#56).
         assert!(validate_email("bob@exampel\u{8}\u{8}\u{8}ple.com").is_err());
         assert!(validate_email("bob smith@example.com").is_err());
+    }
+
+    // ---- ask ----
+
+    /// Answer `ask_with` from `answers` in turn, recording each prompt.
+    fn ask_scripted(
+        setting: &Setting<'_>,
+        saved: &str,
+        review: bool,
+        answers: &[&str],
+    ) -> (String, Vec<String>) {
+        let mut prompts = Vec::new();
+        let mut next = answers.iter();
+        let value = ask_with(setting, saved, review, &mut |prompt, _| {
+            prompts.push(prompt.to_string());
+            Ok(next
+                .next()
+                .expect("asked more often than answered")
+                .to_string())
+        })
+        .unwrap();
+        (value, prompts)
+    }
+
+    #[test]
+    fn a_saved_value_is_kept_without_asking() {
+        let key = Setting::new("Bugzilla", "API key").sensitive();
+        let (value, prompts) = ask_scripted(&key, "abc", false, &[]);
+        assert_eq!(value, "abc");
+        assert!(prompts.is_empty());
+    }
+
+    #[test]
+    fn a_missing_value_is_asked_for() {
+        let key = Setting::new("Bugzilla", "API key").sensitive();
+        // A required setting cannot be left empty.
+        let (value, prompts) = ask_scripted(&key, "", false, &["", "abc"]);
+        assert_eq!(value, "abc");
+        assert_eq!(prompts, ["Enter Bugzilla API key: "; 2]);
+        let fas = Setting::new("Fedora", "account").optional();
+        assert_eq!(ask_scripted(&fas, "", false, &[""]).0, "");
+    }
+
+    #[test]
+    fn a_saved_value_that_fails_its_check_is_asked_for_again() {
+        // #56: an address saved with the ^H of a backspace in it.
+        let email = Setting::new("Bugzilla", "e-mail")
+            .optional()
+            .validated(&validate_email);
+        let saved = "bob@exampel\u{8}\u{8}\u{8}ple.com";
+        let (value, prompts) =
+            ask_scripted(&email, saved, false, &["bob@example", "bob@example.com"]);
+        assert_eq!(value, "bob@example.com");
+        // Asked as if missing: an empty answer would not keep the bad one.
+        assert_eq!(prompts[0], "Enter Bugzilla e-mail: ");
+        assert_eq!(ask_scripted(&email, saved, false, &[""]).0, "");
+    }
+
+    #[test]
+    fn review_keeps_replaces_or_clears() {
+        let email = Setting::new("Bugzilla", "e-mail")
+            .optional()
+            .validated(&validate_email);
+        let saved = "bob@example.com";
+        let (value, prompts) = ask_scripted(&email, saved, true, &[""]);
+        assert_eq!(value, saved);
+        assert_eq!(
+            prompts,
+            ["Enter Bugzilla e-mail [bob@example.com; Enter keeps, - clears]: "]
+        );
+        assert_eq!(
+            ask_scripted(&email, saved, true, &["nope", "ann@example.com"]).0,
+            "ann@example.com"
+        );
+        assert_eq!(ask_scripted(&email, saved, true, &["-"]).0, "");
+    }
+
+    #[test]
+    fn review_never_shows_a_secret_or_clears_a_required_one() {
+        let key = Setting::new("Bugzilla", "API key").sensitive();
+        let (value, prompts) = ask_scripted(&key, "secret", true, &["-"]);
+        // Required: "-" is an answer like any other.
+        assert_eq!(value, "-");
+        assert_eq!(prompts, ["Enter Bugzilla API key [set; Enter keeps]: "]);
+        assert!(!prompts[0].contains("secret"));
+    }
+
+    #[test]
+    fn dash_is_not_a_clear_where_it_is_a_valid_value() {
+        let any = |_: &str| Ok(());
+        let field = Setting::new("Odd", "field").optional().validated(&any);
+        let (value, prompts) = ask_scripted(&field, "x", true, &["-"]);
+        assert_eq!(value, "-");
+        assert!(!prompts[0].contains("- clears"), "{prompts:?}");
+        // The e-mail check refuses a lone "-", so clearing is safe there.
+        assert!(validate_email("-").is_err());
     }
 
     // ---- apply_erasures ----

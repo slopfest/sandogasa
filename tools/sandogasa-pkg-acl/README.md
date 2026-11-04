@@ -47,7 +47,7 @@ value sets the corresponding ACL level.
 ```
 $ sandogasa-pkg-acl config
 No config found at /home/user/.config/sandogasa-pkg-acl/config.toml
-Enter your dist-git API token:
+Enter dist-git API token: 
 Verifying token... OK (authenticated as salimma)
 Saved to /home/user/.config/sandogasa-pkg-acl/config.toml
 ```
@@ -163,6 +163,11 @@ table pinning flag defaults (see the root `DEVELOPMENT.md`).
 directory and 600 on the file. Nothing writes under `/etc`: a system
 file is admin-authored, holds shared non-secret settings, and is
 normally shipped `root:root 0644`.
+
+`sandogasa-pkg-acl config` asks only for settings that are missing, or whose saved
+value is not valid. `--all` asks for every setting again, with the saved
+value as the default: Enter keeps it, a new value replaces it, and `-`
+clears an optional one. A saved secret is never shown.
 
 Credentials belong in the per-user file, which is 600, or in an
 environment variable — a token under `/etc` is readable by every local

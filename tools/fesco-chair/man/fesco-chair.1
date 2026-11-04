@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fesco-chair 1 2026-10-21 "sandogasa 0.27.0" "Sandogasa Manual"
+.TH fesco-chair 1 2026-11-04 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 fesco\-chair \- FESCo meeting chair helper — agenda, day\-of script, summary email, ticket votes
 .SH SYNOPSIS
@@ -100,9 +100,12 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair config
-\fBfesco\-chair config\fR [\fB\-h\fR|\fB\-\-help\fR]
+\fBfesco\-chair config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Store the Forgejo API token (interactive)
+.TP
+\fB\-\-all\fR
+Ask for every setting again, with the saved value as the default: Enter keeps it, a new value replaces it, and \- clears an optional one
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

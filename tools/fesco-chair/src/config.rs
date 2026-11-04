@@ -31,31 +31,33 @@ pub fn stored_token() -> Option<String> {
     (!config.forgejo.token.is_empty()).then_some(config.forgejo.token)
 }
 
-/// Interactive config setup: prompt for the Forgejo token, validate
-/// it against the instance, and save.
-pub fn cmd_config() -> Result<(), String> {
+/// Interactive config setup: prompt for the Forgejo token (again,
+/// with `all`), validate it against the instance, and save.
+pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("fesco-chair");
     let mut config: Config = cf.load_user().unwrap_or_default();
 
     println!("fesco-chair configuration\n");
     println!("Config file: {}\n", cf.path().display());
 
-    if config.forgejo.token.is_empty() {
-        println!(
-            "Generate a Forgejo token at:\n  \
-             {}/user/settings/applications\n\
-             \n\
-             Scopes: read:issue + read:repository (agenda queries) and\n\
-             read:user (this validation step). Pick read-and-write on\n\
-             issue instead to be ready for the planned ticket updates.\n\
-             See the fesco-chair README for details.\n",
-            sources::FORGE_URL
-        );
-        config.forgejo.token = sandogasa_config::prompt_field("Forgejo", "API token", true, None)
-            .map_err(|e| format!("failed to read token: {e}"))?;
-    } else {
-        println!("Forgejo token: (set — delete the config file to replace it)");
-    }
+    let hint = format!(
+        "Generate a Forgejo token at:\n  \
+         {}/user/settings/applications\n\
+         \n\
+         Scopes: read:issue + read:repository (agenda queries) and\n\
+         read:user (this validation step). Pick read-and-write on\n\
+         issue instead to be ready for the planned ticket updates.\n\
+         See the fesco-chair README for details.\n",
+        sources::FORGE_URL
+    );
+    config.forgejo.token = sandogasa_config::ask(
+        &sandogasa_config::Setting::new("Forgejo", "API token")
+            .sensitive()
+            .hint(&hint),
+        &config.forgejo.token,
+        args.all,
+    )
+    .map_err(|e| format!("failed to read token: {e}"))?;
 
     // Validated against the instance; a network hiccup shouldn't lose
     // the token just pasted, so a check that could not be made keeps

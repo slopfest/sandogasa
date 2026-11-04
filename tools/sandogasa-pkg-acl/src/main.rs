@@ -49,7 +49,7 @@ enum Command {
     },
 
     /// Set up or verify stored API token
-    Config,
+    Config(sandogasa_cli::ConfigArgs),
 
     /// Give package ownership to another user
     Give {
@@ -147,7 +147,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let token = resolve_token()?;
             cmd_apply(&config, &packages, &token, strict, json).await
         }
-        Command::Config => cmd_config().await,
+        Command::Config(args) => cmd_config(&args).await,
         Command::Give { user, packages } => {
             let token = resolve_token()?;
             cmd_give(&packages, &user, &token, json).await
@@ -213,53 +213,54 @@ fn resolve_target(
     }
 }
 
-async fn cmd_config() -> Result<(), Box<dyn std::error::Error>> {
+/// Ask for the API token when there is none (with `all`, offering the
+/// saved one as the default), verify it, and save it with the account
+/// it belongs to. A token dist-git refuses can be replaced on the spot.
+async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let cf = ConfigFile::for_tool(TOOL_NAME);
-
-    match cf.load_user::<AppConfig>() {
+    let mut token = match cf.load_user::<AppConfig>() {
         Ok(config) => {
             println!("Found config at {}", cf.path().display());
-            print!("Verifying API token... ");
-            io::stdout().flush()?;
-
-            let client = DistGitClient::new().with_token(config.dist_git.api_token.clone())?;
-            match client.verify_token().await {
-                Ok(username) => {
-                    println!("OK (authenticated as {username})");
-                    cache_username(&username);
-                    return Ok(());
-                }
-                Err(e) => {
-                    println!("FAILED ({e})");
-                    if !sandogasa_cli::confirm("Would you like to replace the token?", false)? {
-                        return Err("Token verification failed".into());
-                    }
-                }
-            }
+            config.dist_git.api_token
         }
         Err(_) => {
             println!("No config found at {}", cf.path().display());
+            String::new()
+        }
+    };
+    let mut review = args.all;
+    loop {
+        token = sandogasa_config::ask(
+            &sandogasa_config::Setting::new("dist-git", "API token").sensitive(),
+            &token,
+            review,
+        )?;
+        print!("Verifying API token... ");
+        io::stdout().flush()?;
+        let client = DistGitClient::new().with_token(token.clone())?;
+        match client.verify_token().await {
+            Ok(username) => {
+                println!("OK (authenticated as {username})");
+                let config = AppConfig {
+                    dist_git: DistGitConfig {
+                        api_token: token,
+                        username,
+                    },
+                };
+                cf.save(&config)?;
+                println!("Saved to {}", cf.path().display());
+                return Ok(());
+            }
+            Err(e) => {
+                println!("FAILED ({e})");
+                if !sandogasa_cli::confirm("Would you like to replace the token?", false)? {
+                    return Err("Token verification failed".into());
+                }
+                token.clear();
+                review = false;
+            }
         }
     }
-
-    let token = sandogasa_config::prompt_field("dist-git", "API token", true, None)?;
-
-    print!("Verifying token... ");
-    io::stdout().flush()?;
-    let client = DistGitClient::new().with_token(token.clone())?;
-    let username = client.verify_token().await?;
-    println!("OK (authenticated as {username})");
-
-    let config = AppConfig {
-        dist_git: DistGitConfig {
-            api_token: token,
-            username,
-        },
-    };
-    cf.save(&config)?;
-    println!("Saved to {}", cf.path().display());
-
-    Ok(())
 }
 
 async fn cmd_show(package: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {

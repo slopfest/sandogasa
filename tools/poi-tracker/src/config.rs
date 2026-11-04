@@ -128,9 +128,11 @@ pub fn resolve_email() -> Option<String> {
         .filter(|e| !e.is_empty())
 }
 
-/// Interactive config setup. Prompts for the Bugzilla API key,
-/// validates it with a minimal search, and writes the result.
-pub async fn cmd_config() -> Result<(), String> {
+/// Interactive config setup. Prompts for what is missing (with
+/// `all`, for every setting), validates the Bugzilla API key, and
+/// writes the result.
+pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
+    use sandogasa_config::{Setting, ask};
     let cf = sandogasa_config::ConfigFile::for_tool("poi-tracker");
     let mut config: PoiTrackerConfig = cf.load_user().unwrap_or_default();
 
@@ -142,62 +144,42 @@ pub async fn cmd_config() -> Result<(), String> {
     }
     println!("Bugzilla URL: {}", config.bugzilla.url);
 
-    if config.bugzilla.api_key.is_empty() {
-        println!(
+    config.bugzilla.api_key = ask(
+        &Setting::new("Bugzilla", "API key").sensitive().hint(
             "\nGenerate an API key at:\n  \
-             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey\n"
-        );
-        let key = sandogasa_config::prompt_field("Bugzilla", "API key", true, None)
-            .map_err(|e| format!("failed to read API key: {e}"))?;
-        config.bugzilla.api_key = key;
-    } else {
-        println!("Bugzilla API key: (set)");
-    }
+             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey\n",
+        ),
+        &config.bugzilla.api_key,
+        args.all,
+    )
+    .map_err(|e| format!("failed to read API key: {e}"))?;
 
     // Email is optional — it's only used by `triage-retired
-    // --claim` to set `assigned_to` on closed bugs. Blank input
-    // keeps the current value (which may itself be empty).
-    let current = if config.bugzilla.email.is_empty() {
-        "<unset>"
-    } else {
-        config.bugzilla.email.as_str()
-    };
-    print!("Bugzilla email [{current}] (for --claim; blank to keep): ");
-    use std::io::{BufRead, Write};
-    std::io::stdout()
-        .flush()
-        .map_err(|e| format!("flush: {e}"))?;
-    let mut line = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut line)
-        .map_err(|e| format!("read: {e}"))?;
-    let trimmed = line.trim();
-    if !trimmed.is_empty() {
-        config.bugzilla.email = trimmed.to_string();
-    }
+    // --claim` to set `assigned_to` on closed bugs.
+    config.bugzilla.email = ask(
+        &Setting::new("Bugzilla", "email (optional, for --claim)")
+            .optional()
+            .validated(&sandogasa_config::validate_email),
+        &config.bugzilla.email,
+        args.all,
+    )
+    .map_err(|e| format!("failed to read e-mail: {e}"))?;
 
     // The dist-git token is optional — only `adopt` needs it.
-    // Blank input keeps the current value.
-    if config.dist_git.api_token.is_empty() {
-        println!(
-            "\nOptional: a dist-git API token lets `adopt` take orphaned\n\
-             packages. Generate one at\n  \
-             https://src.fedoraproject.org/settings/token/new\n\
-             with the \"Modify an existing project\" ACL."
-        );
-        print!("dist-git API token (blank to skip): ");
-        std::io::stdout()
-            .flush()
-            .map_err(|e| format!("flush: {e}"))?;
-        let token = rpassword::read_password().map_err(|e| format!("read token: {e}"))?;
-        let token = token.trim();
-        if !token.is_empty() {
-            config.dist_git.api_token = token.to_string();
-        }
-    } else {
-        println!("dist-git API token: (set)");
-    }
+    config.dist_git.api_token = ask(
+        &Setting::new("dist-git", "API token (optional, empty to skip)")
+            .sensitive()
+            .optional()
+            .hint(
+                "\nOptional: a dist-git API token lets `adopt` take orphaned\n\
+                 packages. Generate one at\n  \
+                 https://src.fedoraproject.org/settings/token/new\n\
+                 with the \"Modify an existing project\" ACL.",
+            ),
+        &config.dist_git.api_token,
+        args.all,
+    )
+    .map_err(|e| format!("failed to read token: {e}"))?;
 
     // Checked by trying to use it, not by searching: Bugzilla serves
     // bug searches to anyone, so the old check passed for a key that

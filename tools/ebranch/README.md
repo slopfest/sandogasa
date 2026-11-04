@@ -1645,6 +1645,11 @@ directory and 600 on the file. Nothing writes under `/etc`: a system
 file is admin-authored, holds shared non-secret settings, and is
 normally shipped `root:root 0644`.
 
+`ebranch config` asks only for settings that are missing, or whose saved
+value is not valid. `--all` asks for every setting again, with the saved
+value as the default: Enter keeps it, a new value replaces it, and `-`
+clears an optional one. A saved secret is never shown.
+
 Credentials belong in the per-user file, which is 600, or in an
 environment variable — a token under `/etc` is readable by every local
 user. For an unattended machine, give the job its own user and its own

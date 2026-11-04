@@ -217,8 +217,8 @@ prints the report machine-readably.
 poi-tracker config
 ```
 
-Prompts for a Bugzilla API key, validates it with a quick test
-search, and saves it to `~/.config/poi-tracker/config.toml`.
+Prompts for a Bugzilla API key, checks that Bugzilla accepts it,
+and saves it to `~/.config/poi-tracker/config.toml`.
 Lookup order at runtime: `--api-key` flag → `BUGZILLA_API_KEY`
 env var → config file.
 
@@ -1168,6 +1168,11 @@ table pinning flag defaults (see the root `DEVELOPMENT.md`).
 directory and 600 on the file. Nothing writes under `/etc`: a system
 file is admin-authored, holds shared non-secret settings, and is
 normally shipped `root:root 0644`.
+
+`poi-tracker config` asks only for settings that are missing, or whose saved
+value is not valid. `--all` asks for every setting again, with the saved
+value as the default: Enter keeps it, a new value replaces it, and `-`
+clears an optional one. A saved secret is never shown.
 
 Credentials belong in the per-user file, which is 600, or in an
 environment variable — a token under `/etc` is readable by every local
