@@ -1378,6 +1378,10 @@ fn main() -> ExitCode {
             sidetag_results: a.sidetag_results.clone(),
             baseline_results: a.baseline_results.clone(),
             distgit_dir: a.distgit_dir.clone(),
+            interactive: {
+                use std::io::IsTerminal;
+                !a.json && std::io::stdin().is_terminal()
+            },
             json: a.json,
             verbose: a.verbose,
         }));

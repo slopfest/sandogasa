@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan offers to regenerate a stale side tag repository
+
+A rebuild report said noctalia was "not checked for SONAME changes (an
+ExcludeArch, or a repository not regenerated since the build)" when it
+had simply been tagged that afternoon: the side tag's repository had not
+caught up. rebuild-plan now asks Koji which architectures a missing
+build has. When it was built for this one, the repository is stale:
+run in a terminal, rebuild-plan offers to run `koji regen-repo --wait`
+(default yes, as check-update does) and reads the side tag again before
+planning; otherwise the build is listed under "Report incomplete" and
+the command exits non-zero. The ExcludeArch wording is kept for builds
+that really have no binaries for the architecture.
+
 ### ebranch: rebuild-plan says when its report is incomplete
 
 A rebuild report could miss entries without showing it: when a dist-git

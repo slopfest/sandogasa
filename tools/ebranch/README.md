@@ -1109,9 +1109,14 @@ A package further down a dependency chain needs a rebuild only if a
 rebuilt package changes a SONAME of its own. With a side tag, each
 rebuild's SONAMEs there are compared with the branch's; when one drops a
 SONAME, the packages linking it join the plan like the library's own
-dependents, and the change is listed. Rebuilds whose binaries the side
-tag's repository does not have for this architecture are listed as not
-checked.
+dependents, and the change is listed. A rebuild Koji built no binaries
+of for this architecture (`ExcludeArch` or `ExclusiveArch`) is listed as
+not checked. One Koji did build for it, but which the side tag's
+repository does not have yet, means the repository has not been
+regenerated since: run in a terminal, `rebuild-plan` offers to run
+`koji regen-repo --wait <side-tag>` (default yes) and reads the side
+tag again before planning; otherwise the rebuild is listed under "Report
+incomplete".
 
 Packages may also be affected without linking the library, by compiling
 its headers in (inline functions, macros, struct layouts) through another
@@ -1228,7 +1233,8 @@ Queries use the repositories of the architecture fedrq runs on.
 
 dist-git requests are retried on transient failures. A lookup that still
 fails (a package's pull requests or CI results, who has access, the
-branch's versions, dist-git's branch tip) is listed under "Report
+branch's versions, dist-git's branch tip, a side tag repository not
+regenerated since a build) is listed under "Report
 incomplete" at the top of the report, and the command exits non-zero
 after printing it.
 

@@ -614,3 +614,11 @@ it looked complete.
   the answer is a documented approximation, not a missing entry.
 - Retry transient failures before giving up. The dist-git client
   retries every GET; other clients still have their own retry helpers.
+- A side tag build missing from the side tag's repository is either
+  not built for this architecture or a repository that has not caught
+  up, and only Koji's list of the build's RPMs tells them apart. The
+  former is an answer (not checked, by design); the latter is a gap,
+  never folded into the ExcludeArch wording, and is offered a
+  `koji regen-repo` before planning, so the regenerated data feeds
+  the whole plan instead of a second pass after it. A build whose RPMs
+  cannot be listed counts as a gap, not an exclusion.

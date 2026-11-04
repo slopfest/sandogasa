@@ -42,6 +42,8 @@ pub struct Options {
     /// Existing dist-git checkouts, one per package (`DIR/<package>`),
     /// that clones of dist-git borrow objects from. Read only.
     pub distgit_dir: Option<PathBuf>,
+    /// Whether to offer fixes on stderr (a terminal, and not `json`).
+    pub interactive: bool,
     pub json: bool,
     pub verbose: bool,
 }
@@ -345,6 +347,10 @@ pub struct RebuildPlan {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub incomplete: Vec<Gap>,
 }
+
+/// What a [`Gap`] for a build the SONAME check could not see is
+/// about.
+const SONAME_GAP: &str = "SONAME changes";
 
 /// A lookup that failed, so the report may be missing what it would
 /// have said.
@@ -1061,8 +1067,8 @@ fn render_incomplete(out: &mut String, plan: &RebuildPlan) {
     let _ = writeln!(out, "## Report incomplete ({})\n", plan.incomplete.len());
     let _ = writeln!(
         out,
-        "These lookups failed, so entries may be missing below. Run it again before \
-         sharing it.\n"
+        "These could not be checked, so entries may be missing below. Fix them, or run \
+         this again, before sharing it.\n"
     );
     for g in &plan.incomplete {
         match &g.package {
@@ -1296,14 +1302,15 @@ pub fn render(plan: &RebuildPlan) -> String {
         if !plan.not_compared.is_empty() {
             let _ = writeln!(
                 out,
-                "Not checked for SONAME changes, as the side tag's repository has none of \
-                 their binaries for this architecture (an ExcludeArch, or a repository not \
-                 regenerated since the build): {}\n",
+                "Not checked for SONAME changes, as Koji built none of their binaries for \
+                 this architecture (ExcludeArch or ExclusiveArch): {}\n",
                 plan.not_compared.join(", ")
             );
         }
         if plan.soname_changes.is_empty() {
-            let checked = if plan.not_compared.is_empty() {
+            let unchecked = !plan.not_compared.is_empty()
+                || plan.incomplete.iter().any(|g| g.what == SONAME_GAP);
+            let checked = if !unchecked {
                 "No rebuild"
             } else {
                 "No other rebuild"
@@ -1726,6 +1733,13 @@ pub fn run(opts: &Options) -> Result<(), String> {
         }
         None => None,
     };
+    let (side_tag, stale_repo) = match side_tag {
+        Some(st) => {
+            let (st, stale) = refresh_stale_side_tag(st, opts)?;
+            (Some(st), stale)
+        }
+        None => (None, Vec::new()),
+    };
     let fedrq = sandogasa_fedrq::Fedrq {
         branch: Some(opts.branch.clone()),
         repo: None,
@@ -1738,6 +1752,21 @@ pub fn run(opts: &Options) -> Result<(), String> {
         opts.verbose,
     )?;
     let mut plan = plan;
+    if let Some(tag) = &opts.side_tag {
+        plan.not_compared.retain(|p| !stale_repo.contains(p));
+        for pkg in &stale_repo {
+            plan.incomplete.push(Gap::new(
+                Some(pkg),
+                SONAME_GAP,
+                format!(
+                    "{tag}'s repository has none of its binaries for {}, though Koji built \
+                     them: it has not been regenerated since the build. Run `koji regen-repo \
+                     {tag}`, or run this in a terminal to be offered it",
+                    std::env::consts::ARCH
+                ),
+            ));
+        }
+    }
     if !opts.pr_authors.is_empty() || opts.contacts {
         let distgit = DistGitLookup::new(&opts.branch)?;
         if !opts.pr_authors.is_empty() {
@@ -2288,6 +2317,77 @@ fn read_side_tag(tag: &str, koji: &dyn KojiQuery, verbose: bool) -> Result<SideT
         nvrs,
         sonames,
     })
+}
+
+/// The side tag's builds whose binaries its repository does not have,
+/// split into those Koji built nothing for `arch` for (`ExcludeArch`
+/// or `ExclusiveArch`), and those it did, which the repository has not
+/// caught up with: it was not regenerated since they were tagged. A
+/// build whose RPMs cannot be listed counts as the latter, so it is
+/// reported rather than explained away.
+fn missing_from_repo(
+    st: &SideTag,
+    arch: &str,
+    build_nvras: &dyn Fn(&str) -> Result<Vec<String>, String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut excluded = Vec::new();
+    let mut stale = Vec::new();
+    for nvr in &st.nvrs {
+        let Some((name, _, _)) = sandogasa_koji::parse_nvr(nvr) else {
+            continue;
+        };
+        if st.sonames.contains_key(name) {
+            continue;
+        }
+        let built_here = build_nvras(nvr).map(|nvras| {
+            nvras.iter().any(|nvra| {
+                nvra.rsplit_once('.')
+                    .is_some_and(|(_, a)| a == arch || a == "noarch")
+            })
+        });
+        match built_here {
+            Ok(false) => excluded.push(name.to_string()),
+            Ok(true) | Err(_) => stale.push(name.to_string()),
+        }
+    }
+    (excluded, stale)
+}
+
+/// Find side tag builds its repository is missing for this
+/// architecture, and offer to regenerate the repository when Koji
+/// built them (default yes, as check-update does); the side tag is
+/// then read again. Returns the side tag and the packages still
+/// missing for a stale repository.
+fn refresh_stale_side_tag(st: SideTag, opts: &Options) -> Result<(SideTag, Vec<String>), String> {
+    let arch = std::env::consts::ARCH;
+    let nvras = |nvr: &str| sandogasa_koji::build_rpm_nvras(nvr, None);
+    let (_, stale) = missing_from_repo(&st, arch, &nvras);
+    if stale.is_empty() || !opts.interactive {
+        return Ok((st, stale));
+    }
+    eprintln!(
+        "{}'s repository has no {arch} binaries of {}, though Koji built them: it has not \
+         been regenerated since. Without a regen they are not checked for SONAME changes.",
+        st.name,
+        stale.join(", ")
+    );
+    let regen = sandogasa_cli::confirm(
+        &format!(
+            "Run `koji regen-repo --wait {}` now? (may take several minutes)",
+            st.name
+        ),
+        true,
+    )
+    .map_err(|e| e.to_string())?;
+    if !regen {
+        return Ok((st, stale));
+    }
+    eprintln!("waiting for koji to regenerate the {} repo...", st.name);
+    sandogasa_koji::regen_repo(&st.name, None)?;
+    // read_side_tag expires the side tag's cached metadata itself.
+    let st = read_side_tag(&st.name, &KojiCli { profile: None }, opts.verbose)?;
+    let (_, stale) = missing_from_repo(&st, arch, &nvras);
+    Ok((st, stale))
 }
 
 /// Whether a BuildRequire is one a repository can answer: `rpmlib()`
@@ -3647,6 +3747,40 @@ mod tests {
     }
 
     #[test]
+    fn missing_builds_are_excluded_arches_or_a_stale_repository() {
+        // noctalia-5.4.1-2 was tagged in the afternoon and the repo not
+        // regenerated; ghc-only stands for an ExclusiveArch x86_64.
+        let st = SideTag {
+            name: "f46-build-side-158330".to_string(),
+            nvrs: strs(&[
+                "bluez-5.87-4.fc46",
+                "noctalia-5.4.1-2.fc46",
+                "ghc-only-1.0-1.fc46",
+                "unreadable-1.0-1.fc46",
+            ]),
+            sonames: BTreeMap::from([("bluez".to_string(), BTreeSet::new())]),
+        };
+        let nvras = |nvr: &str| -> Result<Vec<String>, String> {
+            match nvr {
+                "noctalia-5.4.1-2.fc46" => Ok(strs(&[
+                    "noctalia-5.4.1-2.fc46.aarch64",
+                    "noctalia-5.4.1-2.fc46.x86_64",
+                ])),
+                "ghc-only-1.0-1.fc46" => Ok(strs(&["ghc-only-1.0-1.fc46.x86_64"])),
+                _ => Err("koji: no such build".to_string()),
+            }
+        };
+        let (excluded, stale) = missing_from_repo(&st, "aarch64", &nvras);
+        assert_eq!(excluded, ["ghc-only"]);
+        assert_eq!(stale, ["noctalia", "unreadable"]);
+        // A noarch build counts as built for every architecture.
+        let noarch = |_: &str| Ok(strs(&["noctalia-5.4.1-2.fc46.noarch"]));
+        let (excluded, stale) = missing_from_repo(&st, "s390x", &noarch);
+        assert!(excluded.is_empty());
+        assert_eq!(stale.len(), 3);
+    }
+
+    #[test]
     fn failed_lookups_are_listed_at_the_top_of_the_report() {
         // A request that failed while the laptop was suspended left
         // gnome-panel out of a report that looked complete.
@@ -3669,6 +3803,22 @@ mod tests {
         assert!(gap < out.find("## Still to rebuild").unwrap(), "{out}");
         assert!(out.contains("- bluez: pull requests by salimma ("), "{out}");
         assert!(!render(&libical_plan_with_prs()).contains("Report incomplete"));
+    }
+
+    #[test]
+    fn a_build_the_stale_repository_hid_is_not_called_unchanged() {
+        let mut p = libical_plan();
+        assert!(p.side_tag.is_some() && p.soname_changes.is_empty());
+        p.not_compared.clear();
+        assert!(render(&p).contains("\nNo rebuild in the side tag changed a SONAME"));
+        p.incomplete
+            .push(Gap::new(Some("noctalia"), SONAME_GAP, "not regenerated"));
+        let out = render(&p);
+        assert!(
+            out.contains("No other rebuild in the side tag changed"),
+            "{out}"
+        );
+        assert!(!out.contains("Not checked for SONAME changes"), "{out}");
     }
 
     fn libical_plan_with_prs() -> RebuildPlan {
