@@ -1240,7 +1240,8 @@ ebranch file-request foo epel9 --fas alice --sig rust-sig
 ```
 
 The request is filed against `Fedora EPEL`/`<branch>`, falling
-back to `Fedora`/`rawhide` when the component isn't in EPEL. The
+back to `Fedora`/`rawhide` when the component isn't in EPEL, where
+it carries the `FutureFeature` keyword. The
 request blocks nothing by default — pass `--blocked` with tracking
 bugs/aliases to block, and `--dependson` for prerequisite bugs.
 (Earlier versions blocked the `EPELPackagersSIG` tracker

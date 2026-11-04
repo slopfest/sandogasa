@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### ebranch: file-request marks a request filed against Fedora as a feature request
+
+A branch request for a package not yet in EPEL is filed against
+`Fedora`/`rawhide`, where it read as a bug report about the package and,
+when Fedora branched, was moved to the new release instead of staying on
+rawhide: rhbz#2563239 for python-sphinx-autoapi needed the
+`FutureFeature` keyword added by hand. Requests filed there now carry
+it, which keeps them tracking rawhide; those filed against
+`Fedora EPEL` are unchanged. Fixes #55.
+
 ### ebranch: rebuild-plan lists what a library's SONAME bump has to rebuild
 
 Rebuilding everything that depends on a library after its SONAME bump

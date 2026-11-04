@@ -520,12 +520,16 @@ pub async fn file_one_of_kind(
     }
 
     // Component not in EPEL → request the Fedora branch instead.
+    // FutureFeature marks it as a request rather than a defect, and
+    // keeps it on rawhide when Fedora branches instead of moving it
+    // to the new release (issue #55).
     let mut fedora = serde_json::json!({
         "product": "Fedora",
         "version": "rawhide",
         "component": pkg,
         "summary": summary,
         "description": description,
+        "keywords": ["FutureFeature"],
         "blocks": blocks,
         "depends_on": depends_on,
     });
@@ -3296,6 +3300,8 @@ mod tests {
                 "version": "rawhide",
                 "component": "widget",
                 "summary": "Please branch and build widget in epel10",
+                // rhbz#2563239 needed this added by hand (issue #55).
+                "keywords": ["FutureFeature"],
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 4242})))
             .expect(1)
