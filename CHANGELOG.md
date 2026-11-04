@@ -13,7 +13,8 @@ rebuild-plan now reads root.log for a build that produced RPMs. If dnf's
 only problems are conflicts between the package's own subpackages, the
 build counts as passing. Any other install problem, such as a missing
 dependency, still counts as a failure, and the report quotes dnf's first
-problem.
+problem. The mock behavior is reported upstream as
+rpm-software-management/mock#1835.
 
 ### ebranch: rebuild-plan can clone dist-git from existing checkouts
 

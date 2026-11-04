@@ -558,7 +558,12 @@ the whole point.
   every dnf `Problem` is a conflict between two `@commandline`
   packages. A missing dependency or a conflict with a repository
   package can be exactly what a library bump breaks, so those stay
-  failures.
+  failures. The mock side is filed as
+  [rpm-software-management/mock#1835](https://github.com/rpm-software-management/mock/issues/1835):
+  `--postinstall` installs every built RPM in one transaction, which
+  can never resolve for such packages (coreutils, systemd,
+  fedora-release, glibc and curl among them). Revisit this
+  classification if mock changes how it checks or marks them.
 - The newest build per package is chosen by RPM version comparison,
   never file times: a failed `-7` rebuilt as `-8` must resolve to `-8`
   whatever order they finished in.
