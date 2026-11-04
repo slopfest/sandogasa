@@ -826,6 +826,12 @@ struct FileRequestArgs {
     /// check-crate or resolve report TOML to record the new bug ID in.
     #[arg(long)]
     toml: Option<String>,
+
+    /// Ask for the build from this dist-git commit, for when the tip
+    /// of rawhide does not build for the branch but an older commit
+    /// does. Checked against dist-git before filing.
+    #[arg(long, value_name = "HASH")]
+    from_commit: Option<String>,
 }
 
 #[derive(clap::Args, Clone)]
@@ -1239,6 +1245,7 @@ fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
                 &a.blocked,
                 &a.dependson,
                 a.toml.as_deref(),
+                a.from_commit.as_deref(),
                 &opts,
             )
         }),

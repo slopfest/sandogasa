@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-11-03 "sandogasa 0.27.0" "Sandogasa Manual"
+.TH ebranch 1 2026-11-04 "sandogasa 0.27.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -516,7 +516,7 @@ check\-crate or resolve report TOML with recorded branch requests
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch file-request
-\fBebranch file\-request\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-toml\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR>
+\fBebranch file\-request\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-toml\fR] [\fB\-\-from\-commit\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR>
 .PP
 File a branch request for one package
 .TP
@@ -573,6 +573,9 @@ CSV of bugs/aliases this request depends on
 .TP
 \fB\-\-toml\fR \fI<TOML>\fR
 check\-crate or resolve report TOML to record the new bug ID in
+.TP
+\fB\-\-from\-commit\fR \fI<HASH>\fR
+Ask for the build from this dist\-git commit, for when the tip of rawhide does not build for the branch but an older commit does. Checked against dist\-git before filing
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

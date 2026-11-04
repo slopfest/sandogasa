@@ -81,6 +81,25 @@ pub struct ProjectInfo {
     pub access_groups: AccessGroups,
 }
 
+/// A dist-git commit, as its info endpoint describes it.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct Commit {
+    /// The full hash, whatever abbreviation it was asked for by.
+    pub hash: String,
+    /// Unix timestamp, left raw so this crate needs no date library.
+    pub commit_time: i64,
+    #[serde(default)]
+    pub message: String,
+}
+
+impl Commit {
+    /// The first line of the message.
+    pub fn subject(&self) -> &str {
+        self.message.lines().next().unwrap_or_default()
+    }
+}
+
 /// Keep only projects in the `rpms/` namespace. Group listings
 /// include everything a group can access — `container/`,
 /// `tests/`, `modules/` projects and forks, all reported under
@@ -261,6 +280,20 @@ impl DistGitClient {
         package: &str,
         hash: &str,
     ) -> Result<Option<(i64, String)>, Box<dyn std::error::Error>> {
+        Ok(self
+            .commit(package, hash)
+            .await?
+            .map(|c| (c.commit_time, c.subject().to_string())))
+    }
+
+    /// A commit of `package`, by full or abbreviated hash.
+    ///
+    /// `None` when dist-git does not know the hash for that package.
+    pub async fn commit(
+        &self,
+        package: &str,
+        hash: &str,
+    ) -> Result<Option<Commit>, Box<dyn std::error::Error>> {
         validate_segment(package, "package name")?;
         validate_segment(hash, "commit hash")?;
         let url = format!("{}/api/0/rpms/{}/c/{}/info", self.base_url, package, hash);
@@ -268,16 +301,7 @@ impl DistGitClient {
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        let resp = resp.error_for_status()?;
-        #[derive(serde::Deserialize)]
-        struct Info {
-            commit_time: i64,
-            #[serde(default)]
-            message: String,
-        }
-        let body: Info = resp.json().await?;
-        let subject = body.message.lines().next().unwrap_or_default().to_string();
-        Ok(Some((body.commit_time, subject)))
+        Ok(Some(resp.error_for_status()?.json().await?))
     }
 
     /// The reason a package is retired, from its `dead.package`, or
@@ -865,6 +889,49 @@ mod tests {
     use crate::acl::{AccessGroups, AccessUsers};
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn a_commit_is_found_by_its_abbreviated_hash() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/python-sphinx-autoapi/c/42538d5/info"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "hash": "42538d5aa6a5aeb8d3d042c62fe4607435310590",
+                "commit_time": 1739173130,
+                "message": "Update to latest version (#2344606)\n\nMore detail.\n",
+                "author": "Somebody",
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/0/rpms/python-sphinx-autoapi/c/deadbee/info"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let client = DistGitClient::with_base_url(&server.uri());
+        let commit = client
+            .commit("python-sphinx-autoapi", "42538d5")
+            .await
+            .unwrap()
+            .expect("dist-git knows it");
+        assert_eq!(commit.hash, "42538d5aa6a5aeb8d3d042c62fe4607435310590");
+        assert_eq!(commit.subject(), "Update to latest version (#2344606)");
+        assert_eq!(
+            client
+                .commit_info("python-sphinx-autoapi", "42538d5")
+                .await
+                .unwrap(),
+            Some((1739173130, commit.subject().to_string()))
+        );
+        assert!(
+            client
+                .commit("python-sphinx-autoapi", "deadbee")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn new_uses_default_base_url() {

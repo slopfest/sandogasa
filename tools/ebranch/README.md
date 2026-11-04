@@ -1248,6 +1248,12 @@ bugs/aliases to block, and `--dependson` for prerequisite bugs.
 automatically; that SIG is defunct.) Pass `--report <file>` to
 record the new bug ID in a resolve report.
 
+When the tip of rawhide does not build for the branch but an older
+commit does, pass `--from-commit <hash>`: the request asks for the
+build from that commit, naming it with its subject and a link. The
+hash, full or abbreviated, is looked up in dist-git first, dry runs
+included, and an unknown one stops the request.
+
 To file for a whole dependency closure, first capture it with
 `resolve --report`, then file requests for every package and
 link them along the dependency graph (a package's request

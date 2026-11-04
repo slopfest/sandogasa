@@ -69,6 +69,17 @@ pub struct Options {
     pub assume_yes: bool,
 }
 
+/// The dist-git commit a request asks to be built from, when the
+/// tip of rawhide does not build for the branch but an older commit
+/// does (issue #57).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartingPoint {
+    /// The full hash, as dist-git resolved it.
+    pub hash: String,
+    /// The commit's first message line.
+    pub subject: String,
+}
+
 // ---- request / ping body templates (ported) ----
 
 /// What a request is actually asking for.
@@ -142,7 +153,7 @@ pub fn request_description(
     fas: Option<&str>,
     sig: Option<&str>,
 ) -> Result<String, String> {
-    request_description_for(RequestKind::Branch, pkg, branch, fas, sig)
+    request_description_for(RequestKind::Branch, pkg, branch, fas, sig, None)
 }
 
 /// [`request_description`] for a given kind of request.
@@ -152,8 +163,20 @@ pub fn request_description_for(
     branch: &str,
     fas: Option<&str>,
     sig: Option<&str>,
+    from: Option<&StartingPoint>,
 ) -> Result<String, String> {
-    let base = kind.asking(pkg, branch);
+    let mut base = kind.asking(pkg, branch);
+    if let Some(from) = from {
+        // The link sits alone on its line so it linkifies in Bugzilla.
+        base.push_str(&format!(
+            "\nPlease build it from commit {hash}\n\
+             (\"{subject}\") rather than from the tip of rawhide, \
+             which does not build for {branch}:\n\
+             https://src.fedoraproject.org/rpms/{pkg}/c/{hash}\n",
+            hash = from.hash,
+            subject = from.subject,
+        ));
+    }
     // Nobody is being asked for anything on a bug you filed about
     // your own package, so the co-maintainer offer has no place on it.
     if kind == RequestKind::Requested {
@@ -458,6 +481,7 @@ pub fn releng_ticket(
 /// File one branch request. Tries `Fedora EPEL`/`<branch>` first
 /// and falls back to `Fedora`/`rawhide` when the component isn't
 /// in EPEL. Returns the new bug ID.
+#[allow(clippy::too_many_arguments)]
 pub async fn file_one(
     bz: &BzClient,
     pkg: &str,
@@ -466,6 +490,7 @@ pub async fn file_one(
     sig: Option<&str>,
     blocks: &[u64],
     depends_on: &[u64],
+    from: Option<&StartingPoint>,
 ) -> Result<u64, String> {
     file_one_of_kind(
         bz,
@@ -477,6 +502,7 @@ pub async fn file_one(
         blocks,
         depends_on,
         None,
+        from,
     )
     .await
 }
@@ -493,9 +519,10 @@ pub async fn file_one_of_kind(
     blocks: &[u64],
     depends_on: &[u64],
     claim: Option<&str>,
+    from: Option<&StartingPoint>,
 ) -> Result<u64, String> {
     let summary = kind.summary(pkg, branch);
-    let description = request_description_for(kind, pkg, branch, fas, sig)?;
+    let description = request_description_for(kind, pkg, branch, fas, sig, from)?;
 
     let mut epel = serde_json::json!({
         "product": "Fedora EPEL",
@@ -1388,6 +1415,7 @@ pub async fn file_batch(
             &blocks,
             &[],
             claim_for(standing.get(pkg), opts),
+            None,
         )
         .await?;
         println!("filed {pkg}: rhbz#{rhbz} ({})", kind.asked_for());
@@ -2138,11 +2166,25 @@ fn skipped_report(skipped: &[Skipped], still_open: &BTreeMap<u64, String>) -> Op
 
 /// `file-request` for a single package. When `report_path` is
 /// set, the new bug id is recorded in that report.
+/// Resolve `hash` to a commit of `pkg` in dist-git.
+async fn starting_point(pkg: &str, hash: &str) -> Result<StartingPoint, String> {
+    let commit = sandogasa_distgit::DistGitClient::new()
+        .commit(pkg, hash)
+        .await
+        .map_err(|e| format!("could not look up commit {hash} of {pkg} in dist-git: {e}"))?
+        .ok_or_else(|| format!("dist-git has no commit {hash} in {pkg}"))?;
+    Ok(StartingPoint {
+        subject: commit.subject().to_string(),
+        hash: commit.hash,
+    })
+}
+
 pub fn run_file_request(
     pkg: &str,
     blocked: &[String],
     dependson: &[String],
     report_path: Option<&str>,
+    from_commit: Option<&str>,
     opts: &Options,
 ) -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new()
@@ -2170,8 +2212,22 @@ pub fn run_file_request(
             ),
         }
 
+        // Checked before anything is filed, dry run included: a typo'd
+        // hash would otherwise send the maintainer looking for a
+        // commit that does not exist.
+        let from = match from_commit {
+            Some(hash) => Some(starting_point(pkg, hash).await?),
+            None => None,
+        };
+
         if opts.dry_run {
-            println!("would file branch request for {pkg} in {}", opts.branch);
+            match &from {
+                Some(from) => println!(
+                    "would file branch request for {pkg} in {}, from commit {} ({})",
+                    opts.branch, from.hash, from.subject
+                ),
+                None => println!("would file branch request for {pkg} in {}", opts.branch),
+            }
             return Ok(());
         }
 
@@ -2192,6 +2248,7 @@ pub fn run_file_request(
             opts.sig.as_deref(),
             &blocks,
             &depends_on,
+            from.as_ref(),
         )
         .await?;
         println!("filed {pkg}: rhbz#{rhbz}");
@@ -3271,6 +3328,40 @@ mod tests {
         assert!(!req.pinged, "the new bug has had no ping of ours");
     }
 
+    #[test]
+    fn a_request_from_an_older_commit_names_and_links_it() {
+        // rhbz#2563239: the tip of rawhide needs a newer sphinx than
+        // c10s has, and the commit to build from was added by hand
+        // in a comment (issue #57).
+        let from = StartingPoint {
+            hash: "42538d5aa6a5aeb8d3d042c62fe4607435310590".to_string(),
+            subject: "Update to latest version (#2344606)".to_string(),
+        };
+        let body = request_description_for(
+            RequestKind::Branch,
+            "python-sphinx-autoapi",
+            "epel10",
+            Some("dcavalca"),
+            None,
+            Some(&from),
+        )
+        .unwrap();
+        assert!(
+            body.starts_with("Please branch and build python-sphinx-autoapi in epel10.\n\nPlease build it from commit 42538d5aa6a5aeb8d3d042c62fe4607435310590\n"),
+            "{body}"
+        );
+        assert!(
+            body.contains("(\"Update to latest version (#2344606)\")"),
+            "{body}"
+        );
+        assert!(
+            body.contains("\nhttps://src.fedoraproject.org/rpms/python-sphinx-autoapi/c/42538d5aa6a5aeb8d3d042c62fe4607435310590\n"),
+            "{body}"
+        );
+        // The co-maintainer offer still follows.
+        assert!(body.contains("FAS: dcavalca"), "{body}");
+    }
+
     #[tokio::test]
     async fn filing_falls_back_to_fedora_when_the_component_is_not_in_epel() {
         use wiremock::matchers::{body_partial_json, method, path};
@@ -3309,7 +3400,7 @@ mod tests {
             .await;
 
         let bz = BzClient::new(&server.uri());
-        let id = file_one(&bz, "widget", "epel10", Some("alice"), None, &[], &[])
+        let id = file_one(&bz, "widget", "epel10", Some("alice"), None, &[], &[], None)
             .await
             .expect("the Fedora attempt answers");
         assert_eq!(id, 4242);
@@ -4042,7 +4133,8 @@ mod tests {
             RequestKind::Build.summary("et", "epel10"),
             "Please build et in epel10"
         );
-        let body = request_description_for(RequestKind::Build, "et", "epel10", None, None).unwrap();
+        let body =
+            request_description_for(RequestKind::Build, "et", "epel10", None, None, None).unwrap();
         assert!(
             body.contains("already has a et branch in dist-git"),
             "{body}"
@@ -4141,7 +4233,8 @@ mod tests {
             RequestKind::Branch.summary("cpdup", "epel10")
         );
         let body =
-            request_description_for(RequestKind::Requested, "cpdup", "epel10", None, None).unwrap();
+            request_description_for(RequestKind::Requested, "cpdup", "epel10", None, None, None)
+                .unwrap();
         assert!(
             body.contains("I have asked for the epel10 branch"),
             "{body}"
@@ -4150,9 +4243,15 @@ mod tests {
         assert!(!body.contains("Please branch and build"), "{body}");
         // No co-maintainer offer on your own package, however the run
         // was invoked.
-        let with_offer =
-            request_description_for(RequestKind::Requested, "cpdup", "epel10", Some("me"), None)
-                .unwrap();
+        let with_offer = request_description_for(
+            RequestKind::Requested,
+            "cpdup",
+            "epel10",
+            Some("me"),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(with_offer, body);
         // And the kind follows what the asker did, not just dist-git.
         let unbranched = BranchStanding::default();

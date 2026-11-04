@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch: file-request can ask for the build from an older commit
+
+When the tip of rawhide needs something newer than the target branch
+has, an older commit is often the one that builds, and the request had
+no way to say so: on rhbz#2563239, python-sphinx-autoapi's newer
+versions need a sphinx c10s does not have, and the commit that builds
+for epel10 had to be named in a comment by hand. `file-request
+--from-commit <hash>` puts it in the request, with the commit's subject
+and a link to it in dist-git. The hash is checked against dist-git
+before anything is filed, so a typo stops the request instead of
+sending the maintainer looking for a commit that does not exist.
+Fixes #57.
+
+### sandogasa-distgit: `DistGitClient::commit`
+
+Looks up a commit by full or abbreviated hash and returns a `Commit`
+with its full hash, time and message; `commit_info` now uses it.
+
 ### ebranch, and every tool's config prompts: backspace works on terminals that send ^H
 
 At `ebranch config`'s e-mail prompt, backspace did not erase a typo on a
