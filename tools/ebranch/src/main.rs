@@ -700,10 +700,12 @@ its version-release on the branch.
 
 With --sidetag-results and --baseline-results, local mock results are
 read (never built): each package's newest build with the side tag is
-judged against the same release built on the branch as it is, and
-against the branch and side tag, as failing with the new library only,
-failing without it too, fixed locally, already in the side tag, or
-building as it is. Builds whose
+judged against the same release built on the branch as it is, against
+what dist-git's branch would build (fedpkg verrel in a cached clone),
+and against the side tag: failing with the new library only, failing
+without it too, fixed locally, newer than the side tag's build,
+building as it is, or behind dist-git. Local builds the side tag has
+superseded are left out. Builds whose
 buildroot had another version of the library than their directory
 claims are flagged first.")]
     RebuildPlan(RebuildPlanArgs),

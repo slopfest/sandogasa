@@ -1185,11 +1185,22 @@ comparison) is judged:
 - fails with the new library only, when the same release passes in the
   baseline
 - fails without it too, when it fails in the baseline as well
-- fixed locally, when it passes at a release the branch does not have
-  yet (earlier releases that failed are listed)
-- already in the side tag, when the side tag has a build at least as new
-- builds as it is, when it passes at the branch's release, the dist tag
-  aside
+- fixed locally, when it passes at a release newer than dist-git's
+  branch would build (earlier releases that failed are listed)
+- newer than the side tag's build, when the side tag has one and the
+  local build is newer: it has to be built into the side tag too, or it
+  will shadow the side tag's build when the tag merges
+- builds as it is, when it passes at the release dist-git's branch
+  would build, the dist tag aside
+- built at an older release than dist-git's, when the branch has moved
+  past it
+
+What dist-git's branch would build comes from `fedpkg verrel` in a clone
+of the package kept under `~/.cache/ebranch/distgit/` and fetched again
+on later runs, so commits Koji has not built yet count, `%autorelease`
+included. Without `git` or `fedpkg`, the branch's latest build stands
+in. A local build the side tag already has at the same or a newer
+release is left out.
 
 A build directory with neither marker is taken to be running, and a
 package whose newest build is running is listed as being built. Packages

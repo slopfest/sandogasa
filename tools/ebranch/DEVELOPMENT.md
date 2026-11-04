@@ -557,3 +557,17 @@ the whole point.
   like a pass, and that happened during the libical 4 rebuild.
 - Compare releases without the dist tag: a branch's `-4.fc45` and a
   local `-4.fc46` come from the same commit.
+- Measure a local build against what dist-git's branch would build
+  now, not against the branch's latest Koji build. With `%autorelease`
+  an unbuilt commit moves the release, so an untouched local build
+  looks like a local fix otherwise (redwax-tool, 2026-11-04). The
+  answer comes from `fedpkg verrel` in a **full** clone: a shallow one
+  gives a release counted from wherever its history was cut off
+  (redwax-tool's tip is -12; depth 5 says -5, depth 1 says -1).
+  dist-git ignores `--filter=blob:none`, so there is no cheaper
+  partial clone; a full single-branch clone of libreoffice is 43 MB
+  and a few seconds, and is kept in the cache for later runs.
+- Leave out a local build the side tag already has at the same or a
+  newer release. Report one newer than the side tag's, since a release
+  built outside the side tag shadows the side tag's build when the tag
+  merges.

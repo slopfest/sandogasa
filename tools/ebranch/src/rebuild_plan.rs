@@ -204,15 +204,19 @@ pub enum LocalVerdict {
     /// It fails with the side tag, and there is no branch build of the
     /// same release to tell whether the library is why.
     Fails,
-    /// The newest build with the side tag passes at a release the
-    /// branch does not have yet: a local fix, to be proposed.
+    /// The newest build with the side tag passes at a release newer
+    /// than dist-git's branch would build: a local fix, to be proposed.
     FixedLocally,
-    /// The side tag already has a build at least as new as the local
-    /// ones.
-    InSideTag,
-    /// The newest build with the side tag passes at the branch's
-    /// release (the dist tag aside).
+    /// The side tag has a build, and the local one is newer: once
+    /// committed, it has to be built into the side tag too, or it will
+    /// shadow the side tag's build when the tag merges.
+    NewerThanSideTag,
+    /// The newest build with the side tag passes at the release
+    /// dist-git's branch would build (the dist tag aside).
     BuildsAsIs,
+    /// The newest local build passes, but dist-git's branch has moved
+    /// past it: the result may not hold for what would be built now.
+    BehindDistGit,
     /// A build with the side tag is running (its directory has no
     /// marker yet), at a release newer than any finished one.
     Building,
@@ -242,6 +246,10 @@ pub struct LocalResult {
     /// The version-release in the branch's repositories.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_branch: Option<String>,
+    /// The version-release dist-git's branch would build now
+    /// (`fedpkg verrel`), which counts commits not built yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at_head: Option<String>,
     /// The version-release of its build in the side tag, if rebuilt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_side_tag: Option<String>,
@@ -763,7 +771,9 @@ pub(crate) fn read_results(dir: &Path, library: &str) -> Result<Results, String>
 }
 
 /// Judge each package from its local builds. `on_branch` is the
-/// version-release of each package in the branch's repositories; `libraries` the library's
+/// version-release of each package in the branch's repositories, and
+/// `at_head` what dist-git's branch would build now, which is what a
+/// local build is measured against where known; `libraries` the library's
 /// version-release with the side tag and on the branch, to check each
 /// build used what its directory claims.
 pub(crate) fn local_results(
@@ -771,6 +781,7 @@ pub(crate) fn local_results(
     sidetag: &Results,
     baseline: &Results,
     on_branch: &BTreeMap<String, String>,
+    at_head: &BTreeMap<String, String>,
     libraries: (Option<&str>, Option<&str>),
 ) -> Vec<LocalResult> {
     let rebuilt: BTreeMap<&str, &str> = plan
@@ -837,6 +848,7 @@ pub(crate) fn local_results(
             .map(|b| b.version_release.clone())
             .collect();
         let branch_vr = on_branch.get(pkg).cloned();
+        let head_vr = at_head.get(pkg).cloned();
         let in_side_tag = rebuilt.get(pkg.as_str()).map(|vr| vr.to_string());
         let caught_up = match (&in_side_tag, &newest) {
             (Some(tagged), Some(n)) => {
@@ -858,9 +870,14 @@ pub(crate) fn local_results(
                 })
             })
             .cloned();
+        if caught_up && building.is_none() {
+            // The side tag has this release or a newer one: the local
+            // result has nothing left to say.
+            continue;
+        }
         let verdict = match &newest {
             _ if building.is_some() => LocalVerdict::Building,
-            Some(_) if caught_up => LocalVerdict::InSideTag,
+            Some(n) if n.passed && in_side_tag.is_some() => LocalVerdict::NewerThanSideTag,
             None => {
                 if !plan.rounds.iter().flatten().any(|p| p == pkg)
                     && !plan.blocked_by.contains_key(pkg)
@@ -871,11 +888,18 @@ pub(crate) fn local_results(
                 }
                 LocalVerdict::NotBuilt
             }
-            Some(n) if n.passed => match &branch_vr {
-                Some(b) if without_dist(b) == without_dist(&n.version_release) => {
-                    LocalVerdict::BuildsAsIs
-                }
-                Some(_) => LocalVerdict::FixedLocally,
+            Some(n) if n.passed => match head_vr.as_ref().or(branch_vr.as_ref()) {
+                Some(b) => match sandogasa_rpmvercmp::compare_evr(
+                    without_dist(&n.version_release),
+                    without_dist(b),
+                ) {
+                    std::cmp::Ordering::Equal => LocalVerdict::BuildsAsIs,
+                    std::cmp::Ordering::Greater => LocalVerdict::FixedLocally,
+                    // Only dist-git's tip can be ahead of a local build
+                    // for a reason other than unbuilt commits.
+                    std::cmp::Ordering::Less if head_vr.is_some() => LocalVerdict::BehindDistGit,
+                    std::cmp::Ordering::Less => LocalVerdict::BuildsAsIs,
+                },
                 None if failed_before.is_empty() => LocalVerdict::BuildsAsIs,
                 None => LocalVerdict::FixedLocally,
             },
@@ -893,6 +917,7 @@ pub(crate) fn local_results(
             failed_before,
             baseline: baseline_build,
             on_branch: branch_vr,
+            at_head: head_vr,
             in_side_tag,
             wrong_library,
         });
@@ -1295,10 +1320,14 @@ fn render_local_builds(out: &mut String, plan: &RebuildPlan) {
             "Fixed locally, to be proposed or merged".to_string(),
         ),
         (
-            LocalVerdict::InSideTag,
-            "Already in the side tag".to_string(),
+            LocalVerdict::NewerThanSideTag,
+            "Newer than the side tag's build".to_string(),
         ),
         (LocalVerdict::BuildsAsIs, "Build as they are".to_string()),
+        (
+            LocalVerdict::BehindDistGit,
+            "Built locally at an older release than dist-git's".to_string(),
+        ),
         (LocalVerdict::Building, "Being built now".to_string()),
         (
             LocalVerdict::NotBuilt,
@@ -1327,12 +1356,19 @@ fn render_local_builds(out: &mut String, plan: &RebuildPlan) {
                 (None, None) => {}
             }
             let mut notes = Vec::new();
-            if verdict == LocalVerdict::FixedLocally
-                && let Some(b) = &r.on_branch
-            {
-                notes.push(format!("{} has {b}", plan.branch));
+            if matches!(
+                verdict,
+                LocalVerdict::FixedLocally | LocalVerdict::BehindDistGit
+            ) {
+                match (&r.at_head, &r.on_branch) {
+                    (Some(h), _) => notes.push(format!("dist-git's {} builds {h}", plan.branch)),
+                    (None, Some(b)) => {
+                        notes.push(format!("{} has {b}; dist-git not checked", plan.branch))
+                    }
+                    (None, None) => {}
+                }
             }
-            if verdict == LocalVerdict::InSideTag
+            if verdict == LocalVerdict::NewerThanSideTag
                 && let Some(t) = &r.in_side_tag
             {
                 notes.push(format!("side tag has {t}"));
@@ -1554,11 +1590,17 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 .map(|(_, vr)| vr.to_string())
         });
         let old_library = on_branch.get(&opts.library).cloned();
+        let at_head = dist_git_heads(
+            &needs_head(&plan, &sidetag_builds),
+            &opts.branch,
+            opts.verbose,
+        );
         plan.local_builds = local_results(
             &plan,
             &sidetag_builds,
             &baseline_builds,
             &on_branch,
+            &at_head,
             (new_library.as_deref(), old_library.as_deref()),
         );
         plan.local_libraries = Some((new_library, old_library));
@@ -1715,6 +1757,141 @@ fn checks_on_head(
         names.dedup();
     }
     checks
+}
+
+/// The packages whose newest local build passed and is not superseded
+/// by the side tag: the ones a dist-git comparison can change the
+/// verdict of.
+fn needs_head(plan: &RebuildPlan, sidetag: &Results) -> Vec<String> {
+    let rebuilt: BTreeMap<&str, &str> = plan
+        .dependents
+        .iter()
+        .filter_map(|d| Some((d.package.as_str(), split_nvr(d.rebuilt.as_deref()?)?.1)))
+        .collect();
+    sidetag
+        .finished
+        .iter()
+        .filter_map(|(pkg, builds)| {
+            let newest = builds.last()?;
+            let superseded = rebuilt.get(pkg.as_str()).is_some_and(|tagged| {
+                sandogasa_rpmvercmp::compare_evr(tagged, &newest.version_release)
+                    != std::cmp::Ordering::Less
+            });
+            (newest.passed && !superseded).then(|| pkg.clone())
+        })
+        .collect()
+}
+
+/// What dist-git's `branch` of each package would build now, from
+/// `fedpkg verrel` in a clone kept under ebranch's cache directory
+/// (fetched again on later runs). `%autorelease` counts every commit
+/// since the last version change, so the clone has the whole history
+/// of the branch: a shallow one gives too low a release. A package
+/// that cannot be read is warned about and left out, and its verdict
+/// falls back to the branch's latest build.
+fn dist_git_heads(packages: &[String], branch: &str, verbose: bool) -> BTreeMap<String, String> {
+    if packages.is_empty() {
+        return BTreeMap::new();
+    }
+    if let Err(e) = sandogasa_cli::require_tools(&[
+        ("git", "sudo dnf install git-core", Some("--version")),
+        ("fedpkg", "sudo dnf install fedpkg", Some("--help")),
+    ]) {
+        eprintln!("warning: {e}; local builds are compared with {branch}'s latest build instead");
+        return BTreeMap::new();
+    }
+    let Some(cache) = dirs::cache_dir().map(|c| c.join("ebranch").join("distgit")) else {
+        eprintln!("warning: no cache directory (set XDG_CACHE_HOME or HOME); dist-git not checked");
+        return BTreeMap::new();
+    };
+    let mut heads = BTreeMap::new();
+    for pkg in packages {
+        if verbose {
+            eprintln!("[rebuild-plan] dist-git {branch} of {pkg}");
+        }
+        match dist_git_head(&cache, pkg, branch) {
+            Ok(vr) => {
+                heads.insert(pkg.clone(), vr);
+            }
+            Err(e) => eprintln!("warning: dist-git {branch} of {pkg}: {e}"),
+        }
+    }
+    heads
+}
+
+/// Clone or update `pkg`'s dist-git `branch` under `cache` and ask
+/// `fedpkg verrel` what it builds.
+fn dist_git_head(cache: &Path, pkg: &str, branch: &str) -> Result<String, String> {
+    if pkg.is_empty()
+        || !pkg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
+    {
+        return Err(format!("unexpected package name {pkg:?}"));
+    }
+    let dir = cache.join(pkg);
+    let git = |args: &[&str], cwd: Option<&Path>| -> Result<(), String> {
+        let mut cmd = std::process::Command::new("git");
+        if let Some(cwd) = cwd {
+            cmd.current_dir(cwd);
+        }
+        let out = cmd
+            .args(args)
+            .output()
+            .map_err(|e| format!("could not run git: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "git {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        }
+    };
+    if dir.join(".git").is_dir() {
+        git(&["fetch", "-q", "origin", branch], Some(&dir))?;
+        git(&["checkout", "-q", "--detach", "FETCH_HEAD"], Some(&dir))?;
+    } else {
+        std::fs::create_dir_all(cache)
+            .map_err(|e| format!("cannot create {}: {e}", cache.display()))?;
+        let url = format!("https://src.fedoraproject.org/rpms/{pkg}.git");
+        let target = dir.to_string_lossy().into_owned();
+        git(
+            &[
+                "clone",
+                "-q",
+                "--single-branch",
+                "-b",
+                branch,
+                &url,
+                &target,
+            ],
+            None,
+        )?;
+    }
+    let out = std::process::Command::new("fedpkg")
+        .args(["--release", branch, "verrel"])
+        .current_dir(&dir)
+        .output()
+        .map_err(|e| format!("could not run fedpkg: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "fedpkg verrel: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    parse_verrel(&String::from_utf8_lossy(&out.stdout), pkg)
+        .ok_or_else(|| "fedpkg verrel printed no NVR for it".to_string())
+}
+
+/// The version-release in `fedpkg verrel`'s output, whose last line is
+/// the NVR (`redwax-tool-1.0.0-12.fc46`), after notes such as `Using
+/// redwax-tool.spec`.
+fn parse_verrel(out: &str, pkg: &str) -> Option<String> {
+    let nvr = out.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    let (name, vr) = split_nvr(nvr)?;
+    (name == pkg).then(|| vr.to_string())
 }
 
 /// `name-version-release` → `(name, version-release)`, splitting from
@@ -3402,6 +3579,15 @@ mod tests {
         mock_build(st.path(), "osmo-0.4.4-8.fc46", true, NEW);
         mock_build(bl.path(), "osmo-0.4.4-8.fc46", true, OLD);
         mock_build(st.path(), "claws-mail-4.4.0-10.fc46", true, NEW);
+        // Newer than the side tag's -4: a follow-up not built there.
+        mock_build(
+            st.path(),
+            "bluez-5.87^20260918gitb5ed56d8c-5.fc46",
+            true,
+            NEW,
+        );
+        // Passes, but dist-git has moved on to -5 since.
+        mock_build(st.path(), "orage-4.20.3-4.fc46", true, NEW);
         mock_build(st.path(), "asterisk-23.5.0-5.fc46", false, NEW);
         mock_build(bl.path(), "asterisk-23.5.0-5.fc46", true, OLD);
         mock_build(st.path(), "GoldenCheetah-3.8-2.fc46", false, NEW);
@@ -3429,7 +3615,15 @@ mod tests {
             // Last built for f45: the same commit as a local -1.fc46.
             ("cyrus-imapd".to_string(), "3.12.4-1.fc45".to_string()),
         ]);
-        p.local_builds = local_results(&p, &st, &bl, &on_branch, (Some(NEW), Some(OLD)));
+        // What dist-git's rawhide would build now: claws-mail has a
+        // commit Koji never built, so its tip is -10 while rawhide's
+        // latest build is -9 (redwax-tool's case on 2026-11-04).
+        let at_head = BTreeMap::from([
+            ("osmo".to_string(), "0.4.4-7.fc46".to_string()),
+            ("claws-mail".to_string(), "4.4.0-10.fc46".to_string()),
+            ("orage".to_string(), "4.20.3-5.fc46".to_string()),
+        ]);
+        p.local_builds = local_results(&p, &st, &bl, &on_branch, &at_head, (Some(NEW), Some(OLD)));
         p.local_libraries = Some((Some(NEW.to_string()), Some(OLD.to_string())));
         p
     }
@@ -3467,7 +3661,9 @@ mod tests {
         let osmo = local(&p, "osmo");
         assert_eq!(osmo.verdict, LocalVerdict::FixedLocally);
         assert_eq!(osmo.failed_before, strs(&["0.4.4-7.fc46"]));
-        assert_eq!(local(&p, "claws-mail").verdict, LocalVerdict::FixedLocally);
+        // Its -10 is dist-git's tip, not a local change.
+        assert_eq!(local(&p, "claws-mail").verdict, LocalVerdict::BuildsAsIs);
+        assert_eq!(local(&p, "orage").verdict, LocalVerdict::BehindDistGit);
         assert_eq!(
             local(&p, "asterisk").verdict,
             LocalVerdict::FailsWithNewLibrary
@@ -3479,9 +3675,18 @@ mod tests {
         assert_eq!(local(&p, "cyrus-imapd").verdict, LocalVerdict::BuildsAsIs);
         // Left to rebuild, with nothing local.
         assert_eq!(local(&p, "phosh").verdict, LocalVerdict::NotBuilt);
-        let eds = local(&p, "evolution-data-server");
-        assert_eq!(eds.verdict, LocalVerdict::InSideTag);
-        assert_eq!(eds.in_side_tag.as_deref(), Some("3.62.1-2.fc46"));
+        // The side tag's -2 supersedes the local -1: nothing to say.
+        assert!(
+            !p.local_builds
+                .iter()
+                .any(|r| r.package == "evolution-data-server")
+        );
+        let bluez = local(&p, "bluez");
+        assert_eq!(bluez.verdict, LocalVerdict::NewerThanSideTag);
+        assert_eq!(
+            bluez.in_side_tag.as_deref(),
+            Some("5.87^20260918gitb5ed56d8c-4.fc46")
+        );
         let redwax = local(&p, "redwax-tool");
         assert_eq!(redwax.verdict, LocalVerdict::Building);
         assert_eq!(redwax.building.as_deref(), Some("1.0.0-12.fc46"));
@@ -3523,7 +3728,7 @@ mod tests {
         );
         assert!(at("### Fail without the new libical too") < at("### Fixed locally"));
         assert!(
-            out.contains("- osmo 0.4.4-8.fc46 (rawhide has 0.4.4-7.fc46; failed at 0.4.4-7.fc46)"),
+            out.contains("- osmo 0.4.4-8.fc46 (dist-git's rawhide builds 0.4.4-7.fc46; failed at 0.4.4-7.fc46)"),
             "{out}"
         );
         assert!(
@@ -3537,6 +3742,51 @@ mod tests {
             ),
             "{out}"
         );
+    }
+
+    #[test]
+    fn a_local_build_newer_than_the_side_tags_is_rendered_with_it() {
+        let out = render(&libical_plan_with_local_builds());
+        assert!(
+            out.contains(
+                "### Newer than the side tag's build (1)\n\n\
+                 - bluez 5.87^20260918gitb5ed56d8c-5.fc46 \
+                 (side tag has 5.87^20260918gitb5ed56d8c-4.fc46)"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("evolution-data-server 3.62.1-1"), "{out}");
+    }
+
+    #[test]
+    fn only_passing_builds_the_side_tag_has_not_superseded_need_dist_git() {
+        let p = libical_plan();
+        let (st, _bl) = libical_results();
+        let st = read_results(st.path(), "libical").unwrap();
+        let wanted = needs_head(&p, &st);
+        assert!(wanted.contains(&"osmo".to_string()), "{wanted:?}");
+        assert!(wanted.contains(&"bluez".to_string()), "newer: {wanted:?}");
+        assert!(
+            !wanted.contains(&"evolution-data-server".to_string()),
+            "{wanted:?}"
+        );
+        assert!(
+            !wanted.contains(&"asterisk".to_string()),
+            "failed: {wanted:?}"
+        );
+    }
+
+    #[test]
+    fn verrel_output_gives_the_version_release() {
+        assert_eq!(
+            parse_verrel(
+                "Using redwax-tool.spec\nredwax-tool-1.0.0-12.fc46\n",
+                "redwax-tool"
+            ),
+            Some("1.0.0-12.fc46".to_string())
+        );
+        assert_eq!(parse_verrel("redwax-tool-1.0.0-12.fc46\n", "osmo"), None);
+        assert_eq!(parse_verrel("", "osmo"), None);
     }
 
     #[test]

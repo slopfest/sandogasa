@@ -42,13 +42,22 @@ two `mock --chain --localrepo` result directories, one built with the
 side tag and one against the branch as it is, without building
 anything. Each package's newest build with the side tag (by RPM version
 comparison, so a passing -8 wins over a failing -7) is judged against
-the same release in the baseline, the branch and the side tag: failing
-with the new library only, failing without it too, fixed locally at a
-release the branch does not have yet, already in the side tag, or
-building as it is (the dist tag aside, so `-4.fc45` on the branch and a
-local `-4.fc46` are the same commit); a package whose newest build has
-no marker yet is listed as being built, and packages left to rebuild
-with no local build are listed. Every build's
+the same release in the baseline, against what dist-git's branch would
+build now, and against the side tag: failing with the new library only,
+failing without it too, fixed locally (newer than dist-git's branch
+would build), newer than the side tag's build (to be built there too,
+or it shadows the side tag's build when the tag merges), building as it
+is (the dist tag aside, so `-4.fc45` on the branch and a local `-4.fc46`
+are the same commit), or behind dist-git. Comparing with dist-git
+rather than the branch's latest build matters for `%autorelease`: a
+commit Koji never built (redwax-tool's on 2026-11-04) makes the
+branch's tip -12 while its latest build is -11, and an unchanged local
+build is not a local fix. What the branch would build comes from
+`fedpkg verrel` in a full clone cached under `~/.cache/ebranch/distgit/`,
+as a shallow one undercounts `%autorelease`. Local builds the side tag
+already has at the same or a newer release are left out as noise. A
+package whose newest build has no marker yet is listed as being built,
+and packages left to rebuild with no local build are listed. Every build's
 `installed_pkgs.log` is checked for the library version it got, and a
 build with the wrong one is listed first. The directories are read
 before the plan's slow queries, so a mistyped path fails at once.
