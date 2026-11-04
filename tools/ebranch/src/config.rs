@@ -31,6 +31,14 @@ pub struct EbranchConfig {
     /// and a stalled branch request ends there.
     #[serde(default)]
     pub forgejo: ForgejoConfig,
+    /// `[matrix-rooms]` table: FAS group → Matrix room, added to the
+    /// built-in list or overriding its entries.
+    #[serde(
+        default,
+        rename = "matrix-rooms",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub matrix_rooms: std::collections::BTreeMap<String, String>,
 }
 
 /// Fedora's Forgejo, where the releng ticket for a stalled request
@@ -278,6 +286,17 @@ pub fn bugzilla_email() -> Option<String> {
         .ok()
         .map(|c| c.bugzilla.email)
         .filter(|e| !e.is_empty())
+}
+
+/// FAS group → Matrix room: the built-in list from
+/// `data/matrix-rooms.toml`, with the config's `[matrix-rooms]` laid
+/// over it.
+pub fn matrix_rooms() -> std::collections::BTreeMap<String, String> {
+    let configured = sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .map(|c| c.matrix_rooms)
+        .unwrap_or_default();
+    with_builtin_rooms(configured)
 }
 
 /// Whether the config declares the asker a provenpackager.
@@ -589,9 +608,41 @@ pub async fn cmd_config() -> Result<(), String> {
     Ok(())
 }
 
+/// The built-in rooms with `configured` laid over them.
+fn with_builtin_rooms(
+    configured: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut rooms: std::collections::BTreeMap<String, String> =
+        toml::from_str(include_str!("../data/matrix-rooms.toml"))
+            .expect("the built-in Matrix room list parses");
+    rooms.extend(configured);
+    rooms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_rooms_add_to_and_override_the_built_in_ones() {
+        let rooms = with_builtin_rooms(std::collections::BTreeMap::from([
+            ("kde-sig".to_string(), "#kde-pim:example.org".to_string()),
+            (
+                "perl-sig".to_string(),
+                "#perl:fedoraproject.org".to_string(),
+            ),
+        ]));
+        assert_eq!(rooms["gnome-sig"], "#workstation:fedoraproject.org");
+        assert_eq!(rooms["kde-sig"], "#kde-pim:example.org");
+        assert_eq!(rooms["perl-sig"], "#perl:fedoraproject.org");
+    }
+
+    #[test]
+    fn a_matrix_rooms_table_is_read_from_the_config() {
+        let config: EbranchConfig =
+            toml::from_str("[matrix-rooms]\nperl-sig = \"#perl:fedoraproject.org\"\n").unwrap();
+        assert_eq!(config.matrix_rooms["perl-sig"], "#perl:fedoraproject.org");
+    }
 
     /// A check that answers whatever the test says, without a
     /// network or a terminal.

@@ -1158,6 +1158,22 @@ such pull request are listed too.
 - redwax-tool
 ```
 
+With `--contacts`, each package left to rebuild (in the build rounds,
+blocked, or unable to be rebuilt) is listed with who to contact: its
+`<package>-maintainers@fedoraproject.org` alias, which reaches everyone
+with access to it, group members included; the groups with commit or
+admin access, with their Matrix rooms where known; and its
+version-release on the branch, whose release number shows how many
+builds there have been since the last version update. Groups' own email
+addresses are not listed. The Matrix rooms come from a built-in list
+(`data/matrix-rooms.toml`), which a `[matrix-rooms]` table in
+`~/.config/ebranch/config.toml` adds to or overrides:
+
+```toml
+[matrix-rooms]
+perl-sig = "#perl:fedoraproject.org"
+```
+
 Queries use the repositories of the architecture fedrq runs on.
 
 The output is Markdown, for a mailing list post or a Bodhi comment;

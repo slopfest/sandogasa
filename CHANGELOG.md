@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan can list who to contact about each package left
+
+Reminding maintainers about the rebuilds still to do meant looking up,
+for each package, how to reach the people with access to it, and a
+group's address is often the wrong answer: such addresses exist because
+Bugzilla needs one, and many are unmonitored or accept mail from
+members only. A SIG's Matrix room usually gets a faster reply.
+
+`rebuild-plan --contacts` lists, for each package in the build rounds,
+blocked or unable to be rebuilt, its
+`<package>-maintainers@fedoraproject.org` alias (which reaches everyone
+with access, group members included), the groups with commit or admin
+access with their Matrix rooms, and its version-release on the branch:
+a high release number means many builds since the last version update,
+a hint not to wait long for a reply. The rooms come from a built-in list
+in `data/matrix-rooms.toml` (the GNOME, KDE, Go, multimedia, Python and
+Rust groups so far), which a `[matrix-rooms]` table in ebranch's config
+extends or overrides. The output names no individuals. Refs #58.
+
 ### ebranch: rebuild-plan lists the change owners' pull requests for each package
 
 A status update on a SONAME bump's rebuilds had to be put together by

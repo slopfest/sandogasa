@@ -28,6 +28,10 @@ pub struct Options {
     /// Accounts whose dist-git pull requests carry the fixes (the
     /// change owners); empty skips the pull request lookup.
     pub pr_authors: Vec<String>,
+    /// Look up who to contact about each package left to rebuild.
+    pub contacts: bool,
+    /// FAS group → Matrix room, for `contacts`.
+    pub matrix_rooms: BTreeMap<String, String>,
     pub json: bool,
     pub verbose: bool,
 }
@@ -143,6 +147,31 @@ pub struct PullRequestStatus {
     pub checks: BTreeMap<String, Vec<String>>,
 }
 
+/// A group with commit access to a package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GroupContact {
+    /// The FAS group (`kde-sig`).
+    pub name: String,
+    /// Its Matrix room, when one is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+}
+
+/// Who to contact about a package left to rebuild.
+#[derive(Debug, Clone, Serialize)]
+pub struct Contact {
+    pub package: String,
+    /// `<package>-maintainers@fedoraproject.org`, which reaches
+    /// everyone with access, group members included.
+    pub email: String,
+    /// Groups with commit or admin access.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<GroupContact>,
+    /// The source package's version-release on the branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_release: Option<String>,
+}
+
 /// The whole plan, as `--json` prints it.
 #[derive(Debug, Clone, Serialize)]
 pub struct RebuildPlan {
@@ -194,6 +223,9 @@ pub struct RebuildPlan {
     /// against the branch, newest first.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub pull_requests: BTreeMap<String, Vec<PullRequestStatus>>,
+    /// Who to contact about each package left to rebuild, when asked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<Contact>,
 }
 
 impl RebuildPlan {
@@ -272,6 +304,17 @@ pub(crate) trait PrQuery {
         package: &str,
         id: u64,
     ) -> Result<Vec<sandogasa_distgit::PullRequestFlag>, String>;
+}
+
+/// What the plan asks about who to contact.
+///
+/// Behind a trait so a test answers from recorded data.
+pub(crate) trait ContactQuery {
+    /// The groups with commit or admin access to a package.
+    fn committer_groups(&self, package: &str) -> Result<Vec<String>, String>;
+
+    /// Source package → its version-release on the branch.
+    fn source_vrs(&self, packages: &[String]) -> Result<BTreeMap<String, String>, String>;
 }
 
 /// Work out the plan for `library` on the branch `q` reads, with the
@@ -440,6 +483,7 @@ pub(crate) fn plan(
         header_exposed,
         pr_authors: Vec::new(),
         pull_requests: BTreeMap::new(),
+        contacts: Vec::new(),
     })
 }
 
@@ -519,6 +563,56 @@ pub(crate) fn pull_requests(
     found
 }
 
+/// Who to contact about each package left to rebuild: those in the
+/// build rounds, the blocked and the unbuildable. A package whose
+/// access cannot be read is reported on stderr and listed with its
+/// alias alone.
+pub(crate) fn contacts(
+    plan: &RebuildPlan,
+    rooms: &BTreeMap<String, String>,
+    q: &dyn ContactQuery,
+    verbose: bool,
+) -> Vec<Contact> {
+    let packages: Vec<String> = plan
+        .rounds
+        .iter()
+        .flatten()
+        .chain(plan.blocked_by.keys())
+        .chain(plan.unbuildable.iter().map(|u| &u.package))
+        .cloned()
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
+    let vrs = q.source_vrs(&packages).unwrap_or_else(|e| {
+        eprintln!("warning: could not read the packages' versions: {e}");
+        BTreeMap::new()
+    });
+    packages
+        .iter()
+        .map(|pkg| {
+            if verbose {
+                eprintln!("[rebuild-plan] access to {pkg}");
+            }
+            let groups = q.committer_groups(pkg).unwrap_or_else(|e| {
+                eprintln!("warning: could not read who has access to {pkg}: {e}");
+                Vec::new()
+            });
+            Contact {
+                package: pkg.clone(),
+                email: format!("{pkg}-maintainers@fedoraproject.org"),
+                groups: groups
+                    .into_iter()
+                    .map(|g| GroupContact {
+                        room: rooms.get(&g).cloned(),
+                        name: g,
+                    })
+                    .collect(),
+                version_release: vrs.get(pkg).cloned(),
+            }
+        })
+        .collect()
+}
+
 /// The plan as Markdown, for a mailing list post or a Bodhi comment.
 pub fn render(plan: &RebuildPlan) -> String {
     let mut out = String::new();
@@ -542,6 +636,7 @@ pub fn render(plan: &RebuildPlan) -> String {
     let _ = writeln!(out, "## {heading} ({ready})\n");
     render_rounds(&mut out, plan);
     render_pull_requests(&mut out, plan);
+    render_contacts(&mut out, plan);
 
     if !plan.blocked_by.is_empty() {
         let _ = writeln!(out, "## Blocked ({})\n", plan.blocked_by.len());
@@ -860,6 +955,41 @@ fn render_pull_requests(out: &mut String, plan: &RebuildPlan) {
     }
 }
 
+/// Who to contact about the packages left to rebuild.
+fn render_contacts(out: &mut String, plan: &RebuildPlan) {
+    if plan.contacts.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "## Who to contact ({})\n", plan.contacts.len());
+    let _ = writeln!(
+        out,
+        "Each package's `-maintainers` alias reaches everyone with access to it, group \
+         members included; groups with commit access are named, with their Matrix room \
+         where one is known. The version-release is {}'s: a high release number means many \
+         builds since the last version update.\n",
+        plan.branch
+    );
+    for c in &plan.contacts {
+        let _ = write!(out, "- {}", c.package);
+        if let Some(vr) = &c.version_release {
+            let _ = write!(out, " ({vr})");
+        }
+        let _ = write!(out, ": {}", c.email);
+        for g in &c.groups {
+            match &g.room {
+                Some(room) => {
+                    let _ = write!(out, "; {}: [{room}](https://matrix.to/#/{room})", g.name);
+                }
+                None => {
+                    let _ = write!(out, "; {}", g.name);
+                }
+            }
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+}
+
 /// `[#4](url) (open)`, joined.
 fn pr_links(prs: &[PullRequestStatus]) -> String {
     prs.iter()
@@ -973,10 +1103,15 @@ pub fn run(opts: &Options) -> Result<(), String> {
         opts.verbose,
     )?;
     let mut plan = plan;
-    if !opts.pr_authors.is_empty() {
-        let distgit = DistGitPrs::new()?;
-        plan.pull_requests = pull_requests(&plan, &opts.pr_authors, &distgit, opts.verbose);
-        plan.pr_authors = opts.pr_authors.clone();
+    if !opts.pr_authors.is_empty() || opts.contacts {
+        let distgit = DistGitLookup::new(&opts.branch)?;
+        if !opts.pr_authors.is_empty() {
+            plan.pull_requests = pull_requests(&plan, &opts.pr_authors, &distgit, opts.verbose);
+            plan.pr_authors = opts.pr_authors.clone();
+        }
+        if opts.contacts {
+            plan.contacts = contacts(&plan, &opts.matrix_rooms, &distgit, opts.verbose);
+        }
     }
     if opts.json {
         println!(
@@ -1027,23 +1162,50 @@ impl PlanQuery for sandogasa_fedrq::Fedrq {
 /// `libical.so.3()(64bit)` — not a symbol-version provide such as
 /// `libfoo.so.1(FOO_1.0)(64bit)`, which every package needing it also
 /// pairs with the plain SONAME.
-/// dist-git's pull requests, asked from a run's own runtime.
-struct DistGitPrs {
+/// dist-git, asked from a run's own runtime, and fedrq for versions.
+struct DistGitLookup {
     rt: tokio::runtime::Runtime,
     client: sandogasa_distgit::DistGitClient,
+    branch: String,
 }
 
-impl DistGitPrs {
-    fn new() -> Result<Self, String> {
+impl DistGitLookup {
+    fn new(branch: &str) -> Result<Self, String> {
         Ok(Self {
             rt: tokio::runtime::Runtime::new()
                 .map_err(|e| format!("failed to create async runtime: {e}"))?,
             client: sandogasa_distgit::DistGitClient::new(),
+            branch: branch.to_string(),
         })
     }
 }
 
-impl PrQuery for DistGitPrs {
+impl ContactQuery for DistGitLookup {
+    fn committer_groups(&self, package: &str) -> Result<Vec<String>, String> {
+        let acls = self
+            .rt
+            .block_on(self.client.get_acls(package))
+            .map_err(|e| e.to_string())?;
+        let groups = &acls.access_groups;
+        let mut names: Vec<String> = groups.admin.iter().chain(&groups.commit).cloned().collect();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    fn source_vrs(&self, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
+        let fedrq = sandogasa_fedrq::Fedrq {
+            branch: Some(self.branch.clone()),
+            repo: None,
+        };
+        let nvrs = fedrq.src_nvrs(packages).map_err(|e| e.to_string())?;
+        Ok(crate::branch_request::match_nvrs_to_packages(
+            &nvrs, packages,
+        ))
+    }
+}
+
+impl PrQuery for DistGitLookup {
     fn pull_requests(
         &self,
         package: &str,
@@ -2639,6 +2801,88 @@ mod tests {
         assert!(!section.contains("- osmo\n"), "{section}");
         // Listed under "Cannot be rebuilt" instead.
         assert!(!section.contains("- kdepimlibs\n"), "{section}");
+    }
+
+    /// dist-git's access lists and fedrq's versions, recorded.
+    #[derive(Default)]
+    struct RecordedContacts {
+        groups: BTreeMap<String, Vec<String>>,
+        vrs: BTreeMap<String, String>,
+    }
+
+    impl ContactQuery for RecordedContacts {
+        fn committer_groups(&self, package: &str) -> Result<Vec<String>, String> {
+            match package {
+                "osmo" => Err("dist-git said 503".to_string()),
+                _ => Ok(self.groups.get(package).cloned().unwrap_or_default()),
+            }
+        }
+        fn source_vrs(&self, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
+            Ok(self
+                .vrs
+                .iter()
+                .filter(|(p, _)| packages.contains(p))
+                .map(|(p, v)| (p.clone(), v.clone()))
+                .collect())
+        }
+    }
+
+    fn libical_plan_with_contacts() -> RebuildPlan {
+        let mut p = libical_plan();
+        let q = RecordedContacts {
+            groups: BTreeMap::from([("asterisk".to_string(), strs(&["kde-sig", "voip-sig"]))]),
+            vrs: BTreeMap::from([("asterisk".to_string(), "22.5.2-3.fc46".to_string())]),
+        };
+        let rooms = BTreeMap::from([("kde-sig".to_string(), "#kde:fedoraproject.org".to_string())]);
+        p.contacts = contacts(&p, &rooms, &q, false);
+        p
+    }
+
+    #[test]
+    fn contacts_cover_the_packages_left_to_rebuild_only() {
+        let p = libical_plan_with_contacts();
+        let names: Vec<&str> = p.contacts.iter().map(|c| c.package.as_str()).collect();
+        assert!(names.contains(&"asterisk"), "{names:?}");
+        assert!(names.contains(&"kdepimlibs"), "unbuildable: {names:?}");
+        assert!(!names.contains(&"bluez"), "rebuilt: {names:?}");
+        let asterisk = p.contacts.iter().find(|c| c.package == "asterisk").unwrap();
+        assert_eq!(asterisk.email, "asterisk-maintainers@fedoraproject.org");
+        assert_eq!(asterisk.version_release.as_deref(), Some("22.5.2-3.fc46"));
+        assert_eq!(
+            asterisk.groups,
+            vec![
+                GroupContact {
+                    name: "kde-sig".into(),
+                    room: Some("#kde:fedoraproject.org".into())
+                },
+                GroupContact {
+                    name: "voip-sig".into(),
+                    room: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_package_whose_access_cannot_be_read_keeps_its_alias() {
+        let p = libical_plan_with_contacts();
+        let osmo = p.contacts.iter().find(|c| c.package == "osmo").unwrap();
+        assert_eq!(osmo.email, "osmo-maintainers@fedoraproject.org");
+        assert!(osmo.groups.is_empty());
+    }
+
+    #[test]
+    fn contacts_are_rendered_with_rooms_as_links() {
+        let out = render(&libical_plan_with_contacts());
+        assert!(
+            out.contains(
+                "- asterisk (22.5.2-3.fc46): asterisk-maintainers@fedoraproject.org; \
+                 kde-sig: [#kde:fedoraproject.org](https://matrix.to/#/#kde:fedoraproject.org); \
+                 voip-sig\n"
+            ),
+            "{out}"
+        );
+        assert!(!render(&libical_plan()).contains("## Who to contact"));
     }
 
     #[test]

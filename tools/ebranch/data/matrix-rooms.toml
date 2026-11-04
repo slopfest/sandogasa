@@ -1,0 +1,16 @@
+# Matrix rooms of Fedora groups, for `ebranch rebuild-plan --contacts`.
+#
+# Keyed by the FAS group as dist-git lists it in a package's access
+# (`kde-sig`), not by the team's display name. A group's own email
+# address is deliberately not used: such addresses exist because
+# Bugzilla needs one, and are often unmonitored or members-only.
+#
+# Add to or override this list locally with a [matrix-rooms] table in
+# ~/.config/ebranch/config.toml.
+
+gnome-sig = "#workstation:fedoraproject.org"          # Fedora Workstation WG
+go-sig = "#golang:fedoraproject.org"
+kde-sig = "#kde:fedoraproject.org"                    # KDE WG
+multimedia-sig = "#multimedia:fedoraproject.org"
+python-packagers-sig = "#python:fedoraproject.org"
+rust-sig = "#rust:fedoraproject.org"

@@ -600,7 +600,10 @@ pub async fn resolve_refs(bz: &BzClient, tokens: &[String]) -> Result<Vec<u64>, 
 /// the queried package names: package → `version-release`. Longest
 /// package names are matched first so a package that is a prefix of
 /// another (`python-foo` vs `python-foo-bar`) can't steal its NVR.
-fn match_nvrs_to_packages(nvrs: &[String], packages: &[String]) -> BTreeMap<String, String> {
+pub(crate) fn match_nvrs_to_packages(
+    nvrs: &[String],
+    packages: &[String],
+) -> BTreeMap<String, String> {
     let mut by_len: Vec<&String> = packages.iter().collect();
     by_len.sort_by_key(|p| std::cmp::Reverse(p.len()));
     let mut out = BTreeMap::new();

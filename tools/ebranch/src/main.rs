@@ -684,7 +684,11 @@ build, as they may compile its headers in.
 With --pr-author, the dist-git pull requests those accounts opened
 against the branch are listed per package: merged but not yet built
 in the side tag, open (with the CI results on the head commit), merged
-and built, and packages still to rebuild with none.")]
+and built, and packages still to rebuild with none. With --contacts,
+each package left to rebuild is listed with its -maintainers alias,
+the groups with commit access to it (with their Matrix rooms, from a
+built-in list that a [matrix-rooms] table in the config extends), and
+its version-release on the branch.")]
     RebuildPlan(RebuildPlanArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
@@ -735,6 +739,12 @@ struct RebuildPlanArgs {
     /// (the change owners); lists them per package, with CI results.
     #[arg(long, value_name = "FAS", value_delimiter = ',')]
     pr_author: Vec<String>,
+
+    /// For each package left to rebuild, who to contact: its
+    /// -maintainers alias, groups with commit access and their Matrix
+    /// rooms, and its version-release.
+    #[arg(long)]
+    contacts: bool,
 
     /// Print the plan as JSON.
     #[arg(long)]
@@ -1325,6 +1335,12 @@ fn main() -> ExitCode {
             branch: a.branch.clone(),
             side_tag: a.side_tag.clone(),
             pr_authors: a.pr_author.clone(),
+            contacts: a.contacts,
+            matrix_rooms: if a.contacts {
+                config::matrix_rooms()
+            } else {
+                Default::default()
+            },
             json: a.json,
             verbose: a.verbose,
         }));

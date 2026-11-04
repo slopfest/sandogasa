@@ -764,7 +764,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 [\fIPACKAGES\fR]
 Source RPM names to analyze
 .SS ebranch rebuild-plan
-\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
+\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-contacts\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
 .PP
 Plan the rebuilds a library\*(Aqs SONAME bump calls for.
 .PP
@@ -795,7 +795,11 @@ build, as they may compile its headers in.
 With \-\-pr\-author, the dist\-git pull requests those accounts opened
 against the branch are listed per package: merged but not yet built
 in the side tag, open (with the CI results on the head commit), merged
-and built, and packages still to rebuild with none.
+and built, and packages still to rebuild with none. With \-\-contacts,
+each package left to rebuild is listed with its \-maintainers alias,
+the groups with commit access to it (with their Matrix rooms, from a
+built\-in list that a [matrix\-rooms] table in the config extends), and
+its version\-release on the branch.
 .TP
 \fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR [default: rawhide]
 Branch the library is bumped on
@@ -805,6 +809,9 @@ Side tag the rebuilds go into, to show what is done
 .TP
 \fB\-\-pr\-author\fR \fI<FAS>\fR
 CSV of dist\-git accounts whose pull requests carry the fixes (the change owners); lists them per package, with CI results
+.TP
+\fB\-\-contacts\fR
+For each package left to rebuild, who to contact: its \-maintainers alias, groups with commit access and their Matrix rooms, and its version\-release
 .TP
 \fB\-\-json\fR
 Print the plan as JSON
