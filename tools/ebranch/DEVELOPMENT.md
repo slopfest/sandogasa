@@ -596,3 +596,21 @@ the whole point.
   newer release. Report one newer than the side tag's, since a release
   built outside the side tag shadows the side tag's build when the tag
   merges.
+
+## A rebuild report that missed something must say so
+
+rebuild-plan's reports get pasted into status updates and mails to
+maintainers, where nobody sees stderr. On 2026-11-04 a request failed
+while the laptop was suspended; the warning went to stderr, and the
+report printed normally without gnome-panel's merged pull request, so
+it looked complete.
+
+- Every lookup whose failure changes what the report says records a
+  `Gap`, which is rendered first under "Report incomplete" and in the
+  JSON as `incomplete`, and makes the command exit non-zero after
+  printing. A new lookup must do the same, not only warn.
+- Setup that the README documents as a fallback (no `git` or `fedpkg`,
+  so the branch's latest build stands in for dist-git) is not a gap:
+  the answer is a documented approximation, not a missing entry.
+- Retry transient failures before giving up. The dist-git client
+  retries every GET; other clients still have their own retry helpers.

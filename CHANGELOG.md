@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan says when its report is incomplete
+
+A rebuild report could miss entries without showing it: when a dist-git
+request failed (here, while the laptop was suspended), the warning went
+to stderr and the report printed normally, without gnome-panel's merged
+pull request. Failed lookups are now listed under "Report incomplete" at
+the top of the report (and as `incomplete` in the JSON), and the command
+exits non-zero after printing it.
+
 ### sandogasa-distgit: retry every GET on transient failures
 
 Most of `DistGitClient`'s GET requests made a single attempt, so a

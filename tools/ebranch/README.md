@@ -1226,6 +1226,12 @@ $ ebranch rebuild-plan libical -s f46-build-side-158330 \
 
 Queries use the repositories of the architecture fedrq runs on.
 
+dist-git requests are retried on transient failures. A lookup that still
+fails (a package's pull requests or CI results, who has access, the
+branch's versions, dist-git's branch tip) is listed under "Report
+incomplete" at the top of the report, and the command exits non-zero
+after printing it.
+
 The output is Markdown, for a mailing list post or a Bodhi comment;
 `--json` prints the same plan as JSON.
 

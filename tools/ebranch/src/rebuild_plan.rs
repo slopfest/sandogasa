@@ -340,6 +340,32 @@ pub struct RebuildPlan {
     /// `(side tag's, branch's)`, where known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_libraries: Option<(Option<String>, Option<String>)>,
+    /// Lookups that failed even after retries, so the report may be
+    /// missing entries.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub incomplete: Vec<Gap>,
+}
+
+/// A lookup that failed, so the report may be missing what it would
+/// have said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Gap {
+    /// The package it concerns, when it concerns one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// What could not be read (`pull requests by salimma`).
+    pub what: String,
+    pub error: String,
+}
+
+impl Gap {
+    fn new(package: Option<&str>, what: impl Into<String>, error: impl Into<String>) -> Self {
+        Self {
+            package: package.map(str::to_string),
+            what: what.into(),
+            error: error.into(),
+        }
+    }
 }
 
 impl RebuildPlan {
@@ -600,16 +626,18 @@ pub(crate) fn plan(
         contacts: Vec::new(),
         local_builds: Vec::new(),
         local_libraries: None,
+        incomplete: Vec::new(),
     })
 }
 
 /// Look up the pull requests by `authors` for every package the plan
-/// lists, against its branch. A package whose lookup fails is reported
-/// on stderr and left out, so one bad answer does not cost the plan.
+/// lists, against its branch. A lookup that fails is reported on
+/// stderr and recorded in `gaps`, and the rest of the plan goes on.
 pub(crate) fn pull_requests(
     plan: &RebuildPlan,
     authors: &[String],
     q: &dyn PrQuery,
+    gaps: &mut Vec<Gap>,
     verbose: bool,
 ) -> BTreeMap<String, Vec<PullRequestStatus>> {
     let packages: BTreeSet<&String> = plan
@@ -629,6 +657,7 @@ pub(crate) fn pull_requests(
                 Ok(prs) => prs,
                 Err(e) => {
                     eprintln!("warning: could not list {pkg}'s pull requests by {author}: {e}");
+                    gaps.push(Gap::new(Some(pkg), format!("pull requests by {author}"), e));
                     continue;
                 }
             };
@@ -648,6 +677,7 @@ pub(crate) fn pull_requests(
                         Ok(flags) => checks_on_head(&flags, pr.commit_stop.as_deref()),
                         Err(e) => {
                             eprintln!("warning: could not read CI results of {pkg}#{}: {e}", pr.id);
+                            gaps.push(Gap::new(Some(pkg), format!("CI results of #{}", pr.id), e));
                             BTreeMap::new()
                         }
                     }
@@ -681,12 +711,13 @@ pub(crate) fn pull_requests(
 
 /// Who to contact about each package left to rebuild: those in the
 /// build rounds, the blocked and the unbuildable. A package whose
-/// access cannot be read is reported on stderr and listed with its
-/// alias alone.
+/// access cannot be read is listed with its alias alone; the failure
+/// is reported on stderr and recorded in `gaps`.
 pub(crate) fn contacts(
     plan: &RebuildPlan,
     rooms: &BTreeMap<String, String>,
     q: &dyn ContactQuery,
+    gaps: &mut Vec<Gap>,
     verbose: bool,
 ) -> Vec<Contact> {
     let packages: Vec<String> = plan
@@ -701,6 +732,7 @@ pub(crate) fn contacts(
         .collect();
     let vrs = q.source_vrs(&packages).unwrap_or_else(|e| {
         eprintln!("warning: could not read the packages' versions: {e}");
+        gaps.push(Gap::new(None, "the packages' versions, for contacts", e));
         BTreeMap::new()
     });
     packages
@@ -711,6 +743,7 @@ pub(crate) fn contacts(
             }
             let groups = q.committer_groups(pkg).unwrap_or_else(|e| {
                 eprintln!("warning: could not read who has access to {pkg}: {e}");
+                gaps.push(Gap::new(Some(pkg), "who has access", e));
                 Vec::new()
             });
             Contact {
@@ -1019,6 +1052,31 @@ pub(crate) fn local_results(
     results
 }
 
+/// The lookups that failed, first, so a pasted report cannot quietly
+/// miss entries.
+fn render_incomplete(out: &mut String, plan: &RebuildPlan) {
+    if plan.incomplete.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "## Report incomplete ({})\n", plan.incomplete.len());
+    let _ = writeln!(
+        out,
+        "These lookups failed, so entries may be missing below. Run it again before \
+         sharing it.\n"
+    );
+    for g in &plan.incomplete {
+        match &g.package {
+            Some(p) => {
+                let _ = writeln!(out, "- {p}: {} ({})", g.what, g.error);
+            }
+            None => {
+                let _ = writeln!(out, "- {} ({})", g.what, g.error);
+            }
+        }
+    }
+    out.push('\n');
+}
+
 /// The plan as Markdown, for a mailing list post or a Bodhi comment.
 pub fn render(plan: &RebuildPlan) -> String {
     let mut out = String::new();
@@ -1032,6 +1090,7 @@ pub fn render(plan: &RebuildPlan) -> String {
     }
     let sonames: Vec<String> = plan.sonames.iter().map(|s| format!("`{s}`")).collect();
     let _ = writeln!(out, "SONAMEs on {}: {}\n", plan.branch, sonames.join(", "));
+    render_incomplete(&mut out, plan);
 
     let heading = if plan.side_tag.is_some() {
         "Still to rebuild"
@@ -1682,11 +1741,16 @@ pub fn run(opts: &Options) -> Result<(), String> {
     if !opts.pr_authors.is_empty() || opts.contacts {
         let distgit = DistGitLookup::new(&opts.branch)?;
         if !opts.pr_authors.is_empty() {
-            plan.pull_requests = pull_requests(&plan, &opts.pr_authors, &distgit, opts.verbose);
+            let mut gaps = Vec::new();
+            plan.pull_requests =
+                pull_requests(&plan, &opts.pr_authors, &distgit, &mut gaps, opts.verbose);
+            plan.incomplete.extend(gaps);
             plan.pr_authors = opts.pr_authors.clone();
         }
         if opts.contacts {
-            plan.contacts = contacts(&plan, &opts.matrix_rooms, &distgit, opts.verbose);
+            let mut gaps = Vec::new();
+            plan.contacts = contacts(&plan, &opts.matrix_rooms, &distgit, &mut gaps, opts.verbose);
+            plan.incomplete.extend(gaps);
         }
     }
     if sidetag_builds.is_some() || baseline_builds.is_some() {
@@ -1707,6 +1771,11 @@ pub fn run(opts: &Options) -> Result<(), String> {
             .map(|nvrs| crate::branch_request::match_nvrs_to_packages(&nvrs, &packages))
             .unwrap_or_else(|e| {
                 eprintln!("warning: could not read the branch's versions: {e}");
+                plan.incomplete.push(Gap::new(
+                    None,
+                    format!("{}'s versions, for local builds", opts.branch),
+                    e.to_string(),
+                ));
                 BTreeMap::new()
             });
         let new_library = side_tag.as_ref().and_then(|st| {
@@ -1717,12 +1786,15 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 .map(|(_, vr)| vr.to_string())
         });
         let old_library = on_branch.get(&opts.library).cloned();
+        let mut gaps = Vec::new();
         let at_head = dist_git_heads(
             &needs_head(&plan, &sidetag_builds),
             &opts.branch,
             opts.distgit_dir.as_deref(),
+            &mut gaps,
             opts.verbose,
         );
+        plan.incomplete.extend(gaps);
         plan.local_builds = local_results(
             &plan,
             &sidetag_builds,
@@ -1741,7 +1813,14 @@ pub fn run(opts: &Options) -> Result<(), String> {
     } else {
         print!("{}", render(&plan));
     }
-    Ok(())
+    if plan.incomplete.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "the report is incomplete: {} lookup(s) failed, listed at its top",
+            plan.incomplete.len()
+        ))
+    }
 }
 
 impl PlanQuery for sandogasa_fedrq::Fedrq {
@@ -1923,6 +2002,7 @@ fn dist_git_heads(
     packages: &[String],
     branch: &str,
     checkouts: Option<&Path>,
+    gaps: &mut Vec<Gap>,
     verbose: bool,
 ) -> BTreeMap<String, String> {
     if packages.is_empty() {
@@ -1948,7 +2028,10 @@ fn dist_git_heads(
             Ok(vr) => {
                 heads.insert(pkg.clone(), vr);
             }
-            Err(e) => eprintln!("warning: dist-git {branch} of {pkg}: {e}"),
+            Err(e) => {
+                eprintln!("warning: dist-git {branch} of {pkg}: {e}");
+                gaps.push(Gap::new(Some(pkg), format!("dist-git's {branch}"), e));
+            }
         }
     }
     heads
@@ -3563,10 +3646,35 @@ mod tests {
         r
     }
 
+    #[test]
+    fn failed_lookups_are_listed_at_the_top_of_the_report() {
+        // A request that failed while the laptop was suspended left
+        // gnome-panel out of a report that looked complete.
+        let mut prs = libical_prs();
+        prs.prs.insert(
+            ("bluez".to_string(), "salimma".to_string()),
+            serde_json::json!("error sending request"),
+        );
+        let mut p = libical_plan();
+        let mut gaps = Vec::new();
+        p.pull_requests = pull_requests(&p, &strs(&["salimma", "mcrha"]), &prs, &mut gaps, false);
+        assert!(!p.pull_requests.contains_key("bluez"));
+        assert!(p.pull_requests.contains_key("asterisk"));
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].package.as_deref(), Some("bluez"));
+        assert_eq!(gaps[0].what, "pull requests by salimma");
+        p.incomplete = gaps;
+        let out = render(&p);
+        let gap = out.find("## Report incomplete (1)").expect(&out);
+        assert!(gap < out.find("## Still to rebuild").unwrap(), "{out}");
+        assert!(out.contains("- bluez: pull requests by salimma ("), "{out}");
+        assert!(!render(&libical_plan_with_prs()).contains("Report incomplete"));
+    }
+
     fn libical_plan_with_prs() -> RebuildPlan {
         let mut p = libical_plan();
         let authors = strs(&["salimma", "mcrha"]);
-        p.pull_requests = pull_requests(&p, &authors, &libical_prs(), false);
+        p.pull_requests = pull_requests(&p, &authors, &libical_prs(), &mut Vec::new(), false);
         p.pr_authors = authors;
         p
     }
@@ -3671,7 +3779,7 @@ mod tests {
             vrs: BTreeMap::from([("asterisk".to_string(), "22.5.2-3.fc46".to_string())]),
         };
         let rooms = BTreeMap::from([("kde-sig".to_string(), "#kde:fedoraproject.org".to_string())]);
-        p.contacts = contacts(&p, &rooms, &q, false);
+        p.contacts = contacts(&p, &rooms, &q, &mut Vec::new(), false);
         p
     }
 
