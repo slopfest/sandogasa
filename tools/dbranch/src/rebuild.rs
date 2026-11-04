@@ -2090,6 +2090,22 @@ fn ensure_ci_config_path(
     }
 }
 
+/// How to push `branch` to `remote`. A plain `git push` needs the
+/// branch to have an upstream as well as to be configured to push to
+/// `remote`: settling the remote records only `branch.<b>.pushRemote`,
+/// and git refuses a plain push from a branch with no upstream ("has
+/// no upstream branch"), as a new branch's first push did. So the
+/// first push, and a push to a different remote, set it up with `-u`.
+fn push_command(repo: &Path, branch: &str, remote: &str) -> Vec<String> {
+    if git::has_upstream(repo, branch)
+        && git::branch_remote(repo, branch).as_deref() == Some(remote)
+    {
+        plan::push_argv()
+    } else {
+        plan::push_set_upstream_argv(remote, branch)
+    }
+}
+
 /// The push stage: check the project's CI config path when the branch
 /// carries a salsa-ci.yml, publish the branch to `remote`, then (unless
 /// `nowait`) attach to its CI pipeline via `glab` and wait for the
@@ -2140,15 +2156,7 @@ fn push_stage(
         }
     }
     ui.step(&format!("Push {branch} to {remote}"));
-    // Once the branch is configured to push to `remote` a plain
-    // `git push` (of the checked-out branch) suffices; the first push
-    // sets that up (`-u`), as does a push to a different remote.
-    let push = if git::branch_remote(repo, branch).as_deref() == Some(remote) {
-        plan::push_argv()
-    } else {
-        plan::push_set_upstream_argv(remote, branch)
-    };
-    ui.run_required(&push, repo)?;
+    ui.run_required(&push_command(repo, branch, remote), repo)?;
 
     if nowait {
         eprintln!("--nowait: pushed; not watching CI (use dbranch watch-ci {branch} later)");
@@ -2946,6 +2954,45 @@ mod tests {
             .unwrap()
             .success();
         assert!(ok, "git {args:?} failed");
+    }
+
+    #[test]
+    fn a_branch_with_only_a_push_remote_is_pushed_with_u() {
+        // ubuntu/stonking: the remote settled as pushRemote, nothing
+        // pushed yet, so no upstream, and a plain `git push` fails.
+        let d = setup();
+        let p = d.path();
+        git(
+            p,
+            &["config", "branch.debian/unstable.pushRemote", "origin"],
+        );
+        assert_eq!(
+            push_command(p, "debian/unstable", "origin"),
+            ["git", "push", "-u", "origin", "debian/unstable"]
+        );
+        // Once the first push has set the upstream, a plain push does.
+        git(
+            p,
+            &["update-ref", "refs/remotes/origin/debian/unstable", "HEAD"],
+        );
+        git(p, &["config", "branch.debian/unstable.remote", "origin"]);
+        git(
+            p,
+            &[
+                "config",
+                "branch.debian/unstable.merge",
+                "refs/heads/debian/unstable",
+            ],
+        );
+        assert_eq!(
+            push_command(p, "debian/unstable", "origin"),
+            ["git", "push"]
+        );
+        // A push to another remote than the configured one sets it up.
+        assert_eq!(
+            push_command(p, "debian/unstable", "fork"),
+            ["git", "push", "-u", "fork", "debian/unstable"]
+        );
     }
 
     fn setup() -> tempfile::TempDir {

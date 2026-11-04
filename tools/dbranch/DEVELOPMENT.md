@@ -645,7 +645,13 @@ terminal, otherwise the run errors out asking for `--remote` — there is
 no safe default, and `-y` does not pick one. The merge stage records the
 answer for a branch it creates as `branch.<b>.pushRemote` so the push
 stage, `watch-ci` and later runs need not ask (`git push -u` then sets
-the upstream as usual). `classify_target` and `checkout_existing` use
+the upstream as usual). A `pushRemote` is not an upstream: git refuses
+a plain `git push` from a branch with no `branch.<b>.merge` ("has no
+upstream branch"), so the push stage uses a plain push only when the
+branch has an upstream *and* pushes to the resolved remote, and `-u`
+otherwise. Keying it on the remote alone made the first push of every
+branch the merge stage created fail (damo's `ubuntu/stonking`,
+2026-11-04). `classify_target` and `checkout_existing` use
 the resolved remote, so a branch that exists only on the fork is
 tracked from the fork, and the CI config path check / watch run against
 the fork's project.

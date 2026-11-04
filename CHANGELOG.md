@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### dbranch: the first push of a new branch sets its upstream
+
+`dbranch rebuild`'s push stage failed on the first push of a branch it
+had just created: `git push` stopped with "The current branch
+ubuntu/stonking has no upstream branch". dbranch records the remote it
+settled on as `branch.<b>.pushRemote`, and the push stage took that as
+a sign the branch already tracked the remote, so it ran a plain
+`git push`. A plain push now needs the branch to have an upstream as
+well; until it does, the push is `git push -u <remote> <branch>`.
+
 ### config commands can re-enter, fix and clear saved settings
 
 Once a setting was saved, the tools' `config` commands never asked for

@@ -612,9 +612,9 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   setting is project-wide, but reported: a note on a `debian/*` branch,
   where only the `RELEASE` pin goes unused, a warning on a PPA branch,
   whose relaxations the stock pipeline lacks. Then push the
-  branch to its remote (`git push -u <remote> <branch>` the first
-  time, to set the upstream the new remote ref didn't have yet; a
-  plain `git push` once it is configured to push there), then
+  branch to its remote (`git push -u <remote> <branch>` until the
+  branch has an upstream on that remote, which the first push sets; a
+  plain `git push` after that), then
   (unless `--nowait`)
   watch the pushed commit's GitLab CI pipeline to completion. dbranch
   polls `glab ci list -R <remote-url> --sha <commit> -F json`,
