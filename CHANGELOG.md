@@ -43,7 +43,7 @@ with access, group members included), the groups with commit or admin
 access with their Matrix rooms, and its version-release on the branch:
 a high release number means many builds since the last version update,
 a hint not to wait long for a reply. The rooms come from a built-in list
-in `data/matrix-rooms.toml` (the GNOME, KDE, Go, multimedia, Python and
+in `data/matrix-rooms.toml` (the GNOME, KDE, Go, multimedia, Phosh, Python and
 Rust groups so far), which a `[matrix-rooms]` table in ebranch's config
 extends or overrides. The output names no individuals. Refs #58.
 

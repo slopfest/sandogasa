@@ -12,5 +12,6 @@ gnome-sig = "#workstation:fedoraproject.org"          # Fedora Workstation WG
 go-sig = "#golang:fedoraproject.org"
 kde-sig = "#kde:fedoraproject.org"                    # KDE WG
 multimedia-sig = "#multimedia:fedoraproject.org"
+phosh-sig = "#phosh:fedoraproject.org"
 python-packagers-sig = "#python:fedoraproject.org"
 rust-sig = "#rust:fedoraproject.org"
