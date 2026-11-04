@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.27.1
 
 ### cpu-sig-tracker and hs-relmon: config re-enters saved settings too
 
@@ -284,7 +284,7 @@ line. The prompt helpers in `sandogasa-config`, which every tool's
 `config` command uses, now apply passed-through ^H and DEL as erases
 before trimming the answer, for hidden prompts too. `ebranch config`
 also checks the e-mail address and asks again if it is malformed, and
-`validate_email` now refuses spaces and control characters. Refs #56.
+`validate_email` now refuses spaces and control characters. Fixes #56.
 
 ### sandogasa-config: `prompt_optional_field_validated`
 
