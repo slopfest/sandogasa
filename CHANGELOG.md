@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cpu-sig-tracker and hs-relmon: config re-enters saved settings too
+
+cpu-sig-tracker's `config` read the Atlassian account e-mail as a raw
+line, so on a terminal whose backspace sends `^H` a corrected typo was
+kept, the way #56 found in ebranch. Its prompts, and hs-relmon's, now
+go through `sandogasa_config::ask` like the other tools': the
+backspaces are applied, the e-mail is checked, and `config --all` asks
+for every setting again with the saved value as the default.
+sandogasa-report's profile-based `configure` is left for #65.
+
 ### ebranch: prune-cache removes cached data that has gone unused
 
 ebranch keeps dist-git clones, downloaded update builds, and crates.io

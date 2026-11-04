@@ -221,7 +221,7 @@ stock. The repository is the segment between
     },
 
     /// Configure GitLab authentication.
-    Config,
+    Config(sandogasa_cli::ConfigArgs),
 
     /// Find binary RPMs shipped by 2+ source packages in a tag.
     DupeSubpkgs {
@@ -1379,8 +1379,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 verbose,
             )?;
         }
-        Command::Config => {
-            configure_gitlab()?;
+        Command::Config(args) => {
+            configure_gitlab(&args)?;
         }
     }
 
@@ -1451,14 +1451,20 @@ fn run_prune_one(
 
 const GITLAB_BASE: &str = "https://gitlab.com";
 
-fn configure_gitlab() -> Result<(), Box<dyn std::error::Error>> {
-    let existing = config::load()
+/// Ask for the GitLab token when there is none (with `all`, offering
+/// the saved one as the default), check it, and save it.
+fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let saved = config::load()
         .ok()
         .and_then(|c| c.gitlab.map(|g| g.access_token))
         .unwrap_or_default();
-    if existing.is_empty() {
-        eprintln!("A GitLab personal access token with 'api' scope is needed.");
-    }
+    let existing = sandogasa_config::ask(
+        &sandogasa_config::Setting::new("GitLab", "token")
+            .sensitive()
+            .hint("A GitLab personal access token with 'api' scope is needed."),
+        &saved,
+        args.all,
+    )?;
     let token =
         sandogasa_cli::credential::validated_key_blocking("GitLab", "token", existing, |token| {
             match gitlab::validate_token(GITLAB_BASE, token) {

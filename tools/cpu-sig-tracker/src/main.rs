@@ -45,7 +45,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Set up GitLab and JIRA authentication tokens.
-    Config,
+    Config(sandogasa_cli::ConfigArgs),
 
     /// Enumerate packages in a proposed_updates Koji tag and
     /// emit a sandogasa-inventory TOML file.
@@ -85,7 +85,7 @@ fn main() -> ExitCode {
     sandogasa_cli::init();
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     match cli.command {
-        Command::Config => configure::run(),
+        Command::Config(args) => configure::run(&args),
         Command::DumpInventory(args) => dump_inventory::run(&args),
         Command::FileIssue(args) => file_issue::run(&args),
         Command::ListIssues(args) => list_issues::run(&args),

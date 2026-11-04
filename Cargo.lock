@@ -295,7 +295,6 @@ version = "0.27.0"
 dependencies = [
  "chrono",
  "clap",
- "rpassword",
  "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
