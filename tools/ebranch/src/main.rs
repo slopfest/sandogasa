@@ -688,7 +688,16 @@ and built, and packages still to rebuild with none. With --contacts,
 each package left to rebuild is listed with its -maintainers alias,
 the groups with commit access to it (with their Matrix rooms, from a
 built-in list that a [matrix-rooms] table in the config extends), and
-its version-release on the branch.")]
+its version-release on the branch.
+
+With --sidetag-results and --baseline-results, local mock results are
+read (never built): each package's newest build with the side tag is
+judged against the same release built on the branch as it is, and
+against the branch and side tag, as failing with the new library only,
+failing without it too, fixed locally, already in the side tag, or
+building as it is. Builds whose
+buildroot had another version of the library than their directory
+claims are flagged first.")]
     RebuildPlan(RebuildPlanArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
@@ -745,6 +754,16 @@ struct RebuildPlanArgs {
     /// rooms, and its version-release.
     #[arg(long)]
     contacts: bool,
+
+    /// Local mock results built with the side tag: one directory per
+    /// build, named by NVR, with a success or fail marker. Read only.
+    #[arg(long, value_name = "DIR")]
+    sidetag_results: Option<std::path::PathBuf>,
+
+    /// Local mock results built against the branch as it is, to tell
+    /// failures the new library causes from older ones.
+    #[arg(long, value_name = "DIR")]
+    baseline_results: Option<std::path::PathBuf>,
 
     /// Print the plan as JSON.
     #[arg(long)]
@@ -1341,6 +1360,8 @@ fn main() -> ExitCode {
             } else {
                 Default::default()
             },
+            sidetag_results: a.sidetag_results.clone(),
+            baseline_results: a.baseline_results.clone(),
             json: a.json,
             verbose: a.verbose,
         }));

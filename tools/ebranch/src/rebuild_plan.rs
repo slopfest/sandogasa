@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 use sandogasa_fedrq::PkgInfo;
 use serde::Serialize;
@@ -32,6 +33,12 @@ pub struct Options {
     pub contacts: bool,
     /// FAS group → Matrix room, for `contacts`.
     pub matrix_rooms: BTreeMap<String, String>,
+    /// Local mock results built against the side tag (one directory
+    /// per build, named by NVR, with a `success` or `fail` marker).
+    pub sidetag_results: Option<PathBuf>,
+    /// Local mock results built against the branch as it is, the old
+    /// library.
+    pub baseline_results: Option<PathBuf>,
     pub json: bool,
     pub verbose: bool,
 }
@@ -172,6 +179,78 @@ pub struct Contact {
     pub version_release: Option<String>,
 }
 
+/// One local mock build.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LocalBuild {
+    /// `version-release`, from the build directory's name.
+    pub version_release: String,
+    pub passed: bool,
+    /// The library's version-release in the buildroot, from
+    /// `installed_pkgs.log`, when its main package was there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+}
+
+/// What the local builds say about a package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalVerdict {
+    /// The newest build with the side tag fails, and the same release
+    /// built against the branch passes.
+    FailsWithNewLibrary,
+    /// The newest build with the side tag fails, and so does the
+    /// branch build.
+    AlreadyBroken,
+    /// It fails with the side tag, and there is no branch build of the
+    /// same release to tell whether the library is why.
+    Fails,
+    /// The newest build with the side tag passes at a release the
+    /// branch does not have yet: a local fix, to be proposed.
+    FixedLocally,
+    /// The side tag already has a build at least as new as the local
+    /// ones.
+    InSideTag,
+    /// The newest build with the side tag passes at the branch's
+    /// release (the dist tag aside).
+    BuildsAsIs,
+    /// A build with the side tag is running (its directory has no
+    /// marker yet), at a release newer than any finished one.
+    Building,
+    /// Left to rebuild, but not built with the side tag locally.
+    NotBuilt,
+}
+
+/// A package's local mock builds.
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalResult {
+    pub package: String,
+    pub verdict: LocalVerdict,
+    /// The newest finished build with the side tag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidetag: Option<LocalBuild>,
+    /// The release of a build with the side tag still running, when
+    /// newer than any finished one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub building: Option<String>,
+    /// Earlier releases that failed with the side tag.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed_before: Vec<String>,
+    /// The branch build of the same release as `sidetag`, or the newest
+    /// one when there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<LocalBuild>,
+    /// The version-release in the branch's repositories.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_branch: Option<String>,
+    /// The version-release of its build in the side tag, if rebuilt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_side_tag: Option<String>,
+    /// Builds whose buildroot had another library than their directory
+    /// claims, as `(directory, release, library found)`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wrong_library: Vec<(String, String, String)>,
+}
+
 /// The whole plan, as `--json` prints it.
 #[derive(Debug, Clone, Serialize)]
 pub struct RebuildPlan {
@@ -226,6 +305,13 @@ pub struct RebuildPlan {
     /// Who to contact about each package left to rebuild, when asked.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contacts: Vec<Contact>,
+    /// What local mock builds say, when results were given.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub local_builds: Vec<LocalResult>,
+    /// The library each results directory should have built against:
+    /// `(side tag's, branch's)`, where known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_libraries: Option<(Option<String>, Option<String>)>,
 }
 
 impl RebuildPlan {
@@ -484,6 +570,8 @@ pub(crate) fn plan(
         pr_authors: Vec::new(),
         pull_requests: BTreeMap::new(),
         contacts: Vec::new(),
+        local_builds: Vec::new(),
+        local_libraries: None,
     })
 }
 
@@ -613,6 +701,205 @@ pub(crate) fn contacts(
         .collect()
 }
 
+/// A mock results directory: package → its finished builds, oldest
+/// first, and package → the releases with no marker yet (running, or
+/// interrupted).
+#[derive(Debug, Default)]
+pub(crate) struct Results {
+    pub finished: BTreeMap<String, Vec<LocalBuild>>,
+    pub unfinished: BTreeMap<String, Vec<String>>,
+}
+
+/// Read a mock results directory. Entries that are not build
+/// directories (`repodata`, stray files) are skipped.
+pub(crate) fn read_results(dir: &Path, library: &str) -> Result<Results, String> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    let mut builds: BTreeMap<String, Vec<LocalBuild>> = BTreeMap::new();
+    let mut unfinished: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(nvr) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some((name, vr)) = split_nvr(nvr) else {
+            continue;
+        };
+        let passed = path.join("success").exists();
+        if !passed && !path.join("fail").exists() {
+            unfinished
+                .entry(name.to_string())
+                .or_default()
+                .push(vr.to_string());
+            continue;
+        }
+        let library = std::fs::read_to_string(path.join("installed_pkgs.log"))
+            .ok()
+            .and_then(|log| installed_version(&log, library));
+        builds
+            .entry(name.to_string())
+            .or_default()
+            .push(LocalBuild {
+                version_release: vr.to_string(),
+                passed,
+                library,
+            });
+    }
+    for list in builds.values_mut() {
+        list.sort_by(|a, b| {
+            sandogasa_rpmvercmp::compare_evr(&a.version_release, &b.version_release)
+        });
+    }
+    for list in unfinished.values_mut() {
+        list.sort_by(|a, b| sandogasa_rpmvercmp::compare_evr(a, b));
+    }
+    Ok(Results {
+        finished: builds,
+        unfinished,
+    })
+}
+
+/// Judge each package from its local builds. `on_branch` is the
+/// version-release of each package in the branch's repositories; `libraries` the library's
+/// version-release with the side tag and on the branch, to check each
+/// build used what its directory claims.
+pub(crate) fn local_results(
+    plan: &RebuildPlan,
+    sidetag: &Results,
+    baseline: &Results,
+    on_branch: &BTreeMap<String, String>,
+    libraries: (Option<&str>, Option<&str>),
+) -> Vec<LocalResult> {
+    let rebuilt: BTreeMap<&str, &str> = plan
+        .dependents
+        .iter()
+        .filter_map(|d| {
+            let (_, vr) = split_nvr(d.rebuilt.as_deref()?)?;
+            Some((d.package.as_str(), vr))
+        })
+        .collect();
+    let left: BTreeSet<&String> = plan
+        .rounds
+        .iter()
+        .flatten()
+        .chain(plan.blocked_by.keys())
+        .collect();
+    let packages: BTreeSet<&String> = sidetag
+        .finished
+        .keys()
+        .chain(sidetag.unfinished.keys())
+        .chain(baseline.finished.keys())
+        .chain(left)
+        .collect();
+    let mut results = Vec::new();
+    for pkg in packages {
+        let st = sidetag
+            .finished
+            .get(pkg)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let bl = baseline
+            .finished
+            .get(pkg)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let mut wrong_library = Vec::new();
+        for (builds, expected, which) in
+            [(st, libraries.0, "side tag"), (bl, libraries.1, "baseline")]
+        {
+            let Some(expected) = expected else { continue };
+            for b in builds {
+                if let Some(found) = &b.library
+                    && found != expected
+                {
+                    wrong_library.push((
+                        which.to_string(),
+                        b.version_release.clone(),
+                        found.clone(),
+                    ));
+                }
+            }
+        }
+        let newest = st.last().cloned();
+        let baseline_build = newest
+            .as_ref()
+            .and_then(|n| bl.iter().find(|b| b.version_release == n.version_release))
+            .or(bl.last())
+            .cloned();
+        let failed_before: Vec<String> = st
+            .iter()
+            .rev()
+            .skip(1)
+            .filter(|b| !b.passed)
+            .map(|b| b.version_release.clone())
+            .collect();
+        let branch_vr = on_branch.get(pkg).cloned();
+        let in_side_tag = rebuilt.get(pkg.as_str()).map(|vr| vr.to_string());
+        let caught_up = match (&in_side_tag, &newest) {
+            (Some(tagged), Some(n)) => {
+                sandogasa_rpmvercmp::compare_evr(tagged, &n.version_release)
+                    != std::cmp::Ordering::Less
+            }
+            _ => false,
+        };
+        // A running build newer than every finished one says more
+        // about where the package stands than an older verdict.
+        let building = sidetag
+            .unfinished
+            .get(pkg)
+            .and_then(|vrs| vrs.last())
+            .filter(|vr| {
+                newest.as_ref().is_none_or(|n| {
+                    sandogasa_rpmvercmp::compare_evr(vr, &n.version_release)
+                        == std::cmp::Ordering::Greater
+                })
+            })
+            .cloned();
+        let verdict = match &newest {
+            _ if building.is_some() => LocalVerdict::Building,
+            Some(_) if caught_up => LocalVerdict::InSideTag,
+            None => {
+                if !plan.rounds.iter().flatten().any(|p| p == pkg)
+                    && !plan.blocked_by.contains_key(pkg)
+                {
+                    // Only a baseline build, of a package not left to
+                    // rebuild: nothing to say.
+                    continue;
+                }
+                LocalVerdict::NotBuilt
+            }
+            Some(n) if n.passed => match &branch_vr {
+                Some(b) if without_dist(b) == without_dist(&n.version_release) => {
+                    LocalVerdict::BuildsAsIs
+                }
+                Some(_) => LocalVerdict::FixedLocally,
+                None if failed_before.is_empty() => LocalVerdict::BuildsAsIs,
+                None => LocalVerdict::FixedLocally,
+            },
+            Some(n) => match bl.iter().find(|b| b.version_release == n.version_release) {
+                Some(b) if b.passed => LocalVerdict::FailsWithNewLibrary,
+                Some(_) => LocalVerdict::AlreadyBroken,
+                None => LocalVerdict::Fails,
+            },
+        };
+        results.push(LocalResult {
+            package: pkg.clone(),
+            verdict,
+            sidetag: newest,
+            building,
+            failed_before,
+            baseline: baseline_build,
+            on_branch: branch_vr,
+            in_side_tag,
+            wrong_library,
+        });
+    }
+    results
+}
+
 /// The plan as Markdown, for a mailing list post or a Bodhi comment.
 pub fn render(plan: &RebuildPlan) -> String {
     let mut out = String::new();
@@ -636,6 +923,7 @@ pub fn render(plan: &RebuildPlan) -> String {
     let _ = writeln!(out, "## {heading} ({ready})\n");
     render_rounds(&mut out, plan);
     render_pull_requests(&mut out, plan);
+    render_local_builds(&mut out, plan);
     render_contacts(&mut out, plan);
 
     if !plan.blocked_by.is_empty() {
@@ -955,6 +1243,124 @@ fn render_pull_requests(out: &mut String, plan: &RebuildPlan) {
     }
 }
 
+/// What the local mock builds say, worst first.
+fn render_local_builds(out: &mut String, plan: &RebuildPlan) {
+    if plan.local_builds.is_empty() {
+        return;
+    }
+    let lib = &plan.library;
+    let _ = writeln!(out, "## Local builds ({})\n", plan.local_builds.len());
+    let wrong: Vec<&LocalResult> = plan
+        .local_builds
+        .iter()
+        .filter(|r| !r.wrong_library.is_empty())
+        .collect();
+    if !wrong.is_empty() {
+        let (new, old) = plan.local_libraries.clone().unwrap_or_default();
+        let _ = writeln!(out, "### Built against the wrong {lib} ({})\n", wrong.len());
+        let _ = writeln!(
+            out,
+            "These results do not show what their directory claims: side tag builds should \
+             have {lib} {}, baseline builds {}. Rebuild them before trusting the verdicts \
+             below.\n",
+            new.as_deref().unwrap_or("(unknown)"),
+            old.as_deref().unwrap_or("(unknown)")
+        );
+        for r in &wrong {
+            for (which, vr, found) in &r.wrong_library {
+                let _ = writeln!(
+                    out,
+                    "- {}-{vr} ({which}): built with {lib} {found}",
+                    r.package
+                );
+            }
+        }
+        out.push('\n');
+    }
+    let groups = [
+        (
+            LocalVerdict::FailsWithNewLibrary,
+            format!("Fail with the new {lib} only"),
+        ),
+        (
+            LocalVerdict::Fails,
+            format!("Fail with the new {lib}, no baseline build to compare"),
+        ),
+        (
+            LocalVerdict::AlreadyBroken,
+            format!("Fail without the new {lib} too"),
+        ),
+        (
+            LocalVerdict::FixedLocally,
+            "Fixed locally, to be proposed or merged".to_string(),
+        ),
+        (
+            LocalVerdict::InSideTag,
+            "Already in the side tag".to_string(),
+        ),
+        (LocalVerdict::BuildsAsIs, "Build as they are".to_string()),
+        (LocalVerdict::Building, "Being built now".to_string()),
+        (
+            LocalVerdict::NotBuilt,
+            "Left to rebuild, not built locally".to_string(),
+        ),
+    ];
+    for (verdict, heading) in groups {
+        let rs: Vec<&LocalResult> = plan
+            .local_builds
+            .iter()
+            .filter(|r| r.verdict == verdict)
+            .collect();
+        if rs.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "### {heading} ({})\n", rs.len());
+        for r in rs {
+            let _ = write!(out, "- {}", r.package);
+            match (&r.building, &r.sidetag) {
+                (Some(vr), _) => {
+                    let _ = write!(out, " {vr}");
+                }
+                (None, Some(st)) => {
+                    let _ = write!(out, " {}", st.version_release);
+                }
+                (None, None) => {}
+            }
+            let mut notes = Vec::new();
+            if verdict == LocalVerdict::FixedLocally
+                && let Some(b) = &r.on_branch
+            {
+                notes.push(format!("{} has {b}", plan.branch));
+            }
+            if verdict == LocalVerdict::InSideTag
+                && let Some(t) = &r.in_side_tag
+            {
+                notes.push(format!("side tag has {t}"));
+            }
+            if !r.failed_before.is_empty() {
+                notes.push(format!("failed at {}", r.failed_before.join(", ")));
+            }
+            if verdict == LocalVerdict::Building
+                && let Some(st) = &r.sidetag
+            {
+                let state = if st.passed { "passed" } else { "failed" };
+                notes.push(format!("{} {state}", st.version_release));
+            }
+            if verdict == LocalVerdict::NotBuilt
+                && let Some(b) = &r.baseline
+            {
+                let state = if b.passed { "passes" } else { "fails" };
+                notes.push(format!("baseline {} {state}", b.version_release));
+            }
+            if !notes.is_empty() {
+                let _ = write!(out, " ({})", notes.join("; "));
+            }
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+}
+
 /// Who to contact about the packages left to rebuild.
 fn render_contacts(out: &mut String, plan: &RebuildPlan) {
     if plan.contacts.is_empty() {
@@ -1078,6 +1484,13 @@ fn render_rounds(out: &mut String, plan: &RebuildPlan) {
 /// Plan the rebuilds and print the result.
 pub fn run(opts: &Options) -> Result<(), String> {
     sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
+    // Read before the slow part, so a mistyped path costs seconds.
+    let read = |dir: &Option<PathBuf>| match dir {
+        Some(d) => read_results(d, &opts.library).map(Some),
+        None => Ok(None),
+    };
+    let sidetag_builds = read(&opts.sidetag_results)?;
+    let baseline_builds = read(&opts.baseline_results)?;
     let side_tag = match &opts.side_tag {
         Some(tag) => {
             // `koji` has no `--version`, and `koji version` asks the hub, so
@@ -1112,6 +1525,43 @@ pub fn run(opts: &Options) -> Result<(), String> {
         if opts.contacts {
             plan.contacts = contacts(&plan, &opts.matrix_rooms, &distgit, opts.verbose);
         }
+    }
+    if sidetag_builds.is_some() || baseline_builds.is_some() {
+        let sidetag_builds = sidetag_builds.unwrap_or_default();
+        let baseline_builds = baseline_builds.unwrap_or_default();
+        let mut packages: BTreeSet<String> = sidetag_builds
+            .finished
+            .keys()
+            .chain(sidetag_builds.unfinished.keys())
+            .chain(baseline_builds.finished.keys())
+            .cloned()
+            .collect();
+        packages.extend(plan.rounds.iter().flatten().cloned());
+        packages.insert(opts.library.clone());
+        let packages: Vec<String> = packages.into_iter().collect();
+        let on_branch = fedrq
+            .src_nvrs(&packages)
+            .map(|nvrs| crate::branch_request::match_nvrs_to_packages(&nvrs, &packages))
+            .unwrap_or_else(|e| {
+                eprintln!("warning: could not read the branch's versions: {e}");
+                BTreeMap::new()
+            });
+        let new_library = side_tag.as_ref().and_then(|st| {
+            st.nvrs
+                .iter()
+                .filter_map(|n| split_nvr(n))
+                .find(|(name, _)| *name == opts.library)
+                .map(|(_, vr)| vr.to_string())
+        });
+        let old_library = on_branch.get(&opts.library).cloned();
+        plan.local_builds = local_results(
+            &plan,
+            &sidetag_builds,
+            &baseline_builds,
+            &on_branch,
+            (new_library.as_deref(), old_library.as_deref()),
+        );
+        plan.local_libraries = Some((new_library, old_library));
     }
     if opts.json {
         println!(
@@ -1265,6 +1715,41 @@ fn checks_on_head(
         names.dedup();
     }
     checks
+}
+
+/// `name-version-release` → `(name, version-release)`, splitting from
+/// the right since names contain dashes.
+fn split_nvr(nvr: &str) -> Option<(&str, &str)> {
+    let (rest, _release) = nvr.rsplit_once('-')?;
+    let (name, _version) = rest.rsplit_once('-')?;
+    (!name.is_empty()).then(|| (name, &nvr[name.len() + 1..]))
+}
+
+/// A version-release without its dist tag (`4.20.3-4.fc45` →
+/// `4.20.3-4`), so a build from the same dist-git commit for another
+/// release compares equal.
+fn without_dist(vr: &str) -> &str {
+    match vr.rsplit_once('.') {
+        Some((rest, tag))
+            if (tag.starts_with("fc") || tag.starts_with("el"))
+                && tag[2..].starts_with(|c: char| c.is_ascii_digit()) =>
+        {
+            rest
+        }
+        _ => vr,
+    }
+}
+
+/// The version-release of `package` in an `installed_pkgs.log`, whose
+/// lines start with the package's NEVRA (`libical-4.0.7-1.fc46.aarch64
+/// 1793609616 1494313 installed`).
+fn installed_version(log: &str, package: &str) -> Option<String> {
+    log.lines().find_map(|line| {
+        let nevra = line.split_whitespace().next()?;
+        let (nvr, _arch) = nevra.rsplit_once('.')?;
+        let (name, vr) = split_nvr(nvr)?;
+        (name == package).then(|| vr.to_string())
+    })
 }
 
 fn is_soname(name: &str) -> bool {
@@ -2883,6 +3368,201 @@ mod tests {
             "{out}"
         );
         assert!(!render(&libical_plan()).contains("## Who to contact"));
+    }
+
+    /// Write a mock build directory: `<nvr>/` with its marker and an
+    /// `installed_pkgs.log` naming the libical in its buildroot.
+    fn mock_build(dir: &Path, nvr: &str, passed: bool, libical: &str) {
+        let d = dir.join(nvr);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(if passed { "success" } else { "fail" }), "").unwrap();
+        std::fs::write(
+            d.join("installed_pkgs.log"),
+            format!(
+                "gpg-pubkey-d924b10d-697c9899 1769773209 0 installed\n\
+                 libical-devel-{libical}.aarch64 1793609616 1967921 installed\n\
+                 libical-{libical}.aarch64 1793609616 1494313 installed\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    const NEW: &str = "4.0.7-1.fc46";
+    const OLD: &str = "3.0.20-11.fc46";
+
+    /// The libical 4 results of 2026-11-04, cut down: osmo fails at -7
+    /// with the side tag and passes at -8; claws-mail passes at a
+    /// release dist-git does not have; asterisk fails with the new
+    /// library only; GoldenCheetah fails without it too; cyrus-imapd's
+    /// side tag build used the old library.
+    fn libical_results() -> (tempfile::TempDir, tempfile::TempDir) {
+        let st = tempfile::tempdir().unwrap();
+        let bl = tempfile::tempdir().unwrap();
+        mock_build(st.path(), "osmo-0.4.4-7.fc46", false, NEW);
+        mock_build(st.path(), "osmo-0.4.4-8.fc46", true, NEW);
+        mock_build(bl.path(), "osmo-0.4.4-8.fc46", true, OLD);
+        mock_build(st.path(), "claws-mail-4.4.0-10.fc46", true, NEW);
+        mock_build(st.path(), "asterisk-23.5.0-5.fc46", false, NEW);
+        mock_build(bl.path(), "asterisk-23.5.0-5.fc46", true, OLD);
+        mock_build(st.path(), "GoldenCheetah-3.8-2.fc46", false, NEW);
+        mock_build(bl.path(), "GoldenCheetah-3.8-2.fc46", false, OLD);
+        mock_build(st.path(), "cyrus-imapd-3.12.4-1.fc46", true, OLD);
+        // Rebuilt in the side tag at a newer release than built here.
+        mock_build(st.path(), "evolution-data-server-3.62.1-1.fc46", true, NEW);
+        // Not build directories, or not finished: skipped.
+        std::fs::create_dir_all(st.path().join("repodata")).unwrap();
+        std::fs::create_dir_all(st.path().join("noctalia-5.4.1-1.fc46")).unwrap();
+        // Running, after a release that failed.
+        mock_build(st.path(), "redwax-tool-1.0.0-11.fc46", false, NEW);
+        std::fs::create_dir_all(st.path().join("redwax-tool-1.0.0-12.fc46")).unwrap();
+        (st, bl)
+    }
+
+    fn libical_plan_with_local_builds() -> RebuildPlan {
+        let mut p = libical_plan();
+        let (st, bl) = libical_results();
+        let st = read_results(st.path(), "libical").unwrap();
+        let bl = read_results(bl.path(), "libical").unwrap();
+        let on_branch = BTreeMap::from([
+            ("osmo".to_string(), "0.4.4-7.fc46".to_string()),
+            ("claws-mail".to_string(), "4.4.0-9.fc46".to_string()),
+            // Last built for f45: the same commit as a local -1.fc46.
+            ("cyrus-imapd".to_string(), "3.12.4-1.fc45".to_string()),
+        ]);
+        p.local_builds = local_results(&p, &st, &bl, &on_branch, (Some(NEW), Some(OLD)));
+        p.local_libraries = Some((Some(NEW.to_string()), Some(OLD.to_string())));
+        p
+    }
+
+    fn local(p: &RebuildPlan, pkg: &str) -> LocalResult {
+        p.local_builds
+            .iter()
+            .find(|r| r.package == pkg)
+            .unwrap_or_else(|| panic!("{pkg} judged"))
+            .clone()
+    }
+
+    #[test]
+    fn a_results_directory_is_read_newest_build_last() {
+        let (st, _bl) = libical_results();
+        let results = read_results(st.path(), "libical").unwrap();
+        let builds = &results.finished;
+        let osmo: Vec<(&str, bool)> = builds["osmo"]
+            .iter()
+            .map(|b| (b.version_release.as_str(), b.passed))
+            .collect();
+        assert_eq!(osmo, vec![("0.4.4-7.fc46", false), ("0.4.4-8.fc46", true)]);
+        assert_eq!(builds["osmo"][1].library.as_deref(), Some(NEW));
+        assert!(!builds.contains_key("repodata"));
+        assert!(
+            !builds.contains_key("noctalia"),
+            "no marker: still building"
+        );
+        assert_eq!(results.unfinished["noctalia"], strs(&["5.4.1-1.fc46"]));
+    }
+
+    #[test]
+    fn local_builds_are_judged_against_the_baseline_and_the_branch() {
+        let p = libical_plan_with_local_builds();
+        let osmo = local(&p, "osmo");
+        assert_eq!(osmo.verdict, LocalVerdict::FixedLocally);
+        assert_eq!(osmo.failed_before, strs(&["0.4.4-7.fc46"]));
+        assert_eq!(local(&p, "claws-mail").verdict, LocalVerdict::FixedLocally);
+        assert_eq!(
+            local(&p, "asterisk").verdict,
+            LocalVerdict::FailsWithNewLibrary
+        );
+        assert_eq!(
+            local(&p, "GoldenCheetah").verdict,
+            LocalVerdict::AlreadyBroken
+        );
+        assert_eq!(local(&p, "cyrus-imapd").verdict, LocalVerdict::BuildsAsIs);
+        // Left to rebuild, with nothing local.
+        assert_eq!(local(&p, "phosh").verdict, LocalVerdict::NotBuilt);
+        let eds = local(&p, "evolution-data-server");
+        assert_eq!(eds.verdict, LocalVerdict::InSideTag);
+        assert_eq!(eds.in_side_tag.as_deref(), Some("3.62.1-2.fc46"));
+        let redwax = local(&p, "redwax-tool");
+        assert_eq!(redwax.verdict, LocalVerdict::Building);
+        assert_eq!(redwax.building.as_deref(), Some("1.0.0-12.fc46"));
+        assert_eq!(local(&p, "noctalia").verdict, LocalVerdict::Building);
+    }
+
+    #[test]
+    fn a_build_with_the_wrong_library_is_flagged() {
+        let p = libical_plan_with_local_builds();
+        assert_eq!(
+            local(&p, "cyrus-imapd").wrong_library,
+            vec![(
+                "side tag".to_string(),
+                "3.12.4-1.fc46".to_string(),
+                OLD.to_string()
+            )]
+        );
+        assert!(local(&p, "osmo").wrong_library.is_empty());
+        let out = render(&p);
+        assert!(
+            out.contains("### Built against the wrong libical (1)"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "- cyrus-imapd-3.12.4-1.fc46 (side tag): built with libical 3.0.20-11.fc46"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn local_builds_are_rendered_worst_first() {
+        let out = render(&libical_plan_with_local_builds());
+        let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("{s} in {out}"));
+        assert!(
+            at("### Fail with the new libical only (1)")
+                < at("### Fail without the new libical too")
+        );
+        assert!(at("### Fail without the new libical too") < at("### Fixed locally"));
+        assert!(
+            out.contains("- osmo 0.4.4-8.fc46 (rawhide has 0.4.4-7.fc46; failed at 0.4.4-7.fc46)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("### Left to rebuild, not built locally"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "### Being built now (2)\n\n- noctalia 5.4.1-1.fc46\n\
+                 - redwax-tool 1.0.0-12.fc46 (1.0.0-11.fc46 failed)"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn nvrs_split_from_the_right() {
+        assert_eq!(
+            split_nvr("evolution-data-server-3.62.1-2.fc46"),
+            Some(("evolution-data-server", "3.62.1-2.fc46"))
+        );
+        assert_eq!(
+            split_nvr("bluez-5.87^20260918gitb5ed56d8c-4.fc46"),
+            Some(("bluez", "5.87^20260918gitb5ed56d8c-4.fc46"))
+        );
+        assert_eq!(split_nvr("repodata"), None);
+        assert_eq!(without_dist("4.20.3-4.fc45"), "4.20.3-4");
+        assert_eq!(without_dist("1.2-3.el10_1"), "1.2-3");
+        assert_eq!(
+            without_dist("5.87^20260918gitb5ed56d8c-4"),
+            "5.87^20260918gitb5ed56d8c-4"
+        );
+        assert_eq!(
+            installed_version(
+                "libical-glib-4.0.7-1.fc46.aarch64 1 2 installed\nlibical-4.0.7-1.fc46.aarch64 1 2 installed\n",
+                "libical"
+            ),
+            Some("4.0.7-1.fc46".to_string())
+        );
     }
 
     #[test]

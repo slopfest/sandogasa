@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan reads local mock results
+
+Rebuilds worked on locally in mock were invisible to the plan, which
+only knows Koji: which packages fail with the new library, which fail
+regardless of it, and which a local change already fixes had to be read
+off the result directories by hand. That is also where a mistake hides:
+during the libical 4 rebuild a "side tag" build turned out to have used
+stock rawhide, because a variable was not set.
+
+`rebuild-plan --sidetag-results <dir> --baseline-results <dir>` reads
+two `mock --chain --localrepo` result directories, one built with the
+side tag and one against the branch as it is, without building
+anything. Each package's newest build with the side tag (by RPM version
+comparison, so a passing -8 wins over a failing -7) is judged against
+the same release in the baseline, the branch and the side tag: failing
+with the new library only, failing without it too, fixed locally at a
+release the branch does not have yet, already in the side tag, or
+building as it is (the dist tag aside, so `-4.fc45` on the branch and a
+local `-4.fc46` are the same commit); a package whose newest build has
+no marker yet is listed as being built, and packages left to rebuild
+with no local build are listed. Every build's
+`installed_pkgs.log` is checked for the library version it got, and a
+build with the wrong one is listed first. The directories are read
+before the plan's slow queries, so a mistyped path fails at once.
+Refs #58.
+
 ### ebranch: rebuild-plan can list who to contact about each package left
 
 Reminding maintainers about the rebuilds still to do meant looking up,

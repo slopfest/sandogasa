@@ -1174,6 +1174,36 @@ addresses are not listed. The Matrix rooms come from a built-in list
 perl-sig = "#perl:fedoraproject.org"
 ```
 
+Local mock builds can be folded in with `--sidetag-results <dir>` (built
+with the side tag) and `--baseline-results <dir>` (built against the
+branch as it is). Each directory holds one subdirectory per build, named
+by its NVR, with mock's logs and a `success` or `fail` marker, as
+`mock --chain --localrepo` leaves them; they are only read, never built.
+For each package, the newest build with the side tag (by RPM version
+comparison) is judged:
+
+- fails with the new library only, when the same release passes in the
+  baseline
+- fails without it too, when it fails in the baseline as well
+- fixed locally, when it passes at a release the branch does not have
+  yet (earlier releases that failed are listed)
+- already in the side tag, when the side tag has a build at least as new
+- builds as it is, when it passes at the branch's release, the dist tag
+  aside
+
+A build directory with neither marker is taken to be running, and a
+package whose newest build is running is listed as being built. Packages
+left to rebuild with no local build are listed too. Each
+build's `installed_pkgs.log` is checked for the library it got: a side
+tag build should have the side tag's, a baseline build the branch's, and
+one that does not is listed first, as its verdict cannot be trusted.
+
+```console
+$ ebranch rebuild-plan libical -s f46-build-side-158330 \
+    --sidetag-results results/fedora-rawhide-aarch64 \
+    --baseline-results results/fedora-rawhide-aarch64-baseline
+```
+
 Queries use the repositories of the architecture fedrq runs on.
 
 The output is Markdown, for a mailing list post or a Bodhi comment;

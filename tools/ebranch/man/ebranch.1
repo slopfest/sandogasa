@@ -764,7 +764,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 [\fIPACKAGES\fR]
 Source RPM names to analyze
 .SS ebranch rebuild-plan
-\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-contacts\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
+\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-contacts\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
 .PP
 Plan the rebuilds a library\*(Aqs SONAME bump calls for.
 .PP
@@ -800,6 +800,15 @@ each package left to rebuild is listed with its \-maintainers alias,
 the groups with commit access to it (with their Matrix rooms, from a
 built\-in list that a [matrix\-rooms] table in the config extends), and
 its version\-release on the branch.
+.PP
+With \-\-sidetag\-results and \-\-baseline\-results, local mock results are
+read (never built): each package\*(Aqs newest build with the side tag is
+judged against the same release built on the branch as it is, and
+against the branch and side tag, as failing with the new library only,
+failing without it too, fixed locally, already in the side tag, or
+building as it is. Builds whose
+buildroot had another version of the library than their directory
+claims are flagged first.
 .TP
 \fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR [default: rawhide]
 Branch the library is bumped on
@@ -812,6 +821,12 @@ CSV of dist\-git accounts whose pull requests carry the fixes (the change owners
 .TP
 \fB\-\-contacts\fR
 For each package left to rebuild, who to contact: its \-maintainers alias, groups with commit access and their Matrix rooms, and its version\-release
+.TP
+\fB\-\-sidetag\-results\fR \fI<DIR>\fR
+Local mock results built with the side tag: one directory per build, named by NVR, with a success or fail marker. Read only
+.TP
+\fB\-\-baseline\-results\fR \fI<DIR>\fR
+Local mock results built against the branch as it is, to tell failures the new library causes from older ones
 .TP
 \fB\-\-json\fR
 Print the plan as JSON
