@@ -39,6 +39,9 @@ pub struct Options {
     /// Local mock results built against the branch as it is, the old
     /// library.
     pub baseline_results: Option<PathBuf>,
+    /// Existing dist-git checkouts, one per package (`DIR/<package>`),
+    /// that clones of dist-git borrow objects from. Read only.
+    pub distgit_dir: Option<PathBuf>,
     pub json: bool,
     pub verbose: bool,
 }
@@ -1527,6 +1530,11 @@ pub fn run(opts: &Options) -> Result<(), String> {
     };
     let sidetag_builds = read(&opts.sidetag_results)?;
     let baseline_builds = read(&opts.baseline_results)?;
+    if let Some(d) = &opts.distgit_dir
+        && !d.is_dir()
+    {
+        return Err(format!("{}: not a directory", d.display()));
+    }
     let side_tag = match &opts.side_tag {
         Some(tag) => {
             // `koji` has no `--version`, and `koji version` asks the hub, so
@@ -1593,6 +1601,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
         let at_head = dist_git_heads(
             &needs_head(&plan, &sidetag_builds),
             &opts.branch,
+            opts.distgit_dir.as_deref(),
             opts.verbose,
         );
         plan.local_builds = local_results(
@@ -1786,10 +1795,17 @@ fn needs_head(plan: &RebuildPlan, sidetag: &Results) -> Vec<String> {
 /// `fedpkg verrel` in a clone kept under ebranch's cache directory
 /// (fetched again on later runs). `%autorelease` counts every commit
 /// since the last version change, so the clone has the whole history
-/// of the branch: a shallow one gives too low a release. A package
-/// that cannot be read is warned about and left out, and its verdict
-/// falls back to the branch's latest build.
-fn dist_git_heads(packages: &[String], branch: &str, verbose: bool) -> BTreeMap<String, String> {
+/// of the branch: a shallow one gives too low a release. The first
+/// clone of a package borrows what it can from its checkout in
+/// `checkouts`, if there is one. A package that cannot be read is
+/// warned about and left out, and its verdict falls back to the
+/// branch's latest build.
+fn dist_git_heads(
+    packages: &[String],
+    branch: &str,
+    checkouts: Option<&Path>,
+    verbose: bool,
+) -> BTreeMap<String, String> {
     if packages.is_empty() {
         return BTreeMap::new();
     }
@@ -1809,7 +1825,7 @@ fn dist_git_heads(packages: &[String], branch: &str, verbose: bool) -> BTreeMap<
         if verbose {
             eprintln!("[rebuild-plan] dist-git {branch} of {pkg}");
         }
-        match dist_git_head(&cache, pkg, branch) {
+        match dist_git_head(&cache, pkg, branch, checkouts) {
             Ok(vr) => {
                 heads.insert(pkg.clone(), vr);
             }
@@ -1819,9 +1835,41 @@ fn dist_git_heads(packages: &[String], branch: &str, verbose: bool) -> BTreeMap<
     heads
 }
 
+/// `pkg`'s checkout in `checkouts`, if it has one: a directory with a
+/// `.git` (a file, for a worktree).
+fn checkout_of(checkouts: Option<&Path>, pkg: &str) -> Option<PathBuf> {
+    let dir = checkouts?.join(pkg);
+    dir.join(".git").exists().then_some(dir)
+}
+
+/// The arguments for a full clone of `branch` from `url` into
+/// `target`. With a `reference`, git copies the objects it already
+/// has from there and downloads only the rest; `--dissociate` makes
+/// the clone independent of it afterwards. The reference is only
+/// read, so its branches and local changes play no part.
+fn clone_args(url: &str, target: &str, branch: &str, reference: Option<&Path>) -> Vec<String> {
+    let mut args: Vec<String> = ["clone", "-q", "--single-branch", "-b", branch]
+        .map(String::from)
+        .into();
+    if let Some(r) = reference {
+        args.extend([
+            "--reference".to_string(),
+            r.to_string_lossy().into_owned(),
+            "--dissociate".to_string(),
+        ]);
+    }
+    args.extend([url.to_string(), target.to_string()]);
+    args
+}
+
 /// Clone or update `pkg`'s dist-git `branch` under `cache` and ask
 /// `fedpkg verrel` what it builds.
-fn dist_git_head(cache: &Path, pkg: &str, branch: &str) -> Result<String, String> {
+fn dist_git_head(
+    cache: &Path,
+    pkg: &str,
+    branch: &str,
+    checkouts: Option<&Path>,
+) -> Result<String, String> {
     if pkg.is_empty()
         || !pkg
             .chars()
@@ -1830,7 +1878,7 @@ fn dist_git_head(cache: &Path, pkg: &str, branch: &str) -> Result<String, String
         return Err(format!("unexpected package name {pkg:?}"));
     }
     let dir = cache.join(pkg);
-    let git = |args: &[&str], cwd: Option<&Path>| -> Result<(), String> {
+    let git = |args: &[String], cwd: Option<&Path>| -> Result<(), String> {
         let mut cmd = std::process::Command::new("git");
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
@@ -1850,25 +1898,33 @@ fn dist_git_head(cache: &Path, pkg: &str, branch: &str) -> Result<String, String
         }
     };
     if dir.join(".git").is_dir() {
-        git(&["fetch", "-q", "origin", branch], Some(&dir))?;
-        git(&["checkout", "-q", "--detach", "FETCH_HEAD"], Some(&dir))?;
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        git(&args(&["fetch", "-q", "origin", branch]), Some(&dir))?;
+        git(
+            &args(&["checkout", "-q", "--detach", "FETCH_HEAD"]),
+            Some(&dir),
+        )?;
     } else {
         std::fs::create_dir_all(cache)
             .map_err(|e| format!("cannot create {}: {e}", cache.display()))?;
         let url = format!("https://src.fedoraproject.org/rpms/{pkg}.git");
         let target = dir.to_string_lossy().into_owned();
-        git(
-            &[
-                "clone",
-                "-q",
-                "--single-branch",
-                "-b",
-                branch,
-                &url,
-                &target,
-            ],
+        let reference = checkout_of(checkouts, pkg);
+        let cloned = git(
+            &clone_args(&url, &target, branch, reference.as_deref()),
             None,
-        )?;
+        );
+        if let (Err(e), Some(r)) = (&cloned, &reference) {
+            // A checkout git cannot borrow from should not cost the
+            // comparison: clone from dist-git alone.
+            eprintln!(
+                "warning: cloning {pkg} with {} as a reference: {e}; cloning without it",
+                r.display()
+            );
+            git(&clone_args(&url, &target, branch, None), None)?;
+        } else {
+            cloned?;
+        }
     }
     let out = std::process::Command::new("fedpkg")
         .args(["--release", branch, "verrel"])
@@ -3787,6 +3843,59 @@ mod tests {
         );
         assert_eq!(parse_verrel("redwax-tool-1.0.0-12.fc46\n", "osmo"), None);
         assert_eq!(parse_verrel("", "osmo"), None);
+    }
+
+    #[test]
+    fn only_git_checkouts_are_borrowed_from() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("osmo/.git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("orage")).unwrap();
+        // A worktree's .git is a file.
+        std::fs::create_dir_all(dir.path().join("phosh")).unwrap();
+        std::fs::write(dir.path().join("phosh/.git"), "gitdir: elsewhere\n").unwrap();
+        assert_eq!(
+            checkout_of(Some(dir.path()), "osmo"),
+            Some(dir.path().join("osmo"))
+        );
+        assert_eq!(
+            checkout_of(Some(dir.path()), "phosh"),
+            Some(dir.path().join("phosh"))
+        );
+        assert_eq!(checkout_of(Some(dir.path()), "orage"), None);
+        assert_eq!(checkout_of(Some(dir.path()), "bluez"), None);
+        assert_eq!(checkout_of(None, "osmo"), None);
+    }
+
+    #[test]
+    fn clones_borrow_from_a_checkout_and_then_drop_it() {
+        let url = "https://src.fedoraproject.org/rpms/osmo.git";
+        assert_eq!(
+            clone_args(url, "/c/osmo", "rawhide", None),
+            [
+                "clone",
+                "-q",
+                "--single-branch",
+                "-b",
+                "rawhide",
+                url,
+                "/c/osmo"
+            ]
+        );
+        assert_eq!(
+            clone_args(url, "/c/osmo", "rawhide", Some(Path::new("/w/osmo"))),
+            [
+                "clone",
+                "-q",
+                "--single-branch",
+                "-b",
+                "rawhide",
+                "--reference",
+                "/w/osmo",
+                "--dissociate",
+                url,
+                "/c/osmo"
+            ]
+        );
     }
 
     #[test]

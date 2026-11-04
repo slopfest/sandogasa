@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan can clone dist-git from existing checkouts
+
+Measuring local builds against dist-git cloned every package fresh into
+ebranch's cache, although whoever made those builds usually has a
+dist-git checkout of each package already. `rebuild-plan --distgit-dir
+<dir>` takes the directory holding them (`<dir>/<package>`) and clones
+with the checkout as a `--reference`, so only the objects it lacks are
+downloaded; `--dissociate` leaves the cache clone independent of it.
+`fedpkg verrel` still runs in the cache clone at dist-git's branch tip,
+never in the checkout, whose local commits and edits are the fixes
+being judged. A package with no checkout there is cloned as before.
+
 ### ebranch: resolve reads packages that only build with local changes
 
 `resolve` worked out a closure from the source branch alone, so when no

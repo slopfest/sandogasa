@@ -775,6 +775,11 @@ struct RebuildPlanArgs {
     #[arg(long, value_name = "DIR")]
     baseline_results: Option<std::path::PathBuf>,
 
+    /// Existing dist-git checkouts, one per package (DIR/<package>), to
+    /// clone from instead of downloading every object again. Read only.
+    #[arg(long, value_name = "DIR")]
+    distgit_dir: Option<std::path::PathBuf>,
+
     /// Print the plan as JSON.
     #[arg(long)]
     json: bool,
@@ -1372,6 +1377,7 @@ fn main() -> ExitCode {
             },
             sidetag_results: a.sidetag_results.clone(),
             baseline_results: a.baseline_results.clone(),
+            distgit_dir: a.distgit_dir.clone(),
             json: a.json,
             verbose: a.verbose,
         }));

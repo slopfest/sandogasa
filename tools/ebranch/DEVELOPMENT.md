@@ -567,6 +567,15 @@ the whole point.
   dist-git ignores `--filter=blob:none`, so there is no cheaper
   partial clone; a full single-branch clone of libreoffice is 43 MB
   and a few seconds, and is kept in the cache for later runs.
+- Never run `verrel` in the user's own checkouts (`--distgit-dir`).
+  They hold the very fixes being judged, as local commits or
+  uncommitted edits, so `verrel` there would count a local fix as what
+  dist-git builds and call it "builds as is". They serve only as a
+  `git clone --reference ... --dissociate` source for the cache clone:
+  read, never fetched into or checked out, and not needed afterwards
+  (no `objects/info/alternates` is left behind, so removing or
+  gc'ing a checkout cannot break the cache). A clone that fails with
+  the reference is retried without it.
 - Leave out a local build the side tag already has at the same or a
   newer release. Report one newer than the side tag's, since a release
   built outside the side tag shadows the side tag's build when the tag

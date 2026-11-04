@@ -767,7 +767,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 [\fIPACKAGES\fR]
 Source RPM names to analyze
 .SS ebranch rebuild-plan
-\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-contacts\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
+\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-contacts\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
 .PP
 Plan the rebuilds a library\*(Aqs SONAME bump calls for.
 .PP
@@ -832,6 +832,9 @@ Local mock results built with the side tag: one directory per build, named by NV
 .TP
 \fB\-\-baseline\-results\fR \fI<DIR>\fR
 Local mock results built against the branch as it is, to tell failures the new library causes from older ones
+.TP
+\fB\-\-distgit\-dir\fR \fI<DIR>\fR
+Existing dist\-git checkouts, one per package (DIR/<package>), to clone from instead of downloading every object again. Read only
 .TP
 \fB\-\-json\fR
 Print the plan as JSON

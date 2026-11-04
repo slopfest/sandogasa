@@ -1198,8 +1198,11 @@ comparison) is judged:
 What dist-git's branch would build comes from `fedpkg verrel` in a clone
 of the package kept under `~/.cache/ebranch/distgit/` and fetched again
 on later runs, so commits Koji has not built yet count, `%autorelease`
-included. Without `git` or `fedpkg`, the branch's latest build stands
-in. A local build the side tag already has at the same or a newer
+included. With `--distgit-dir <dir>`, a package with a checkout at
+`<dir>/<package>` is cloned from dist-git with that checkout as a
+reference, so only objects it lacks are downloaded; the checkout is
+only read, and its own branches and changes play no part. Without
+`git` or `fedpkg`, the branch's latest build stands in. A local build the side tag already has at the same or a newer
 release is left out.
 
 A build directory with neither marker is taken to be running, and a
@@ -1212,7 +1215,8 @@ one that does not is listed first, as its verdict cannot be trusted.
 ```console
 $ ebranch rebuild-plan libical -s f46-build-side-158330 \
     --sidetag-results results/fedora-rawhide-aarch64 \
-    --baseline-results results/fedora-rawhide-aarch64-baseline
+    --baseline-results results/fedora-rawhide-aarch64-baseline \
+    --distgit-dir ~/src/fedora/projects/libical4
 ```
 
 Queries use the repositories of the architecture fedrq runs on.
