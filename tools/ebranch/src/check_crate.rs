@@ -239,6 +239,7 @@ impl CheckCrateReport {
             branch_requests: self.branch_requests.clone(),
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::new(),
+            local: BTreeSet::new(),
         }
     }
 

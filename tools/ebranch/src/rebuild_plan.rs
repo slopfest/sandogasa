@@ -1719,7 +1719,7 @@ fn checks_on_head(
 
 /// `name-version-release` → `(name, version-release)`, splitting from
 /// the right since names contain dashes.
-fn split_nvr(nvr: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_nvr(nvr: &str) -> Option<(&str, &str)> {
     let (rest, _release) = nvr.rsplit_once('-')?;
     let (name, _version) = rest.rsplit_once('-')?;
     (!name.is_empty()).then(|| (name, &nvr[name.len() + 1..]))

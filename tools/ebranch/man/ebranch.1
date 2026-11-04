@@ -647,7 +647,7 @@ check\-crate or resolve report TOML listing the missing packages
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch find-cycles
-\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
+\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-\-local\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
 .PP
 Detect dependency cycles in the build graph
 .TP
@@ -758,6 +758,9 @@ Clear fedrq + libdnf5 repo metadata caches before querying
 \fB\-\-graph\fR \fI<PATH>\fR
 Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
 .TP
+\fB\-\-local\-repo\fR \fI<DIR>\fR
+Local mock results (a mock \-\-chain \-\-localrepo directory, with repodata) for packages no release builds as\-is for the target: those built there take their BuildRequires from their SRPM, and dependencies their binaries provide resolve to them
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
@@ -840,7 +843,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fILIBRARY\fR>
 The library\*(Aqs source package (e.g. libical)
 .SS ebranch resolve
-\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
+\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-\-local\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
 .PP
 Resolve the full dependency closure for porting
 .TP
@@ -950,6 +953,9 @@ Clear fedrq + libdnf5 repo metadata caches before querying
 .TP
 \fB\-\-graph\fR \fI<PATH>\fR
 Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
+.TP
+\fB\-\-local\-repo\fR \fI<DIR>\fR
+Local mock results (a mock \-\-chain \-\-localrepo directory, with repodata) for packages no release builds as\-is for the target: those built there take their BuildRequires from their SRPM, and dependencies their binaries provide resolve to them
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

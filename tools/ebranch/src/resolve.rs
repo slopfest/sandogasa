@@ -67,6 +67,12 @@ pub struct Closure {
     /// interactive prompt). These *are* in `closure`.
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub overrides: BTreeSet<String>,
+    /// Packages in `closure` read from local mock results
+    /// (`--local-repo`) rather than the source branch: they build
+    /// only with local changes, so their requests need more than
+    /// "branch and build".
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub local: BTreeSet<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -122,6 +128,10 @@ pub struct ResolveReport {
     /// package needs a new package review, not a branch request.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub overrides: BTreeSet<String>,
+    /// Packages in `packages` read from local mock results: they build
+    /// for the target only with local changes.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub local: BTreeSet<String>,
 }
 
 /// A filed branch-request bug and whether it's been escalated.
@@ -160,6 +170,7 @@ impl ResolveReport {
             branch_requests: BTreeMap::new(),
             blocked_by_base: closure.blocked_by_base.clone(),
             overrides: closure.overrides.clone(),
+            local: closure.local.clone(),
         }
     }
 }
@@ -1072,6 +1083,7 @@ fn resolve_closure_with_cache(
         closure,
         blocked_by_base,
         overrides,
+        local: BTreeSet::new(),
         warnings,
     })
 }
@@ -1803,6 +1815,7 @@ mod tests {
             .collect(),
             blocked_by_base: Default::default(),
             overrides: Default::default(),
+            local: Default::default(),
             warnings: vec![],
         };
 
@@ -1848,6 +1861,7 @@ mod tests {
             closure: closure_map,
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::new(),
+            local: BTreeSet::new(),
             warnings: vec![],
         };
         let report = ResolveReport::from_closure(&closure);
@@ -1898,12 +1912,14 @@ mod tests {
             branch_requests: requests,
             blocked_by_base: blocked,
             overrides: BTreeSet::from(["a".to_string()]),
+            local: BTreeSet::from(["b".to_string()]),
         };
         let toml = toml::to_string_pretty(&report).unwrap();
         let back: ResolveReport = toml::from_str(&toml).unwrap();
         assert_eq!(back.packages, report.packages);
         assert_eq!(back.branch_requests.get("a").unwrap().rhbz, 42);
         assert!(back.branch_requests.get("a").unwrap().pinged);
+        assert_eq!(back.local, BTreeSet::from(["b".to_string()]));
         let b = back.blocked_by_base.get("python-setuptools").unwrap();
         assert_eq!(b.base_version, "69.0.3-9.el10");
         assert!(b.required_by.contains("python-django6"));

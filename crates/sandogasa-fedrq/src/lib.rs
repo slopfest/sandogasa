@@ -548,13 +548,18 @@ impl Fedrq {
         args: &[&str],
         operands: &[S],
     ) -> Result<Vec<PkgInfo>, Error> {
+        let raw = Self::run_raw(&mut self.json_command(args, operands))?;
+        serde_json::from_str(&raw).map_err(|e| Error::Parse(e.to_string()))
+    }
+
+    /// The command [`Self::query_json`] runs.
+    fn json_command<S: AsRef<std::ffi::OsStr>>(&self, args: &[&str], operands: &[S]) -> Command {
         let mut cmd = Command::new("fedrq");
         cmd.args(args);
         self.apply_opts(&mut cmd);
         cmd.arg("--");
         cmd.args(operands);
-        let raw = Self::run_raw(&mut cmd)?;
-        serde_json::from_str(&raw).map_err(|e| Error::Parse(e.to_string()))
+        cmd
     }
 
     /// Run `fedrq subpkgs -S -F <formatter> <srpm>` and return one entry per line.
@@ -789,6 +794,27 @@ impl Fedrq {
                 "json:name,requires,source_name,repoid",
             ],
             srpms,
+        )
+    }
+
+    /// Every binary package in the selected repositories, with its
+    /// Requires, Provides, source, version and release — meant for a
+    /// small repository such as a local `@baseurl:file://` one, where
+    /// listing everything is one cheap query.
+    pub fn binaries_info(&self) -> Result<Vec<PkgInfo>, Error> {
+        let raw = Self::run_raw(&mut self.binaries_info_command())?;
+        serde_json::from_str(&raw).map_err(|e| Error::Parse(e.to_string()))
+    }
+
+    fn binaries_info_command(&self) -> Command {
+        self.json_command(
+            &[
+                "pkgs",
+                "-S",
+                "-F",
+                "json:name,requires,provides,source_name,repoid,version,release",
+            ],
+            &["*"],
         )
     }
 
@@ -1192,6 +1218,28 @@ mod tests {
         assert!(before.windows(2).any(|w| w == ["-F", "name"]), "{args:?}");
         assert_eq!(args[sep + 1], "pkgconfig(libical)", "{args:?}");
         assert!(f.whatrequires_src(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn binaries_info_lists_every_binary_of_a_local_repo() {
+        let f = Fedrq {
+            branch: None,
+            repo: Some("@baseurl:file:///srv/results".to_string()),
+        };
+        let args = argv(&f.binaries_info_command());
+        let sep = args.iter().position(|a| a == "--").expect("separator");
+        assert_eq!(&args[..2], ["pkgs", "-S"], "{args:?}");
+        assert!(
+            args[..sep]
+                .windows(2)
+                .any(|w| w == ["-r", "@baseurl:file:///srv/results"]),
+            "{args:?}"
+        );
+        assert!(
+            args[..sep].iter().any(|a| a.contains("version,release")),
+            "{args:?}"
+        );
+        assert_eq!(args[sep + 1..], ["*"], "{args:?}");
     }
 
     #[test]

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: resolve reads packages that only build with local changes
+
+`resolve` worked out a closure from the source branch alone, so when no
+Fedora release had a package in a state that builds for the target,
+the closure described a build nobody would make: python-sphinx-autoapi
+needs a sphinx newer than c10s has from rawhide on, and only an older
+commit builds for epel10 (rhbz#2563239).
+
+`resolve --local-repo <dir>` (and `find-cycles`) reads a
+`mock --chain --localrepo` results directory. For each package built
+there, the newest successful build's SRPM supplies its BuildRequires as
+evaluated for the target, its binaries satisfy dependencies on it (so
+a versioned dependency on an older release finds the local build), and
+its binaries' Requires feed the installability check. Everything else
+is asked of fedrq as before. The packages stay in the closure, marked
+as coming from local results in the output, in `--json` and in the
+`--report` file (`local`), since their requests need more than "branch
+and build". The directory is read before resolving starts, so one
+without repodata fails at once. Resolves #59.
+
+### sandogasa-fedrq: `Fedrq::binaries_info`
+
+Lists every binary package in the selected repositories with its
+Requires, Provides, source, version and release, for small
+repositories such as a local `@baseurl:file://` one.
+
 ### ebranch: rebuild-plan reads local mock results
 
 Rebuilds worked on locally in mock were invisible to the plan, which

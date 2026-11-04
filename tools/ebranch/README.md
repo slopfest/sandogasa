@@ -1267,6 +1267,30 @@ base-distro guard, which are always live — goes to fedrq, and the
 summary says how many lookups went each way. The graph is a snapshot
 of the source branch; its periodic regeneration is the refresh.
 
+#### Packages that only build with local changes
+
+When no Fedora release has a package in a state that builds for the
+target, and it is built locally instead, pass the results with
+`--local-repo DIR`: a `mock --chain --localrepo` results directory,
+with one subdirectory per build named by its NVR and the repodata mock
+writes. For each package built there, the newest successful build (or
+the newest attempt, when none passed) is read:
+
+- its BuildRequires come from its SRPM, as evaluated for the target,
+  instead of from the source branch
+- a dependency one of its binaries satisfies resolves to it, so a
+  versioned dependency on an older release finds the local build
+- its binaries' Requires are what the installability check reads
+
+Such packages stay in the closure, since they still need a branch,
+and are marked as coming from local results, in the output and in a
+`--report` file. The directory is only read.
+
+```console
+$ ebranch resolve python-sphinx-autoapi -s rawhide -t epel10 \
+    --local-repo results/epel-10-x86_64
+```
+
 #### Base-distro guard (EPEL targets)
 
 EPEL packages must not replace base-distro (RHEL / CentOS Stream)

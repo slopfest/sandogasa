@@ -2387,6 +2387,7 @@ mod tests {
             branch_requests: BTreeMap::new(),
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::from(["rust-alt".to_string()]),
+            local: BTreeSet::new(),
         };
         // Pre-flight found python-setuptools in the base — even though
         // the (stale) report lists it as a plain package.
@@ -2440,6 +2441,7 @@ mod tests {
             branch_requests: BTreeMap::new(),
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::new(),
+            local: BTreeSet::new(),
         };
         let source_present: BTreeMap<String, String> = report
             .packages
@@ -2904,6 +2906,7 @@ mod tests {
                 branch_requests: BTreeMap::new(),
                 blocked_by_base: BTreeMap::new(),
                 overrides: BTreeSet::new(),
+                local: BTreeSet::new(),
             },
             resolve_path,
         )
@@ -3164,6 +3167,7 @@ mod tests {
             )]),
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::new(),
+            local: BTreeSet::new(),
         }
     }
 
@@ -3767,6 +3771,7 @@ mod tests {
             branch_requests: BTreeMap::new(),
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::new(),
+            local: BTreeSet::new(),
         };
         let mut opts = mock_opts(&server.uri(), false);
         opts.base_branch = Some("c10s".to_string());
@@ -4104,6 +4109,7 @@ mod tests {
             branch_requests: BTreeMap::new(),
             blocked_by_base: BTreeMap::new(),
             overrides: BTreeSet::new(),
+            local: BTreeSet::new(),
         };
         let opts = mock_opts(&server.uri(), true);
         let changed = file_batch(&mut report, &[], &opts, &probe)

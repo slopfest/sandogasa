@@ -13,6 +13,7 @@ mod copr_prune;
 mod dag;
 mod discover;
 mod karma;
+mod local_repo;
 mod rebuild_plan;
 mod resolve;
 mod review_deps;
@@ -203,6 +204,13 @@ it can't infer (e.g. epel8)."
     /// go to fedrq.
     #[arg(long, value_name = "PATH")]
     graph: Option<String>,
+
+    /// Local mock results (a mock --chain --localrepo directory, with
+    /// repodata) for packages no release builds as-is for the target:
+    /// those built there take their BuildRequires from their SRPM,
+    /// and dependencies their binaries provide resolve to them.
+    #[arg(long, value_name = "DIR")]
+    local_repo: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args, Clone)]
@@ -2081,6 +2089,29 @@ fn main() -> ExitCode {
         source_offline: Default::default(),
         source_online: Default::default(),
     };
+    // Read before resolving, so a bad directory fails in seconds.
+    let local = match &args.local_repo {
+        Some(dir) => match local_repo::LocalRepo::load(dir, args.verbose) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => None,
+    };
+    let local_packages = local
+        .as_ref()
+        .map(local_repo::LocalRepo::packages)
+        .unwrap_or_default();
+    let overlay = local.map(|local| local_repo::LocalOverlay {
+        inner: &resolver,
+        local,
+    });
+    let dep_resolver: &dyn resolve::DepResolver = match &overlay {
+        Some(o) => o,
+        None => &resolver,
+    };
     let source_label = branch_repo_label(args.source.as_deref(), args.source_repo.as_deref());
     let target_label = branch_repo_label(args.target.as_deref(), args.target_repo.as_deref());
     let options = ResolveOptions {
@@ -2095,9 +2126,9 @@ fn main() -> ExitCode {
             !args.json && std::io::stdin().is_terminal()
         },
     };
-    let (closure, install_report) = if args.check_install {
+    let (mut closure, install_report) = if args.check_install {
         match resolve_with_installability(
-            &resolver,
+            dep_resolver,
             &args.packages,
             &source_label,
             &target_label,
@@ -2111,7 +2142,7 @@ fn main() -> ExitCode {
         }
     } else {
         match resolve_closure_with_options(
-            &resolver,
+            dep_resolver,
             &args.packages,
             &source_label,
             &target_label,
@@ -2124,6 +2155,11 @@ fn main() -> ExitCode {
             }
         }
     };
+
+    closure.local = local_packages
+        .into_iter()
+        .filter(|p| closure.closure.contains_key(p))
+        .collect();
 
     for w in &closure.warnings {
         eprintln!("warning: {w}");
@@ -2197,6 +2233,7 @@ fn main() -> ExitCode {
                     "closure": closure.closure,
                     "blocked_by_base": closure.blocked_by_base,
                     "overrides": closure.overrides,
+                    "local": closure.local,
                     "warnings": closure.warnings,
                     "build_order": phases,
                 });
@@ -2375,6 +2412,8 @@ fn render_blocked(closure: &resolve::Closure) -> String {
 fn override_marker(closure: &resolve::Closure, pkg: &str) -> &'static str {
     if closure.overrides.contains(pkg) {
         " (override — needs new package review)"
+    } else if closure.local.contains(pkg) {
+        " (from local results — builds only with local changes)"
     } else {
         ""
     }
