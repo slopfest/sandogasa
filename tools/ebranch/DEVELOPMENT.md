@@ -548,6 +548,17 @@ the whole point.
 - A directory's `repodata` indexes binary RPMs only (`fedrq -A src`
   finds none of its SRPMs), so anything about sources comes from the
   build directories themselves.
+- A `fail` marker does not always mean rpmbuild failed: with
+  `--postinst`, mock also writes it when the built packages cannot all
+  be installed together. asterisk-23.5.0-5 (2026-11-04) built all its
+  RPMs and failed there, because its voicemail backends conflict with
+  each other and with mwi-external by design. A build counts as having
+  got past rpmbuild only when the directory holds binary RPMs and
+  root.log has "Installation of built packages failed". It passes when
+  every dnf `Problem` is a conflict between two `@commandline`
+  packages. A missing dependency or a conflict with a repository
+  package can be exactly what a library bump breaks, so those stay
+  failures.
 - The newest build per package is chosen by RPM version comparison,
   never file times: a failed `-7` rebuilt as `-8` must resolve to `-8`
   whatever order they finished in.

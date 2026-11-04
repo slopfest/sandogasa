@@ -1179,7 +1179,12 @@ with the side tag) and `--baseline-results <dir>` (built against the
 branch as it is). Each directory holds one subdirectory per build, named
 by its NVR, with mock's logs and a `success` or `fail` marker, as
 `mock --chain --localrepo` leaves them; they are only read, never built.
-For each package, the newest build with the side tag (by RPM version
+A `fail` from mock's install check (`--postinst`) on a build that
+produced its RPMs is told apart from a failed build: when every
+problem dnf reports is one built package conflicting with another,
+the package's own `Conflicts:` make installing them all at once
+impossible, and the build counts as passing; any other install problem
+counts as a failure. Either way the problem is noted. For each package, the newest build with the side tag (by RPM version
 comparison) is judged:
 
 - fails with the new library only, when the same release passes in the

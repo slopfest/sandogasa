@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan tells a failed install check from a failed build
+
+A local build of asterisk was reported as failing although it had built
+all its RPMs: mock's `--postinst` check could not install them together,
+because asterisk's voicemail backends conflict with each other by
+design, and mock marks that `fail` too. With the baseline build failing
+the same way, a side tag build would have been called "already broken".
+rebuild-plan now reads root.log for a build that produced RPMs. If dnf's
+only problems are conflicts between the package's own subpackages, the
+build counts as passing. Any other install problem, such as a missing
+dependency, still counts as a failure, and the report quotes dnf's first
+problem.
+
 ### ebranch: rebuild-plan can clone dist-git from existing checkouts
 
 Measuring local builds against dist-git cloned every package fresh into

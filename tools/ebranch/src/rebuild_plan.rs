@@ -187,11 +187,28 @@ pub struct Contact {
 pub struct LocalBuild {
     /// `version-release`, from the build directory's name.
     pub version_release: String,
+    /// It built, and its packages could be installed, or could not
+    /// only because some of them conflict with each other.
     pub passed: bool,
+    /// The package built, but mock could not install all of its
+    /// packages together afterwards (`--postinst`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_check: Option<InstallCheck>,
     /// The library's version-release in the buildroot, from
     /// `installed_pkgs.log`, when its main package was there.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
+}
+
+/// Why mock could not install a build's packages together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InstallCheck {
+    /// The resolver's problems, one line each, as dnf printed them.
+    pub problems: Vec<String>,
+    /// Every problem is one built package conflicting with another
+    /// (`Conflicts:` between its own subpackages), so installing them
+    /// all at once can never work, and the build counts as passing.
+    pub own_conflicts: bool,
 }
 
 /// What the local builds say about a package.
@@ -721,6 +738,71 @@ pub(crate) struct Results {
     pub unfinished: BTreeMap<String, Vec<String>>,
 }
 
+/// Whether a build directory holds binary RPMs, which mock copies
+/// there only once rpmbuild has succeeded.
+fn has_binary_rpms(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.ends_with(".rpm") && !name.ends_with(".src.rpm")
+        })
+    })
+}
+
+/// A resolver problem in which one built package conflicts with
+/// another built package: `package asterisk-voicemail-… from
+/// @commandline conflicts with asterisk-mwi-external <= … provided by
+/// asterisk-mwi-external-… from @commandline`.
+fn is_own_conflict(problem: &str) -> bool {
+    problem.contains(" conflicts with ") && problem.matches("from @commandline").count() == 2
+}
+
+/// Why mock's install of the built packages failed, from its
+/// `root.log`: the `Problem` lines dnf printed between the last
+/// "Failed to resolve the transaction" and "Installation of built
+/// packages failed". `None` when the log shows no such failure.
+fn install_check(root_log: &str) -> Option<InstallCheck> {
+    let lines: Vec<&str> = root_log.lines().collect();
+    let failed = lines
+        .iter()
+        .rposition(|l| l.contains("Installation of built packages failed"))?;
+    // mock prefixes each line of dnf's output with `DEBUG util.py:NNN:  `.
+    let text = |l: &str| match l.split_once(".py:") {
+        Some((_, rest)) => rest
+            .split_once(':')
+            .map_or(rest, |(_, msg)| msg)
+            .trim()
+            .to_string(),
+        None => l.trim().to_string(),
+    };
+    let start = lines[..failed]
+        .iter()
+        .rposition(|l| l.contains("Failed to resolve the transaction"))
+        .unwrap_or(failed);
+    let texts: Vec<String> = lines[start..failed].iter().map(|l| text(l)).collect();
+    let problems: Vec<String> = texts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let (_, problem) = t.strip_prefix("Problem")?.split_once(": ")?;
+            // A lone `Problem: conflicting requests` says what went
+            // wrong on its next line, `- nothing provides …`.
+            if problem == "conflicting requests"
+                && let Some(detail) = texts.get(i + 1).and_then(|n| n.strip_prefix("- "))
+            {
+                return Some(detail.to_string());
+            }
+            Some(problem.to_string())
+        })
+        .collect();
+    let own_conflicts = !problems.is_empty() && problems.iter().all(|p| is_own_conflict(p));
+    Some(InstallCheck {
+        problems,
+        own_conflicts,
+    })
+}
+
 /// Read a mock results directory. Entries that are not build
 /// directories (`repodata`, stray files) are skipped.
 pub(crate) fn read_results(dir: &Path, library: &str) -> Result<Results, String> {
@@ -739,8 +821,8 @@ pub(crate) fn read_results(dir: &Path, library: &str) -> Result<Results, String>
         let Some((name, vr)) = split_nvr(nvr) else {
             continue;
         };
-        let passed = path.join("success").exists();
-        if !passed && !path.join("fail").exists() {
+        let succeeded = path.join("success").exists();
+        if !succeeded && !path.join("fail").exists() {
             unfinished
                 .entry(name.to_string())
                 .or_default()
@@ -750,12 +832,21 @@ pub(crate) fn read_results(dir: &Path, library: &str) -> Result<Results, String>
         let library = std::fs::read_to_string(path.join("installed_pkgs.log"))
             .ok()
             .and_then(|log| installed_version(&log, library));
+        let install_check = if succeeded || !has_binary_rpms(&path) {
+            None
+        } else {
+            std::fs::read_to_string(path.join("root.log"))
+                .ok()
+                .and_then(|log| install_check(&log))
+        };
+        let passed = succeeded || install_check.as_ref().is_some_and(|c| c.own_conflicts);
         builds
             .entry(name.to_string())
             .or_default()
             .push(LocalBuild {
                 version_release: vr.to_string(),
                 passed,
+                install_check,
                 library,
             });
     }
@@ -1271,6 +1362,28 @@ fn render_pull_requests(out: &mut String, plan: &RebuildPlan) {
     }
 }
 
+/// What a build's failed install check means, for its notes.
+fn install_note(b: &LocalBuild) -> Option<String> {
+    let check = b.install_check.as_ref()?;
+    Some(if check.own_conflicts {
+        format!(
+            "{} built; its own subpackages conflict, so mock could not install them together",
+            b.version_release
+        )
+    } else {
+        match check.problems.first() {
+            Some(p) => format!(
+                "{} built, but its packages do not install: {p}",
+                b.version_release
+            ),
+            None => format!(
+                "{} built, but its packages do not install",
+                b.version_release
+            ),
+        }
+    })
+}
+
 /// What the local mock builds say, worst first.
 fn render_local_builds(out: &mut String, plan: &RebuildPlan) {
     if plan.local_builds.is_empty() {
@@ -1378,6 +1491,12 @@ fn render_local_builds(out: &mut String, plan: &RebuildPlan) {
             }
             if !r.failed_before.is_empty() {
                 notes.push(format!("failed at {}", r.failed_before.join(", ")));
+            }
+            if let Some(n) = r.sidetag.as_ref().and_then(install_note) {
+                notes.push(n);
+            }
+            if let Some(n) = r.baseline.as_ref().and_then(install_note) {
+                notes.push(format!("baseline: {n}"));
             }
             if verdict == LocalVerdict::Building
                 && let Some(st) = &r.sidetag
@@ -3601,6 +3720,102 @@ mod tests {
             "{out}"
         );
         assert!(!render(&libical_plan()).contains("## Who to contact"));
+    }
+
+    /// The end of asterisk-23.5.0-5's root.log (2026-11-04): it built,
+    /// and `--postinst` failed on Conflicts between its subpackages.
+    const ASTERISK_ROOT_LOG: &str = "\
+INFO backend.py:775:  Installing built packages
+DEBUG util.py:535:  Failed to resolve the transaction:
+DEBUG util.py:535:  Problem 1: package asterisk-voicemail-23.5.0-5.fc46.aarch64 from @commandline conflicts with asterisk-mwi-external <= 23.5.0-5.fc46 provided by asterisk-mwi-external-23.5.0-5.fc46.aarch64 from @commandline
+DEBUG util.py:535:    - conflicting requests
+DEBUG util.py:535:  Problem 2: package asterisk-voicemail-plain-23.5.0-5.fc46.aarch64 from @commandline conflicts with asterisk-voicemail-odbc <= 23.5.0-5.fc46 provided by asterisk-voicemail-odbc-23.5.0-5.fc46.aarch64 from @commandline
+DEBUG util.py:535:    - conflicting requests
+DEBUG util.py:535:  You can try to add to command line:
+DEBUG util.py:535:    --skip-broken to skip uninstallable packages
+DEBUG util.py:688:  Child return code was: 1
+ERROR backend.py:794:  Installation of built packages failed
+INFO backend.py:499:  End chain build: ./asterisk-23.5.0-5.fc46.src.rpm
+";
+
+    /// A built package that needs something nothing provides.
+    const MISSING_DEP_ROOT_LOG: &str = "\
+DEBUG util.py:535:  Failed to resolve the transaction:
+DEBUG util.py:535:  Problem: conflicting requests
+DEBUG util.py:535:    - nothing provides libfoo.so.3()(64bit) needed by osmo-0.4.4-8.fc46.aarch64 from @commandline
+ERROR backend.py:794:  Installation of built packages failed
+";
+
+    #[test]
+    fn conflicts_between_own_subpackages_are_expected() {
+        let check = install_check(ASTERISK_ROOT_LOG).unwrap();
+        assert!(check.own_conflicts);
+        assert_eq!(check.problems.len(), 2);
+        assert!(
+            check.problems[0].starts_with("package asterisk-voicemail-23.5.0-5"),
+            "{:?}",
+            check.problems
+        );
+    }
+
+    #[test]
+    fn other_install_problems_are_real_failures() {
+        let check = install_check(MISSING_DEP_ROOT_LOG).unwrap();
+        assert!(!check.own_conflicts);
+        assert_eq!(
+            check.problems,
+            [
+                "nothing provides libfoo.so.3()(64bit) needed by osmo-0.4.4-8.fc46.aarch64 from \
+              @commandline"
+            ]
+        );
+        // A conflict with a repository package is not the package's own.
+        assert!(!is_own_conflict(
+            "package osmo-0.4.4-8.fc46.aarch64 from @commandline conflicts with osmo-data \
+             provided by osmo-data-0.4.4-7.fc46.noarch from fedora"
+        ));
+        assert_eq!(install_check("ERROR backend.py:494:  Command failed"), None);
+    }
+
+    #[test]
+    fn a_failed_install_check_is_not_a_failed_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let rpms = |nvr: &str, log: &str| {
+            mock_build(dir.path(), nvr, false, "3.0.20-9.fc46");
+            let d = dir.path().join(nvr);
+            let (name, vr) = split_nvr(nvr).unwrap();
+            std::fs::write(d.join(format!("{name}-{vr}.aarch64.rpm")), "").unwrap();
+            std::fs::write(d.join(format!("{nvr}.src.rpm")), "").unwrap();
+            std::fs::write(d.join("root.log"), log).unwrap();
+        };
+        rpms("asterisk-23.5.0-5.fc46", ASTERISK_ROOT_LOG);
+        rpms("osmo-0.4.4-8.fc46", MISSING_DEP_ROOT_LOG);
+        // rpmbuild failed: only the source RPM, and the same message
+        // cannot have come from a later install.
+        mock_build(
+            dir.path(),
+            "claws-mail-4.4.0-10.fc46",
+            false,
+            "3.0.20-9.fc46",
+        );
+        let results = read_results(dir.path(), "libical").unwrap();
+        let build = |pkg: &str| results.finished[pkg][0].clone();
+        assert!(build("asterisk").passed);
+        assert!(build("asterisk").install_check.unwrap().own_conflicts);
+        assert!(!build("osmo").passed);
+        assert!(build("osmo").install_check.is_some());
+        assert!(!build("claws-mail").passed);
+        assert_eq!(build("claws-mail").install_check, None);
+        assert_eq!(
+            install_note(&build("asterisk")).unwrap(),
+            "23.5.0-5.fc46 built; its own subpackages conflict, so mock could not install \
+             them together"
+        );
+        assert_eq!(
+            install_note(&build("osmo")).unwrap(),
+            "0.4.4-8.fc46 built, but its packages do not install: nothing provides \
+             libfoo.so.3()(64bit) needed by osmo-0.4.4-8.fc46.aarch64 from @commandline"
+        );
     }
 
     /// Write a mock build directory: `<nvr>/` with its marker and an
