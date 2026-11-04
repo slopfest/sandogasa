@@ -14,6 +14,7 @@ mod dag;
 mod discover;
 mod karma;
 mod local_repo;
+mod prune_cache;
 mod rebuild_plan;
 mod resolve;
 mod review_deps;
@@ -661,6 +662,8 @@ enum Command {
     FileRequests(FileRequestsArgs),
     /// Detect dependency cycles in the build graph.
     FindCycles(ResolveArgs),
+    /// Remove cached data ebranch has not used for a while.
+    PruneCache(PruneCacheArgs),
     /// Plan the rebuilds a library's SONAME bump calls for.
     #[command(long_about = "\
 Plan the rebuilds a library's SONAME bump calls for.
@@ -723,6 +726,26 @@ claims are flagged first.")]
 /// keeps a package. Deletions run `copr-cli delete-package` and are
 /// confirmed one by one; `--yes` skips the questions; `--json` and a
 /// non-terminal never delete.
+/// Remove what ebranch keeps under ~/.cache/ebranch/ and has not
+/// used for a while: dist-git clones (30 days), downloaded update
+/// builds (14 days), crates.io answers (30 days) and NVD answers (1
+/// day). Each entry is removed whole. Nothing else ever removes them.
+#[derive(clap::Args, Clone)]
+struct PruneCacheArgs {
+    /// Remove entries unused for more than DAYS, instead of each
+    /// cache's own age.
+    #[arg(long, value_name = "DAYS", value_parser = clap::value_parser!(u64).range(1..))]
+    older_than: Option<u64>,
+
+    /// Report what would be removed, and remove nothing.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Print the report as JSON.
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(clap::Args, Clone)]
 struct CoprPruneArgs {
     /// COPR project: owner/project, @group/project, or its URL.
@@ -1339,6 +1362,15 @@ fn main() -> ExitCode {
     if let Command::Config(a) = &cli.command {
         let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
         return exit_code(rt.block_on(config::cmd_config(a)));
+    }
+    if let Command::PruneCache(a) = &cli.command {
+        return exit_code(prune_cache::run(&prune_cache::Options {
+            older_than: a
+                .older_than
+                .map(|d| std::time::Duration::from_secs(d * 24 * 60 * 60)),
+            dry_run: a.dry_run,
+            json: a.json,
+        }));
     }
 
     if let Command::CoprPrune(a) = &cli.command {
@@ -1987,6 +2019,7 @@ fn main() -> ExitCode {
         | Command::Escalate(_)
         | Command::FileRequest(_)
         | Command::FileRequests(_)
+        | Command::PruneCache(_)
         | Command::RebuildPlan(_) => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),

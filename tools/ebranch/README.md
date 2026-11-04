@@ -1018,6 +1018,36 @@ ebranch find-cycles systemd util-linux \
     --source rawhide --target c10s --target-repo '@epel'
 ```
 
+### Remove unused cached data
+
+ebranch keeps some data under `~/.cache/ebranch/` between runs, and
+records when each entry was last used. Nothing removes it on its own;
+`prune-cache` removes, whole, the entries that have gone unused for
+longer than their cache's age:
+
+| Cache | Holds | Removed after |
+|---|---|---|
+| `crates-io` | crates.io answers, per crate | 30 days |
+| `distgit` | dist-git clones (rebuild-plan) | 30 days |
+| `nvd` | NVD answers | 1 day, when they expire |
+| `update-repos` | downloaded update builds (check-update) | 14 days |
+
+```console
+$ ebranch prune-cache --dry-run --older-than 1
+crates-io (crates.io answers, per crate; unused for over 1 day): would remove 0, 0 B; kept 0, 0 B
+distgit (dist-git clones, for rebuild-plan's comparison; unused for over 1 day): would remove 0, 0 B; kept 7, 3.3 MB
+nvd (NVD answers, served for a day; unused for over 1 day): would remove 1, 3.9 KB; kept 0, 0 B
+  CVE-2026-93601.json (3.9 KB, unused for 1 day)
+update-repos (downloaded update builds, for check-update; unused for over 1 day): would remove 2, 14.6 MB; kept 0, 0 B
+  crosswords-puzzle-sets-gnome-0-4-6-1-fc45-54d85025 (185.9 KB, unused for 1 day)
+  sandogasa-0-27-0-2-fc45-df672ceb (14.4 MB, unused for 1 day)
+In all: would remove 14.6 MB.
+```
+
+`--older-than DAYS` uses one age for every cache instead, though never
+less than a day, so an entry a running command is using is never
+removed under it. `--json` prints the report as JSON.
+
 ### Plan rebuilds after a SONAME bump
 
 When a library bumps its SONAME, `rebuild-plan` lists the packages that

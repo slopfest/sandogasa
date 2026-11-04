@@ -2157,6 +2157,7 @@ fn dist_git_head(
             cloned?;
         }
     }
+    sandogasa_cli::cache::mark_used(&dir);
     let out = std::process::Command::new("fedpkg")
         .args(["--release", branch, "verrel"])
         .current_dir(&dir)

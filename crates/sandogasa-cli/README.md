@@ -9,6 +9,15 @@ stays clean for piped or `--json` output). `confirm_each` asks the
 same way about a list the caller has already printed: all of it, none
 of it, or `each` to walk it item by item, returning the indices taken.
 
+The `cache` module keeps answers between runs (`DiskCache`, one file
+per key, each cache with its own lifetime) and lets a tool expire what
+it keeps: `mark_used(entry)` records a use in a stamp beside the entry
+(`.<name>.last-used`, never inside it), `last_used(entry)` reads it
+back (an entry never marked counts from its modification time), and
+`prune(dir, max_age, dry_run)` removes, whole, the entries directly
+under `dir` unused for longer than `max_age`, never less than a day,
+reporting what it removed and kept with their sizes.
+
 `ConfigArgs` holds the arguments every tool's `config` command takes
 (`Config(sandogasa_cli::ConfigArgs)`), so the flags and their help read
 the same everywhere. Today that is `--all`, which asks for every

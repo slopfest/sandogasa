@@ -769,6 +769,22 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 [\fIPACKAGES\fR]
 Source RPM names to analyze
+.SS ebranch prune-cache
+\fBebranch prune\-cache\fR [\fB\-\-older\-than\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Remove cached data ebranch has not used for a while
+.TP
+\fB\-\-older\-than\fR \fI<DAYS>\fR
+Remove entries unused for more than DAYS, instead of each cache\*(Aqs own age
+.TP
+\fB\-\-dry\-run\fR
+Report what would be removed, and remove nothing
+.TP
+\fB\-\-json\fR
+Print the report as JSON
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS ebranch rebuild-plan
 \fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-contacts\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
 .PP

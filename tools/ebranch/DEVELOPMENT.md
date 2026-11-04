@@ -622,3 +622,26 @@ it looked complete.
   `koji regen-repo` before planning, so the regenerated data feeds
   the whole plan instead of a second pass after it. A build whose RPMs
   cannot be listed counts as a gap, not an exclusion.
+
+## Cached data is marked when used and removed only on request
+
+Data kept under `~/.cache/ebranch/` grows for as long as ebranch is
+used: dist-git clones, downloaded update builds, crates.io and NVD
+answers. Access times cannot say what is still in use (a fetch inside
+a clone never lists its top directory, backups and indexers refresh
+them, `noatime` mounts drop them), and an age-based cleaner such as
+`systemd-tmpfiles` deletes file by file, which corrupts a clone whose
+old packfiles nobody read recently (#62).
+
+- Every command that uses a cache entry calls
+  `sandogasa_cli::cache::mark_used` on the entry: a clone or update
+  repository directory, or for crates.io a crate's directory. The stamp
+  goes beside the entry, so a clone gets no untracked file.
+- Only `ebranch prune-cache` removes entries, whole, and only when run;
+  no other command prunes as a side effect.
+- A new cache gets a line in `prune_cache::CACHES` with its age, and
+  its entries marked when used. Forgetting the second makes an entry's
+  age its modification time, so one in daily use is removed once it
+  was created longer ago than the cache's age.
+- Nothing is removed within a day of its last use (`MIN_PRUNE_AGE`),
+  which stands in for a lock: no command runs that long.

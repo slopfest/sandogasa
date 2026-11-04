@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: prune-cache removes cached data that has gone unused
+
+ebranch keeps dist-git clones, downloaded update builds, and crates.io
+and NVD answers under `~/.cache/ebranch/`, and nothing ever removed
+them: an NVD answer past its one-day life stayed on disk until the
+same CVE was looked up again, and every update check-update downloaded
+stayed for good. Resolves #62.
+
+Each command now records when it uses an entry, in a stamp beside it,
+and the new `ebranch prune-cache` removes, whole, the entries unused
+for longer than their cache's age: 30 days for clones and crates.io
+answers, 14 for update builds, and NVD answers once they expire.
+`--dry-run` reports without removing, `--older-than DAYS` sets one age
+for every cache, and `--json` prints the report. Nothing is removed
+within a day of its last use, so a running command never loses an
+entry, and no other command prunes on its own. Access times are not
+used: a fetch inside a clone does not update its directory's, and
+backups and indexers refresh them.
+
+### sandogasa-cli: expire cache entries
+
+`cache::mark_used`, `cache::last_used` and `cache::prune` let a tool
+record when it uses a cache entry and remove the ones unused for
+longer than an age (never less than a day), whole, with a report of
+what was removed and kept.
+
 ### dbranch: the first push of a new branch sets its upstream
 
 `dbranch rebuild`'s push stage failed on the first push of a branch it

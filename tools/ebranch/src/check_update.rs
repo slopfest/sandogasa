@@ -2512,6 +2512,8 @@ fn local_update_repo(
         .map(|a| format!("{a}'s"))
         .unwrap_or_else(|| "the".to_string());
     let dir = local_update_repo_dir(&key)?;
+    // Marked whether reused or rebuilt below, for `ebranch prune-cache`.
+    sandogasa_cli::cache::mark_used(&dir);
     if local_repo_is_current(&dir, nvrs) {
         if verbose {
             eprintln!(

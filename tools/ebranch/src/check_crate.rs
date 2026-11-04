@@ -1330,7 +1330,17 @@ impl CratesIoCache {
                 return None;
             }
         }
-        std::fs::read_to_string(path).ok()
+        let body = std::fs::read_to_string(path).ok()?;
+        self.mark_used(rel);
+        Some(body)
+    }
+
+    /// Record a use of the crate `rel` belongs to (its first path
+    /// component, `<crate>/…`), the unit `ebranch prune-cache` removes.
+    fn mark_used(&self, rel: &str) {
+        if let (Some(dir), Some(name)) = (&self.dir, rel.split('/').next()) {
+            sandogasa_cli::cache::mark_used(&dir.join(name));
+        }
     }
 
     /// Store a body; failures are silent (a cache is a convenience).
@@ -1345,6 +1355,7 @@ impl CratesIoCache {
                 let _ = std::fs::rename(&tmp, &path);
             }
         }
+        self.mark_used(rel);
     }
 }
 
