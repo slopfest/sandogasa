@@ -120,38 +120,20 @@ pub fn bugs_for_branch(bugs: &[Bug], branch: &str) -> Vec<Bug> {
 /// little longer between each attempt. Used for transient
 /// network failures from Pagure / Bugzilla — the failure
 /// message includes the operation label so users can see what's
-/// being retried.
-pub async fn retry<F, Fut, T, E>(
-    label: &str,
-    attempts: usize,
-    mut f: F,
-    verbose: bool,
-) -> Result<T, E>
+/// Retry an async fallible operation a few times, sleeping a little
+/// longer between each attempt, for transient network failures from
+/// Pagure / Bugzilla. Every error counts as transient here: the clients
+/// these wrap report a failed request as a plain message. The retry
+/// notes name `label` on stderr, through [`sandogasa_cli::retry`].
+pub async fn retry<F, Fut, T, E>(label: &str, attempts: usize, f: F) -> Result<T, E>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
     E: std::fmt::Display,
 {
-    let mut last: Option<E> = None;
-    for attempt in 1..=attempts {
-        match f().await {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                if attempt < attempts {
-                    let backoff = 1u64 << (attempt - 1).min(4); // 1, 2, 4, 8s
-                    if verbose {
-                        eprintln!(
-                            "[poi-tracker] {label} attempt {attempt}/{attempts} failed: {e}; \
-                             retrying in {backoff}s"
-                        );
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
-                }
-                last = Some(e);
-            }
-        }
-    }
-    Err(last.expect("loop ran at least once"))
+    let policy =
+        sandogasa_cli::retry::Policy::attempts(u32::try_from(attempts).unwrap_or(u32::MAX));
+    sandogasa_cli::retry::retry(label, &policy, |_: &E| true, f).await
 }
 
 /// Default number of attempts for transient-network retries.
@@ -255,14 +237,9 @@ pub async fn run(
                 eprintln!("[poi-tracker] batch: querying bugs for {email}");
             }
             let query = crate::triage_updates::batch_bug_query(email, all_reporters);
-            let bugs = retry(
-                "batch bug search",
-                RETRY_ATTEMPTS,
-                || bz.search(&query, 0),
-                verbose,
-            )
-            .await
-            .map_err(|e| format!("Bugzilla batch search: {e}"))?;
+            let bugs = retry("batch bug search", RETRY_ATTEMPTS, || bz.search(&query, 0))
+                .await
+                .map_err(|e| format!("Bugzilla batch search: {e}"))?;
             Some(crate::triage_updates::group_bugs_by_component(bugs))
         }
         None => None,
@@ -289,7 +266,6 @@ pub async fn run(
                 &format!("is_retired({}, {branch})", pkg.name),
                 RETRY_ATTEMPTS,
                 || dg.is_retired(&pkg.name, branch),
-                verbose,
             )
             .await
             .map_err(|e| format!("dist-git is_retired for {} on {branch}: {e}", pkg.name))?;
@@ -330,7 +306,6 @@ pub async fn run(
                         &format!("bug search for {} on {branch}", pkg.name),
                         RETRY_ATTEMPTS,
                         || bz.search(&query, 0),
-                        verbose,
                     )
                     .await
                     .map_err(|e| format!("Bugzilla search for {} on {branch}: {e}", pkg.name))?

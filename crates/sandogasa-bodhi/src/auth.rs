@@ -134,34 +134,24 @@ pub fn save_tokens(path: &Path, id_provider: &str, tokens: &OidcTokens) -> Resul
 /// that work.
 const AUTH_RETRY_ATTEMPTS: u32 = 3;
 
-/// Send a request (rebuilt fresh per attempt) with retries on
-/// transport errors and 5xx responses. Other statuses return the
-/// response for the caller to interpret. Only use with requests
-/// that are safe to repeat.
+/// Send a request (rebuilt fresh per attempt), retrying transient
+/// failures as [`sandogasa_cli::retry`] defines them: transport errors,
+/// 429 and 500/502/503/504. Other statuses return the response for the
+/// caller to interpret; a failure that outlasts the retries is an error
+/// naming `what`. Only use with requests that are safe to repeat.
 pub(crate) async fn send_with_retry<F>(what: &str, build: F) -> Result<reqwest::Response, String>
 where
     F: Fn() -> reqwest::RequestBuilder,
 {
-    let mut last_err = String::new();
-    for attempt in 0..AUTH_RETRY_ATTEMPTS {
-        if attempt > 0 {
-            let delay = std::time::Duration::from_secs(1 << (attempt - 1));
-            eprintln!(
-                "{what}: {last_err}; retrying in {}s ({attempt}/{})",
-                delay.as_secs(),
-                AUTH_RETRY_ATTEMPTS - 1
-            );
-            tokio::time::sleep(delay).await;
-        }
-        match build().send().await {
-            Ok(resp) if resp.status().is_server_error() => {
-                last_err = format!("HTTP {}", resp.status());
-            }
-            Ok(resp) => return Ok(resp),
-            Err(e) => last_err = format!("{e}"),
-        }
+    let policy = sandogasa_cli::retry::Policy::attempts(AUTH_RETRY_ATTEMPTS);
+    match sandogasa_cli::retry::send(what, &policy, build).await {
+        Ok(resp) if sandogasa_cli::retry::is_transient(resp.status()) => Err(format!(
+            "{what} failed after retries: HTTP {}",
+            resp.status()
+        )),
+        Ok(resp) => Ok(resp),
+        Err(e) => Err(format!("{what} failed after retries: {e}")),
     }
-    Err(format!("{what} failed after retries: {last_err}"))
 }
 
 #[derive(Deserialize)]

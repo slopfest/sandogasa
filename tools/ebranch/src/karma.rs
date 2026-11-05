@@ -675,35 +675,32 @@ pub fn ensure_session() -> Result<(), String> {
 /// `None` (with a warning) when the lookup keeps failing, since
 /// it only gates a client-side nicety.
 async fn session_username_with_retry(http: &reqwest::Client) -> Option<String> {
-    const ATTEMPTS: u32 = 3;
-    let mut last_err = String::new();
-    for attempt in 0..ATTEMPTS {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
-        }
-        let result = async {
+    let lookup = sandogasa_cli::retry::retry(
+        "username lookup",
+        &sandogasa_cli::retry::Policy::attempts(3),
+        // Its requests already retry transient HTTP failures; what is
+        // left (a cache file being written, a token not ready yet) is
+        // worth one more try whatever it is.
+        |_: &String| true,
+        || async {
             let token =
                 auth::cli_session_token(http, &auth::cli_cache_path(), auth::FEDORA_IDP).await?;
             auth::username(http, auth::FEDORA_IDP, &token).await
-        }
-        .await;
-        match result {
-            Ok(user) => return Some(user),
-            Err(e) => {
-                if attempt + 1 < ATTEMPTS {
-                    eprintln!("username lookup failed ({e}); retrying...");
-                }
-                last_err = e;
-            }
+        },
+    )
+    .await;
+    match lookup {
+        Ok(user) => Some(user),
+        Err(e) => {
+            eprintln!(
+                "warning: could not determine the session username \
+                 ({e}); assuming this is not your own update \
+                 (Bodhi enforces the own-update karma rule server-side \
+                 anyway)"
+            );
+            None
         }
     }
-    eprintln!(
-        "warning: could not determine the session username \
-         ({last_err}); assuming this is not your own update \
-         (Bodhi enforces the own-update karma rule server-side \
-         anyway)"
-    );
-    None
 }
 
 /// Fill in bug titles Bodhi hasn't cached yet, straight from

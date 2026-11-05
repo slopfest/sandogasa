@@ -374,7 +374,6 @@ pub async fn classify(
                     // client's boxed error is not Send, and the
                     // joined task's output must be.
                     || async { dg.get_acls(&name).await.map_err(|e| e.to_string()) },
-                    verbose,
                 )
                 .await;
                 let (entry, warning) = match looked_up {

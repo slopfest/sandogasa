@@ -1085,33 +1085,21 @@ fn list_group_projects_query(
     Ok(all)
 }
 
-/// Blocking GET with retry on transient server errors.
+/// Blocking GET, retrying transient failures as
+/// [`sandogasa_cli::retry`] defines them. A dropped connection used to
+/// fail the whole listing at once, since only 5xx statuses were
+/// retried; a status that is still an error afterwards is reported as
+/// one.
 fn get_with_retry_blocking(
     client: &reqwest::blocking::Client,
     url: &str,
 ) -> Result<reqwest::blocking::Response, Box<dyn std::error::Error>> {
-    let mut last_err = None;
-    for attempt in 0..=3u32 {
-        let resp = client.get(url).send()?;
-        let status = resp.status();
-        if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
-            || status == reqwest::StatusCode::BAD_GATEWAY
-            || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-            || status == reqwest::StatusCode::GATEWAY_TIMEOUT
-        {
-            let delay = std::time::Duration::from_secs(1 << attempt);
-            eprintln!(
-                "  {status}, retrying in {}s ({}/3)",
-                delay.as_secs(),
-                attempt + 1,
-            );
-            std::thread::sleep(delay);
-            last_err = Some(format!("{status} for {url}"));
-            continue;
-        }
-        return Ok(blocking_ok(resp, &format!("GitLab GET {url}"))?);
-    }
-    Err(last_err.unwrap().into())
+    let resp = sandogasa_cli::retry::send_blocking(
+        &format!("GitLab GET {url}"),
+        &sandogasa_cli::retry::Policy::DEFAULT,
+        || client.get(url),
+    )?;
+    Ok(blocking_ok(resp, &format!("GitLab GET {url}"))?)
 }
 
 /// Parse a GitLab project URL into (base_url, project_path).

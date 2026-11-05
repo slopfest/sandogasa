@@ -93,12 +93,9 @@ pub async fn run(
         if verbose {
             eprintln!("[poi-tracker] {}: checking dist-git owner", pkg.name);
         }
-        let acls = match retry(
-            &format!("ACLs for {}", pkg.name),
-            RETRY_ATTEMPTS,
-            || dg.get_acls(&pkg.name),
-            verbose,
-        )
+        let acls = match retry(&format!("ACLs for {}", pkg.name), RETRY_ATTEMPTS, || {
+            dg.get_acls(&pkg.name)
+        })
         .await
         {
             Ok(a) => a,

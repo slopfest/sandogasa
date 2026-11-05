@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Every client retries transient failures the same way
+
+Seven clients carried their own retry loop, and they disagreed on what
+was worth retrying. GitLab's blocking GET gave up at the first dropped
+connection, since it retried only 5xx statuses; only dist-git counted a
+429; poi-tracker and ebranch's username lookup retried any error at
+all. A run's resilience depended on which client it happened to use.
+Resolves #63.
+
+`sandogasa_cli::retry` now defines it once: transport errors and 429,
+500, 502, 503 and 504 are retried with doubling backoff that honours a
+server's `Retry-After`; everything else, a 404 included, goes back to
+the caller. sandogasa-distgit, sandogasa-gitlab (which now retries
+dropped connections too), sandogasa-bodhi, sandogasa-kojihub,
+ebranch's session username lookup and poi-tracker use it.
+`sandogasa_kojihub::retry` keeps its signature. poi-tracker's retry
+notes now always print, as every other tool's do, rather than only
+with `--verbose`. sandogasa-bugzilla's verified writes keep their own
+retry: they read the bugs back after a failure and resend only to
+those unchanged, which a blind resend could not do safely.
+
 ### fedora-cve-triage: a fix version for a bundled library is no longer read as the bundler's
 
 For CVE-2026-12345 (CPython, awaiting analysis in NVD), `run -c

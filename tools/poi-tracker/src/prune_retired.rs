@@ -313,12 +313,9 @@ async fn check_package(
     active: &[String],
     verbose: bool,
 ) -> Result<Option<PruneCandidate>, String> {
-    let branches = retry(
-        &format!("project_branches({name})"),
-        RETRY_ATTEMPTS,
-        || dg.project_branches(name),
-        verbose,
-    )
+    let branches = retry(&format!("project_branches({name})"), RETRY_ATTEMPTS, || {
+        dg.project_branches(name)
+    })
     .await
     .map_err(|e| format!("dist-git branches for {name}: {e}"))?;
 
@@ -354,7 +351,6 @@ async fn check_package(
             &format!("is_retired({name}, {branch})"),
             RETRY_ATTEMPTS,
             || dg.is_retired(name, branch),
-            verbose,
         )
         .await
         .map_err(|e| format!("dist-git is_retired for {name} on {branch}: {e}"))?;

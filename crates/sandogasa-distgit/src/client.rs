@@ -900,45 +900,21 @@ impl DistGitClient {
         Ok(self.get_transient_retry(url).await?.error_for_status()?)
     }
 
-    /// GET with retry on transient failures (transport errors, 429,
-    /// 500/502/503/504),
-    /// returning the final response without judging its status —
+    /// GET, retrying transient failures (transport errors, 429 and
+    /// 500/502/503/504) as [`sandogasa_cli::retry`] defines them,
+    /// and returning the final response without judging its status:
     /// callers decide what a non-2xx status means.
     async fn get_transient_retry(
         &self,
         url: &str,
     ) -> Result<reqwest::Response, Box<dyn std::error::Error>> {
-        let mut last_err = None;
-        for attempt in 0..=3u32 {
-            // Transport failures (connection reset, timeout, DNS)
-            // are just as transient as a 5xx — retry them with the
-            // same backoff instead of aborting the whole sync.
-            let problem = match self.client.get(url).send().await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
-                        || status == reqwest::StatusCode::BAD_GATEWAY
-                        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
-                        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
-                        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    {
-                        format!("{status}")
-                    } else {
-                        return Ok(resp);
-                    }
-                }
-                Err(e) => format!("{e}"),
-            };
-            let delay = std::time::Duration::from_secs(1 << attempt);
-            eprintln!(
-                "  {problem}, retrying in {}s ({}/3)",
-                delay.as_secs(),
-                attempt + 1,
-            );
-            tokio::time::sleep(delay).await;
-            last_err = Some(format!("{problem} for {url}"));
-        }
-        Err(last_err.unwrap().into())
+        let policy = sandogasa_cli::retry::Policy::DEFAULT;
+        Ok(
+            sandogasa_cli::retry::send(&format!("dist-git GET {url}"), &policy, || {
+                self.client.get(url)
+            })
+            .await?,
+        )
     }
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
