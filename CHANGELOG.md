@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### fedora-cve-triage: bodhi-check judges a bundled copy on its own release line (breaking)
+
+On asahi-installer, bodhi-check still offered "Treat CVE-2026-12345 as
+fixed in 3.15.0?", a version scraped from the CPython issue, although
+asahi-installer bundles Python 3.13.9 and the 3.13 line is fixed in
+3.13.18. Every CPython bug on it went the same way, or to "no fixed
+version". Refs #66.
+
+For a CVE in a library the component bundles, bodhi-check now asks
+git first, as bundled-library does: the first release on the line of
+the copy rawhide ships whose tag has one of OSV's fix commits. That
+version is used with ranges keeping everything below it and every
+later minor series vulnerable, so only the line's own later releases
+count as fixed, and an update bundling 3.14.2 cannot pass as past a
+3.13.18 fix. A line with no fix yet is reported as such, with no
+prompt. bodhi-check now also names the product the way bundled-library
+does: from OSV's fix repository when nothing else names it, and
+`CPython` as Fedora's `python`. On asahi-installer all 36 bugs are now
+judged this way: one closes against the EPEL 10 updates that bundle a
+fixed Python, 33 have no update with the fix, and CVE-2025-15367's two
+have no 3.13 fix at all.
+
+Breaking: `sandogasa_cve::facts::VersionSource` gains a `Git { tag }`
+variant, for a fixed version found this way. A match on it needs an
+arm for it.
+
 ### fedora-cve-triage: a bundled copy is judged by its own release tag when no version can be
 
 `run -c asahi-installer` settled 2 of its 36 CPython CVE bugs and left

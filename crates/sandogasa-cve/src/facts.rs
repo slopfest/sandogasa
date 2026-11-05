@@ -338,6 +338,9 @@ pub enum VersionSource {
     /// whether that answer was written to the config — which decides
     /// whether there is anything left to advise.
     Confirmed { version: String, recorded: bool },
+    /// The first release on a bundled copy's line whose tag (`tag`)
+    /// contains one of the fix commits OSV records, found with git.
+    Git { tag: String },
 }
 
 /// What GitHub's advisories for a CVE settle: the first advisory with a
