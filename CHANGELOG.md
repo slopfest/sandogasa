@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### ebranch: check-update takes EPEL Next builds by NVR
+
+`ebranch check-update sandogasa-0.27.1-1.el9.next` stopped with "could
+not infer branch from side tag sandogasa-0.27.1-1.el9.next; pass
+--branch", and `--branch` was no way out in a run that also submitted
+the Fedora and EPEL 10 builds, since it applies to every input. The
+dist tag was read as the NVR's last dot-separated part, which for EPEL
+Next is `next`, so the build was not recognised as one and fell
+through to the side-tag reading. `elN.next` is now read whole and maps
+to `epelN-next`, which ebranch already knew to check against CentOS
+Stream. An input that is neither a side tag nor a recognised build now
+says so, instead of calling itself a side tag.
+
 ### Bugzilla key checks say why a key was refused, and catch expired ones
 
 `fedora-cve-triage config` answered an expired Red Hat Bugzilla key

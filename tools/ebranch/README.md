@@ -856,6 +856,16 @@ submitted, so a typo in the third tag cannot leave the first two
 submitted. They are then checked and submitted in order, each with its
 own plan and confirmation.
 
+Builds can be named directly by NVR instead. They are grouped into one
+update per release by their dist tag: `fc45` is Fedora 45, `el9` EPEL 9,
+`el9.next` EPEL 9 Next (checked against CentOS Stream 9), and `el10_4`
+EPEL 10.4. So one run can cover a whole release:
+
+```sh
+ebranch check-update sandogasa-0.27.1-1.{fc43,fc44,fc45,el9.next,el10_4} \
+    --submit --type enhancement --notes-file relnotes.md
+```
+
 ### Keeping an update in step with RPM Fusion
 
 RPM Fusion rebuilds some Fedora packages with the codecs Fedora has to

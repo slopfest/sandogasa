@@ -33,8 +33,8 @@ pub enum InputKind {
     Builds(Vec<String>),
 }
 
-/// The dist tag an NVR ends with (`fc43`, `el10_2`, `eln159`), if it
-/// ends with one.
+/// The dist tag an NVR ends with (`fc43`, `el10_2`, `eln159`, and
+/// EPEL Next's two-part `el9.next`), if it ends with one.
 ///
 /// This is what groups builds into updates. Bodhi groups by the
 /// release a build's Koji tag belongs to; the dist tag agrees with
@@ -45,6 +45,14 @@ pub enum InputKind {
 /// with its tag would group wrongly; the alternative is a Koji round
 /// trip per build.
 pub fn dist_tag(nvr: &str) -> Option<&str> {
+    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    // EPEL Next appends `.next` to the EL tag, so its dist tag is the
+    // last two dot-separated parts, `el9.next`.
+    if let Some(stem) = nvr.strip_suffix(".next") {
+        let el = stem.rsplit_once('.')?.1;
+        let major = el.strip_prefix("el")?;
+        return numeric(major).then(|| &nvr[stem.len() - el.len()..]);
+    }
     let tag = nvr.rsplit_once('.')?.1;
     // `eln` before `el`, or eln159 parses as el + "n159".
     let rest = tag
@@ -56,7 +64,6 @@ pub fn dist_tag(nvr: &str) -> Option<&str> {
         Some((a, b)) => (a, Some(b)),
         None => (rest, None),
     };
-    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     (numeric(major) && minor.is_none_or(numeric)).then_some(tag)
 }
 
@@ -2221,7 +2228,8 @@ pub fn branch_from_side_tag(tag: &str) -> Option<String> {
 }
 
 /// The fedrq branch a dist tag belongs to: `fc43` is `f43`, `el9` is
-/// `epel9`, and an EPEL minor such as `el10_2` ships from `epel10.2`.
+/// `epel9`, `el9.next` is `epel9-next`, and an EPEL minor such as
+/// `el10_2` ships from `epel10.2`.
 ///
 /// ELN has no branch here and returns nothing rather than guessing:
 /// it takes no reviewed updates, and inventing one would check an
@@ -2232,6 +2240,10 @@ pub fn branch_for_dist_tag(tag: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_digit())
             .then(|| format!("f{n}"));
+    }
+    if let Some(major) = tag.strip_suffix(".next").and_then(|t| t.strip_prefix("el")) {
+        return (!major.is_empty() && major.chars().all(|c| c.is_ascii_digit()))
+            .then(|| format!("epel{major}-next"));
     }
     let rest = tag.strip_prefix("el")?;
     let (major, minor) = match rest.split_once('_') {
@@ -2277,7 +2289,9 @@ fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
     match branch_from_side_tag(tag) {
         Some(b) if is_fedora_branch(&b) || b.starts_with("epel") => Ok(b),
         _ => Err(format!(
-            "could not infer branch from side tag {tag}; pass --branch"
+            "could not infer a branch from {tag}: it is neither a side tag \
+             (<branch>-build-side-<id>) nor a build whose dist tag ebranch \
+             recognises; pass --branch"
         )),
     }
 }
@@ -4052,6 +4066,11 @@ mod tests {
         assert_eq!(dist_tag("sandogasa-0.25.4-1.fc43"), Some("fc43"));
         assert_eq!(dist_tag("libheif-1.23.6-1.el10_2"), Some("el10_2"));
         assert_eq!(dist_tag("libheif-1.23.6-1.eln159"), Some("eln159"));
+        // EPEL Next's dist tag has two parts; reading only the last
+        // left el9.next builds to the side-tag fallback.
+        assert_eq!(dist_tag("sandogasa-0.27.1-1.el9.next"), Some("el9.next"));
+        assert_eq!(dist_tag("pkg-1-1.next"), None);
+        assert_eq!(dist_tag("pkg-1-1.elx.next"), None);
         // A side tag carries no dist tag, which is what keeps the two
         // apart: sending one to Bodhi as a build is the mistake this
         // prevents.
@@ -4076,6 +4095,21 @@ mod tests {
         // One NVR is one update's builds.
         match detect_input_type("sandogasa-0.25.4-1.fc43") {
             InputKind::Builds(n) => assert_eq!(n, ["sandogasa-0.25.4-1.fc43"]),
+            other => panic!("{other:?}"),
+        }
+        // An EPEL Next build is a build, and is grouped apart from el9.
+        let grouped = group_builds_by_release(&[
+            "sandogasa-0.27.1-1.el9.next".to_string(),
+            "sandogasa-0.27.1-1.fc43".to_string(),
+        ]);
+        assert_eq!(
+            grouped,
+            ["sandogasa-0.27.1-1.el9.next", "sandogasa-0.27.1-1.fc43"]
+        );
+        match detect_input_type("sandogasa-0.27.1-1.el9.next") {
+            InputKind::Builds(n) => {
+                assert_eq!(branch_for_builds(&n, None).unwrap(), "epel9-next")
+            }
             other => panic!("{other:?}"),
         }
         // A mixed group is refused rather than submitted in part: it
@@ -4140,6 +4174,11 @@ mod tests {
         // An EPEL minor ships from its own branch, as Bodhi records
         // it: el10_2 is EPEL-10.2, not EPEL-10.
         assert_eq!(branch_for_dist_tag("el10_2").as_deref(), Some("epel10.2"));
+        // EPEL Next ships from its own branch, against CentOS Stream.
+        assert_eq!(
+            branch_for_dist_tag("el9.next").as_deref(),
+            Some("epel9-next")
+        );
         // ELN takes no reviewed updates, so it declines rather than
         // checking against repositories that are not its own.
         assert_eq!(branch_for_dist_tag("eln159"), None);
