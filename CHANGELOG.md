@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a fix version for a bundled library is no longer read as the bundler's
+
+For CVE-2026-12345 (CPython, awaiting analysis in NVD), `run -c
+asahi-installer` took the fixed version 3.15.0 from the config and
+reported "using asahi-installer 3.15.0", then compared that with
+asahi-installer's own versions (0.9.x). asahi-installer bundles
+Python 3.13.9. A version from the config, or one confirmed at the
+prompt, names no product, and it was attributed to the component, so
+a package whose own version ran past a bundled library's fix would
+have had a live bug closed.
+
+Such a version is now attributed to the CVE's product: NVD's CPE data,
+or else the product the bug summary names (`asahi-installer: python:
+…`). It falls back to the component only when that product is the
+component itself (`python3.13`) or nothing names one. bodhi-check
+then judges each update build by the version it declares bundling
+(`bundled(python) = 3.13.9`, read from Koji). When a package declares
+nothing, the bug is left for a human rather than compared with the
+package's own version. Comparing within a release line (3.13.18 rather
+than 3.15.0 for a bundled 3.13) is left for #66.
+
 ### ebranch: check-update takes EPEL Next builds by NVR
 
 `ebranch check-update sandogasa-0.27.1-1.el9.next` stopped with "could
