@@ -17,11 +17,14 @@ reqwest = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 sandogasa-config = { workspace = true }
 serde = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 toml = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true }
+wiremock = { workspace = true }
 
 [features]
 default = ["tls"]
@@ -36,7 +39,7 @@ tls = ["dep:rustls"]
 # HTTP plumbing shared by the API-client crates (the `http` module):
 # preconfigured reqwest builders and uniform status/JSON handling.
 # Off by default so network-free tools don't pull in reqwest.
-http = ["tls", "dep:reqwest", "dep:serde"]
+http = ["tls", "dep:reqwest", "dep:serde", "dep:tokio"]
 
 # Man page generation from the clap definition (the `man` module).
 # Off by default and enabled as a dev-dependency by the tools, so

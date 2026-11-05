@@ -12,10 +12,18 @@ or drop connections under load. Any client code talking to them must
 assume a request can fail once and succeed on an immediate retry.
 Concretely:
 
-- **Retry transient failures on GETs.** Retry 500/502/503/504 and
-  transport errors (connection reset, timeout, DNS) with backoff.
-  `sandogasa-distgit` has `get_transient_retry`/`get_with_retry` for
-  this; reuse or replicate the pattern in other HTTP clients.
+- **Retry transient failures on GETs, through `sandogasa_cli::retry`.**
+  Transient means a transport error (connection reset, timeout, DNS) or
+  a 429, 500, 502, 503 or 504, and nothing else: `retry::send` /
+  `send_blocking` for a reqwest request, `retry::retry` /
+  `retry_blocking` with a predicate for anything else (Koji's XML-RPC
+  faults are not retried). Do not write another loop. There were seven,
+  and they disagreed: GitLab's gave up at the first dropped connection,
+  most ignored 429, and a dist-git listing lost to one failed request
+  made a rebuild report look complete (#63). The one exception is
+  `sandogasa-bugzilla`'s verified writes, which read the bugs back
+  after a failure and resend only to those unchanged; a blind resend
+  could apply a change twice.
 - **Only a 404 means "does not exist".** Never fold "the request
   failed" into "the resource is absent": an existence check that maps
   any non-2xx status to `false` turns a Pagure hiccup into a

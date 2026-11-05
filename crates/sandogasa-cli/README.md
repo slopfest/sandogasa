@@ -9,6 +9,16 @@ stays clean for piped or `--json` output). `confirm_each` asks the
 same way about a list the caller has already printed: all of it, none
 of it, or `each` to walk it item by item, returning the indices taken.
 
+The `retry` module is the one place a client decides what to retry: a
+transport error, or a 429, 500, 502, 503 or 504. `send` and
+`send_blocking` resend a reqwest request (with the `http` feature),
+returning the last response when the attempts run out, so the caller
+judges its status. `retry` and `retry_blocking` take a predicate for
+anything else, such as a Koji XML-RPC call. A `Policy` sets the
+attempts and the backoff (doubling from a base delay, honouring a
+`Retry-After`, never over a cap); `Policy::immediate` waits for
+nothing, for tests.
+
 The `cache` module keeps answers between runs (`DiskCache`, one file
 per key, each cache with its own lifetime) and lets a tool expire what
 it keeps: `mark_used(entry)` records a use in a stamp beside the entry
