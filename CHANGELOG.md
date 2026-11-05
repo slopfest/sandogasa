@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### fedora-cve-triage: OSV as a source of fixed versions
+
+When neither NVD nor GitHub's advisory database recorded a fixed
+version, fedora-cve-triage had nothing structured left and fell back
+to reading advisory pages for a candidate to confirm by hand. OSV
+(osv.dev) carries the upstream databases GitHub does not always
+mirror: PyPI's, Go's, RustSec's, the PSF's. Refs #66.
+
+The new `sandogasa_cve::osv` reads a CVE's OSV record and its upstream
+aliases (`PYSEC-`, `GO-`, `RUSTSEC-`, `PSF-`). Ranges in upstream
+ecosystems (PyPI, crates.io, Go, npm and others) state fixed versions
+outright and are judged like a GHSA record's, credited to the OSV id.
+Distribution ecosystems (Debian, SUSE, AlmaLinux, …) are ignored,
+since their versions are their packages'. Git ranges are kept as fix
+commits per repository, never turned into versions: OSV's
+affected-tag lists derived from them leave out tags off a branch's
+line (CPython 3.13.9 is missing from every one, though 3.13.8 and
+3.13.10 are affected), so "the first release not listed" could name
+an affected release as the fix. The commits are for the git check
+that #66 adds next.
+
 ### Every client retries transient failures the same way
 
 Seven clients carried their own retry loop, and they disagreed on what

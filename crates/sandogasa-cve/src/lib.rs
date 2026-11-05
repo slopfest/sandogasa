@@ -16,6 +16,7 @@
 pub mod advisory;
 pub mod cache;
 pub mod facts;
+pub mod osv;
 pub mod version;
 
 pub use cache::NvdCache;
