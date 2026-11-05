@@ -187,6 +187,79 @@ pub fn merge(into: &mut OsvFix, other: OsvFix) {
     }
 }
 
+/// `(owner, repo)` for a GitHub repository URL
+/// (`https://github.com/python/cpython`, with or without `.git` or a
+/// trailing slash); `None` for any other host.
+pub fn github_repo(url: &str) -> Option<(String, String)> {
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.strip_prefix("http://github.com/"))?;
+    let mut parts = rest.trim_end_matches('/').splitn(3, '/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next()?.trim_end_matches(".git");
+    (!repo.is_empty() && parts.next().is_none()).then(|| (owner.to_string(), repo.to_string()))
+}
+
+/// The release tags on `version`'s line, oldest first, as
+/// `(patch, tag)`: for 3.13.9 every `v3.13.N` or `3.13.N`. `None` when
+/// the version is not `major.minor.patch` or has no tag of its own, so
+/// there is nothing to compare against. The position of its own tag is
+/// returned with the list.
+pub fn line_tags(tags: &[String], version: &str) -> Option<(usize, Vec<(u64, String)>)> {
+    let mut parts = version.split('.');
+    let (major, minor, patch) = (parts.next()?, parts.next()?, parts.next()?);
+    let numeric = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if parts.next().is_some() || ![major, minor, patch].iter().all(|p| numeric(p)) {
+        return None;
+    }
+    let prefix = format!("{major}.{minor}.");
+    let mut line: Vec<(u64, String)> = tags
+        .iter()
+        .filter_map(|t| {
+            let n = t.strip_prefix('v').unwrap_or(t).strip_prefix(&prefix)?;
+            n.parse()
+                .ok()
+                .filter(|_| numeric(n))
+                .map(|n| (n, t.clone()))
+        })
+        .collect();
+    line.sort();
+    line.dedup_by_key(|(n, _)| *n);
+    let own: u64 = patch.parse().ok()?;
+    let at = line.iter().position(|(n, _)| *n == own)?;
+    Some((at, line))
+}
+
+/// The first tag after `after` on a release line that contains a fix,
+/// asking `contains(tag)` as few times as it can: the newest tag first
+/// (none of the line has the fix if that one lacks it), then halving.
+/// `Some(Some(i))` names `line[i]`; `Some(None)` means no release on
+/// the line has the fix yet; `None` that a question went unanswered.
+pub async fn first_fixed<F, Fut>(
+    line: &[(u64, String)],
+    after: usize,
+    mut contains: F,
+) -> Option<Option<usize>>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Option<bool>>,
+{
+    let newest = line.len().checked_sub(1)?;
+    if newest <= after || !contains(line[newest].1.clone()).await? {
+        return Some(None);
+    }
+    let (mut lo, mut hi) = (after + 1, newest);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if contains(line[mid].1.clone()).await? {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Some(Some(lo))
+}
+
 /// An ecosystem range's events as GHSA-style ranges, one per
 /// interval: `introduced 0, fixed 2.0` is `< 2.0`, patched in 2.0;
 /// `introduced 1.0, last_affected 1.4` is `>= 1.0, <= 1.4`, with no
@@ -290,6 +363,85 @@ mod tests {
             ]
         );
         assert!(fix.vulns.iter().all(|v| v.package == "requests"));
+    }
+
+    #[test]
+    fn github_repositories_are_read_from_their_urls() {
+        let cpython = Some(("python".to_string(), "cpython".to_string()));
+        assert_eq!(github_repo("https://github.com/python/cpython"), cpython);
+        assert_eq!(
+            github_repo("https://github.com/python/cpython.git"),
+            cpython
+        );
+        assert_eq!(github_repo("https://github.com/python/cpython/"), cpython);
+        assert_eq!(github_repo("https://gitlab.com/python/cpython"), None);
+        assert_eq!(
+            github_repo("https://github.com/python/cpython/commit/abc"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_version_s_line_is_its_own_tags_in_release_order() {
+        let tags: Vec<String> = [
+            "v3.13.10",
+            "v3.13.9",
+            "v3.13.8",
+            "v3.14.0",
+            "v3.13.0rc1",
+            "v3.12.9",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (at, line) = line_tags(&tags, "3.13.9").unwrap();
+        assert_eq!(
+            line.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            [8, 9, 10],
+            "release candidates and other lines are left out"
+        );
+        assert_eq!(line[at].1, "v3.13.9");
+        // No tag of its own, or not a three-part version: nothing to do.
+        assert_eq!(line_tags(&tags, "3.13.7"), None);
+        assert_eq!(line_tags(&tags, "3.13"), None);
+        assert_eq!(line_tags(&tags, "3.13.9a"), None);
+        // Tags without the v work the same.
+        let plain = vec!["1.2.3".to_string(), "1.2.4".to_string()];
+        assert_eq!(line_tags(&plain, "1.2.3").unwrap().0, 0);
+    }
+
+    /// v3.13.8 to v3.13.18, as `line_tags` gives them.
+    fn line_313() -> Vec<(u64, String)> {
+        (8..=18).map(|n| (n, format!("v3.13.{n}"))).collect()
+    }
+
+    #[test]
+    fn the_first_fixed_release_is_found_by_halving() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let line = line_313();
+        // Fixed from 3.13.14 on; the copy is 3.13.9 (index 1).
+        let mut asked = Vec::new();
+        let found = rt.block_on(first_fixed(&line, 1, |tag: String| {
+            asked.push(tag.clone());
+            let n: u64 = tag.rsplit('.').next().unwrap().parse().unwrap();
+            async move { Some(n >= 14) }
+        }));
+        assert_eq!(found.map(|i| i.map(|i| line[i].0)), Some(Some(14)));
+        assert!(asked.len() <= 5, "{asked:?}");
+        // No release on the line has it: one question, about the newest.
+        let mut asked = 0;
+        let none = rt.block_on(first_fixed(&line, 1, |_| {
+            asked += 1;
+            async { Some(false) }
+        }));
+        assert_eq!((none, asked), (Some(None), 1));
+        // An unanswered question leaves it open rather than guessing.
+        assert_eq!(rt.block_on(first_fixed(&line, 1, |_| async { None })), None);
+        // The copy is the newest release: nothing after it to find.
+        assert_eq!(
+            rt.block_on(first_fixed(&line, 10, |_| async { Some(true) })),
+            Some(None)
+        );
     }
 
     #[test]

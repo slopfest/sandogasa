@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a bundled copy is judged by its own release tag when no version can be
+
+`run -c asahi-installer` settled 2 of its 36 CPython CVE bugs and left
+34 as "NVD records no fixed version": asahi-installer bundles Python
+3.13.9, NVD had deferred most of these CVEs, and neither GitHub nor
+OSV states a fixed version for CPython, only fix commits. It now
+settles all 36: one is not affected (the CVE-2025-8194 fix is in
+v3.13.9) and 35 are real, each with the first 3.13 release that fixes
+it (3.13.10 to 3.13.18), or, for CVE-2025-15367, the note that no 3.13
+release has the fix yet. Refs #66.
+
+When nothing gives a bundled library a fixed version, the check asks
+git instead, using the fix commits OSV records: whether any is in the
+copy's own release tag. Not in it, the first release on the line with
+the fix is found by halving the line's later tags, a handful of
+GitHub compare calls, each answer cached for good. OSV's own
+affected-tag lists are not used, since they leave out tags off a
+branch's line. Two gaps that kept most of these bugs from the check
+are closed too: when neither NVD nor the bug summary names the library
+(older bot summaries such as "asahi-installer: IMAP command
+injection…"), the repository OSV records the fix in names it; and
+`CPython` is read as Fedora's `python`, the name asahi-installer
+declares in `bundled(python)`.
+
 ### fedora-cve-triage: OSV as a source of fixed versions
 
 When neither NVD nor GitHub's advisory database recorded a fixed
