@@ -71,6 +71,14 @@ msrv-check: ## Build with the declared MSRV toolchain (rustup toolchain install 
 check-non-exhaustive: ## Fail on a library response model that is not #[non_exhaustive]
 	./scripts/check-non-exhaustive.sh
 
+.PHONY: check-deprecated
+check-deprecated: ## Fail on deprecated API use, with all features on
+	./scripts/check-deprecated.sh
+
+.PHONY: find-api-use
+find-api-use: ## Search the locked dependencies for PATTERN (an advisory's API)
+	./scripts/find-api-use.sh '$(PATTERN)'
+
 .PHONY: check-published
 check-published: ## Verify every crate reached crates.io (run after publishing)
 	./scripts/check-published.sh
@@ -104,8 +112,9 @@ check: ## Everything a pull request should pass
 	$(MAKE) packaging-test
 
 .PHONY: release-checks
-release-checks: check ## The pre-tagging gates: check, plus audit, semver, MSRV, coverage
+release-checks: check ## The pre-tagging gates: check, plus audit, deprecations, semver, MSRV, coverage
 	$(MAKE) audit
+	$(MAKE) check-deprecated
 	$(MAKE) semver-checks
 	$(MAKE) msrv-check
 	$(MAKE) cov
