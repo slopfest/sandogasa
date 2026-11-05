@@ -408,13 +408,21 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
                         ));
                     }
                 };
-                match bz.api_key_accepted().await {
-                    Ok(true) => {
+                match bz.check_api_key().await {
+                    Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
                         sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
                     }
-                    Ok(false) => {
-                        sandogasa_cli::credential::KeyVerdict::Refused("refused.".to_string())
+                    Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
+                        sandogasa_cli::credential::KeyVerdict::Refused(format!("refused: {why}"))
                     }
+                    Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
+                        sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                            "could not tell: {why}"
+                        ))
+                    }
+                    Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
+                        "could not tell.".to_string(),
+                    ),
                     Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
                         "could not check: {e}"
                     )),
@@ -571,13 +579,23 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
                             ));
                         }
                     };
-                    match bz.api_key_accepted().await {
-                        Ok(true) => {
+                    match bz.check_api_key().await {
+                        Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
                             sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
                         }
-                        Ok(false) => {
-                            sandogasa_cli::credential::KeyVerdict::Refused("refused.".to_string())
+                        Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
+                            sandogasa_cli::credential::KeyVerdict::Refused(format!(
+                                "refused: {why}"
+                            ))
                         }
+                        Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
+                            sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                                "could not tell: {why}"
+                            ))
+                        }
+                        Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
+                            "could not tell.".to_string(),
+                        ),
                         Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
                             "could not check: {e}"
                         )),

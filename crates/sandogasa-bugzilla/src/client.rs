@@ -38,6 +38,35 @@ pub struct WriteOutcome {
     pub last_error: Option<String>,
 }
 
+/// What Bugzilla said about the configured API key
+/// ([`BzClient::check_api_key`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum KeyCheck {
+    /// It got past authentication: the complaint was about the empty
+    /// bug, not the credential.
+    Accepted,
+    /// Bugzilla refused it, with its own reason ("The API key you
+    /// specified has expired…").
+    Refused(String),
+    /// An answer that says neither, with Bugzilla's message.
+    Unclear(String),
+}
+
+/// What Bugzilla said about a key and an account together
+/// ([`BzClient::check_login`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LoginCheck {
+    /// The key works and belongs to the account.
+    Valid,
+    /// The key works, but not for that account.
+    NotRecognised,
+    /// Bugzilla refused the request, with its own reason (an expired
+    /// or invalid key).
+    Refused(String),
+}
+
 impl WriteOutcome {
     /// Every bug got the change.
     pub fn complete(&self) -> bool {
@@ -163,9 +192,23 @@ impl BzClient {
     /// answered anonymously proves nothing: RPM Fusion's instance
     /// serves bug searches to anyone, so the obvious check passed for
     /// a key that could never write.
+    ///
+    /// [`Self::check_api_key`] gives the reason as well; this is
+    /// `false` only when Bugzilla refused the key.
     pub async fn api_key_accepted(&self) -> Result<bool, reqwest::Error> {
+        Ok(!matches!(self.check_api_key().await?, KeyCheck::Refused(_)))
+    }
+
+    /// Whether the server accepts the configured key, and if not, why,
+    /// in Bugzilla's words. Makes the same harmless request as
+    /// [`Self::api_key_accepted`]. Refused: 306 (invalid key), 410 (no
+    /// key, or none it recognises) and 32000, which Red Hat's instance
+    /// answers for an expired key. Accepted: 106, the complaint about
+    /// the missing product, which only a request past authentication
+    /// gets. Anything else is unclear rather than a pass.
+    pub async fn check_api_key(&self) -> Result<KeyCheck, reqwest::Error> {
         if self.api_key.is_none() {
-            return Ok(false);
+            return Ok(KeyCheck::Refused("no API key is configured".to_string()));
         }
         let resp: serde_json::Value = self
             .auth(self.client.post(self.url("bug")))
@@ -174,8 +217,34 @@ impl BzClient {
             .await?
             .json()
             .await?;
-        let refused = matches!(resp.get("code").and_then(|c| c.as_u64()), Some(306 | 410));
-        Ok(!refused)
+        Ok(key_check(&resp))
+    }
+
+    /// Whether the configured key works and belongs to `email`, and if
+    /// Bugzilla refuses the request, why: [`Self::valid_login`] turns a
+    /// refusal (HTTP 400 for an expired or invalid key) into a bare
+    /// status error, losing the reason.
+    pub async fn check_login(&self, email: &str) -> Result<LoginCheck, reqwest::Error> {
+        let url = self.url(&format!("valid_login?login={email}"));
+        let resp = self.auth(self.client.get(&url)).send().await?;
+        let status = resp.status();
+        if status.is_client_error() {
+            // Bugzilla refusing the request (400 for an expired or
+            // invalid key), with its reason in the body when it gave one.
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let reason = body["message"]
+                .as_str()
+                .map_or_else(|| format!("HTTP {status}"), str::to_string);
+            return Ok(LoginCheck::Refused(reason));
+        }
+        // Anything else that is not a success (a 5xx) says nothing
+        // about the key, and stays an error.
+        let body: serde_json::Value = resp.error_for_status()?.json().await?;
+        Ok(if body["result"].as_bool().unwrap_or(false) {
+            LoginCheck::Valid
+        } else {
+            LoginCheck::NotRecognised
+        })
     }
 
     /// The pause before a retried write (default 5 s, times the
@@ -490,6 +559,16 @@ fn satisfies(bug: &Bug, expected: &[(&str, String)]) -> bool {
     })
 }
 
+/// Read the answer to a create with no fields ([`BzClient::check_api_key`]).
+fn key_check(resp: &serde_json::Value) -> KeyCheck {
+    let message = resp["message"].as_str().unwrap_or("no message").to_string();
+    match resp["code"].as_u64() {
+        Some(106) => KeyCheck::Accepted,
+        Some(306 | 410 | 32000) => KeyCheck::Refused(message),
+        _ => KeyCheck::Unclear(message),
+    }
+}
+
 /// Build the crate's HTTP client with the shared sandogasa defaults
 /// (user agent, request timeout, crypto provider). Panics only where
 /// `Client::new()` would too (TLS backend init).
@@ -633,6 +712,94 @@ mod tests {
                 "code {code} should read as refused"
             );
         }
+    }
+
+    /// What Red Hat's Bugzilla answered an expired key with (2026-11-05).
+    fn expired() -> serde_json::Value {
+        serde_json::json!({
+            "error": true,
+            "code": 32000,
+            "message": "The API key you specified has expired. You will need to create \
+                        a new API key to continue using the API."
+        })
+    }
+
+    #[tokio::test]
+    async fn an_expired_key_is_refused_with_bugzilla_s_reason() {
+        // Code 32000 used to read as accepted: only 306 and 410 counted.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(expired()))
+            .mount(&server)
+            .await;
+        let bz = BzClient::new(&server.uri())
+            .with_api_key("k".to_string())
+            .unwrap();
+        match bz.check_api_key().await.unwrap() {
+            KeyCheck::Refused(reason) => assert!(reason.contains("has expired"), "{reason}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert!(!bz.api_key_accepted().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_proves_nothing_is_unclear_not_accepted() {
+        let server = creating_answers(serde_json::json!({
+            "error": true, "code": 51, "message": "something else"
+        }))
+        .await;
+        let bz = BzClient::new(&server.uri())
+            .with_api_key("k".to_string())
+            .unwrap();
+        assert_eq!(
+            bz.check_api_key().await.unwrap(),
+            KeyCheck::Unclear("something else".to_string())
+        );
+        assert_eq!(
+            BzClient::new(&server.uri()).check_api_key().await.unwrap(),
+            KeyCheck::Refused("no API key is configured".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_login_check_gives_bugzilla_s_reason_for_a_refusal() {
+        // valid_login answered an expired key with a bare
+        // "400 Bad Request", and the tools said "could not check".
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/valid_login"))
+            .and(wiremock::matchers::query_param("login", "old@example.com"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(expired()))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/valid_login"))
+            .and(wiremock::matchers::query_param("login", "me@example.com"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"result": true})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/valid_login"))
+            .and(wiremock::matchers::query_param("login", "down@example.com"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        let bz = BzClient::new(&server.uri())
+            .with_api_key("k".to_string())
+            .unwrap();
+        match bz.check_login("old@example.com").await.unwrap() {
+            LoginCheck::Refused(reason) => assert!(reason.contains("has expired"), "{reason}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert_eq!(
+            bz.check_login("me@example.com").await.unwrap(),
+            LoginCheck::Valid
+        );
+        // A server error says nothing about the key: still an error.
+        assert!(bz.check_login("down@example.com").await.is_err());
     }
 
     #[tokio::test]

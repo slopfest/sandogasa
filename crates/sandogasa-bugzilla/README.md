@@ -13,6 +13,10 @@ either way, though a stock instance serves one string).
 - Fetch comments on a bug
 - Update single or multiple bugs in one request (requires API key)
 - Bearer token authentication
+- Check a key without changing anything: `check_api_key` says whether
+  Bugzilla accepted it, refused it (with Bugzilla's reason, e.g. that
+  it has expired), or gave an answer that proves neither;
+  `check_login` does the same for a key and an account together
 - Shared "claim ownership" mechanics (`claim` module) for
   bug-closing tools: one decision matrix (an explicit `--claim`
   flag claims without prompting, `-y` alone declines, no

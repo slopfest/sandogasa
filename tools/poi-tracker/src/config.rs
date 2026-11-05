@@ -199,9 +199,17 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
                     Ok(bz) => bz,
                     Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
                 };
-                match bz.api_key_accepted().await {
-                    Ok(true) => KeyVerdict::Accepted("accepted.".to_string()),
-                    Ok(false) => KeyVerdict::Refused("refused.".to_string()),
+                match bz.check_api_key().await {
+                    Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
+                        KeyVerdict::Accepted("accepted.".to_string())
+                    }
+                    Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
+                        KeyVerdict::Refused(format!("refused: {why}"))
+                    }
+                    Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
+                        KeyVerdict::Unknown(format!("could not tell: {why}"))
+                    }
+                    Ok(_) => KeyVerdict::Unknown("could not tell.".to_string()),
                     Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
                 }
             })

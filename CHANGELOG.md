@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Bugzilla key checks say why a key was refused, and catch expired ones
+
+`fedora-cve-triage config` answered an expired Red Hat Bugzilla key
+with "could not check: HTTP status client error (400 Bad Request)",
+which hid the reason Bugzilla gave ("The API key you specified has
+expired…") and, as an inconclusive check, offered no replacement.
+ebranch's and poi-tracker's check was worse: it counted only codes 306
+and 410 as a refusal, and Red Hat answers an expired key with 32000,
+so an expired key was reported "accepted."
+
+sandogasa-bugzilla gains `check_api_key` and `check_login`, which
+return Bugzilla's verdict with its own reason: accepted, refused (306,
+410, and now 32000 for an expired key), or for `check_api_key` an
+answer that proves neither, which is no longer counted as a pass.
+`api_key_accepted` and `valid_login` keep their signatures, and the
+former now refuses an expired key too. The `config` commands of
+ebranch, fedora-cve-triage, fedora-review-digest and poi-tracker use
+the new checks, so a refused key is reported with Bugzilla's reason
+and offered for replacement on the spot.
+
 ## v0.27.1
 
 ### cpu-sig-tracker and hs-relmon: config re-enters saved settings too

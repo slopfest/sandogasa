@@ -4,7 +4,7 @@ pub mod claim;
 mod client;
 pub mod models;
 
-pub use client::{BzClient, WriteOutcome};
+pub use client::{BzClient, KeyCheck, LoginCheck, WriteOutcome};
 
 /// Whether a string looks like a Bugzilla API key.
 ///

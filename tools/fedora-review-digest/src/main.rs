@@ -167,13 +167,16 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
                 Ok(c) => c,
                 Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
             };
-            match rt.block_on(client.valid_login(&email)) {
-                Ok(true) => KeyVerdict::Accepted("valid.".to_string()),
-                Ok(false) => KeyVerdict::Refused(format!(
-                    "not recognised for {email} — the key, or the address, is not the \
-                     one Bugzilla has."
+            use sandogasa_bugzilla::LoginCheck;
+            match rt.block_on(client.check_login(&email)) {
+                Ok(LoginCheck::Valid) => KeyVerdict::Accepted("valid.".to_string()),
+                Ok(LoginCheck::NotRecognised) => KeyVerdict::Refused(format!(
+                    "not recognised for {email} — the key, or the address, is not \
+                     the one Bugzilla has."
                 )),
-                Err(e) => KeyVerdict::Unknown(format!("could not validate: {e}")),
+                Ok(LoginCheck::Refused(why)) => KeyVerdict::Refused(format!("refused: {why}")),
+                Ok(_) => KeyVerdict::Unknown("could not tell.".to_string()),
+                Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
             }
         },
     )
