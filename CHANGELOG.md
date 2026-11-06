@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### fedora-cve-triage: tidier output for bundled-copy verdicts
+
+On asahi-installer, a run printed "Asking GitHub whether v3.13.9 has
+…'s fix" for every bug, though all but the first per CVE were
+answered from the cache. The same Python was written "Python" or
+"python" depending on how each bug summary spelled it. And a bug
+whose release line has no fix yet was listed under "No fixed version
+in NVD", although NVD was not what came up empty. Resolves #66.
+
+The question is now printed only when GitHub is actually asked;
+`Python` is read as Fedora's `python`, like `CPython`; and the heading
+is "No fixed version found", since the sources include GitHub's and
+OSV's advisories and git.
+
 ### fedora-cve-triage: fix versions confirmed at the prompt are kept per product
 
 A fixed version confirmed at the prompt was recorded under the CVE
