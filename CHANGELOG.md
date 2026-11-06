@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a finding confirmed under a new analysis is remembered, so its bug is not re-read every run
+
+After the analysis number went up, every triaged bug was read again,
+as intended; but a bug whose finding came out word for word the same
+against the same builds got no comment, since a repeat would only add
+noise, so it never showed the new analysis and every later run read it
+again. On asahi-installer that was 29 of 35 bugs, each costing NVD,
+Bodhi and Koji queries on every run. Fixes #72.
+
+Such a confirmation is now remembered in
+`$XDG_CACHE_HOME/fedora-cve-triage/confirmed.json`, and a later run
+skips the bug on it until the analysis or the bug's builds change.
+The record is per machine: without it, a bug is simply read once more.
+
 ### fedora-cve-triage: a tracker fixed on some releases records those builds in Fixed In Version
 
 A `[fedora-all]` or `[epel-all]` tracker fixed on some releases but
