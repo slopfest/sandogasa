@@ -11,8 +11,9 @@
 //! round-tripping.
 
 use std::collections::BTreeSet;
-use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
+
+use sandogasa_config::{Setting, ask};
 
 use crate::config;
 use crate::forge;
@@ -101,8 +102,11 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
             existing_keys.join(", ")
         }
     );
-    let profile_key = read_line("Profile to configure (existing name or new): ")?;
-    let profile_key = profile_key.trim().to_string();
+    let profile_key = ask(
+        &Setting::new("profile", "to configure (an existing name or a new one)").optional(),
+        "",
+        false,
+    )?;
     if profile_key.is_empty() {
         eprintln!("No profile name given, aborting.");
         return Ok(());
@@ -206,7 +210,7 @@ fn prompt_profile(
     let fas_default = existing
         .and_then(|p| p.fas.clone())
         .unwrap_or_else(|| profile_key.to_string());
-    let fas = prompt_default(&format!("  FAS username [{fas_default}]: "), &fas_default)?;
+    let fas = ask(&Setting::new("FAS", "username"), &fas_default, true)?;
     if existing.and_then(|p| p.fas.as_deref()) != Some(&fas) {
         overlay_set_str(overlay, &["users", profile_key, "fas"], &fas);
         changed = true;
@@ -215,14 +219,19 @@ fn prompt_profile(
     let bz_default = existing
         .and_then(|p| p.bugzilla_email.clone())
         .unwrap_or_default();
-    let bz = prompt_default(
-        &format!("  Bugzilla email (empty to skip) [{bz_default}]: "),
+    let bz = ask(
+        &Setting::new("Bugzilla", "email")
+            .optional()
+            .validated(&sandogasa_config::validate_email),
         &bz_default,
+        true,
     )?;
-    if !bz.is_empty() && existing.and_then(|p| p.bugzilla_email.as_deref()) != Some(&bz) {
-        overlay_set_str(overlay, &["users", profile_key, "bugzilla_email"], &bz);
-        changed = true;
-    }
+    changed |= overlay_update(
+        overlay,
+        &["users", profile_key, "bugzilla_email"],
+        existing.and_then(|p| p.bugzilla_email.as_deref()),
+        &bz,
+    );
     changed |= prompt_per_instance_usernames(
         overlay,
         profile_key,
@@ -239,12 +248,14 @@ fn prompt_profile(
     if !sourcehut_instances.is_empty() {
         let existing_emails = existing.map(|p| p.git_emails.clone()).unwrap_or_default();
         let emails_default = existing_emails.join(", ");
-        let answer = prompt_default(
-            &format!(
-                "  Git emails for Sourcehut commit attribution \
-                 (comma-separated, * for all) [{emails_default}]: "
-            ),
+        let answer = ask(
+            &Setting::new(
+                "Sourcehut",
+                "commit attribution git emails (comma-separated, * for all)",
+            )
+            .optional(),
             &emails_default,
+            true,
         )?;
         let emails: Vec<String> = answer
             .split(',')
@@ -326,24 +337,23 @@ fn prompt_per_instance_usernames(
     host_of: impl Fn(&str) -> String,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
-    if !instances.is_empty() {
-        eprintln!("\n  {forge_label} usernames (per instance):");
-    }
     for instance in instances {
         let host = host_of(instance);
         let current: String = existing
             .and_then(|p| lookup(p, &host))
             .cloned()
             .unwrap_or_default();
-        let u = prompt_default(
-            &format!("    {host} (empty to skip) [{current}]: "),
+        let u = ask(
+            &Setting::new(forge_label, &format!("username on {host}")).optional(),
             &current,
+            true,
         )?;
-        if !u.is_empty() && existing.and_then(|p| lookup(p, &host)).map(String::as_str) != Some(&u)
-        {
-            overlay_set_str(overlay, &["users", profile_key, forge_key, &host], &u);
-            changed = true;
-        }
+        changed |= overlay_update(
+            overlay,
+            &["users", profile_key, forge_key, &host],
+            existing.and_then(|p| lookup(p, &host)).map(String::as_str),
+            &u,
+        );
     }
     Ok(changed)
 }
@@ -360,11 +370,11 @@ type ValidateFn = fn(&str, &str) -> Result<bool, Box<dyn std::error::Error>>;
 
 /// Interactively collect an API token for `instance` on one forge.
 /// Validates an existing token first (and keeps it if still valid),
-/// then prompts for a new one via `rpassword`. An empty response
+/// then asks for a new one, hidden. An empty response
 /// skips the instance — useful when a shell env var is providing
 /// the token and the user doesn't want to persist it.
 ///
-/// `prompt` is the full rpassword prompt (it names the scope the
+/// `prompt` is shown before asking (it names the scope the
 /// forge needs). A failed check keeps the existing token for every
 /// forge: an unreachable API says nothing about a credential, and
 /// discarding one over a transient outage is guesswork.
@@ -400,8 +410,19 @@ fn prompt_token(
         }
         return Ok(TokenChoice::Saved(checked.key));
     }
-    let token = rpassword::prompt_password(prompt)?;
-    let token = token.trim().to_string();
+    let hint = prompt
+        .trim_end()
+        .trim_end_matches(':')
+        .trim_end_matches("(enter to skip)")
+        .trim_end();
+    let token = ask(
+        &Setting::new(instance, "token (empty to skip)")
+            .sensitive()
+            .optional()
+            .hint(hint),
+        "",
+        false,
+    )?;
     if token.is_empty() {
         return Ok(TokenChoice::Skipped);
     }
@@ -497,29 +518,41 @@ fn parse_overlay(text: &str) -> Result<toml::Value, Box<dyn std::error::Error>> 
     Ok(toml::from_str::<toml::Value>(text)?)
 }
 
-fn read_line(prompt: &str) -> io::Result<String> {
-    eprint!("{prompt}");
-    io::stderr().flush()?;
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line)?;
-    Ok(line)
-}
-
-/// Read a line, returning `default` if the user pressed Enter
-/// without typing anything.
-fn prompt_default(prompt: &str, default: &str) -> io::Result<String> {
-    let line = read_line(prompt)?;
-    let trimmed = line.trim();
-    Ok(if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    })
-}
-
 /// Read a string leaf at `path` from a `toml::Value`. Returns
 /// `None` if any intermediate key is missing or the leaf isn't a
 /// string.
+/// Record an answer for the string at `path`: set it when it differs
+/// from what the profile had, remove it when the answer clears it
+/// (empty, or `-` at the prompt). Whether anything changed.
+fn overlay_update(value: &mut toml::Value, path: &[&str], had: Option<&str>, answer: &str) -> bool {
+    match (had, answer.is_empty()) {
+        (Some(old), false) if old == answer => false,
+        (_, false) => {
+            overlay_set_str(value, path, answer);
+            true
+        }
+        (Some(_), true) => overlay_remove(value, path),
+        (None, true) => false,
+    }
+}
+
+/// Remove the leaf at `path` from the overlay; whether it was there.
+/// Only the overlay is touched: a value from the main config stays.
+fn overlay_remove(value: &mut toml::Value, path: &[&str]) -> bool {
+    let Some((leaf, parents)) = path.split_last() else {
+        return false;
+    };
+    let mut cur = value;
+    for key in parents {
+        match cur.get_mut(*key) {
+            Some(next) => cur = next,
+            None => return false,
+        }
+    }
+    cur.as_table_mut()
+        .is_some_and(|t| t.remove(*leaf).is_some())
+}
+
 /// Set a path to an array of strings, creating intermediate tables like
 /// [`overlay_set_str`].
 fn overlay_set_array(value: &mut toml::Value, path: &[&str], items: &[String]) {
@@ -647,6 +680,37 @@ fas = "salimma"
         .unwrap();
         let got = overlay_get_str(&v, &["users", "michel", "gitlab", "gitlab.com"]);
         assert_eq!(got.as_deref(), Some("michel-slm"));
+    }
+
+    #[test]
+    fn an_answer_sets_keeps_or_clears_the_overlay_value() {
+        let mut v = parse_overlay("[users.me]\nbugzilla_email = \"me@example.com\"\n").unwrap();
+        let path = ["users", "me", "bugzilla_email"];
+        // The same answer changes nothing.
+        assert!(!overlay_update(
+            &mut v,
+            &path,
+            Some("me@example.com"),
+            "me@example.com"
+        ));
+        // A new one replaces it.
+        assert!(overlay_update(
+            &mut v,
+            &path,
+            Some("me@example.com"),
+            "new@example.com"
+        ));
+        assert_eq!(
+            overlay_get_str(&v, &path).as_deref(),
+            Some("new@example.com")
+        );
+        // Cleared at the prompt, it is removed.
+        assert!(overlay_update(&mut v, &path, Some("new@example.com"), ""));
+        assert_eq!(overlay_get_str(&v, &path), None);
+        // Nothing there and nothing given: nothing to do.
+        assert!(!overlay_update(&mut v, &path, None, ""));
+        // A value only the main config has is not the overlay's to remove.
+        assert!(!overlay_remove(&mut v, &["users", "other", "fas"]));
     }
 
     #[test]

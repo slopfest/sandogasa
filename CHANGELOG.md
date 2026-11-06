@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-report: config prompts handle backspace, and can clear a field
+
+`sandogasa-report config` read its answers as raw lines, so on a
+terminal whose backspace sends `^H` a corrected typo was kept in what
+it saved, the bug #56 found in ebranch. An empty answer kept the old
+value, so a field, once set, could only be cleared by editing the
+file, and the Bugzilla email was not checked. Resolves #65.
+
+Its prompts now go through `sandogasa_config::ask`, as every other
+tool's do: backspaces are applied, each field offers its saved value
+as the default (Enter keeps it), `-` clears an optional field from the
+user's file, and the Bugzilla email is checked as an address. New
+tokens are asked for hidden as before, after a hint naming the scope
+the forge needs. Prompts now go to stdout like the other tools'.
+
 ### fedora-cve-triage: tidier output for bundled-copy verdicts
 
 On asahi-installer, a run printed "Asking GitHub whether v3.13.9 has
