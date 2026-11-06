@@ -279,6 +279,32 @@ pub fn forgejo() -> ForgejoConfig {
         .unwrap_or_default()
 }
 
+/// Everything `escalate` needs of a new Forgejo token, asked of the
+/// releng tracker without writing anything there: reading and writing
+/// its issues, and resolving the labels a ticket is filed with, some
+/// of which belong to the organisation and need its scope. The first
+/// refusal is the answer.
+fn new_token_access(url: &str, token: &str) -> Result<sandogasa_forgejo::IssueAccess, String> {
+    use sandogasa_forgejo::IssueAccess;
+    let (owner, repo) = crate::branch_request::RELENG_REPO;
+    let issues = sandogasa_forgejo::check_issue_access(url, token, owner, repo)
+        .map_err(|e| e.to_string())?;
+    if issues != IssueAccess::Granted {
+        return Ok(issues);
+    }
+    let org = sandogasa_forgejo::check_org_read(url, token, owner).map_err(|e| e.to_string())?;
+    if org != IssueAccess::Granted {
+        return Ok(org);
+    }
+    // The labels themselves, resolved the way filing resolves them: a
+    // name the tracker no longer has is not the token's fault, but it
+    // would fail every ticket, so it is said now.
+    sandogasa_forgejo::Client::new(url, token)
+        .and_then(|c| c.label_ids(owner, repo, &crate::branch_request::RELENG_LABELS))
+        .map_err(|e| e.to_string())?;
+    Ok(IssueAccess::Granted)
+}
+
 /// Ask for the Forgejo token `escalate` files releng tickets with,
 /// check it against `forge.url`, and keep the answer in `forge`.
 /// Optional: an empty answer leaves escalate reporting the step
@@ -289,7 +315,9 @@ pub async fn ask_forgejo_token(forge: &mut ForgejoConfig, review: bool) -> Resul
     let hint = format!(
         "\nescalate files a releng ticket for a branch request whose maintainers \
          have not answered. Create a token at {}/user/settings/applications with \
-         the issue scope at Read and Write, or leave empty to skip.",
+         the issue scope at Read and Write (to search and file tickets) and the \
+         organization scope at Read (for the tracker's organisation-wide labels), \
+         or leave empty to skip.",
         forge.url.trim_end_matches('/')
     );
     let saved = forge.token.clone();
@@ -320,11 +348,11 @@ pub async fn ask_forgejo_token(forge: &mut ForgejoConfig, review: bool) -> Resul
             let (owner, repo) = crate::branch_request::RELENG_REPO;
             let checked = tokio::task::spawn_blocking(move || {
                 if full {
-                    sandogasa_forgejo::check_issue_access(&url, &k, owner, repo)
+                    new_token_access(&url, &k)
                 } else {
                     sandogasa_forgejo::check_issue_read(&url, &k, owner, repo)
+                        .map_err(|e| e.to_string())
                 }
-                .map_err(|e| e.to_string())
             })
             .await
             .map_err(|e| e.to_string())

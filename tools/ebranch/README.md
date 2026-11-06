@@ -1629,10 +1629,12 @@ offers what it found as the answer to confirm.
 A `[forgejo]` table holds the token `escalate` files a releng ticket
 with, on Fedora's Forgejo. `ebranch config` asks for it; create it at
 https://forge.fedoraproject.org/user/settings/applications with the
-issue scope at Read and Write. It is checked for both against the
-releng tracker when it is entered, without writing anything there,
-and only for still working when it is kept; a token Forgejo refuses,
-or one missing a scope, is offered for replacement:
+issue scope at Read and Write, to search and file tickets, and the
+organization scope at Read, since some of the labels a ticket is
+filed with belong to the releng organisation. A new token is checked
+for all of it against the releng tracker, without writing anything
+there; a kept one only for still working. A token Forgejo refuses, or
+one missing a scope, is offered for replacement:
 
 ```toml
 [forgejo]

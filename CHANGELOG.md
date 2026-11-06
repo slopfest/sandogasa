@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### ebranch: a releng ticket's labels need the organization scope, and the token is checked for it
+
+`ebranch escalate` failed to file a releng ticket with "no such
+label(s): points/01, Priority/Low", and filed nothing, though both
+labels exist. They belong to the releng organisation, not the
+tracker, and Fedora's Forgejo refuses an organisation's labels (403)
+to a token without the organization scope. `label_ids` in
+sandogasa-forgejo dropped that refusal, so the labels looked missing,
+and the token prompt neither asked for that scope nor checked it.
+
+The prompt now asks for the organization scope at Read alongside the
+issue scope, and a new token is checked for it, then for the labels
+themselves, which are resolved the way filing resolves them; a token
+without the scope is offered for replacement. `label_ids` names why
+the organisation's labels could not be read when a label goes
+unfound. sandogasa-forgejo gains `check_org_read`.
+
 ### ebranch: config and escalate ask for the Forgejo token releng tickets need
 
 `ebranch config` never asked for the Fedora Forgejo token that

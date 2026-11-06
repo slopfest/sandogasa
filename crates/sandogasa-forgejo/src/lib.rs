@@ -389,9 +389,9 @@ struct CompareResult {
 }
 
 /// A Forgejo / Gitea API client bound to one instance.
-/// What an instance says about a token asked to read, or read and
-/// write, a repository's issues; see [`check_issue_read`] and
-/// [`check_issue_access`].
+/// What an instance says about a token asked for some access; see
+/// [`check_issue_read`], [`check_issue_access`] and
+/// [`check_org_read`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum IssueAccess {
@@ -720,15 +720,23 @@ impl Client {
         for l in self.get_paged::<Label>(&url, &[], "Forgejo repo labels")? {
             known.insert(l.name, l.id);
         }
+        let mut org_unread = None;
         if names.iter().any(|n| !known.contains_key(*n)) {
-            // A user-owned repository has no organisation to fall back
-            // to, which is not a failure -- it just means everything
-            // that exists has already been seen.
             let url = format!("{}/api/v1/orgs/{owner}/labels", self.base_url);
-            if let Ok(labels) = self.get_paged::<Label>(&url, &[], "Forgejo org labels") {
-                for l in labels {
-                    known.entry(l.name).or_insert(l.id);
+            // A token without the organization scope is refused here
+            // (403), and that has to be said: dropped, the labels would
+            // simply look missing.
+            let org = self.get_paged::<Label>(&url, &[], "Forgejo org labels");
+            match org {
+                Ok(labels) => {
+                    for l in labels {
+                        known.entry(l.name).or_insert(l.id);
+                    }
                 }
+                // A user-owned repository has no organisation to fall
+                // back to, which is not a failure in itself; it is
+                // named only if a label then goes unfound.
+                Err(e) => org_unread = Some(e.to_string()),
             }
         }
         let missing: Vec<&str> = names
@@ -737,7 +745,14 @@ impl Client {
             .filter(|n| !known.contains_key(*n))
             .collect();
         if !missing.is_empty() {
-            return Err(format!("{owner}/{repo}: no such label(s): {}", missing.join(", ")).into());
+            let why = org_unread
+                .map(|e| format!(" (the {owner} organisation's labels could not be read: {e})"))
+                .unwrap_or_default();
+            return Err(format!(
+                "{owner}/{repo}: no such label(s): {}{why}",
+                missing.join(", ")
+            )
+            .into());
         }
         Ok(names.iter().map(|n| known[*n]).collect())
     }
@@ -1026,6 +1041,25 @@ pub fn check_issue_read(
         .query(&[("limit", "1")])
         .send()?;
     Ok(access_refusal(read, "read")?.unwrap_or(IssueAccess::Granted))
+}
+
+/// Check that `token` can read organisation `org`, by listing one of
+/// its labels: what resolving an organisation-wide label for a new
+/// issue needs. A token without the organization scope is refused
+/// (403) even where the labels are public.
+pub fn check_org_read(
+    base_url: &str,
+    token: &str,
+    org: &str,
+) -> Result<IssueAccess, Box<dyn std::error::Error>> {
+    sandogasa_cli::ensure_secure_url(base_url)?;
+    let http = build_http_client(Some(token))?;
+    let url = format!(
+        "{}/api/v1/orgs/{org}/labels",
+        base_url.trim_end_matches('/')
+    );
+    let read = http.get(url).query(&[("limit", "1")]).send()?;
+    Ok(access_refusal(read, "organisation")?.unwrap_or(IssueAccess::Granted))
 }
 
 /// Check that `token` can read and write `owner/repo`'s issues: what a
@@ -1461,6 +1495,34 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_organisation_is_named_when_its_labels_go_unfound() {
+        // Fedora's Forgejo refuses an issue-only token the releng
+        // organisation's labels (403, read:organization). Dropped, that
+        // refusal read as "no such label(s): points/01, Priority/Low".
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v1/repos/releng/tickets/labels")
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"[{"id": 982, "name": "ops"}]"#)
+            .create();
+        server
+            .mock("GET", "/api/v1/orgs/releng/labels")
+            .match_query(mockito::Matcher::Any)
+            .match_header("authorization", "token tok")
+            .with_status(403)
+            .with_body(r#"{"message":"token does not have at least one of required scope(s): [read:organization]"}"#)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let err = client
+            .label_ids("releng", "tickets", &["ops", "points/01", "Priority/Low"])
+            .expect_err("unreadable organisation labels are unfound");
+        let msg = err.to_string();
+        assert!(msg.contains("Priority/Low"), "{msg}");
+        assert!(msg.contains("read:organization"), "{msg}");
+    }
+
+    #[test]
     fn a_repo_label_wins_over_the_organisations() {
         let server = label_server(
             r#"[{"id": 982, "name": "ops"}]"#,
@@ -1502,10 +1564,11 @@ mod tests {
             client.label_ids("releng", "tickets", &["bug"]).unwrap(),
             vec![7]
         );
-        assert!(
-            client.label_ids("releng", "tickets", &["ops"]).is_err(),
-            "a name that is nowhere must still be an error"
-        );
+        let err = client
+            .label_ids("releng", "tickets", &["ops"])
+            .expect_err("a name that is nowhere must still be an error");
+        // And why the organisation was no help is said, not dropped.
+        assert!(err.to_string().contains("could not be read"), "{err}");
     }
 
     #[test]
@@ -1821,6 +1884,35 @@ mod tests {
             .with_status(502)
             .create();
         assert!(check_issue_access(&server.url(), "good", "releng", "tickets").is_err());
+    }
+
+    #[test]
+    fn org_read_tells_a_missing_scope() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v1/orgs/releng/labels")
+            .match_query(mockito::Matcher::Any)
+            .match_header("authorization", "token wide")
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        server
+            .mock("GET", "/api/v1/orgs/releng/labels")
+            .match_query(mockito::Matcher::Any)
+            .match_header("authorization", "token narrow")
+            .with_status(403)
+            .with_body(r#"{"message":"token does not have at least one of required scope(s): [read:organization]"}"#)
+            .create();
+        assert_eq!(
+            check_org_read(&server.url(), "wide", "releng").unwrap(),
+            IssueAccess::Granted
+        );
+        assert_eq!(
+            check_org_read(&server.url(), "narrow", "releng").unwrap(),
+            IssueAccess::MissingScope(
+                "token does not have at least one of required scope(s): [read:organization]".into()
+            )
+        );
     }
 
     #[test]
