@@ -18,22 +18,15 @@ use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name};
 
 #[derive(clap::Args)]
 pub struct DumpInventoryArgs {
-    /// CentOS release(s) to enumerate, e.g. "c10s" or "c9s,c10s"
-    /// (CSV or repeated). The Koji tag queried per release is
-    /// "proposed_updates<N>s-packages-main-release" where N is the
-    /// major version digit.
-    #[arg(short, long = "release", value_delimiter = ',')]
-    pub releases: Vec<String>,
+    /// Koji CLI profile (cbs for CentOS Build System).
+    #[arg(long, default_value = "cbs")]
+    pub koji_profile: String,
 
     /// Output file (sandogasa-inventory TOML). If it exists,
     /// merge in the newly-discovered packages; existing entries
     /// are preserved.
     #[arg(short, long)]
     pub output: String,
-
-    /// Koji CLI profile (cbs for CentOS Build System).
-    #[arg(long, default_value = "cbs")]
-    pub koji_profile: String,
 
     /// Drop packages from each workload that are no longer
     /// tagged in either the `-release` or `-testing` tag for
@@ -43,6 +36,13 @@ pub struct DumpInventoryArgs {
     /// aren't lost.
     #[arg(long)]
     pub prune: bool,
+
+    /// CentOS release(s) to enumerate, e.g. "c10s" or "c9s,c10s"
+    /// (CSV or repeated). The Koji tag queried per release is
+    /// "proposed_updates<N>s-packages-main-release" where N is the
+    /// major version digit.
+    #[arg(short, long = "release", value_delimiter = ',')]
+    pub releases: Vec<String>,
 
     /// Print progress to stderr.
     #[arg(short, long)]

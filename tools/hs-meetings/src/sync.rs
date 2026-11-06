@@ -20,29 +20,29 @@ const MANAGED_FROM_YEAR: i32 = 2024;
 
 #[derive(clap::Args)]
 pub struct SyncArgs {
+    /// Print planned changes without writing.
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// Path to the tool-managed meetings list file.
     #[arg(short, long, value_name = "PATH")]
     pub file: String,
-
-    /// Meetbot search topic.
-    #[arg(short, long, default_value = DEFAULT_TOPIC)]
-    pub topic: String,
-
-    /// Start date filter (inclusive, YYYY-MM-DD).
-    #[arg(long, group = "date_range")]
-    pub since: Option<NaiveDate>,
-
-    /// End date filter (inclusive, YYYY-MM-DD, default: today).
-    #[arg(long, requires = "since")]
-    pub until: Option<NaiveDate>,
 
     /// Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`.
     #[arg(long, group = "date_range")]
     pub period: Option<String>,
 
-    /// Print planned changes without writing.
-    #[arg(long)]
-    pub dry_run: bool,
+    /// Start date filter (inclusive, YYYY-MM-DD).
+    #[arg(long, group = "date_range")]
+    pub since: Option<NaiveDate>,
+
+    /// Meetbot search topic.
+    #[arg(short, long, default_value = DEFAULT_TOPIC)]
+    pub topic: String,
+
+    /// End date filter (inclusive, YYYY-MM-DD, default: today).
+    #[arg(long, requires = "since")]
+    pub until: Option<NaiveDate>,
 }
 
 pub fn run(args: &SyncArgs) -> ExitCode {

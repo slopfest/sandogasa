@@ -1,28 +1,28 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH koji-diff 1 2026-11-04 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH koji-diff 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 koji\-diff \- Koji build log differ: compare buildroot and build logs of two builds
 .SH SYNOPSIS
-\fBkoji\-diff\fR [\fB\-\-instance\fR] [\fB\-\-arch\fR] [\fB\-\-log\-lines\fR] [\fB\-\-json\fR] [\fB\-\-debug\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIREF1\fR> <\fIREF2\fR>
+\fBkoji\-diff\fR [\fB\-\-arch\fR] [\fB\-\-debug\fR] [\fB\-\-instance\fR] [\fB\-\-json\fR] [\fB\-\-log\-lines\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIREF1\fR> <\fIREF2\fR>
 .SH DESCRIPTION
 Koji build log differ: compare buildroot and build logs of two builds
 .SH OPTIONS
 .TP
-\fB\-\-instance\fR \fI<HOST>\fR
-Koji instance hostname (required for bare IDs)
-.TP
 \fB\-\-arch\fR \fI<ARCH>\fR [default: x86_64]
 Architecture to compare
 .TP
-\fB\-\-log\-lines\fR \fI<N>\fR [default: 50]
-build.log tail lines on failure
+\fB\-\-debug\fR
+Show debug info (log snippets, file listings)
+.TP
+\fB\-\-instance\fR \fI<HOST>\fR
+Koji instance hostname (required for bare IDs)
 .TP
 \fB\-\-json\fR
 Output as JSON
 .TP
-\fB\-\-debug\fR
-Show debug info (log snippets, file listings)
+\fB\-\-log\-lines\fR \fI<N>\fR [default: 50]
+build.log tail lines on failure
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

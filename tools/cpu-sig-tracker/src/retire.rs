@@ -165,42 +165,42 @@ pub struct RetireArgs {
 
     /// With a package name: the release to retire it in (e.g.
     /// `c10s`), when it is tracked in several.
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     pub release: Option<String>,
 
     /// Why: landed (the problem is fixed in stock — labelled
     /// `superseded` when not by the SIG's own MR) or abandoned (the
     /// SIG gives up). Inferred from the MR, stock and the RHEL issue
     /// when omitted, and asked at a terminal.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, help_heading = "Reason")]
     pub reason: Option<Reason>,
 
     /// With `--reason landed` and nothing on record: the stock build
     /// that carries the fix, as you verified it. Recorded on the issue
     /// for `timeline`; asked for at a terminal otherwise.
-    #[arg(long, value_name = "NVR", requires = "reason")]
+    #[arg(long, value_name = "NVR", requires = "reason", help_heading = "Reason")]
     pub stock_fix: Option<String>,
-
-    /// Skip the interactive confirmation prompt.
-    #[arg(short, long)]
-    pub yes: bool,
-
-    /// Skip the precondition checks (build untagged, and what the
-    /// reason needs). Use when the tool can't reach Koji/GitLab or
-    /// when you're sure the conditions hold.
-    #[arg(long)]
-    pub force: bool,
 
     /// Also assign the issue to you as it is closed.
     ///
     /// Without this you are asked, unless -y is given: a
     /// non-interactive run must not reassign work nobody asked
     /// it to.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     pub claim: bool,
 
+    /// Skip the precondition checks (build untagged, and what the
+    /// reason needs). Use when the tool can't reach Koji/GitLab or
+    /// when you're sure the conditions hold.
+    #[arg(long, help_heading = "Writing")]
+    pub force: bool,
+
+    /// Skip the interactive confirmation prompt.
+    #[arg(short, long, help_heading = "Writing")]
+    pub yes: bool,
+
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     pub verbose: bool,
 }
 

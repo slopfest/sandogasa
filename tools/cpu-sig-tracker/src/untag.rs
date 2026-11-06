@@ -28,24 +28,24 @@ pub struct UntagArgs {
     /// or a specific NVR (e.g. `xz-5.6.4-1~proposed.el10`).
     pub target: String,
 
-    /// CentOS release whose proposed_updates tags to untag from
-    /// (`c9s`, `c10s`, …).
-    #[arg(long)]
-    pub release: String,
-
-    /// Skip the interactive confirmation prompt.
-    #[arg(short, long)]
-    pub yes: bool,
-
     /// Skip the JIRA-resolved precondition. Use when the
     /// tracking issue can't be located or you're sure the
     /// check would pass.
     #[arg(long)]
     pub force: bool,
 
+    /// CentOS release whose proposed_updates tags to untag from
+    /// (`c9s`, `c10s`, …).
+    #[arg(long)]
+    pub release: String,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Skip the interactive confirmation prompt.
+    #[arg(short, long)]
+    pub yes: bool,
 }
 
 pub fn run(args: &UntagArgs) -> ExitCode {

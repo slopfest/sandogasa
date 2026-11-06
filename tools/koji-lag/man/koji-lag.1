@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH koji-lag 1 2026-11-04 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH koji-lag 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 koji\-lag \- Quantify Koji build queue lag and per\-arch build\-time drag
 .SH SYNOPSIS
@@ -16,18 +16,18 @@ Print help
 Print version
 .SH COMMANDS
 .SS koji-lag annotate
-\fBkoji\-lag annotate\fR [\fB\-\-instance\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-events\fR>
+\fBkoji\-lag annotate\fR [\fB\-\-annotations\fR] [\fB\-\-instance\fR] [\fB\-\-min\-samples\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-events\fR>
 .PP
 Report the mass rebuilds and architecture stalls in a store
+.TP
+\fB\-\-annotations\fR \fI<FILE>\fR
+Extra annotations, beyond the ones built in
 .TP
 \fB\-\-events\fR \fI<DIR>\fR
 Events tree to rewrite, as passed to `events \-\-out`
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream)
-.TP
-\fB\-\-annotations\fR \fI<FILE>\fR
-Extra annotations, beyond the ones built in
 .TP
 \fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
 Withhold stats below this sample count in the rewritten reports
@@ -38,31 +38,25 @@ Withhold stats below this sample count in the rewritten reports
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS koji-lag events
-\fBkoji\-lag events\fR [\fB\-\-no\-verify\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-schedule\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR> <\fB\-o\fR|\fB\-\-out\fR>
+\fBkoji\-lag events\fR [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-annotations\fR] [\fB\-\-min\-samples\fR] [\fB\-\-no\-verify\fR] [\fB\-\-schedule\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR> <\fB\-o\fR|\fB\-\-out\fR>
 .PP
 .TP
-\fB\-\-store\fR \fI<FILE>\fR
-Store to read from
-.TP
-\fB\-\-no\-verify\fR
-Skip the check for days the store claims and does not hold
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SH SELECTION
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream)
 .TP
-\fB\-o\fR, \fB\-\-out\fR \fI<DIR>\fR
-Directory to write the events tree into
-.TP
 \fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
 First day to consider (default: everything the store holds)
 .TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to read from
+.TP
 \fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
 Last day to consider, inclusive
-.TP
-\fB\-\-schedule\fR \fI<DIR>\fR
-Release schedule checkout, for announced dates.
-
-One `f\-NN/Fedora.Schedule.xml` per release. With it, a rebuild reports the dates it was announced for beside the ones it ran on, and every event names the release cycle it fell in.
+.SH ANALYSIS
 .TP
 \fB\-\-annotations\fR \fI<FILE>\fR
 Extra outage causes, merged with the built\-in ones.
@@ -72,21 +66,27 @@ Same form as the tool\*(Aqs own `data/outages.toml`. An entry that matches no de
 \fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
 Withhold report stats below this sample count
 .TP
+\fB\-\-no\-verify\fR
+Skip the check for days the store claims and does not hold
+.TP
+\fB\-\-schedule\fR \fI<DIR>\fR
+Release schedule checkout, for announced dates.
+
+One `f\-NN/Fedora.Schedule.xml` per release. With it, a rebuild reports the dates it was announced for beside the ones it ran on, and every event names the release cycle it fell in.
+.SH OUTPUT
+.TP
 \fB\-\-format\fR \fI<FORM,...>\fR
 Output forms: text, json, csv (comma\-separated or repeated)
 .TP
+\fB\-o\fR, \fB\-\-out\fR \fI<DIR>\fR
+Directory to write the events tree into
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Name each event as it is written
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag export
-\fBkoji\-lag export\fR [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR> <\fB\-o\fR|\fB\-\-out\fR>
+\fBkoji\-lag export\fR [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-o\fR|\fB\-\-out\fR> <\fB\-\-store\fR>
 .PP
 Write a store\*(Aqs rows out as CSV, for analysis elsewhere
-.TP
-\fB\-\-store\fR \fI<FILE>\fR
-Store to read from
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream)
@@ -97,31 +97,34 @@ Directory to write the CSV files into
 \fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
 First day to export (default: everything the store holds)
 .TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to read from
+.TP
 \fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
 Last day to export, inclusive
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS koji-lag probe
-\fBkoji\-lag probe\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-depth\fR] [\fB\-\-timeout\fR] [\fB\-\-page\-size\fR] [\fB\-\-steps\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBkoji\-lag probe\fR [\fB\-\-hub\-url\fR] [\fB\-\-instance\fR] [\fB\-\-depth\fR] [\fB\-\-page\-size\fR] [\fB\-\-steps\fR] [\fB\-\-timeout\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Time one listing page, to size a backfill before starting it
 .TP
-\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
-Known Koji instance (cbs, fedora, stream)
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SH SELECTION
 .TP
 \fB\-\-hub\-url\fR \fI<URL>\fR
 Koji hub XML\-RPC URL (overrides \-\-instance)
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
+.SH REQUESTS
 .TP
 \fB\-\-depth\fR \fI<DAYS,...>\fR [default: 1,600]
 Depths to time, in days before now (comma\-separated).
 
 Defaults to a recent page and one at twenty months, which is roughly where cost stops being negligible.
-.TP
-\fB\-\-timeout\fR \fI<SECS>\fR
-Seconds a single hub request may take; 0 waits forever.
-
-Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a deep window: a page that exceeds the bound is abandoned and the retry pays the hub cost again, so too low a value can stop a backfill progressing rather than merely slow it. `probe` says what the depth you are asking for actually costs.
 .TP
 \fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 4000]
 Rows per page, as `sync \-\-page\-size` would ask for
@@ -131,30 +134,36 @@ Pages to walk from each depth.
 
 At least two, because the first page into a region nobody has asked about lately costs several times what the ones behind it do — seven minutes against 55s when January 2025 was collected — and both numbers are needed to size a backfill.
 .TP
+\fB\-\-timeout\fR \fI<SECS>\fR
+Seconds a single hub request may take; 0 waits forever.
+
+Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a deep window: a page that exceeds the bound is abandoned and the retry pays the hub cost again, so too low a value can stop a backfill progressing rather than merely slow it. `probe` says what the depth you are asking for actually costs.
+.SH OUTPUT
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Name each page as it is timed
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag report
-\fBkoji\-lag report\fR [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-arch\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-\-class\fR] [\fB\-\-scratch\fR] [\fB\-\-official\fR] [\fB\-\-include\-failed\fR] [\fB\-\-out\fR] [\fB\-\-min\-samples\fR] [\fB\-\-json\fR] [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR>
+\fBkoji\-lag report\fR [\fB\-\-arch\fR] [\fB\-\-class\fR] [\fB\-\-instance\fR] [\fB\-\-official\fR] [\fB\-\-owner\fR] [\fB\-\-package\fR] [\fB\-\-scratch\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-include\-failed\fR] [\fB\-\-min\-samples\fR] [\fB\-\-format\fR] [\fB\-\-json\fR] [\fB\-\-out\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR>
 .PP
 Per\-arch queue\-wait / build\-time / bottleneck report
 .TP
-\fB\-\-store\fR \fI<FILE>\fR
-Store to report from
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SH SELECTION
+.TP
+\fB\-\-arch\fR \fI<ARCH,...>\fR
+Restrict to these arches (CSV or repeated)
+.TP
+\fB\-\-class\fR \fI<CLASS,...>\fR
+Restrict to these classes of build (CSV or repeated).
+
+One of mass\-rebuild, eln\-sync, eln\-fix, koschei, ci, service, hand\-scratch, official. Restrict to mass\-rebuild before comparing one period with another: an unrestricted window is mostly koschei, whose mix moves with whatever it retried.
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream), with \-\-store
 .TP
-\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
-Only tasks completing on/after this date (UTC midnight)
-.TP
-\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
-Only tasks completing on/before this date (UTC midnight)
-.TP
-\fB\-\-arch\fR \fI<ARCH,...>\fR
-Restrict to these arches (CSV or repeated)
+\fB\-\-official\fR
+Only official (non\-scratch) builds
 .TP
 \fB\-\-owner\fR \fI<NAME,...>\fR
 Restrict to builds by these accounts (CSV or repeated).
@@ -164,130 +173,137 @@ The account exactly as Koji records it, which for a service is a long name: `kos
 \fB\-\-package\fR \fI<NAME,...>\fR
 Restrict to these source packages (CSV or repeated)
 .TP
-\fB\-\-class\fR \fI<CLASS,...>\fR
-Restrict to these classes of build (CSV or repeated).
-
-One of mass\-rebuild, eln\-sync, eln\-fix, koschei, ci, service, hand\-scratch, official. Restrict to mass\-rebuild before comparing one period with another: an unrestricted window is mostly koschei, whose mix moves with whatever it retried.
-.TP
 \fB\-\-scratch\fR
 Only scratch builds
 .TP
-\fB\-\-official\fR
-Only official (non\-scratch) builds
+\fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
+Only tasks completing on/after this date (UTC midnight)
+.TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to report from
+.TP
+\fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
+Only tasks completing on/before this date (UTC midnight)
+.SH ANALYSIS
 .TP
 \fB\-\-include\-failed\fR
 Include FAILED tasks in build\-time statistics
 .TP
-\fB\-\-out\fR \fI<DIR>\fR
-Write report.txt and report.json into this directory.
-
-Both forms in one pass, since a reader wants the table and a machine wants the fields, and running the report twice to get both would read the dataset twice. Without it the report goes to stdout, as text or as JSON with \-\-json.
-.TP
 \fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
 Withhold human\-output stats below this sample count
+.SH OUTPUT
+.TP
+\fB\-\-format\fR \fI<FORM,...>\fR
+Output forms: text, json, csv (comma\-separated or repeated).
+
+Writing to a directory defaults to text,json. `csv` is one file per table, because a CSV holds one table where the other two carry every table for the period together.
 .TP
 \fB\-\-json\fR
 Print JSON instead of tables: shorthand for \-\-format json.
 
 Every tool here takes \-\-json, so it stays as the conventional way to ask, and means the same thing.
 .TP
-\fB\-\-format\fR \fI<FORM,...>\fR
-Output forms: text, json, csv (comma\-separated or repeated).
+\fB\-\-out\fR \fI<DIR>\fR
+Write report.txt and report.json into this directory.
 
-Writing to a directory defaults to text,json. `csv` is one file per table, because a CSV holds one table where the other two carry every table for the period together.
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Both forms in one pass, since a reader wants the table and a machine wants the fields, and running the report twice to get both would read the dataset twice. Without it the report goes to stdout, as text or as JSON with \-\-json.
 .SS koji-lag reports
-\fBkoji\-lag reports\fR [\fB\-\-no\-verify\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-force\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR> <\fB\-\-reports\-root\fR>
+\fBkoji\-lag reports\fR [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-min\-samples\fR] [\fB\-\-no\-verify\fR] [\fB\-\-force\fR] [\fB\-\-format\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR> <\fB\-\-reports\-root\fR>
 .PP
 Write reports for every period the store covers
 .TP
-\fB\-\-store\fR \fI<FILE>\fR
-Store to report from
-.TP
-\fB\-\-no\-verify\fR
-Skip the check for days the store claims and does not hold
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SH SELECTION
 .TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream)
 .TP
-\fB\-\-reports\-root\fR \fI<DIR>\fR
-Directory tree to write reports into
-.TP
 \fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
 First day to consider (default: everything the store holds)
 .TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to report from
+.TP
 \fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
 Last day to consider, inclusive
+.SH ANALYSIS
 .TP
 \fB\-\-min\-samples\fR \fI<MIN_SAMPLES>\fR [default: 5]
 Withhold report stats below this sample count
+.TP
+\fB\-\-no\-verify\fR
+Skip the check for days the store claims and does not hold
+.SH WRITING
 .TP
 \fB\-\-force\fR
 Re\-render reports that already exist.
 
 Off by default, so re\-running after an interruption costs nothing; pass it after changing what a report says, or after a sync has filled in rows a period was missing.
+.SH OUTPUT
 .TP
 \fB\-\-format\fR \fI<FORM,...>\fR
 Output forms: text, json, csv (comma\-separated or repeated).
 
 Writing to a directory defaults to text,json. `csv` is one file per table, because a CSV holds one table where the other two carry every table for the period together.
 .TP
+\fB\-\-reports\-root\fR \fI<DIR>\fR
+Directory tree to write reports into
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print each period as it is considered
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag sync
-\fBkoji\-lag sync\fR [\fB\-\-instance\fR] [\fB\-\-hub\-url\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-days\fR] [\fB\-\-timeout\fR] [\fB\-\-page\-size\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-retries\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR>
+\fBkoji\-lag sync\fR [\fB\-\-days\fR] [\fB\-\-hub\-url\fR] [\fB\-\-instance\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-duty\-cycle\fR] [\fB\-\-page\-size\fR] [\fB\-\-retries\fR] [\fB\-\-sleep\-ms\fR] [\fB\-\-timeout\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR>
 .PP
 Fetch whatever the store is missing for a window
 .TP
-\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
-Known Koji instance (cbs, fedora, stream)
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SH SELECTION
+.TP
+\fB\-\-days\fR \fI<N>\fR
+Sync the last N complete UTC days
 .TP
 \fB\-\-hub\-url\fR \fI<URL>\fR
 Explicit hub URL (overrides \-\-instance; https only)
+.TP
+\fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
+Known Koji instance (cbs, fedora, stream)
 .TP
 \fB\-\-since\fR \fI<YYYY\-MM\-DD>\fR
 Window start date (UTC midnight, inclusive)
 .TP
 \fB\-\-until\fR \fI<YYYY\-MM\-DD>\fR
 Window end date, inclusive (default: the last complete UTC day — the running day is never included implicitly)
-.TP
-\fB\-\-days\fR \fI<N>\fR
-Sync the last N complete UTC days
-.TP
-\fB\-\-store\fR \fI<FILE>\fR
-Store to fill (created if absent)
-.TP
-\fB\-\-timeout\fR \fI<SECS>\fR
-Seconds a single hub request may take; 0 waits forever.
-
-Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a deep window: a page that exceeds the bound is abandoned and the retry pays the hub cost again, so too low a value can stop a backfill progressing rather than merely slow it. `probe` says what the depth you are asking for actually costs.
-.TP
-\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 4000]
-Tasks per listTasks page.
-
-A page costs what it costs to *find*, not to send: at thirteen months\*(Aq depth 1000 rows take 18s and 4000 take 21s. Fewer, larger pages therefore ask the hub for far fewer expensive seeks, and the duty cycle keeps our share of it the same either way.
-.TP
-\fB\-\-sleep\-ms\fR \fI<SLEEP_MS>\fR [default: 500]
-Minimum pause between hub requests, in milliseconds
+.SH REQUESTS
 .TP
 \fB\-\-duty\-cycle\fR \fI<PERCENT>\fR [default: 50]
 Share of one connection to use, as a percentage.
 
 Each pause is scaled to how long the last request took, so a hub under load is asked less often and a hub that speeds up is asked more. 50 means pause as long as the request took; 100 paces by \-\-sleep\-ms alone.
 .TP
+\fB\-\-page\-size\fR \fI<PAGE_SIZE>\fR [default: 4000]
+Tasks per listTasks page.
+
+A page costs what it costs to *find*, not to send: at thirteen months\*(Aq depth 1000 rows take 18s and 4000 take 21s. Fewer, larger pages therefore ask the hub for far fewer expensive seeks, and the duty cycle keeps our share of it the same either way.
+.TP
 \fB\-\-retries\fR \fI<RETRIES>\fR [default: 3]
 Retries per failed hub request
 .TP
+\fB\-\-sleep\-ms\fR \fI<SLEEP_MS>\fR [default: 500]
+Minimum pause between hub requests, in milliseconds
+.TP
+\fB\-\-timeout\fR \fI<SECS>\fR
+Seconds a single hub request may take; 0 waits forever.
+
+Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a deep window: a page that exceeds the bound is abandoned and the retry pays the hub cost again, so too low a value can stop a backfill progressing rather than merely slow it. `probe` says what the depth you are asking for actually costs.
+.SH OUTPUT
+.TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to fill (created if absent)
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS koji-lag verify
 \fBkoji\-lag verify\fR [\fB\-\-instance\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-store\fR>
 .PP
@@ -295,11 +311,11 @@ Check a store for days it claims to cover and does not hold.
 .PP
 Exits non\-zero when it finds one, so it can gate a publish.
 .TP
-\fB\-\-store\fR \fI<FILE>\fR
-Store to check
-.TP
 \fB\-\-instance\fR \fI<INSTANCE>\fR [default: fedora]
 Known Koji instance (cbs, fedora, stream)
+.TP
+\fB\-\-store\fR \fI<FILE>\fR
+Store to check
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

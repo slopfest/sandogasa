@@ -30,27 +30,27 @@ const TRACKING_LABEL: &str = "cpu-sig-tracker";
 
 #[derive(clap::Args)]
 pub struct ListIssuesArgs {
-    /// sandogasa-inventory TOML; with it every inventory package is
-    /// classified, `proposed` and `missing` included
-    #[arg(short, long)]
-    pub inventory: Option<String>,
-
-    /// Restrict to a single release (e.g. `c10s`)
-    #[arg(long)]
-    pub release: Option<String>,
-
-    /// Restrict to these package(s) (repeat/CSV)
-    #[arg(long, value_delimiter = ',')]
-    pub package: Vec<String>,
-
     /// Label hand-filed tracking issues `cpu-sig-tracker` without
     /// asking, so every command tracks them
     #[arg(long)]
     pub adopt: bool,
 
+    /// sandogasa-inventory TOML; with it every inventory package is
+    /// classified, `proposed` and `missing` included
+    #[arg(short, long)]
+    pub inventory: Option<String>,
+
     /// Emit a machine-readable JSON array instead of grouped text
     #[arg(long)]
     pub json: bool,
+
+    /// Restrict to these package(s) (repeat/CSV)
+    #[arg(long, value_delimiter = ',')]
+    pub package: Vec<String>,
+
+    /// Restrict to a single release (e.g. `c10s`)
+    #[arg(long)]
+    pub release: Option<String>,
 
     /// Print progress to stderr
     #[arg(short, long)]

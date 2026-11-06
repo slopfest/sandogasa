@@ -14,25 +14,25 @@ pub const DEFAULT_TOPIC: &str = "centos-hyperscale-sig";
 
 #[derive(clap::Args)]
 pub struct ListArgs {
-    /// Meetbot search topic (matches meeting topic substrings).
-    #[arg(short, long, default_value = DEFAULT_TOPIC)]
-    pub topic: String,
-
-    /// Start date filter (inclusive, YYYY-MM-DD).
-    #[arg(long, group = "date_range")]
-    pub since: Option<NaiveDate>,
-
-    /// End date filter (inclusive, YYYY-MM-DD, default: today).
-    #[arg(long, requires = "since")]
-    pub until: Option<NaiveDate>,
+    /// Emit JSON instead of the human-readable table.
+    #[arg(long)]
+    pub json: bool,
 
     /// Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`.
     #[arg(long, group = "date_range")]
     pub period: Option<String>,
 
-    /// Emit JSON instead of the human-readable table.
-    #[arg(long)]
-    pub json: bool,
+    /// Start date filter (inclusive, YYYY-MM-DD).
+    #[arg(long, group = "date_range")]
+    pub since: Option<NaiveDate>,
+
+    /// Meetbot search topic (matches meeting topic substrings).
+    #[arg(short, long, default_value = DEFAULT_TOPIC)]
+    pub topic: String,
+
+    /// End date filter (inclusive, YYYY-MM-DD, default: today).
+    #[arg(long, requires = "since")]
+    pub until: Option<NaiveDate>,
 }
 
 #[derive(serde::Serialize)]

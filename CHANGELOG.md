@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Every tool's `--help` groups its flags by topic
+
+Most tools listed their flags in the order they had been added, so
+`--help` mixed what to work on, what to do and whether to write
+anything: `fedora-cve-triage run` put `--yes` between `--assignee` and
+`--skip-component`, and `--apply` after `--check`. The global flags
+(`-v`, `--refresh`, `--no-defaults`) were also interleaved with each
+subcommand's own, since clap numbers every struct's flags from zero.
+Resolves #73.
+
+A subcommand with more than six options now lists them under
+headings, alphabetical within each: `Selection` (what to work on),
+the command's own work in its own words (fedora-cve-triage's
+`Checks`, dbranch's `Stages`), `Writing` (whether and how it changes
+anything) and `Output`, with a group's main flag first where there is
+one (dbranch's `--stage`). Smaller subcommands list their flags
+alphabetically. The global flags come last everywhere, under `Global
+options`, which sandogasa-cli's `parse_with_defaults` now arranges for
+every tool. No flag was added, removed or renamed: every command of
+every tool offers the same flags as before. The man pages follow the
+same groups.
+
+dbranch's `rebuild` drops its `Bulk (no branches given)` heading for
+the shared ones: `--include-eol` is under `Selection` and `--yes`
+under `Writing`. Both help texts still begin "Bulk run:".
+
 ### fedora-cve-triage: bugs are read logged in, so a needinfo reaches the assignee; `run --bug` names bugs to triage
 
 A run read its bugs from Bugzilla anonymously, and Red Hat's Bugzilla

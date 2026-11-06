@@ -51,40 +51,40 @@ pub struct FileIssueArgs {
 
     /// Affected (currently-tagged) NVR. If omitted, left blank in
     /// the issue body; can be filled in later.
-    #[arg(long)]
+    #[arg(long, help_heading = "Issue")]
     pub affected: Option<String>,
 
     /// Expected fix NVR once the MR lands and is built.
-    #[arg(long = "expected-fix")]
+    #[arg(long = "expected-fix", help_heading = "Issue")]
     pub expected_fix: Option<String>,
 
     /// Override the auto-extracted JIRA key (e.g. "RHEL-12345").
     /// Useful when the MR description doesn't mention it verbatim.
-    #[arg(long)]
+    #[arg(long, help_heading = "Issue")]
     pub jira: Option<String>,
+
+    /// Free-form context note prepended to the issue body as
+    /// a lead paragraph before the structured metadata.
+    #[arg(long, help_heading = "Issue")]
+    pub note: Option<String>,
 
     /// Override the release auto-derived from the MR target
     /// branch (e.g. `c10s`).
-    #[arg(long)]
+    #[arg(long, help_heading = "Issue")]
     pub release: Option<String>,
 
     /// Apply one of the proposed_updates type labels:
     /// enhancement, bugfix, arch-enablement, security.
-    #[arg(long = "type", value_enum)]
+    #[arg(long = "type", value_enum, help_heading = "Issue")]
     pub issue_type: Option<IssueType>,
-
-    /// Free-form context note prepended to the issue body as
-    /// a lead paragraph before the structured metadata.
-    #[arg(long)]
-    pub note: Option<String>,
 
     /// Print the issue that would be filed and exit without
     /// making any GitLab API calls.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     pub dry_run: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     pub verbose: bool,
 }
 

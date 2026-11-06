@@ -24,25 +24,25 @@ struct Cli {
     /// Second build reference (Koji URL, build:<ID>, or task:<ID>).
     ref2: String,
 
-    /// Koji instance hostname (required for bare IDs).
-    #[arg(long, value_name = "HOST")]
-    instance: Option<String>,
-
     /// Architecture to compare.
     #[arg(long, default_value = "x86_64")]
     arch: String,
 
-    /// build.log tail lines on failure.
-    #[arg(long = "log-lines", default_value = "50", value_name = "N")]
-    build_log_lines: usize,
+    /// Show debug info (log snippets, file listings).
+    #[arg(long)]
+    debug: bool,
+
+    /// Koji instance hostname (required for bare IDs).
+    #[arg(long, value_name = "HOST")]
+    instance: Option<String>,
 
     /// Output as JSON.
     #[arg(long)]
     json: bool,
 
-    /// Show debug info (log snippets, file listings).
-    #[arg(long)]
-    debug: bool,
+    /// build.log tail lines on failure.
+    #[arg(long = "log-lines", default_value = "50", value_name = "N")]
+    build_log_lines: usize,
 }
 
 #[derive(serde::Serialize)]

@@ -52,12 +52,12 @@ enum Commands {
         target_branch: String,
         /// Branch to take the package from (e.g. "rawhide").
         source_branch: String,
-        /// Output as JSON.
-        #[arg(long)]
-        json: bool,
         /// Additional branches to check for reverse dependencies (comma-separated).
         #[arg(long, value_delimiter = ',')]
         also_check: Vec<String>,
+        /// Output as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 

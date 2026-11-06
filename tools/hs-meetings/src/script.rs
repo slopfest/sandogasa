@@ -32,13 +32,13 @@ pub struct ScriptArgs {
     #[arg(long)]
     pub date: Option<NaiveDate>,
 
-    /// Meetbot topic the previous meeting was recorded under.
-    #[arg(short, long, default_value = DEFAULT_TOPIC)]
-    pub topic: String,
-
     /// Emit JSON (the script plus what it was built from).
     #[arg(long)]
     pub json: bool,
+
+    /// Meetbot topic the previous meeting was recorded under.
+    #[arg(short, long, default_value = DEFAULT_TOPIC)]
+    pub topic: String,
 }
 
 /// The previous meeting, as far as Followups needs it.

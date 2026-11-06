@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH dbranch 1 2026-11-04 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH dbranch 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 dbranch \- Propagate a Debian package across its Ubuntu PPA and Debian branches
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS dbranch autopkgtest
-\fBdbranch autopkgtest\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-deb\fR>
+\fBdbranch autopkgtest\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-deb\fR>
 .PP
 Write an autopkgtest that runs the programs a package installs. A
 package can build, lint clean, and install a program that does not
@@ -32,9 +32,6 @@ written.
 Keeps debcargo\*(Aqs own generated stanzas, placing the smoke test above
 them, so a crate\*(Aqs cargo tests keep running too.
 .TP
-\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
-Run in this package working directory
-.TP
 \fB\-\-deb\fR \fI<DEB>...\fR
 Built package(s) whose programs to probe (repeatable/CSV)
 .TP
@@ -44,10 +41,13 @@ Print the commands without running anything (a tutorial)
 \fB\-\-explain\fR
 Run, but narrate each step + command first (follow along)
 .TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch check
-\fBdbranch check\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-deb\fR] [\fB\-\-json\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBdbranch check\fR [\fB\-\-deb\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-json\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Check packaging files instead of trusting them. debian/ is often
 adopted rather than written \-\- from upstream, from an older release,
@@ -61,14 +61,8 @@ reaches a package, and whether the programs it installs actually run
 \-\- the second being the one a build can never do for you.
 Writes nothing. Exits non\-zero when something would block a sponsor.
 .TP
-\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
-Run in this package working directory
-.TP
 \fB\-\-deb\fR \fI<DEB>...\fR
 Built package(s) to check against (repeatable or CSV)
-.TP
-\fB\-\-json\fR
-Print findings as JSON
 .TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)
@@ -76,10 +70,16 @@ Print the commands without running anything (a tutorial)
 \fB\-\-explain\fR
 Run, but narrate each step + command first (follow along)
 .TP
+\fB\-\-json\fR
+Print findings as JSON
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch clone
-\fBdbranch clone\fR [\fB\-\-upstream\-version\fR] [\fB\-\-debian\-branch\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-salsa\fR] [\fB\-\-wrap\-and\-sort\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR]
+\fBdbranch clone\fR [\fB\-\-debian\-branch\fR] [\fB\-\-from\-upstream\-packaging\fR] [\fB\-\-fresh\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-mr\fR] [\fB\-\-mrconfig\fR] [\fB\-\-salsa\fR] [\fB\-\-wrap\-and\-sort\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL\fR> [\fIDIR\fR]
 .PP
 Clone upstream\*(Aqs git to package it straight from its tags (gbp\*(Aqs
 "upstream uses git, no tarballs" flow): clone with upstream as
@@ -96,42 +96,6 @@ which detects this layout, and the source stage generates the orig
 tarball from the tag with gbp export\-orig. Writing the rest of
 debian/ is left to you.
 .TP
-\fB\-\-upstream\-version\fR \fI<VERSION>\fR
-Upstream release to start from (default: the newest tag)
-.TP
-\fB\-\-debian\-branch\fR \fI<BRANCH>\fR [default: debian/latest]
-Debian packaging branch to create
-.TP
-\fB\-\-upstream\-remote\fR \fI<NAME>\fR [default: upstream]
-Name for the remote holding upstream\*(Aqs git
-.TP
-\fB\-\-from\-upstream\-packaging\fR
-Start from upstream\*(Aqs own debian/* branch without asking
-.TP
-\fB\-\-fresh\fR
-Ignore any debian/* branch upstream carries; start at the tag
-.TP
-\fB\-\-salsa\fR \fI<NAMESPACE>\fR
-Create the packaging project on salsa.debian.org in this namespace and add it as origin (pushing is update\*(Aqs job)
-.TP
-\fB\-\-wrap\-and\-sort\fR
-Normalize adopted debian/ with wrap\-and\-sort, in its own commit (devscripts)
-.TP
-\fB\-\-mr\fR
-Register the clone with myrepos (mr config)
-.TP
-\fB\-\-mrconfig\fR \fI<PATH>\fR
-mrconfig to register in (default: ~/.mrconfig)
-.TP
-\fB\-\-dry\-run\fR
-Print the commands without running anything (a tutorial)
-.TP
-\fB\-\-explain\fR
-Run, but narrate each step + command first (follow along)
-.TP
-\fB\-q\fR, \fB\-\-quiet\fR
-Suppress tool output, showing it only when a step fails
-.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
@@ -140,21 +104,52 @@ Upstream git URL
 .TP
 [\fIDIR\fR]
 Directory to clone into (default: the repository\*(Aqs name)
+.SH BRANCHES
+.TP
+\fB\-\-debian\-branch\fR \fI<BRANCH>\fR [default: debian/latest]
+Debian packaging branch to create
+.TP
+\fB\-\-from\-upstream\-packaging\fR
+Start from upstream\*(Aqs own debian/* branch without asking
+.TP
+\fB\-\-fresh\fR
+Ignore any debian/* branch upstream carries; start at the tag
+.TP
+\fB\-\-upstream\-remote\fR \fI<NAME>\fR [default: upstream]
+Name for the remote holding upstream\*(Aqs git
+.TP
+\fB\-\-upstream\-version\fR \fI<VERSION>\fR
+Upstream release to start from (default: the newest tag)
+.SH SETUP
+.TP
+\fB\-\-mr\fR
+Register the clone with myrepos (mr config)
+.TP
+\fB\-\-mrconfig\fR \fI<PATH>\fR
+mrconfig to register in (default: ~/.mrconfig)
+.TP
+\fB\-\-salsa\fR \fI<NAMESPACE>\fR
+Create the packaging project on salsa.debian.org in this namespace and add it as origin (pushing is update\*(Aqs job)
+.TP
+\fB\-\-wrap\-and\-sort\fR
+Normalize adopted debian/ with wrap\-and\-sort, in its own commit (devscripts)
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Print the commands without running anything (a tutorial)
+.SH OUTPUT
+.TP
+\fB\-\-explain\fR
+Run, but narrate each step + command first (follow along)
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress tool output, showing it only when a step fails
 .SS dbranch debusine-repo
-\fBdbranch debusine\-repo\fR [\fB\-\-suite\fR] [\fB\-y\fR|\fB\-\-assume\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-owner\fR> <\fB\-\-project\fR>
+\fBdbranch debusine\-repo\fR [\fB\-y\fR|\fB\-\-assume\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-suite\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-owner\fR> <\fB\-\-project\fR>
 .PP
 Create a Debusine personal repository, if it is not there.
 .PP
 rebuild and update do this before an upload they are driving. This is the same check and the same recipe for an upload they are not: a package built from a debcargo tree, say, which has no packaging repository for them to work in.
-.TP
-\fB\-\-owner\fR \fI<NAME>\fR
-Repository owner\*(Aqs Debusine name (workspace r\-NAME\-PROJECT)
-.TP
-\fB\-\-project\fR \fI<PROJECT>\fR
-Project the repository serves (its suite is SUITE\-PROJECT)
-.TP
-\fB\-\-suite\fR \fI<SUITE>\fR [default: sid]
-Base Debian suite the repository publishes to
 .TP
 \fB\-y\fR, \fB\-\-assume\-yes\fR
 Create what is missing without asking
@@ -165,10 +160,19 @@ Print the commands without running anything (a tutorial)
 \fB\-\-explain\fR
 Run, but narrate each step + command first (follow along)
 .TP
+\fB\-\-owner\fR \fI<NAME>\fR
+Repository owner\*(Aqs Debusine name (workspace r\-NAME\-PROJECT)
+.TP
+\fB\-\-project\fR \fI<PROJECT>\fR
+Project the repository serves (its suite is SUITE\-PROJECT)
+.TP
+\fB\-\-suite\fR \fI<SUITE>\fR [default: sid]
+Base Debian suite the repository publishes to
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .SS dbranch dep3-template
-\fBdbranch dep3\-template\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-print\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBdbranch dep3\-template\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-print\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Write the DEP\-3 commit template a patch is written with. On a
 3.0 (quilt) package a fix to a file outside debian/ cannot be a
@@ -187,27 +191,24 @@ not set commit.template, which git cannot scope to one branch and
 which would then apply to packaging commits too, where DEP\-3 fields
 mean nothing.
 .TP
-\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
-Run in this package working directory
-.TP
-\fB\-\-print\fR
-Print the template instead of writing it
-.TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)
 .TP
 \fB\-\-explain\fR
 Run, but narrate each step + command first (follow along)
 .TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
-.SS dbranch fixup
-\fBdbranch fixup\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
-.PP
-Fix up gbp.conf / salsa\-ci.yml on existing branch(es)
+\fB\-\-print\fR
+Print the template instead of writing it
 .TP
 \fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
 Run in this package working directory
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SS dbranch fixup
+\fBdbranch fixup\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
+.PP
+Fix up gbp.conf / salsa\-ci.yml on existing branch(es)
 .TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)
@@ -218,18 +219,18 @@ Run, but narrate each step + command first (follow along)
 \fB\-q\fR, \fB\-\-quiet\fR
 Suppress tool output, showing it only when a step fails
 .TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
 [\fIBRANCH\fR]
 Branch(es) to fix up (default: the current branch)
 .SS dbranch rebuild
-\fBdbranch rebuild\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-source\fR] [\fB\-\-remote\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-include\-eol\fR] [\fB\-\-ppa\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
+\fBdbranch rebuild\fR [\fB\-\-include\-eol\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-remote\fR] [\fB\-\-source\fR] [\fB\-\-urgency\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-ppa\fR] [\fB\-\-upload\-target\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
 .PP
 Rebuild a Debian package across its Ubuntu/PPA branches
-.TP
-\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
-Run in this package working directory
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -241,6 +242,13 @@ source). A branch that doesn\*(Aqt exist is created from
 it (codename = the name\*(Aqs basename). With none given,
 all local branches except the current one and gbp\*(Aqs
 upstream / pristine\-tar branches are rebuilt.
+.SH SELECTION
+.TP
+\fB\-\-include\-eol\fR
+Bulk run: include EOL Ubuntu releases (default skips them)
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
 .SH STAGES
 .TP
 \fB\-\-stage\fR \fI<STAGE>\fR
@@ -261,11 +269,8 @@ Stages to run, repeatable or comma\-separated:
           (upload and tag are opt\-in)
 Defaults to merge (the others are opt\-in for now).
 .TP
-\fB\-\-source\fR \fI<BRANCH>\fR
-Merge source branch (default: the checked\-out branch)
-.TP
-\fB\-\-remote\fR \fI<NAME>\fR
-Git remote to push to and configure CI on (default: the branch\*(Aqs own, else the only one; asks when several could)
+\fB\-\-no\-refresh\-chroot\fR
+Build stage: never auto\-refresh the pbuilder chroot
 .TP
 \fB\-\-nowait\fR
 In the push stage, push but don\*(Aqt wait for / watch CI
@@ -273,25 +278,15 @@ In the push stage, push but don\*(Aqt wait for / watch CI
 \fB\-\-refresh\-chroot\fR
 Build stage: force\-refresh the pbuilder chroot first
 .TP
-\fB\-\-no\-refresh\-chroot\fR
-Build stage: never auto\-refresh the pbuilder chroot
+\fB\-\-remote\fR \fI<NAME>\fR
+Git remote to push to and configure CI on (default: the branch\*(Aqs own, else the only one; asks when several could)
+.TP
+\fB\-\-source\fR \fI<BRANCH>\fR
+Merge source branch (default: the checked\-out branch)
 .TP
 \fB\-\-urgency\fR \fI<LEVEL>\fR [default: medium]
 Changelog urgency (default medium; e.g. high for security)
-.SH "BULK (NO BRANCHES GIVEN)"
-.TP
-\fB\-y\fR, \fB\-\-yes\fR
-Bulk run: skip the branch\-set confirmation prompt
-.TP
-\fB\-\-include\-eol\fR
-Bulk run: include EOL Ubuntu releases (default skips them)
 .SH UPLOAD
-.TP
-\fB\-\-ppa\fR \fI<PPA>\fR
-Upload stage: target PPA (e.g. user/name; ppa: optional)
-.TP
-\fB\-\-upload\-target\fR \fI<TARGET>\fR
-Upload stage: dput target host (e.g. mentors, ftp\-master)
 .TP
 \fB\-\-debusine\fR \fI<NAME>\fR
 Upload stage: publish to a Debusine personal repository instead of a
@@ -311,10 +306,20 @@ in the r\-NAME\-PROJECT workspace and publish\-to\-<suite>\-PROJECT
 workflow. Defaults to the source package name, which fits a repo
 shipping one package; a shared workspace hosting several packages
 names its project here. Requires \-\-debusine.
-.SH OUTPUT
+.TP
+\fB\-\-ppa\fR \fI<PPA>\fR
+Upload stage: target PPA (e.g. user/name; ppa: optional)
+.TP
+\fB\-\-upload\-target\fR \fI<TARGET>\fR
+Upload stage: dput target host (e.g. mentors, ftp\-master)
+.SH WRITING
 .TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Bulk run: skip the branch\-set confirmation prompt
+.SH OUTPUT
 .TP
 \fB\-\-explain\fR
 Run, but narrate each step + command first (follow along)
@@ -322,21 +327,19 @@ Run, but narrate each step + command first (follow along)
 \fB\-q\fR, \fB\-\-quiet\fR
 Suppress tool output, showing it only when a step fails
 .SS dbranch update
-\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-nowait\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-urgency\fR] [\fB\-\-upload\-target\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
+\fBdbranch update\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-stage\fR] [\fB\-\-build\-suite\fR] [\fB\-\-no\-refresh\-chroot\fR] [\fB\-\-nowait\fR] [\fB\-\-refresh\-chroot\fR] [\fB\-\-upstream\-remote\fR] [\fB\-\-upstream\-version\fR] [\fB\-\-urgency\fR] [\fB\-\-debusine\fR] [\fB\-\-debusine\-project\fR] [\fB\-\-upload\-target\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-explain\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
 .PP
 Update the Debian branch to a new upstream release
-.TP
-\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
-Run in this package working directory
-.TP
-\fB\-y\fR, \fB\-\-yes\fR
-Answer yes to prompts (e.g. create a missing Debusine workspace) instead of asking
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 [\fIBRANCH\fR]
 Debian branch to update (defaults to the current branch)
+.SH SELECTION
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
 .SH STAGES
 .TP
 \fB\-\-stage\fR \fI<STAGE>\fR
@@ -363,11 +366,8 @@ Defaults to import.
 \fB\-\-build\-suite\fR \fI<SUITE>\fR [default: testing]
 Debian suite to build against (e.g. unstable)
 .TP
-\fB\-\-upstream\-remote\fR \fI<NAME>\fR
-Remote holding upstream\*(Aqs git, to merge releases from (default: one named upstream, if present)
-.TP
-\fB\-\-upstream\-version\fR \fI<VERSION>\fR
-Upstream release to merge in (default: the newest tag)
+\fB\-\-no\-refresh\-chroot\fR
+Build stage: never auto\-refresh the pbuilder chroot
 .TP
 \fB\-\-nowait\fR
 In the push stage, push but don\*(Aqt wait for / watch CI
@@ -375,15 +375,15 @@ In the push stage, push but don\*(Aqt wait for / watch CI
 \fB\-\-refresh\-chroot\fR
 Build stage: force\-refresh the pbuilder chroot first
 .TP
-\fB\-\-no\-refresh\-chroot\fR
-Build stage: never auto\-refresh the pbuilder chroot
+\fB\-\-upstream\-remote\fR \fI<NAME>\fR
+Remote holding upstream\*(Aqs git, to merge releases from (default: one named upstream, if present)
+.TP
+\fB\-\-upstream\-version\fR \fI<VERSION>\fR
+Upstream release to merge in (default: the newest tag)
 .TP
 \fB\-\-urgency\fR \fI<LEVEL>\fR [default: medium]
 Changelog urgency (default medium; e.g. high for security)
 .SH UPLOAD
-.TP
-\fB\-\-upload\-target\fR \fI<TARGET>\fR
-Upload stage: dput target (default: dput\*(Aqs own; e.g. mentors)
 .TP
 \fB\-\-debusine\fR \fI<NAME>\fR
 Upload stage: publish to a Debusine personal repository instead of a
@@ -402,10 +402,17 @@ in the r\-NAME\-PROJECT workspace and publish\-to\-sid\-PROJECT
 workflow. Defaults to the source package name, which fits a repo
 shipping one package; a shared workspace hosting several packages
 names its project here. Requires \-\-debusine.
-.SH OUTPUT
+.TP
+\fB\-\-upload\-target\fR \fI<TARGET>\fR
+Upload stage: dput target (default: dput\*(Aqs own; e.g. mentors)
+.SH WRITING
 .TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Answer yes to prompts (e.g. create a missing Debusine workspace) instead of asking
+.SH OUTPUT
 .TP
 \fB\-\-explain\fR
 Run, but narrate each step + command first (follow along)
@@ -413,18 +420,18 @@ Run, but narrate each step + command first (follow along)
 \fB\-q\fR, \fB\-\-quiet\fR
 Suppress tool output, showing it only when a step fails
 .SS dbranch watch-ci
-\fBdbranch watch\-ci\fR [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
+\fBdbranch watch\-ci\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
 .PP
 Watch a branch\*(Aqs GitLab CI pipeline via glab
-.TP
-\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
-Run in this package working directory
 .TP
 \fB\-\-dry\-run\fR
 Print the commands without running anything (a tutorial)
 .TP
 \fB\-\-explain\fR
 Run, but narrate each step + command first (follow along)
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR [default: .]
+Run in this package working directory
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fesco-chair 1 2026-11-04 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH fesco-chair 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 fesco\-chair \- FESCo meeting chair helper — agenda, day\-of script, summary email, ticket votes
 .SH SYNOPSIS
@@ -16,18 +16,23 @@ Print help
 Print version
 .SH COMMANDS
 .SS fesco-chair agenda
-\fBfesco\-chair agenda\fR [\fB\-\-date\fR] [\fB\-\-dry\-run\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBfesco\-chair agenda\fR [\fB\-\-date\fR] [\fB\-\-history\fR] [\fB\-\-docs\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-voted\fR] [\fB\-\-ignore\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Compose the meeting announcement email from the tracker
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SELECTION
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date (default: the coming Tuesday)
 .TP
-\fB\-\-dry\-run\fR
-Show the decision comment and label edit without making them
+\fB\-\-history\fR \fI<N>\fR
+Past meetings scanned for followups (default 12)
+.SH AGENDA
 .TP
-\fB\-\-voted\fR \fI<N>\fR
-Force ticket(s) into Discussed and Voted (repeat/CSV)
+\fB\-\-docs\fR \fI<N>\fR
+Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
 .TP
 \fB\-\-followup\fR \fI<N>\fR
 Force ticket(s) into Followups (repeat/CSV)
@@ -35,45 +40,45 @@ Force ticket(s) into Followups (repeat/CSV)
 \fB\-\-new\fR \fI<N>\fR
 Force ticket(s) into New business (repeat/CSV)
 .TP
-\fB\-\-docs\fR \fI<N>\fR
-Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
+\fB\-\-voted\fR \fI<N>\fR
+Force ticket(s) into Discussed and Voted (repeat/CSV)
+.SH VOTES
+.TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
 .TP
 \fB\-\-non\-voting\fR \fI<FAS>\fR
 Group members who do not vote, e.g. the FPL (repeat/CSV)
 .TP
 \fB\-\-vote\fR \fI<N:FAS=V>\fR
 Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
+.SH WRITING
 .TP
-\fB\-\-ignore\fR \fI<N:FAS>\fR
-Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
-.TP
-\fB\-\-history\fR \fI<N>\fR
-Past meetings scanned for followups (default 12)
+\fB\-\-dry\-run\fR
+Show the decision comment and label edit without making them
+.SH OUTPUT
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
 .SS fesco-chair announced
-\fBfesco\-chair announced\fR [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-all\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL|FILE\fR>
+\fBfesco\-chair announced\fR [\fB\-\-all\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIURL|FILE\fR>
 .PP
 Record that the announcement went out, and close its tickets
-.TP
-\fB\-\-dry\-run\fR
-Show what would be written without writing it
-.TP
-\fB\-y\fR, \fB\-\-yes\fR
-Do not prompt; record every pending ticket
 .TP
 \fB\-\-all\fR
 Consider every pending ticket, without reading the announcement to see which it actually names
 .TP
+\fB\-\-dry\-run\fR
+Show what would be written without writing it
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Do not prompt; record every pending ticket
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
@@ -81,18 +86,18 @@ Print help
 <\fIURL|FILE\fR>
 The announcement: a list\-archive link, or a file on disk
 .SS fesco-chair changes
-\fBfesco\-chair changes\fR [\fB\-\-ticket\fR] [\fB\-\-json\fR] [\fB\-\-script\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBfesco\-chair changes\fR [\fB\-\-json\fR] [\fB\-\-script\fR] [\fB\-\-ticket\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Where each Change on the Incomplete Changes Report stands
-.TP
-\fB\-\-ticket\fR \fI<N>\fR
-The report ticket (default: the open meeting ticket titled "... Incomplete Changes Report")
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output
 .TP
 \fB\-\-script\fR
 The chair\*(Aqs zodbot lines for the meeting instead of the report: a `!topic FNN Change: <name>` and `!fesco <ticket>` pair per Change that needs a decision, in the ticket\*(Aqs order
+.TP
+\fB\-\-ticket\fR \fI<N>\fR
+The report ticket (default: the open meeting ticket titled "... Incomplete Changes Report")
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
@@ -110,18 +115,26 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair script
-\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-dry\-run\fR] [\fB\-\-voted\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-docs\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-history\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIURL|FILE\fR]
+\fBfesco\-chair script\fR [\fB\-\-date\fR] [\fB\-\-history\fR] [\fB\-\-docs\fR] [\fB\-\-followup\fR] [\fB\-\-new\fR] [\fB\-\-voted\fR] [\fB\-\-ignore\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIURL|FILE\fR]
 .PP
 Day\-of checklist plus the meetbot command script
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIURL|FILE\fR]
+An announced agenda to build the script from: a list\-archive link, or a file on disk. Without one the script is built from the tracker, as the agenda itself is
+.SH SELECTION
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date (default: the coming Tuesday)
 .TP
-\fB\-\-dry\-run\fR
-Show the decision comment and label edit without making them
+\fB\-\-history\fR \fI<N>\fR
+Past meetings scanned for followups (default 12)
+.SH AGENDA
 .TP
-\fB\-\-voted\fR \fI<N>\fR
-Force ticket(s) into Discussed and Voted (repeat/CSV)
+\fB\-\-docs\fR \fI<N>\fR
+Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
 .TP
 \fB\-\-followup\fR \fI<N>\fR
 Force ticket(s) into Followups (repeat/CSV)
@@ -129,48 +142,45 @@ Force ticket(s) into Followups (repeat/CSV)
 \fB\-\-new\fR \fI<N>\fR
 Force ticket(s) into New business (repeat/CSV)
 .TP
-\fB\-\-docs\fR \fI<N>\fR
-Add fesco/docs issue/PR(s) to the agenda (repeat/CSV)
+\fB\-\-voted\fR \fI<N>\fR
+Force ticket(s) into Discussed and Voted (repeat/CSV)
+.SH VOTES
+.TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
 .TP
 \fB\-\-non\-voting\fR \fI<FAS>\fR
 Group members who do not vote, e.g. the FPL (repeat/CSV)
 .TP
 \fB\-\-vote\fR \fI<N:FAS=V>\fR
 Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
+.SH WRITING
 .TP
-\fB\-\-ignore\fR \fI<N:FAS>\fR
-Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
-.TP
-\fB\-\-history\fR \fI<N>\fR
-Past meetings scanned for followups (default 12)
+\fB\-\-dry\-run\fR
+Show the decision comment and label edit without making them
+.SH OUTPUT
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
-.TP
-[\fIURL|FILE\fR]
-An announced agenda to build the script from: a list\-archive link, or a file on disk. Without one the script is built from the tracker, as the agenda itself is
 .SS fesco-chair summary
-\fBfesco\-chair summary\fR [\fB\-\-date\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBfesco\-chair summary\fR [\fB\-\-date\fR] [\fB\-\-ignore\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Compose the post\-meeting summary email from the minutes
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date (default: today)
 .TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
+.TP
 \fB\-\-non\-voting\fR \fI<FAS>\fR
 Group members who do not vote, e.g. the FPL (repeat/CSV)
 .TP
 \fB\-\-vote\fR \fI<N:FAS=V>\fR
 Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
-.TP
-\fB\-\-ignore\fR \fI<N:FAS>\fR
-Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output
@@ -181,30 +191,33 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fesco-chair votes
-\fBfesco\-chair votes\fR [\fB\-\-date\fR] [\fB\-\-member\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-ignore\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBfesco\-chair votes\fR [\fB\-\-date\fR] [\fB\-\-member\fR] [\fB\-\-ignore\fR] [\fB\-\-non\-voting\fR] [\fB\-\-vote\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Where each open in\-ticket vote stands under the policy
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SELECTION
 .TP
 \fB\-\-date\fR \fI<YYYY\-MM\-DD>\fR
 Meeting date the hints refer to (default: the coming Tuesday)
 .TP
 \fB\-\-member\fR \fI<FAS>\fR
 Count these FAS users as voters instead of the fesco group (repeat/CSV)
+.SH VOTES
+.TP
+\fB\-\-ignore\fR \fI<N:FAS>\fR
+Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
 .TP
 \fB\-\-non\-voting\fR \fI<FAS>\fR
 Group members who do not vote, e.g. the FPL (repeat/CSV)
 .TP
 \fB\-\-vote\fR \fI<N:FAS=V>\fR
 Count a member\*(Aqs vote on one ticket as given, e.g. 3685:salimma=0, when a comment was misread (repeat/CSV)
-.TP
-\fB\-\-ignore\fR \fI<N:FAS>\fR
-Treat a member as not having voted on one ticket, e.g. 3685:salimma (repeat/CSV)
+.SH OUTPUT
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help

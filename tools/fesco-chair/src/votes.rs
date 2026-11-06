@@ -36,6 +36,11 @@ pub const FAST_TRACK_TITLE: &str = "[FastTrack]";
 /// votes (`votes`, `agenda`, `script`, `summary`).
 #[derive(clap::Args, Default)]
 pub struct VoterArgs {
+    /// Treat a member as not having voted on one ticket, e.g.
+    /// 3685:salimma (repeat/CSV).
+    #[arg(long = "ignore", value_name = "N:FAS", value_delimiter = ',', value_parser = parse_scoped)]
+    pub ignore: Vec<(u64, String)>,
+
     /// Group members who do not vote, e.g. the FPL (repeat/CSV).
     #[arg(long = "non-voting", value_name = "FAS", value_delimiter = ',')]
     pub non_voting: Vec<String>,
@@ -44,33 +49,33 @@ pub struct VoterArgs {
     /// 3685:salimma=0, when a comment was misread (repeat/CSV).
     #[arg(long = "vote", value_name = "N:FAS=V", value_delimiter = ',', value_parser = parse_override)]
     pub votes: Vec<(u64, String, Vote)>,
-
-    /// Treat a member as not having voted on one ticket, e.g.
-    /// 3685:salimma (repeat/CSV).
-    #[arg(long = "ignore", value_name = "N:FAS", value_delimiter = ',', value_parser = parse_scoped)]
-    pub ignore: Vec<(u64, String)>,
 }
 
 #[derive(clap::Args)]
 pub struct VotesArgs {
     /// Meeting date the hints refer to (default: the coming Tuesday).
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
     pub date: Option<NaiveDate>,
 
     /// Count these FAS users as voters instead of the fesco group
     /// (repeat/CSV).
-    #[arg(long = "member", value_name = "FAS", value_delimiter = ',')]
+    #[arg(
+        long = "member",
+        value_name = "FAS",
+        value_delimiter = ',',
+        help_heading = "Selection"
+    )]
     pub members: Vec<String>,
 
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Votes")]
     pub voters: VoterArgs,
 
     /// Machine-readable JSON output.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub json: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     pub verbose: bool,
 }
 

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-report 1 2026-11-04 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH sandogasa-report 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 sandogasa\-report \- Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
 .SH SYNOPSIS
@@ -26,18 +26,54 @@ Main config file to enumerate domains / forge instances from. Without one, there
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS sandogasa-report report
-\fBsandogasa\-report report\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-\-by\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
+\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
 .PP
 Generate an activity report across one or more domains
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SH SELECTION
+.TP
+\fB\-d\fR, \fB\-\-domain\fR \fI<DOMAIN>\fR
+Domain(s) to report on (defined in config)
+.TP
+\fB\-\-period\fR \fI<PERIOD>\fR
+Reporting period (e.g. 2026Q1, 2026H1)
+.TP
+\fB\-\-since\fR \fI<SINCE>\fR
+Start date (inclusive, YYYY\-MM\-DD)
+.TP
+\fB\-\-until\fR \fI<UNTIL>\fR
+End date (inclusive, YYYY\-MM\-DD, default: today)
+.TP
+\fB\-u\fR, \fB\-\-user\fR \fI<USER>\fR
+FAS username to report on
+.SH SOURCES
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<PATH>\fR
 Path to main config file (domains, groups)
 .TP
-\fB\-u\fR, \fB\-\-user\fR \fI<USER>\fR
-FAS username to report on
+\fB\-\-no\-bodhi\fR
+Skip Bodhi queries
 .TP
-\fB\-d\fR, \fB\-\-domain\fR \fI<DOMAIN>\fR
-Domain(s) to report on (defined in config)
+\fB\-\-no\-bugzilla\fR
+Skip Bugzilla queries
+.TP
+\fB\-\-no\-forgejo\fR
+Skip Forgejo queries
+.TP
+\fB\-\-no\-github\fR
+Skip GitHub queries
+.TP
+\fB\-\-no\-gitlab\fR
+Skip GitLab queries
+.TP
+\fB\-\-no\-koji\fR
+Skip Koji queries
+.TP
+\fB\-\-no\-sourcehut\fR
+Skip Sourcehut queries
+.SH OUTPUT
 .TP
 \fB\-\-by\fR \fI<AXIS>\fR
 Add a breakdown grouped this way (repeat or comma\-separate)
@@ -50,36 +86,6 @@ Add a breakdown grouped this way (repeat or comma\-separate)
 repo: One row per repository, summed across domains and forges
 .RE
 .TP
-\fB\-\-since\fR \fI<SINCE>\fR
-Start date (inclusive, YYYY\-MM\-DD)
-.TP
-\fB\-\-until\fR \fI<UNTIL>\fR
-End date (inclusive, YYYY\-MM\-DD, default: today)
-.TP
-\fB\-\-period\fR \fI<PERIOD>\fR
-Reporting period (e.g. 2026Q1, 2026H1)
-.TP
-\fB\-\-no\-bugzilla\fR
-Skip Bugzilla queries
-.TP
-\fB\-\-no\-bodhi\fR
-Skip Bodhi queries
-.TP
-\fB\-\-no\-koji\fR
-Skip Koji queries
-.TP
-\fB\-\-no\-gitlab\fR
-Skip GitLab queries
-.TP
-\fB\-\-no\-github\fR
-Skip GitHub queries
-.TP
-\fB\-\-no\-forgejo\fR
-Skip Forgejo queries
-.TP
-\fB\-\-no\-sourcehut\fR
-Skip Sourcehut queries
-.TP
 \fB\-\-detailed\fR
 Add detail. Once: counts per repo, project or component under each heading. Twice: the items themselves — every PR, bug, patch and ticket, and every build of a Bodhi update
 .TP
@@ -91,6 +97,3 @@ Write output to file instead of stdout
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)

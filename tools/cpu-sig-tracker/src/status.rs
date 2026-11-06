@@ -29,32 +29,30 @@ const KOJI_PROFILE: &str = "cbs";
 #[derive(clap::Args)]
 pub struct StatusArgs {
     /// Path to the sandogasa-inventory TOML file.
-    #[arg(short, long, default_value = "inventory.toml")]
+    #[arg(
+        short,
+        long,
+        default_value = "inventory.toml",
+        help_heading = "Selection"
+    )]
     pub inventory: String,
-
-    /// Restrict the check to a single release (e.g. `c10s`).
-    #[arg(long)]
-    pub release: Option<String>,
 
     /// Narrow to specific packages (repeatable or CSV). When
     /// unset, every tracked package in scope is processed.
     /// Primarily useful with --refresh to skip the extra
     /// work-item-status probes for packages you don't care
     /// about.
-    #[arg(short = 'p', long = "package", value_delimiter = ',')]
+    #[arg(
+        short = 'p',
+        long = "package",
+        value_delimiter = ',',
+        help_heading = "Selection"
+    )]
     pub packages: Vec<String>,
 
-    /// Emit JSON instead of grouped text.
-    #[arg(long)]
-    pub json: bool,
-
-    /// Rewrite tracking issue bodies to the standardized
-    /// format, refreshing the MR state and JIRA status lines
-    /// to their current values. Normalizes legacy bodies and
-    /// keeps already-standard bodies up to date. Mutates
-    /// GitLab state; off by default.
-    #[arg(long)]
-    pub refresh: bool,
+    /// Restrict the check to a single release (e.g. `c10s`).
+    #[arg(long, help_heading = "Selection")]
+    pub release: Option<String>,
 
     /// With --refresh, also process closed tracking issues —
     /// backfill their start_date / due_date and reconcile
@@ -62,11 +60,23 @@ pub struct StatusArgs {
     /// resolution (e.g. Done → Won't do when JIRA was
     /// retroactively flipped). Body content is left alone.
     /// No-op without --refresh.
-    #[arg(long, requires = "refresh")]
+    #[arg(long, requires = "refresh", help_heading = "Writing")]
     pub include_closed: bool,
 
+    /// Rewrite tracking issue bodies to the standardized
+    /// format, refreshing the MR state and JIRA status lines
+    /// to their current values. Normalizes legacy bodies and
+    /// keeps already-standard bodies up to date. Mutates
+    /// GitLab state; off by default.
+    #[arg(long, help_heading = "Writing")]
+    pub refresh: bool,
+
+    /// Emit JSON instead of grouped text.
+    #[arg(long, help_heading = "Output")]
+    pub json: bool,
+
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     pub verbose: bool,
 }
 

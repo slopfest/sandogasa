@@ -69,20 +69,31 @@ const BEHIND_MARKER: &str = "<!-- cpu-sig-tracker: behind ";
 pub struct PingArgs {
     /// Path to the sandogasa-inventory TOML file (its workloads name
     /// the releases to scan).
-    #[arg(short, long, default_value = "inventory.toml")]
+    #[arg(
+        short,
+        long,
+        default_value = "inventory.toml",
+        help_heading = "Selection"
+    )]
     pub inventory: String,
 
-    /// Restrict the scan to a single release (e.g. `c10s`).
-    #[arg(long)]
-    pub release: Option<String>,
-
     /// Restrict to these package(s) (repeat/CSV).
-    #[arg(long = "package", value_name = "PKG", value_delimiter = ',')]
+    #[arg(
+        long = "package",
+        value_name = "PKG",
+        value_delimiter = ',',
+        help_heading = "Selection"
+    )]
     pub packages: Vec<String>,
+
+    /// Restrict the scan to a single release (e.g. `c10s`).
+    #[arg(long, help_heading = "Selection")]
+    pub release: Option<String>,
 
     /// Days without upstream activity before a merge request is
     /// pinged (default 14).
     #[arg(
+        help_heading = "Timing",
         long,
         value_name = "N",
         default_value = "14",
@@ -93,6 +104,7 @@ pub struct PingArgs {
     /// Days after an unanswered ping before it is repeated (default
     /// 30).
     #[arg(
+        help_heading = "Timing",
         long,
         value_name = "N",
         default_value = "30",
@@ -100,22 +112,22 @@ pub struct PingArgs {
     )]
     pub reping_days: i64,
 
+    /// Report only: never prompt, never post
+    #[arg(long, help_heading = "Writing")]
+    pub dry_run: bool,
+
     /// Take the default answer at every prompt without asking, for
     /// an unattended run: post each note unless the SIG owes a reply
     /// on that change
-    #[arg(short = 'y', long)]
+    #[arg(short = 'y', long, help_heading = "Writing")]
     pub yes: bool,
 
-    /// Report only: never prompt, never post
-    #[arg(long)]
-    pub dry_run: bool,
-
     /// Emit a machine-readable JSON array instead of a table.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub json: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     pub verbose: bool,
 }
 

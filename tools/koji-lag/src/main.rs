@@ -47,13 +47,13 @@ enum Command {
 /// Exits non-zero when it finds one, so it can gate a publish.
 #[derive(clap::Args)]
 struct VerifyArgs {
-    /// Store to check.
-    #[arg(long, value_name = "FILE")]
-    store: PathBuf,
-
     /// Known Koji instance (cbs, fedora, stream).
     #[arg(long, default_value = "fedora")]
     instance: String,
+
+    /// Store to check.
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
 }
 
 /// Apply annotations to an events tree that already exists.
@@ -64,6 +64,10 @@ struct VerifyArgs {
 /// what makes annotating an outage worth doing at all.
 #[derive(clap::Args)]
 struct AnnotateArgs {
+    /// Extra annotations, beyond the ones built in.
+    #[arg(long, value_name = "FILE")]
+    annotations: Option<PathBuf>,
+
     /// Events tree to rewrite, as passed to `events --out`.
     #[arg(long, value_name = "DIR")]
     events: PathBuf,
@@ -71,10 +75,6 @@ struct AnnotateArgs {
     /// Known Koji instance (cbs, fedora, stream).
     #[arg(long, default_value = "fedora")]
     instance: String,
-
-    /// Extra annotations, beyond the ones built in.
-    #[arg(long, value_name = "FILE")]
-    annotations: Option<PathBuf>,
 
     /// Withhold stats below this sample count in the rewritten reports.
     #[arg(long, default_value_t = 5)]
@@ -86,69 +86,66 @@ struct AnnotateArgs {
 
 #[derive(clap::Args)]
 struct EventsArgs {
-    /// Store to read from.
-    #[arg(long, value_name = "FILE")]
-    store: PathBuf,
-
-    /// Skip the check for days the store claims and does not hold.
-    #[arg(long)]
-    no_verify: bool,
-
     /// Known Koji instance (cbs, fedora, stream).
-    #[arg(long, default_value = "fedora")]
+    #[arg(long, default_value = "fedora", help_heading = "Selection")]
     instance: String,
 
-    /// Directory to write the events tree into.
-    #[arg(short, long, value_name = "DIR")]
-    out: PathBuf,
-
     /// First day to consider (default: everything the store holds).
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
     since: Option<String>,
 
+    /// Store to read from.
+    #[arg(long, value_name = "FILE", help_heading = "Selection")]
+    store: PathBuf,
+
     /// Last day to consider, inclusive.
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
     until: Option<String>,
+
+    /// Extra outage causes, merged with the built-in ones.
+    ///
+    /// Same form as the tool's own `data/outages.toml`. An entry that
+    /// matches no detected event is reported rather than ignored.
+    #[arg(long, value_name = "FILE", help_heading = "Analysis")]
+    annotations: Option<PathBuf>,
+
+    /// Withhold report stats below this sample count.
+    #[arg(long, default_value_t = 5, help_heading = "Analysis")]
+    min_samples: usize,
+
+    /// Skip the check for days the store claims and does not hold.
+    #[arg(long, help_heading = "Analysis")]
+    no_verify: bool,
 
     /// Release schedule checkout, for announced dates.
     ///
     /// One `f-NN/Fedora.Schedule.xml` per release. With it, a rebuild
     /// reports the dates it was announced for beside the ones it ran
     /// on, and every event names the release cycle it fell in.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "DIR", help_heading = "Analysis")]
     schedule: Option<PathBuf>,
-
-    /// Extra outage causes, merged with the built-in ones.
-    ///
-    /// Same form as the tool's own `data/outages.toml`. An entry that
-    /// matches no detected event is reported rather than ignored.
-    #[arg(long, value_name = "FILE")]
-    annotations: Option<PathBuf>,
-
-    /// Withhold report stats below this sample count.
-    #[arg(long, default_value_t = 5)]
-    min_samples: usize,
 
     /// Output forms: text, json, csv (comma-separated or repeated).
     #[arg(
         long,
         value_name = "FORM,...",
         value_delimiter = ',',
-        hide_possible_values = true
+        hide_possible_values = true,
+        help_heading = "Output"
     )]
     format: Vec<koji_lag::pool::Format>,
 
+    /// Directory to write the events tree into.
+    #[arg(short, long, value_name = "DIR", help_heading = "Output")]
+    out: PathBuf,
+
     /// Name each event as it is written.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct ExportArgs {
-    /// Store to read from.
-    #[arg(long, value_name = "FILE")]
-    store: PathBuf,
-
     /// Known Koji instance (cbs, fedora, stream).
     #[arg(long, default_value = "fedora")]
     instance: String,
@@ -161,6 +158,10 @@ struct ExportArgs {
     #[arg(long, value_name = "YYYY-MM-DD")]
     since: Option<String>,
 
+    /// Store to read from.
+    #[arg(long, value_name = "FILE")]
+    store: PathBuf,
+
     /// Last day to export, inclusive.
     #[arg(long, value_name = "YYYY-MM-DD")]
     until: Option<String>,
@@ -168,30 +169,62 @@ struct ExportArgs {
 
 #[derive(clap::Args)]
 struct SyncArgs {
-    /// Known Koji instance (cbs, fedora, stream).
-    #[arg(long, default_value = "fedora")]
-    instance: String,
+    /// Sync the last N complete UTC days.
+    #[arg(long, value_name = "N", help_heading = "Selection")]
+    days: Option<u32>,
 
     /// Explicit hub URL (overrides --instance; https only).
-    #[arg(long, value_name = "URL")]
+    #[arg(long, value_name = "URL", help_heading = "Selection")]
     hub_url: Option<String>,
 
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora", help_heading = "Selection")]
+    instance: String,
+
     /// Window start date (UTC midnight, inclusive).
-    #[arg(long, value_name = "YYYY-MM-DD", conflicts_with = "days")]
+    #[arg(
+        long,
+        value_name = "YYYY-MM-DD",
+        conflicts_with = "days",
+        help_heading = "Selection"
+    )]
     since: Option<String>,
 
     /// Window end date, inclusive (default: the last complete
     /// UTC day — the running day is never included implicitly).
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
     until: Option<String>,
 
-    /// Sync the last N complete UTC days.
-    #[arg(long, value_name = "N")]
-    days: Option<u32>,
+    /// Share of one connection to use, as a percentage.
+    ///
+    /// Each pause is scaled to how long the last request took, so a
+    /// hub under load is asked less often and a hub that speeds up
+    /// is asked more. 50 means pause as long as the request took;
+    /// 100 paces by --sleep-ms alone.
+    #[arg(
+        long,
+        value_name = "PERCENT",
+        default_value_t = 50,
+        help_heading = "Requests"
+    )]
+    duty_cycle: u32,
 
-    /// Store to fill (created if absent).
-    #[arg(long, value_name = "FILE")]
-    store: PathBuf,
+    /// Tasks per listTasks page.
+    ///
+    /// A page costs what it costs to *find*, not to send: at thirteen
+    /// months' depth 1000 rows take 18s and 4000 take 21s. Fewer, larger
+    /// pages therefore ask the hub for far fewer expensive seeks, and the
+    /// duty cycle keeps our share of it the same either way.
+    #[arg(long, default_value_t = 4000, help_heading = "Requests")]
+    page_size: i64,
+
+    /// Retries per failed hub request.
+    #[arg(long, default_value_t = 3, help_heading = "Requests")]
+    retries: u32,
+
+    /// Minimum pause between hub requests, in milliseconds.
+    #[arg(long, default_value_t = 500, help_heading = "Requests")]
+    sleep_ms: u64,
 
     /// Seconds a single hub request may take; 0 waits forever.
     ///
@@ -200,76 +233,50 @@ struct SyncArgs {
     /// retry pays the hub cost again, so too low a value can stop a
     /// backfill progressing rather than merely slow it. `probe` says
     /// what the depth you are asking for actually costs.
-    #[arg(long, value_name = "SECS")]
+    #[arg(long, value_name = "SECS", help_heading = "Requests")]
     timeout: Option<u64>,
 
-    /// Tasks per listTasks page.
-    ///
-    /// A page costs what it costs to *find*, not to send: at thirteen
-    /// months' depth 1000 rows take 18s and 4000 take 21s. Fewer, larger
-    /// pages therefore ask the hub for far fewer expensive seeks, and the
-    /// duty cycle keeps our share of it the same either way.
-    #[arg(long, default_value_t = 4000)]
-    page_size: i64,
-
-    /// Minimum pause between hub requests, in milliseconds.
-    #[arg(long, default_value_t = 500)]
-    sleep_ms: u64,
-
-    /// Share of one connection to use, as a percentage.
-    ///
-    /// Each pause is scaled to how long the last request took, so a
-    /// hub under load is asked less often and a hub that speeds up
-    /// is asked more. 50 means pause as long as the request took;
-    /// 100 paces by --sleep-ms alone.
-    #[arg(long, value_name = "PERCENT", default_value_t = 50)]
-    duty_cycle: u32,
-
-    /// Retries per failed hub request.
-    #[arg(long, default_value_t = 3)]
-    retries: u32,
+    /// Store to fill (created if absent).
+    #[arg(long, value_name = "FILE", help_heading = "Output")]
+    store: PathBuf,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct ReportsArgs {
-    /// Store to report from.
-    #[arg(long, value_name = "FILE")]
-    store: PathBuf,
-
-    /// Skip the check for days the store claims and does not hold.
-    #[arg(long)]
-    no_verify: bool,
-
     /// Known Koji instance (cbs, fedora, stream).
-    #[arg(long, default_value = "fedora")]
+    #[arg(long, default_value = "fedora", help_heading = "Selection")]
     instance: String,
 
-    /// Directory tree to write reports into.
-    #[arg(long, value_name = "DIR")]
-    reports_root: PathBuf,
-
     /// First day to consider (default: everything the store holds).
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
     since: Option<String>,
 
+    /// Store to report from.
+    #[arg(long, value_name = "FILE", help_heading = "Selection")]
+    store: PathBuf,
+
     /// Last day to consider, inclusive.
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
     until: Option<String>,
 
     /// Withhold report stats below this sample count.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = 5, help_heading = "Analysis")]
     min_samples: usize,
+
+    /// Skip the check for days the store claims and does not hold.
+    #[arg(long, help_heading = "Analysis")]
+    no_verify: bool,
 
     /// Re-render reports that already exist.
     ///
     /// Off by default, so re-running after an interruption costs
     /// nothing; pass it after changing what a report says, or after a
     /// sync has filled in rows a period was missing.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     force: bool,
 
     /// Output forms: text, json, csv (comma-separated or repeated).
@@ -283,24 +290,29 @@ struct ReportsArgs {
         long,
         value_name = "FORM,...",
         value_delimiter = ',',
-        hide_possible_values = true
+        hide_possible_values = true,
+        help_heading = "Output"
     )]
     format: Vec<koji_lag::pool::Format>,
 
+    /// Directory tree to write reports into.
+    #[arg(long, value_name = "DIR", help_heading = "Output")]
+    reports_root: PathBuf,
+
     /// Print each period as it is considered.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct ProbeArgs {
-    /// Known Koji instance (cbs, fedora, stream).
-    #[arg(long, default_value = "fedora")]
-    instance: String,
-
     /// Koji hub XML-RPC URL (overrides --instance).
-    #[arg(long, value_name = "URL")]
+    #[arg(long, value_name = "URL", help_heading = "Selection")]
     hub_url: Option<String>,
+
+    /// Known Koji instance (cbs, fedora, stream).
+    #[arg(long, default_value = "fedora", help_heading = "Selection")]
+    instance: String,
 
     /// Depths to time, in days before now (comma-separated).
     ///
@@ -310,22 +322,13 @@ struct ProbeArgs {
         long,
         value_name = "DAYS,...",
         value_delimiter = ',',
-        default_value = "1,600"
+        default_value = "1,600",
+        help_heading = "Requests"
     )]
     depth: Vec<f64>,
 
-    /// Seconds a single hub request may take; 0 waits forever.
-    ///
-    /// Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a
-    /// deep window: a page that exceeds the bound is abandoned and the
-    /// retry pays the hub cost again, so too low a value can stop a
-    /// backfill progressing rather than merely slow it. `probe` says
-    /// what the depth you are asking for actually costs.
-    #[arg(long, value_name = "SECS")]
-    timeout: Option<u64>,
-
     /// Rows per page, as `sync --page-size` would ask for.
-    #[arg(long, default_value_t = 4000)]
+    #[arg(long, default_value_t = 4000, help_heading = "Requests")]
     page_size: i64,
 
     /// Pages to walk from each depth.
@@ -334,48 +337,34 @@ struct ProbeArgs {
     /// asked about lately costs several times what the ones behind it
     /// do — seven minutes against 55s when January 2025 was collected —
     /// and both numbers are needed to size a backfill.
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 3, help_heading = "Requests")]
     steps: usize,
 
+    /// Seconds a single hub request may take; 0 waits forever.
+    ///
+    /// Defaults to $SANDOGASA_KOJI_TIMEOUT, else 600. Raise it for a
+    /// deep window: a page that exceeds the bound is abandoned and the
+    /// retry pays the hub cost again, so too low a value can stop a
+    /// backfill progressing rather than merely slow it. `probe` says
+    /// what the depth you are asking for actually costs.
+    #[arg(long, value_name = "SECS", help_heading = "Requests")]
+    timeout: Option<u64>,
+
     /// Name each page as it is timed.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct ReportArgs {
-    /// Store to report from.
-    #[arg(long, value_name = "FILE")]
-    store: PathBuf,
-
-    /// Known Koji instance (cbs, fedora, stream), with --store.
-    #[arg(long, default_value = "fedora")]
-    instance: String,
-
-    /// Only tasks completing on/after this date (UTC midnight).
-    #[arg(long, value_name = "YYYY-MM-DD")]
-    since: Option<String>,
-
-    /// Only tasks completing on/before this date (UTC midnight).
-    #[arg(long, value_name = "YYYY-MM-DD")]
-    until: Option<String>,
-
     /// Restrict to these arches (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "ARCH,...")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "ARCH,...",
+        help_heading = "Selection"
+    )]
     arch: Vec<String>,
-
-    /// Restrict to builds by these accounts (CSV or repeated).
-    ///
-    /// The account exactly as Koji records it, which for a service is a
-    /// long name: `koschei/koschei-backend01.rdu3.fedoraproject.org`
-    /// rather than `koschei`. Answers "how did my own builds fare"
-    /// without anybody having to publish a per-person report.
-    #[arg(long, value_delimiter = ',', value_name = "NAME,...")]
-    owner: Vec<String>,
-
-    /// Restrict to these source packages (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "NAME,...")]
-    package: Vec<String>,
 
     /// Restrict to these classes of build (CSV or repeated).
     ///
@@ -383,40 +372,68 @@ struct ReportArgs {
     /// hand-scratch, official. Restrict to mass-rebuild before comparing
     /// one period with another: an unrestricted window is mostly koschei,
     /// whose mix moves with whatever it retried.
-    #[arg(long = "class", value_delimiter = ',', value_name = "CLASS,...")]
+    #[arg(
+        long = "class",
+        value_delimiter = ',',
+        value_name = "CLASS,...",
+        help_heading = "Selection"
+    )]
     classes: Vec<String>,
 
-    /// Only scratch builds.
-    #[arg(long, conflicts_with = "official")]
-    scratch: bool,
+    /// Known Koji instance (cbs, fedora, stream), with --store.
+    #[arg(long, default_value = "fedora", help_heading = "Selection")]
+    instance: String,
 
     /// Only official (non-scratch) builds.
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     official: bool,
 
+    /// Restrict to builds by these accounts (CSV or repeated).
+    ///
+    /// The account exactly as Koji records it, which for a service is a
+    /// long name: `koschei/koschei-backend01.rdu3.fedoraproject.org`
+    /// rather than `koschei`. Answers "how did my own builds fare"
+    /// without anybody having to publish a per-person report.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "NAME,...",
+        help_heading = "Selection"
+    )]
+    owner: Vec<String>,
+
+    /// Restrict to these source packages (CSV or repeated).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "NAME,...",
+        help_heading = "Selection"
+    )]
+    package: Vec<String>,
+
+    /// Only scratch builds.
+    #[arg(long, conflicts_with = "official", help_heading = "Selection")]
+    scratch: bool,
+
+    /// Only tasks completing on/after this date (UTC midnight).
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
+    since: Option<String>,
+
+    /// Store to report from.
+    #[arg(long, value_name = "FILE", help_heading = "Selection")]
+    store: PathBuf,
+
+    /// Only tasks completing on/before this date (UTC midnight).
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
+    until: Option<String>,
+
     /// Include FAILED tasks in build-time statistics.
-    #[arg(long)]
+    #[arg(long, help_heading = "Analysis")]
     include_failed: bool,
 
-    /// Write report.txt and report.json into this directory.
-    ///
-    /// Both forms in one pass, since a reader wants the table and a
-    /// machine wants the fields, and running the report twice to get
-    /// both would read the dataset twice. Without it the report goes
-    /// to stdout, as text or as JSON with --json.
-    #[arg(long, value_name = "DIR")]
-    out: Option<PathBuf>,
-
     /// Withhold human-output stats below this sample count.
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = 5, help_heading = "Analysis")]
     min_samples: usize,
-
-    /// Print JSON instead of tables: shorthand for --format json.
-    ///
-    /// Every tool here takes --json, so it stays as the conventional way
-    /// to ask, and means the same thing.
-    #[arg(long, conflicts_with = "format")]
-    json: bool,
 
     /// Output forms: text, json, csv (comma-separated or repeated).
     ///
@@ -429,9 +446,26 @@ struct ReportArgs {
         long,
         value_name = "FORM,...",
         value_delimiter = ',',
-        hide_possible_values = true
+        hide_possible_values = true,
+        help_heading = "Output"
     )]
     format: Vec<koji_lag::pool::Format>,
+
+    /// Print JSON instead of tables: shorthand for --format json.
+    ///
+    /// Every tool here takes --json, so it stays as the conventional way
+    /// to ask, and means the same thing.
+    #[arg(long, conflicts_with = "format", help_heading = "Output")]
+    json: bool,
+
+    /// Write report.txt and report.json into this directory.
+    ///
+    /// Both forms in one pass, since a reader wants the table and a
+    /// machine wants the fields, and running the report twice to get
+    /// both would read the dataset twice. Without it the report goes
+    /// to stdout, as text or as JSON with --json.
+    #[arg(long, value_name = "DIR", help_heading = "Output")]
+    out: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {

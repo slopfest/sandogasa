@@ -19,34 +19,12 @@ use crate::sources::{self, Sections};
 #[derive(clap::Args)]
 pub struct AgendaArgs {
     /// Meeting date (default: the coming Tuesday).
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    #[arg(long, value_name = "YYYY-MM-DD", help_heading = "Selection")]
     pub date: Option<NaiveDate>,
-
-    /// Show the decision comment and label edit without making them.
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Force ticket(s) into Discussed and Voted (repeat/CSV).
-    #[arg(long, value_name = "N", value_delimiter = ',')]
-    pub voted: Vec<u64>,
-
-    /// Force ticket(s) into Followups (repeat/CSV).
-    #[arg(long, value_name = "N", value_delimiter = ',')]
-    pub followup: Vec<u64>,
-
-    /// Force ticket(s) into New business (repeat/CSV).
-    #[arg(long = "new", value_name = "N", value_delimiter = ',')]
-    pub new_business: Vec<u64>,
-
-    /// Add fesco/docs issue/PR(s) to the agenda (repeat/CSV).
-    #[arg(long, value_name = "N", value_delimiter = ',')]
-    pub docs: Vec<u64>,
-
-    #[command(flatten)]
-    pub voters: crate::votes::VoterArgs,
 
     /// Past meetings scanned for followups (default 12).
     #[arg(
+        help_heading = "Selection",
         long,
         value_name = "N",
         default_value = "12",
@@ -54,12 +32,40 @@ pub struct AgendaArgs {
     )]
     pub history: usize,
 
+    /// Add fesco/docs issue/PR(s) to the agenda (repeat/CSV).
+    #[arg(long, value_name = "N", value_delimiter = ',', help_heading = "Agenda")]
+    pub docs: Vec<u64>,
+
+    /// Force ticket(s) into Followups (repeat/CSV).
+    #[arg(long, value_name = "N", value_delimiter = ',', help_heading = "Agenda")]
+    pub followup: Vec<u64>,
+
+    /// Force ticket(s) into New business (repeat/CSV).
+    #[arg(
+        long = "new",
+        value_name = "N",
+        value_delimiter = ',',
+        help_heading = "Agenda"
+    )]
+    pub new_business: Vec<u64>,
+
+    /// Force ticket(s) into Discussed and Voted (repeat/CSV).
+    #[arg(long, value_name = "N", value_delimiter = ',', help_heading = "Agenda")]
+    pub voted: Vec<u64>,
+
+    #[command(flatten, next_help_heading = "Votes")]
+    pub voters: crate::votes::VoterArgs,
+
+    /// Show the decision comment and label edit without making them.
+    #[arg(long, help_heading = "Writing")]
+    pub dry_run: bool,
+
     /// Machine-readable JSON output.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub json: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     pub verbose: bool,
 }
 

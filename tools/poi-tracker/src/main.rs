@@ -151,37 +151,61 @@ struct PruneRetiredArgs {
     /// Active branch(es) to check against (CSV or repeated;
     /// e.g. `rawhide,f44,epel9`). Default: queried from Bodhi's
     /// active releases, plus rawhide.
-    #[arg(long, value_delimiter = ',', value_name = "BRANCH,...")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "BRANCH,...",
+        help_heading = "Selection"
+    )]
     branch: Vec<String>,
 
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Selection")]
     filter: WalkFilterArgs,
 
     /// Parallel dist-git queries.
-    #[arg(short = 'j', long, default_value = "8")]
+    #[arg(short = 'j', long, default_value = "8", help_heading = "Queries")]
     jobs: usize,
 
     /// Preview without modifying the inventory.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     dry_run: bool,
 
     /// Delete matched packages from the inventory instead of
     /// marking them `unshipped` (the default; marking survives
     /// re-syncs and lets triage-retired keep closing bugs).
-    #[arg(long, conflicts_with = "dry_run")]
+    #[arg(long, conflicts_with = "dry_run", help_heading = "Writing")]
     remove: bool,
 
     /// Skip the confirmation prompt.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Writing")]
     yes: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct TriageRetiredArgs {
+    /// Close ALL open bugs on retired branches, not just
+    /// release-monitoring (Anitya) bugs. Use with care: this
+    /// closes human-filed bugs (CVEs, FTBFS, etc.) too.
+    #[arg(long, help_heading = "Selection")]
+    all_reporters: bool,
+
+    /// Batch mode: one Bugzilla query for bugs assigned to or
+    /// CC'ing EMAIL (default: the configured email), matched
+    /// against the inventory locally. Much faster on a large
+    /// inventory, but misses bugs where EMAIL is neither
+    /// assignee nor CC'd.
+    #[arg(
+        long,
+        value_name = "EMAIL",
+        num_args = 0..=1,
+        help_heading = "Selection"
+    )]
+    batch: Option<Option<String>>,
+
     /// Dist-git branch(es) to check retirement against (CSV or
     /// repeated; e.g. `rawhide`, `epel10`, `f43`). Each branch
     /// scopes its own Bugzilla search — a `rawhide` retirement
@@ -192,100 +216,92 @@ struct TriageRetiredArgs {
         long,
         value_delimiter = ',',
         value_name = "BRANCH,...",
-        default_value = "rawhide"
+        default_value = "rawhide",
+        help_heading = "Selection"
     )]
     branch: Vec<String>,
 
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Selection")]
     filter: WalkFilterArgs,
-
-    /// Batch mode: one Bugzilla query for bugs assigned to or
-    /// CC'ing EMAIL (default: the configured email), matched
-    /// against the inventory locally. Much faster on a large
-    /// inventory, but misses bugs where EMAIL is neither
-    /// assignee nor CC'd.
-    #[arg(long, value_name = "EMAIL", num_args = 0..=1)]
-    batch: Option<Option<String>>,
-
-    /// Close ALL open bugs on retired branches, not just
-    /// release-monitoring (Anitya) bugs. Use with care: this
-    /// closes human-filed bugs (CVEs, FTBFS, etc.) too.
-    #[arg(long)]
-    all_reporters: bool,
-
-    /// Record results in the inventory's `retired_on` markers
-    /// (adds and removes; needs a single -i file).
-    #[arg(long, conflicts_with = "dry_run")]
-    mark: bool,
 
     /// Bugzilla API key (or set BUGZILLA_API_KEY env var, or
     /// run `poi-tracker config`).
-    #[arg(long, env = "BUGZILLA_API_KEY")]
+    #[arg(long, env = "BUGZILLA_API_KEY", help_heading = "Writing")]
     api_key: Option<String>,
 
     /// Also set `assigned_to` on each closed bug to the
     /// Bugzilla email set via `poi-tracker config`. Interactive
     /// mode prompts; with `-y` this flag is the only way to
     /// claim.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     claim: bool,
 
     /// Preview closures without applying them.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     dry_run: bool,
 
+    /// Record results in the inventory's `retired_on` markers
+    /// (adds and removes; needs a single -i file).
+    #[arg(long, conflicts_with = "dry_run", help_heading = "Writing")]
+    mark: bool,
+
     /// Skip the confirmation prompt.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Writing")]
     yes: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct TriageUpdatesArgs {
-    #[command(flatten)]
-    filter: WalkFilterArgs,
-
     /// Batch mode: one Bugzilla query for bugs assigned to or
     /// CC'ing EMAIL (default: the configured email), matched
     /// against the inventory locally. Much faster on a large
     /// inventory, but misses bugs where EMAIL is neither
     /// assignee nor CC'd.
-    #[arg(long, value_name = "EMAIL", num_args = 0..=1)]
+    #[arg(
+        long,
+        value_name = "EMAIL",
+        num_args = 0..=1,
+        help_heading = "Selection"
+    )]
     batch: Option<Option<String>>,
 
+    #[command(flatten, next_help_heading = "Selection")]
+    filter: WalkFilterArgs,
+
     /// Close partially-addressed bugs without asking.
-    #[arg(long, conflicts_with = "skip_stale")]
+    #[arg(long, conflicts_with = "skip_stale", help_heading = "Staleness")]
     close_stale: bool,
 
     /// Skip the Bodhi check for already-built updates.
-    #[arg(long)]
+    #[arg(long, help_heading = "Staleness")]
     skip_stale: bool,
 
     /// Bugzilla API key (or set BUGZILLA_API_KEY env var, or
     /// run `poi-tracker config`).
-    #[arg(long, env = "BUGZILLA_API_KEY")]
+    #[arg(long, env = "BUGZILLA_API_KEY", help_heading = "Writing")]
     api_key: Option<String>,
 
     /// Also set `assigned_to` on each closed bug to the
     /// Bugzilla email set via `poi-tracker config`. Interactive
     /// mode prompts; with `-y` this flag is the only way to
     /// claim.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     claim: bool,
 
     /// Preview updates without applying them.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     dry_run: bool,
 
     /// Skip the confirmation prompt.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Writing")]
     yes: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
@@ -294,6 +310,11 @@ struct TriageUpdatesArgs {
 /// inside the `[start-from, end-with]` range.
 #[derive(clap::Args, Default)]
 struct WalkFilterArgs {
+    /// Stop after this package (inclusive). Combine with
+    /// `--start-from` to bound a sub-range.
+    #[arg(long, value_name = "NAME")]
+    end_with: Option<String>,
+
     /// Only process packages matching this glob (e.g. `rust-*`;
     /// a bare name matches exactly). Comma-separated or
     /// repeated; default: all packages.
@@ -304,11 +325,6 @@ struct WalkFilterArgs {
     /// inventory's iteration order.
     #[arg(long, value_name = "NAME")]
     start_from: Option<String>,
-
-    /// Stop after this package (inclusive). Combine with
-    /// `--start-from` to bound a sub-range.
-    #[arg(long, value_name = "NAME")]
-    end_with: Option<String>,
 }
 
 impl WalkFilterArgs {
@@ -322,92 +338,97 @@ impl WalkFilterArgs {
 
 #[derive(clap::Args)]
 struct SemverAuditArgs {
-    #[command(flatten)]
-    filter: WalkFilterArgs,
-
     /// Batch mode: one Bugzilla query for bugs assigned to or
     /// CC'ing EMAIL (default: the configured email), matched
     /// against the inventory locally. Much faster on a large
     /// inventory, but misses bugs where EMAIL is neither
     /// assignee nor CC'd.
-    #[arg(long, value_name = "EMAIL", num_args = 0..=1)]
+    #[arg(
+        long,
+        value_name = "EMAIL",
+        num_args = 0..=1,
+        help_heading = "Selection"
+    )]
     batch: Option<Option<String>>,
 
-    /// Show only non-breaking updates.
-    #[arg(long)]
-    non_breaking: bool,
+    #[command(flatten, next_help_heading = "Selection")]
+    filter: WalkFilterArgs,
 
     /// Output as JSON instead of human-readable text.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 
+    /// Show only non-breaking updates.
+    #[arg(long, help_heading = "Output")]
+    non_breaking: bool,
+
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct IntersectArgs {
-    /// Inventory file(s) to intersect with: only packages of the
-    /// main inventory also found in one of these survive
-    /// (repeat the flag per file).
-    #[arg(long, required = true)]
-    with: Vec<String>,
+    /// Output as JSON instead of human-readable.
+    #[arg(long)]
+    json: bool,
 
     /// Merge the intersection into this inventory TOML file
     /// (accumulates; existing entries win).
     #[arg(short, long)]
     output: Option<String>,
 
-    /// Output as JSON instead of human-readable.
-    #[arg(long)]
-    json: bool,
+    /// Inventory file(s) to intersect with: only packages of the
+    /// main inventory also found in one of these survive
+    /// (repeat the flag per file).
+    #[arg(long, required = true)]
+    with: Vec<String>,
 }
 
 #[derive(clap::Args)]
 struct KondoArgs {
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Selection")]
     filter: WalkFilterArgs,
 
     /// Essential inventory file(s): packages found in any of these
     /// are never cull candidates (repeat the flag per file).
-    #[arg(long, required = true)]
+    #[arg(long, required = true, help_heading = "Triage")]
     essential: Vec<String>,
-
-    /// dist-git username whose access level routes each action.
-    #[arg(long)]
-    user: String,
 
     /// Default inventory for 'explain': Enter at the explanation
     /// prompt files the package here.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = "Triage")]
     explain_into: Option<String>,
-
-    /// Keep every candidate without prompting.
-    #[arg(short, long)]
-    yes: bool,
-
-    /// Ignore the day-fresh ACL cache and look every level up again.
-    #[arg(long)]
-    refresh_acls: bool,
 
     /// Reason recorded in the -o cull file for packages culled this
     /// run (the access level is always appended). A note typed at
     /// the prompt as `c <note>` overrides it per package.
-    #[arg(long)]
+    #[arg(long, help_heading = "Triage")]
     reason: Option<String>,
+
+    /// Ignore the day-fresh ACL cache and look every level up again.
+    #[arg(long, help_heading = "Triage")]
+    refresh_acls: bool,
+
+    /// dist-git username whose access level routes each action.
+    #[arg(long, help_heading = "Triage")]
+    user: String,
 
     /// Merge the culled set into this inventory TOML file
     /// (accumulates across passes).
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Writing")]
     output: Option<String>,
 
+    /// Keep every candidate without prompting.
+    #[arg(short, long, help_heading = "Writing")]
+    yes: bool,
+
     /// Output as JSON instead of human-readable.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
@@ -425,54 +446,39 @@ struct KondoArgs {
 /// default without asking; `--json` reports and asks nothing.
 #[derive(clap::Args)]
 struct ReconcileArgs {
-    /// Essential inventory that promoted packages are filed into
-    /// (default: the closure's first keeps inventory).
-    #[arg(long, value_name = "PATH")]
-    into: Option<String>,
-
-    /// Take every default without asking (ride, keep essential),
-    /// and leave the triage candidates as cull candidates.
-    #[arg(short, long)]
-    yes: bool,
-
-    /// Ignore the day-fresh ACL cache in the triage.
-    #[arg(long)]
-    refresh_acls: bool,
-
     /// Compute and report only: write no file, walk nothing, ask
     /// nothing (new keeps are listed instead of walked).
     #[arg(long)]
     dry_run: bool,
+
+    /// Essential inventory that promoted packages are filed into
+    /// (default: the closure's first keeps inventory).
+    #[arg(long, value_name = "PATH")]
+    into: Option<String>,
 
     /// Report as JSON; asks and triages nothing (files are still
     /// written unless --dry-run).
     #[arg(long)]
     json: bool,
 
+    /// Ignore the day-fresh ACL cache in the triage.
+    #[arg(long)]
+    refresh_acls: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+
+    /// Take every default without asking (ride, keep essential),
+    /// and leave the triage candidates as cull candidates.
+    #[arg(short, long)]
+    yes: bool,
 }
 
 /// Where a dependency walk looks and what it collects — shared by
 /// `deps` (a full walk) and `keep` (an incremental one).
 #[derive(clap::Args)]
 struct WalkRepoArgs {
-    /// fedrq branch (e.g. hs.el9, epel9).
-    #[arg(short, long)]
-    branch: String,
-
-    /// fedrq repo class (e.g. stack).
-    #[arg(short, long)]
-    repo: Option<String>,
-
-    /// Collect providers from these repo ids (CSV or repeated).
-    ///
-    /// Exact match. The default suits an EPEL walk; for a Fedora
-    /// walk pass the branch's own repo id, e.g. `--from rawhide`.
-    #[arg(long, value_delimiter = ',', default_value = "epel")]
-    from: Vec<String>,
-
     /// Base-distro repo id prefix(es); their providers end the
     /// walk.
     ///
@@ -482,6 +488,21 @@ struct WalkRepoArgs {
     /// repos, which is what you want.
     #[arg(long, value_delimiter = ',', default_value = "fedrq-centos-stream-")]
     base_repo: Vec<String>,
+
+    /// fedrq branch (e.g. hs.el9, epel9).
+    #[arg(short, long)]
+    branch: String,
+
+    /// Collect providers from these repo ids (CSV or repeated).
+    ///
+    /// Exact match. The default suits an EPEL walk; for a Fedora
+    /// walk pass the branch's own repo id, e.g. `--from rawhide`.
+    #[arg(long, value_delimiter = ',', default_value = "epel")]
+    from: Vec<String>,
+
+    /// fedrq repo class (e.g. stack).
+    #[arg(short, long)]
+    repo: Option<String>,
 
     /// Walk runtime dependencies only, without seeding the
     /// roots' BuildRequires.
@@ -495,131 +516,141 @@ struct KeepArgs {
     #[arg(required = true, value_name = "PACKAGE")]
     names: Vec<String>,
 
-    /// Keep inventory to add them to (default: the first -i).
-    #[arg(long, value_name = "PATH")]
-    into: Option<String>,
+    #[command(flatten, next_help_heading = "Walk")]
+    walk: WalkRepoArgs,
+
+    /// Derived inventory to recompute afterwards (optional).
+    #[arg(long, value_name = "PATH", help_heading = "Inventories")]
+    deps: Option<String>,
 
     /// Saved dependency graph to extend (from `deps`); the walk
     /// resolves offline whatever it already knows.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = "Inventories")]
     graph: String,
 
-    /// Inventory of the packages you own — newly reached owned
-    /// packages become fixpoint roots and derived entries.
-    #[arg(long, value_name = "PATH")]
-    owned: String,
-
-    /// Derived inventory to recompute afterwards (optional).
-    #[arg(long, value_name = "PATH")]
-    deps: Option<String>,
+    /// Keep inventory to add them to (default: the first -i).
+    #[arg(long, value_name = "PATH", help_heading = "Inventories")]
+    into: Option<String>,
 
     /// Closure inventory (the `deps -o` file) to bring up to date
     /// with the graph afterwards (optional).
-    #[arg(short, long, value_name = "PATH")]
+    #[arg(short, long, value_name = "PATH", help_heading = "Inventories")]
     output: Option<String>,
 
-    #[command(flatten)]
-    walk: WalkRepoArgs,
+    /// Inventory of the packages you own — newly reached owned
+    /// packages become fixpoint roots and derived entries.
+    #[arg(long, value_name = "PATH", help_heading = "Inventories")]
+    owned: String,
 
     /// Output as JSON instead of human-readable.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct DepsArgs {
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Selection")]
     filter: WalkFilterArgs,
 
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Walk")]
     walk: WalkRepoArgs,
-
-    /// Where to write the walk's full dependency graph (every
-    /// requirer/provider edge, not just first attributions) as
-    /// JSON. Default: beside -o, as <output>-graph.json.
-    #[arg(long, value_name = "PATH")]
-    graph: Option<String>,
 
     /// Iterate to a fixpoint: collected packages found in this
     /// inventory (yours) become roots whose BuildRequires seed
     /// further rounds.
-    #[arg(long, value_name = "PATH", conflicts_with = "runtime_only")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "runtime_only",
+        help_heading = "Inventories"
+    )]
     fixpoint: Option<String>,
 
-    /// Write the collected dependencies as an inventory TOML file.
-    #[arg(short, long)]
-    output: Option<String>,
+    /// Where to write the walk's full dependency graph (every
+    /// requirer/provider edge, not just first attributions) as
+    /// JSON. Default: beside -o, as <output>-graph.json.
+    #[arg(long, value_name = "PATH", help_heading = "Inventories")]
+    graph: Option<String>,
 
     /// Inventory name for --output
     /// (default: "<input name>-deps-<branch>").
-    #[arg(long)]
+    #[arg(long, help_heading = "Inventories")]
     name: Option<String>,
 
+    /// Write the collected dependencies as an inventory TOML file.
+    #[arg(short, long, help_heading = "Inventories")]
+    output: Option<String>,
+
     /// Output as JSON instead of human-readable.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct ActArgs {
-    /// FAS username whose ACL actions these are.
-    #[arg(long)]
-    user: String,
-
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Selection")]
     filter: WalkFilterArgs,
-
-    /// Personal inventory to drop enacted packages from.
-    #[arg(long, value_name = "PATH")]
-    personal: Option<String>,
 
     /// Branch(es) for the reverse-dependency probe before an orphan
     /// (CSV or repeated). The default `auto` derives them per package
     /// from its dist-git branches: rawhide plus its own EPEL
     /// branches — an EPEL-only package's dependents are invisible
     /// from rawhide.
-    #[arg(long, value_delimiter = ',', default_value = "auto")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "auto",
+        help_heading = "Actions"
+    )]
     branch: Vec<String>,
+
+    /// Ignore the day-fresh ACL cache and look every level up again.
+    #[arg(long, help_heading = "Actions")]
+    refresh_acls: bool,
+
+    /// FAS username whose ACL actions these are.
+    #[arg(long, help_heading = "Actions")]
+    user: String,
 
     /// Dist-git API token (or PAGURE_API_TOKEN, or run
     /// `poi-tracker config`).
-    #[arg(long, env = "PAGURE_API_TOKEN")]
+    #[arg(long, env = "PAGURE_API_TOKEN", help_heading = "Writing")]
     api_token: Option<String>,
 
-    /// Ignore the day-fresh ACL cache and look every level up again.
-    #[arg(long)]
-    refresh_acls: bool,
+    /// Personal inventory to drop enacted packages from.
+    #[arg(long, value_name = "PATH", help_heading = "Writing")]
+    personal: Option<String>,
 
     /// Log each access lookup.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
 #[derive(clap::Args)]
 struct AnnounceArgs {
-    /// FAS username whose access level routes each action.
+    /// Output machine-readable JSON.
     #[arg(long)]
-    user: String,
+    json: bool,
 
     /// Ignore the day-fresh ACL cache and look every level up again.
     #[arg(long)]
     refresh_acls: bool,
 
+    /// FAS username whose access level routes each action.
+    #[arg(long)]
+    user: String,
+
     /// Log each access lookup.
     #[arg(short, long)]
     verbose: bool,
-
-    /// Output machine-readable JSON.
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -635,26 +666,26 @@ struct DependentsArgs {
 
 #[derive(clap::Args)]
 struct DeriveArgs {
+    /// Replace the output file's packages; without it, report only.
+    #[arg(long)]
+    apply: bool,
+
     /// Dependency graph JSON from a `deps --graph` run.
     #[arg(long, value_name = "PATH")]
     graph: String,
 
-    /// Inventory of the packages you own (e.g. a sync-distgit
-    /// output); only owned packages enter the derived inventory.
-    #[arg(long, value_name = "PATH")]
-    owned: String,
+    /// Output machine-readable JSON.
+    #[arg(long)]
+    json: bool,
 
     /// The derived inventory to recompute.
     #[arg(short, long, value_name = "PATH")]
     output: String,
 
-    /// Replace the output file's packages; without it, report only.
-    #[arg(long)]
-    apply: bool,
-
-    /// Output machine-readable JSON.
-    #[arg(long)]
-    json: bool,
+    /// Inventory of the packages you own (e.g. a sync-distgit
+    /// output); only owned packages enter the derived inventory.
+    #[arg(long, value_name = "PATH")]
+    owned: String,
 }
 
 #[derive(clap::Args)]
@@ -663,18 +694,18 @@ struct UnkeepArgs {
     #[arg(required = true, value_name = "PACKAGE")]
     names: Vec<String>,
 
-    /// Dependency graph JSON from a `deps --graph` run.
-    #[arg(long, value_name = "PATH")]
-    graph: String,
+    /// Edit the inventories; without it, report only.
+    #[arg(long)]
+    apply: bool,
 
     /// Derived dependency inventories (a `deps` output merged by
     /// `intersect`, say); freed packages leave these with --apply.
     #[arg(long, value_name = "PATH")]
     deps: Vec<String>,
 
-    /// Edit the inventories; without it, report only.
-    #[arg(long)]
-    apply: bool,
+    /// Dependency graph JSON from a `deps --graph` run.
+    #[arg(long, value_name = "PATH")]
+    graph: String,
 
     /// Output machine-readable JSON.
     #[arg(long)]
@@ -686,55 +717,55 @@ struct AddArgs {
     /// Source RPM name.
     name: String,
 
+    /// Binary RPM subpackage(s) to track (comma-separated or repeated).
+    #[arg(long, value_delimiter = ',', help_heading = "Tracking")]
+    rpm: Vec<String>,
+
+    /// Track branch for hs-relmon (e.g. upstream, fedora-rawhide).
+    #[arg(long, help_heading = "Tracking")]
+    track: Option<String>,
+
+    /// Workload tag(s) (comma-separated or repeated).
+    #[arg(long, value_delimiter = ',', help_heading = "Tracking")]
+    workload: Vec<String>,
+
     /// Point of contact ("Name <email>").
-    #[arg(long)]
+    #[arg(long, help_heading = "Metadata")]
     poc: Option<String>,
 
     /// Reason for tracking.
-    #[arg(long)]
+    #[arg(long, help_heading = "Metadata")]
     reason: Option<String>,
 
-    /// Team responsible.
-    #[arg(long)]
-    team: Option<String>,
-
     /// Internal task/ticket reference.
-    #[arg(long)]
+    #[arg(long, help_heading = "Metadata")]
     task: Option<String>,
 
-    /// Binary RPM subpackage(s) to track (comma-separated or repeated).
-    #[arg(long, value_delimiter = ',')]
-    rpm: Vec<String>,
-
-    /// Workload tag(s) (comma-separated or repeated).
-    #[arg(long, value_delimiter = ',')]
-    workload: Vec<String>,
-
-    /// Track branch for hs-relmon (e.g. upstream, fedora-rawhide).
-    #[arg(long)]
-    track: Option<String>,
+    /// Team responsible.
+    #[arg(long, help_heading = "Metadata")]
+    team: Option<String>,
 }
 
 #[derive(clap::Args)]
 struct AdoptArgs {
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Selection")]
     filter: WalkFilterArgs,
 
     /// Dist-git API token with the `modify_project` ACL (or set
     /// PAGURE_API_TOKEN, or run `poi-tracker config`).
-    #[arg(long, env = "PAGURE_API_TOKEN")]
+    #[arg(long, env = "PAGURE_API_TOKEN", help_heading = "Writing")]
     api_token: Option<String>,
 
     /// Preview orphaned packages without adopting them.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     dry_run: bool,
 
     /// Adopt every orphaned match without per-package prompts.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Writing")]
     yes: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
@@ -756,13 +787,13 @@ struct RemoveArgs {
 
 #[derive(clap::Args)]
 struct ShowArgs {
-    /// Filter by workload.
-    #[arg(long)]
-    workload: Option<String>,
-
     /// Output as JSON instead of human-readable.
     #[arg(long)]
     json: bool,
+
+    /// Filter by workload.
+    #[arg(long)]
+    workload: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -775,33 +806,34 @@ struct ExportArgs {
 enum ExportFormat {
     /// Export as content-resolver YAML.
     ContentResolver {
-        /// Export only this workload.
-        #[arg(long)]
-        workload: Option<String>,
         /// Output file (default: {workload-name}.yaml).
         #[arg(short, long)]
         output: Option<String>,
+        /// Export only this workload.
+        #[arg(long)]
+        workload: Option<String>,
     },
     /// Export as hs-relmon manifest TOML.
     HsRelmon {
-        /// Filter by workload.
-        #[arg(long)]
-        workload: Option<String>,
+        /// Default distros list.
+        #[arg(long, default_value = "upstream,fedora,centos,hyperscale")]
+        distros: String,
+
         /// Output file (default: stdout).
         #[arg(short, long)]
         output: Option<String>,
 
-        /// Default distros list.
-        #[arg(long, default_value = "upstream,fedora,centos,hyperscale")]
-        distros: String,
+        /// Remove manifest entries not in the inventory.
+        #[arg(long)]
+        prune: bool,
 
         /// Default tracking branch.
         #[arg(long, default_value = "upstream")]
         track: String,
 
-        /// Remove manifest entries not in the inventory.
+        /// Filter by workload.
         #[arg(long)]
-        prune: bool,
+        workload: Option<String>,
     },
 }
 
@@ -830,17 +862,57 @@ struct ImportArgs {
         .args(["user", "group"])
 ))]
 struct SyncDistgitArgs {
-    /// Import packages for this dist-git user.
-    #[arg(long)]
-    user: Option<String>,
+    /// Exclude packages by glob (CSV or repeated).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "GLOB,...",
+        help_heading = "Selection"
+    )]
+    exclude: Vec<String>,
+
+    /// Drop these groups (CSV or repeated).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "GROUP,...",
+        help_heading = "Selection"
+    )]
+    exclude_group: Vec<String>,
 
     /// Import packages for this dist-git group.
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     group: Option<String>,
 
-    /// Output TOML file.
-    #[arg(short, long, default_value = "inventory.toml")]
-    output: String,
+    /// Keep only these groups (CSV or repeated).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "GROUP,...",
+        conflicts_with = "exclude_group",
+        help_heading = "Selection"
+    )]
+    include_group: Vec<String>,
+
+    /// Exclude group-only access.
+    #[arg(
+        long,
+        conflicts_with_all = ["include_group", "exclude_group"],
+        help_heading = "Selection"
+    )]
+    no_groups: bool,
+
+    /// Import packages for this dist-git user.
+    #[arg(long, help_heading = "Selection")]
+    user: Option<String>,
+
+    /// Query by a-z/0-9 prefix (--user default).
+    #[arg(long, overrides_with = "no_auto_prefix", help_heading = "Queries")]
+    auto_prefix: bool,
+
+    /// Stop the prefix scan before this prefix.
+    #[arg(long, value_name = "PREFIX", help_heading = "Queries")]
+    end_pattern: Option<String>,
 
     /// One owner-alias request instead of a prefix scan.
     /// Direct owner/admin/commit only: collaborator/ticket
@@ -850,85 +922,70 @@ struct SyncDistgitArgs {
         long,
         conflicts_with_all = ["group", "include_group", "exclude_group",
                               "auto_prefix", "no_auto_prefix",
-                              "start_pattern", "end_pattern"]
+                              "start_pattern", "end_pattern"],
+        help_heading = "Queries"
     )]
     fast: bool,
 
-    /// Exclude group-only access.
-    #[arg(
-        long,
-        conflicts_with_all = ["include_group", "exclude_group"]
-    )]
-    no_groups: bool,
-
-    /// Keep only these groups (CSV or repeated).
-    #[arg(
-        long,
-        value_delimiter = ',',
-        value_name = "GROUP,...",
-        conflicts_with = "exclude_group"
-    )]
-    include_group: Vec<String>,
-
-    /// Drop these groups (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "GROUP,...")]
-    exclude_group: Vec<String>,
-
-    /// Exclude packages by glob (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
-    exclude: Vec<String>,
-
-    /// Name pattern for a single patterned query.
-    #[arg(
-        long,
-        conflicts_with_all = ["auto_prefix", "start_pattern", "end_pattern"]
-    )]
-    pattern: Option<String>,
-
-    /// Start the prefix scan at this prefix.
-    #[arg(long, value_name = "PREFIX")]
-    start_pattern: Option<String>,
-
-    /// Stop the prefix scan before this prefix.
-    #[arg(long, value_name = "PREFIX")]
-    end_pattern: Option<String>,
-
-    /// Query by a-z/0-9 prefix (--user default).
-    #[arg(long, overrides_with = "no_auto_prefix")]
-    auto_prefix: bool,
+    /// Parallel dist-git queries for --mark-unshipped.
+    #[arg(short = 'j', long, default_value = "8", help_heading = "Queries")]
+    jobs: usize,
 
     /// Single query; may 504 for a --user sync.
     #[arg(
         long,
         overrides_with = "auto_prefix",
-        conflicts_with_all = ["start_pattern", "end_pattern"]
+        conflicts_with_all = ["start_pattern", "end_pattern"],
+        help_heading = "Queries"
     )]
     no_auto_prefix: bool,
 
-    /// Remove packages no longer in dist-git results.
-    #[arg(long)]
-    prune: bool,
+    /// Name pattern for a single patterned query.
+    #[arg(
+        long,
+        conflicts_with_all = ["auto_prefix", "start_pattern", "end_pattern"],
+        help_heading = "Queries"
+    )]
+    pattern: Option<String>,
+
+    /// Pagure API page size.
+    #[arg(long, default_value = "100", help_heading = "Queries")]
+    per_page: u32,
+
+    /// Start the prefix scan at this prefix.
+    #[arg(long, value_name = "PREFIX", help_heading = "Queries")]
+    start_pattern: Option<String>,
 
     /// Mark packages added by this sync that are already
     /// retired everywhere (like prune-retired).
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     mark_unshipped: bool,
 
-    /// Parallel dist-git queries for --mark-unshipped.
-    #[arg(short = 'j', long, default_value = "8")]
-    jobs: usize,
+    /// Inventory name (default: user/group).
+    #[arg(long, help_heading = "Writing")]
+    name: Option<String>,
 
-    /// Pagure API page size.
-    #[arg(long, default_value = "100")]
-    per_page: u32,
+    /// Output TOML file.
+    #[arg(
+        short,
+        long,
+        default_value = "inventory.toml",
+        help_heading = "Writing"
+    )]
+    output: String,
+
+    /// Remove packages no longer in dist-git results.
+    #[arg(long, help_heading = "Writing")]
+    prune: bool,
 
     /// Workload tags (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "WORKLOAD,...")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "WORKLOAD,...",
+        help_heading = "Writing"
+    )]
     workload: Vec<String>,
-
-    /// Inventory name (default: user/group).
-    #[arg(long)]
-    name: Option<String>,
 }
 
 /// Well-known GitLab RPM group presets.
@@ -951,52 +1008,82 @@ const GITLAB_PRESETS: &[(&str, &str)] = &[
         .args(["url", "preset"])
 ))]
 struct SyncGitlabArgs {
-    /// GitLab group URL.
-    #[arg(long)]
-    url: Option<String>,
-
-    /// Preset: hyperscale, proposed-updates, centos-stream.
-    #[arg(long)]
-    preset: Option<String>,
-
-    /// Output TOML file.
-    #[arg(short, long, default_value = "inventory.toml")]
-    output: String,
-
     /// Exclude packages by glob (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "GLOB,...",
+        help_heading = "Selection"
+    )]
     exclude: Vec<String>,
 
-    /// Remove packages no longer in GitLab results.
-    #[arg(long)]
-    prune: bool,
+    /// Preset: hyperscale, proposed-updates, centos-stream.
+    #[arg(long, help_heading = "Selection")]
+    preset: Option<String>,
 
-    /// Workload tags (CSV or repeated).
-    #[arg(long, value_delimiter = ',', value_name = "WORKLOAD,...")]
-    workload: Vec<String>,
-
-    /// Mark archived projects with no released CBS build as
-    /// unshipped (Hyperscale: RHEL or Stream; Proposed Updates:
-    /// Stream only).
-    #[arg(long)]
-    mark_unshipped: bool,
+    /// GitLab group URL.
+    #[arg(long, help_heading = "Selection")]
+    url: Option<String>,
 
     /// CentOS releases to count as currently shipped (CSV).
     #[arg(
         long,
         value_delimiter = ',',
         value_name = "REL,...",
-        default_value = "9,10"
+        default_value = "9,10",
+        help_heading = "Writing"
     )]
     centos_release: Vec<u32>,
 
+    /// Mark archived projects with no released CBS build as
+    /// unshipped (Hyperscale: RHEL or Stream; Proposed Updates:
+    /// Stream only).
+    #[arg(long, help_heading = "Writing")]
+    mark_unshipped: bool,
+
     /// Inventory name (default: derived from group).
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     name: Option<String>,
+
+    /// Output TOML file.
+    #[arg(
+        short,
+        long,
+        default_value = "inventory.toml",
+        help_heading = "Writing"
+    )]
+    output: String,
+
+    /// Remove packages no longer in GitLab results.
+    #[arg(long, help_heading = "Writing")]
+    prune: bool,
+
+    /// Workload tags (CSV or repeated).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "WORKLOAD,...",
+        help_heading = "Writing"
+    )]
+    workload: Vec<String>,
 }
 
 #[derive(clap::Args)]
 struct SyncRpmfusionArgs {
+    /// Inventory name (default: rpmfusion).
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Output TOML file.
+    #[arg(short, long, default_value = "inventory.toml")]
+    output: String,
+
+    /// Remove packages RPM Fusion ships for no release listed in the
+    /// inventory. Scanning a subset never prunes what another
+    /// release still ships.
+    #[arg(long)]
+    prune: bool,
+
     /// Releases to scan (CSV): f43, f44, el10. Each becomes a
     /// workload, so the inventory can answer per release.
     #[arg(
@@ -1008,24 +1095,10 @@ struct SyncRpmfusionArgs {
     )]
     release: Vec<String>,
 
-    /// Output TOML file.
-    #[arg(short, long, default_value = "inventory.toml")]
-    output: String,
-
     /// fedrq repo class. The default covers free and nonfree
     /// together, which is what "does RPM Fusion ship this?" asks.
     #[arg(long, value_name = "CLASS")]
     repo: Option<String>,
-
-    /// Remove packages RPM Fusion ships for no release listed in the
-    /// inventory. Scanning a subset never prunes what another
-    /// release still ships.
-    #[arg(long)]
-    prune: bool,
-
-    /// Inventory name (default: rpmfusion).
-    #[arg(long)]
-    name: Option<String>,
 }
 
 /// Command outcome: hard failures bubble up as an error (printed

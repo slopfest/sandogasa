@@ -43,26 +43,26 @@ const TYPE_LABELS: [&str; 4] = ["security", "bugfix", "enhancement", "arch-enabl
 
 #[derive(clap::Args)]
 pub struct TimelineArgs {
-    /// Restrict to a single release (e.g. `c10s`)
+    /// Emit CSV with the spreadsheet's columns instead of a table
     #[arg(long)]
-    pub release: Option<String>,
+    pub csv: bool,
 
-    /// Restrict to these package(s) (repeat/CSV)
-    #[arg(long, value_delimiter = ',')]
-    pub package: Vec<String>,
+    /// Emit a machine-readable JSON array instead of a table
+    #[arg(long, conflicts_with = "csv")]
+    pub json: bool,
 
     /// Open tracking issues only (closed ones are the history and are
     /// included by default)
     #[arg(long)]
     pub open_only: bool,
 
-    /// Emit a machine-readable JSON array instead of a table
-    #[arg(long, conflicts_with = "csv")]
-    pub json: bool,
+    /// Restrict to these package(s) (repeat/CSV)
+    #[arg(long, value_delimiter = ',')]
+    pub package: Vec<String>,
 
-    /// Emit CSV with the spreadsheet's columns instead of a table
+    /// Restrict to a single release (e.g. `c10s`)
     #[arg(long)]
-    pub csv: bool,
+    pub release: Option<String>,
 
     /// Print progress to stderr
     #[arg(short, long)]

@@ -66,23 +66,19 @@ enum Command {
         /// Package name
         package: String,
 
-        /// User to remove ACLs for
-        #[arg(long, group = "target")]
-        user: Option<String>,
-
         /// Group to remove ACLs for
         #[arg(long, group = "target")]
         group: Option<String>,
+
+        /// User to remove ACLs for
+        #[arg(long, group = "target")]
+        user: Option<String>,
     },
 
     /// Set an ACL level for a user or group
     Set {
         /// Package name
         package: String,
-
-        /// User to set ACL for
-        #[arg(long, group = "target")]
-        user: Option<String>,
 
         /// Group to set ACL for
         #[arg(long, group = "target")]
@@ -96,6 +92,10 @@ enum Command {
         /// Downgrade access if already higher than requested
         #[arg(long)]
         strict: bool,
+
+        /// User to set ACL for
+        #[arg(long, group = "target")]
+        user: Option<String>,
     },
 
     /// Show current ACLs for a package

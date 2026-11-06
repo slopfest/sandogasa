@@ -167,14 +167,14 @@ enum Command {
         /// Forgejo username to look up
         username: String,
 
+        /// How far back to look
+        #[arg(long, default_value = "90", value_name = "DAYS")]
+        days: u32,
+
         /// Only these repositories (`owner/repo`, e.g. fesco/tickets);
         /// repeatable. Lists every event instead of a per-repo summary.
         #[arg(long)]
         repo: Vec<String>,
-
-        /// How far back to look
-        #[arg(long, default_value = "90", value_name = "DAYS")]
-        days: u32,
 
         /// Forgejo instance base URL
         #[arg(long, default_value = forge::DEFAULT_URL)]
@@ -191,6 +191,20 @@ enum Command {
         #[arg(long, default_value = "25", value_name = "N")]
         max_members: usize,
 
+        /// Also report each member's last attended meetbot meeting
+        /// with this topic (e.g. fesco)
+        #[arg(long, value_name = "TOPIC")]
+        meeting: Option<String>,
+
+        /// Run only these services (comma-separated, repeatable).
+        #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "skip")]
+        only: Vec<Service>,
+
+        /// Count Forgejo activity in these repositories only
+        /// (`owner/repo`); repeatable
+        #[arg(long, value_name = "OWNER/REPO")]
+        repo: Vec<String>,
+
         /// Skip these services (comma-separated, repeatable). Mailman
         /// is skipped unless asked for: its archive walk per member
         /// would dominate the run.
@@ -202,20 +216,6 @@ enum Command {
             default_value = "mailman"
         )]
         skip: Vec<Service>,
-
-        /// Run only these services (comma-separated, repeatable).
-        #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "skip")]
-        only: Vec<Service>,
-
-        /// Also report each member's last attended meetbot meeting
-        /// with this topic (e.g. fesco)
-        #[arg(long, value_name = "TOPIC")]
-        meeting: Option<String>,
-
-        /// Count Forgejo activity in these repositories only
-        /// (`owner/repo`); repeatable
-        #[arg(long, value_name = "OWNER/REPO")]
-        repo: Vec<String>,
     },
 
     /// Summary of a contributor's last activity across all services
@@ -225,46 +225,62 @@ enum Command {
 
         /// Email address(es) for Bugzilla/Mailman.
         /// Repeat for multiple: --email a@x.org --email b@y.org
-        #[arg(long)]
+        #[arg(long, help_heading = "Selection")]
         email: Vec<String>,
 
+        /// Extra Matrix ID(s) that are this user in meeting minutes,
+        /// beyond `@<username>:fedora.im` and the FAS profile's; repeatable
+        #[arg(long, value_name = "MXID", help_heading = "Selection")]
+        matrix: Vec<String>,
+
         /// Skip FASJSON lookup for email discovery
-        #[arg(long)]
+        #[arg(long, help_heading = "Selection")]
         no_fas: bool,
 
-        /// Mailing list(s) to search for sender ID
-        #[arg(long, default_value = "devel@lists.fedoraproject.org")]
-        list: Vec<String>,
-
-        /// Max pages to scan mailing list archives
-        #[arg(long, default_value = "200")]
-        max_pages: u32,
+        /// Run only these services (comma-separated, repeatable).
+        /// Inverse of `--skip`.
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            conflicts_with = "skip",
+            help_heading = "Services"
+        )]
+        only: Vec<Service>,
 
         /// Skip these services (comma-separated, repeatable).
         /// Mailman is the slowest, so `--skip mailman` is the
         /// common speed-up when a user doesn't post to lists.
-        #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "only")]
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            conflicts_with = "only",
+            help_heading = "Services"
+        )]
         skip: Vec<Service>,
 
-        /// Run only these services (comma-separated, repeatable).
-        /// Inverse of `--skip`.
-        #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "skip")]
-        only: Vec<Service>,
+        /// Mailing list(s) to search for sender ID
+        #[arg(
+            long,
+            default_value = "devel@lists.fedoraproject.org",
+            help_heading = "Sources"
+        )]
+        list: Vec<String>,
+
+        /// Max pages to scan mailing list archives
+        #[arg(long, default_value = "200", help_heading = "Sources")]
+        max_pages: u32,
 
         /// Also report the last attended meetbot meeting with this
         /// topic (e.g. fesco)
-        #[arg(long, value_name = "TOPIC")]
+        #[arg(long, value_name = "TOPIC", help_heading = "Sources")]
         meeting: Option<String>,
 
         /// Count Forgejo activity in these repositories only
         /// (`owner/repo`, e.g. fesco/tickets); repeatable
-        #[arg(long, value_name = "OWNER/REPO")]
+        #[arg(long, value_name = "OWNER/REPO", help_heading = "Sources")]
         repo: Vec<String>,
-
-        /// Extra Matrix ID(s) that are this user in meeting minutes,
-        /// beyond `@<username>:fedora.im` and the FAS profile's; repeatable
-        #[arg(long, value_name = "MXID")]
-        matrix: Vec<String>,
     },
 
     /// Show a contributor's mailing list activity
@@ -278,10 +294,6 @@ enum Command {
         #[arg(long)]
         email: Vec<String>,
 
-        /// Skip FASJSON lookup, only search username@fedoraproject.org
-        #[arg(long)]
-        no_fas: bool,
-
         /// Mailing list(s) to search for the sender.
         /// Repeat for multiple: --list a@x.org --list b@x.org
         #[arg(long, default_value = "devel@lists.fedoraproject.org")]
@@ -292,6 +304,10 @@ enum Command {
         /// may need 200+ to cover a week)
         #[arg(long, default_value = "200")]
         max_pages: u32,
+
+        /// Skip FASJSON lookup, only search username@fedoraproject.org
+        #[arg(long)]
+        no_fas: bool,
     },
 
     /// Show a contributor's attendance at a recurring meetbot meeting
@@ -299,28 +315,28 @@ enum Command {
         /// FAS username to look up (`@<username>:fedora.im` on Matrix)
         username: String,
 
-        /// The meeting's meetbot topic (its `!meetingname`)
-        #[arg(long, default_value = "fesco", value_name = "TOPIC")]
-        meeting: String,
-
         /// How far back to look
         #[arg(long, default_value = "180", value_name = "DAYS")]
         days: u32,
-
-        /// Look from this date instead of `--days` back — e.g. the day
-        /// the member joined, so earlier meetings do not count against
-        /// them
-        #[arg(long, value_name = "YYYY-MM-DD", conflicts_with = "days")]
-        since: Option<chrono::NaiveDate>,
 
         /// Extra Matrix ID(s) that are this user, beyond
         /// `@<username>:fedora.im` and the FAS profile's; repeatable
         #[arg(long, value_name = "MXID")]
         matrix: Vec<String>,
 
+        /// The meeting's meetbot topic (its `!meetingname`)
+        #[arg(long, default_value = "fesco", value_name = "TOPIC")]
+        meeting: String,
+
         /// Skip the FASJSON lookup of the profile's Matrix IDs
         #[arg(long)]
         no_fas: bool,
+
+        /// Look from this date instead of `--days` back — e.g. the day
+        /// the member joined, so earlier meetings do not count against
+        /// them
+        #[arg(long, value_name = "YYYY-MM-DD", conflicts_with = "days")]
+        since: Option<chrono::NaiveDate>,
 
         /// meetbot instance base URL
         #[arg(long, default_value = sandogasa_meetbot::DEFAULT_BASE_URL)]

@@ -256,22 +256,22 @@ pub struct AnnouncedArgs {
     #[arg(value_name = "URL|FILE")]
     pub url: String,
 
-    /// Show what would be written without writing it.
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Do not prompt; record every pending ticket.
-    #[arg(short = 'y', long = "yes")]
-    pub assume_yes: bool,
-
     /// Consider every pending ticket, without reading the
     /// announcement to see which it actually names.
     #[arg(long)]
     pub all: bool,
 
+    /// Show what would be written without writing it.
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// Print progress to stderr.
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// Do not prompt; record every pending ticket.
+    #[arg(short = 'y', long = "yes")]
+    pub assume_yes: bool,
 }
 
 /// The ticket numbers an announcement names.

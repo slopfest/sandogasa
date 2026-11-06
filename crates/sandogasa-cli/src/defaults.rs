@@ -168,15 +168,47 @@ fn fail(sources: &str, msg: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Add the `--no-defaults` escape hatch to a tool's command.
+/// Where global flags start in every subcommand's `--help`: after the
+/// subcommand's own options, whose display order clap numbers from 0.
+const GLOBALS_FIRST: usize = 10_000;
+
+/// The heading global flags are listed under, in every `--help`.
+pub const GLOBAL_HEADING: &str = "Global options";
+
+/// Add the `--no-defaults` escape hatch to a tool's command, and list
+/// the global flags after a subcommand's own.
+///
+/// clap numbers each struct's flags from zero, so a global flag such
+/// as `-v` shares its place with a subcommand's first option and the
+/// two lists interleave: `-v, -c, --refresh, -p, …`. Global flags
+/// belong to no subcommand, so they go last, under their own heading,
+/// alphabetically by long name among themselves (issue #73). The
+/// heading is also what keeps them after a subcommand's grouped
+/// options: clap prints its unnamed `Options` section first.
 fn augment_command(cmd: Command) -> Command {
-    cmd.arg(
+    let mut cmd = cmd.arg(
         Arg::new(NO_DEFAULTS)
             .long(NO_DEFAULTS)
             .global(true)
             .action(ArgAction::SetTrue)
             .help("Ignore the config file's [defaults] table"),
-    )
+    );
+    let mut globals: Vec<(String, clap::Id)> = cmd
+        .get_arguments()
+        .filter(|a| a.is_global_set())
+        .map(|a| {
+            let name = a.get_long().unwrap_or(a.get_id().as_str()).to_string();
+            (name, a.get_id().clone())
+        })
+        .collect();
+    globals.sort();
+    for (i, (_, id)) in globals.into_iter().enumerate() {
+        cmd = cmd.mut_arg(id, |a| {
+            a.display_order(GLOBALS_FIRST + i)
+                .help_heading(GLOBAL_HEADING)
+        });
+    }
+    cmd
 }
 
 /// Load the `[defaults]` table from the tool's config layers
@@ -447,6 +479,30 @@ mod tests {
             retries: u32,
         },
         Show,
+    }
+
+    #[test]
+    fn global_flags_follow_a_subcommands_own() {
+        // Numbered from zero per struct, -v used to sit between a
+        // subcommand's first and second options (issue #73).
+        let mut cmd = augment_command(DemoCli::command());
+        // Building is what copies the global flags into subcommands.
+        cmd.build();
+        let help = cmd
+            .find_subcommand_mut("update")
+            .expect("update")
+            .render_help()
+            .to_string();
+        let at = |flag: &str| {
+            help.find(flag)
+                .unwrap_or_else(|| panic!("{flag} in {help}"))
+        };
+        assert!(at("--retries") < at("--no-defaults"), "{help}");
+        assert!(at("--retries") < at("--verbose"), "{help}");
+        // Among themselves, by long name, under their own heading.
+        assert!(at("--no-defaults") < at("--verbose"), "{help}");
+        assert!(at("Global options:") < at("--no-defaults"), "{help}");
+        assert!(at("--retries") < at("Global options:"), "{help}");
     }
 
     fn plan(argv: &[&str], defaults: &str) -> Result<Vec<String>, String> {

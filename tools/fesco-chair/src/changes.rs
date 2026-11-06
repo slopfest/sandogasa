@@ -32,11 +32,6 @@ pub const REPORT_TITLE: &str = "Incomplete Changes Report";
 
 #[derive(clap::Args)]
 pub struct ChangesArgs {
-    /// The report ticket (default: the open meeting ticket titled
-    /// "... Incomplete Changes Report").
-    #[arg(long, value_name = "N")]
-    pub ticket: Option<u64>,
-
     /// Machine-readable JSON output.
     #[arg(long, conflicts_with = "script")]
     pub json: bool,
@@ -46,6 +41,11 @@ pub struct ChangesArgs {
     /// pair per Change that needs a decision, in the ticket's order.
     #[arg(long)]
     pub script: bool,
+
+    /// The report ticket (default: the open meeting ticket titled
+    /// "... Incomplete Changes Report").
+    #[arg(long, value_name = "N")]
+    pub ticket: Option<u64>,
 
     /// Print progress to stderr.
     #[arg(short, long)]

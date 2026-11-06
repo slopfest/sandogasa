@@ -33,9 +33,22 @@ enum Command {
 
 #[derive(clap::Args)]
 struct RunArgs {
+    /// The branch whose closures -w reads graphs from. Graphs of
+    /// different branches are never merged: a binary's source package
+    /// differs between them (CentOS Stream 9 ships rust-srpm-macros
+    /// as its own package; rawhide has it in cargo-rpm-macros).
+    #[arg(
+        long,
+        value_name = "BRANCH",
+        default_value = "rawhide",
+        help_heading = "Selection"
+    )]
+    branch: String,
+
     /// Path to inventory TOML file (default: the workspace's `owned`
     /// inventory when -w is given).
     #[arg(
+        help_heading = "Selection",
         short,
         long,
         value_name = "PATH",
@@ -43,80 +56,83 @@ struct RunArgs {
     )]
     inventory: Option<String>,
 
+    /// Limit to specific packages (repeatable).
+    #[arg(long = "package", value_name = "NAME", help_heading = "Selection")]
+    packages: Vec<String>,
+
     /// A poi-tracker workspace file (kondo.toml): its `owned` inventory
     /// is the default -i, and the saved graphs of its closures for
     /// --branch feed the dependency_health check.
-    #[arg(short, long, value_name = "PATH")]
+    #[arg(short, long, value_name = "PATH", help_heading = "Selection")]
     workspace: Option<String>,
 
-    /// The branch whose closures -w reads graphs from. Graphs of
-    /// different branches are never merged: a binary's source package
-    /// differs between them (CentOS Stream 9 ships rust-srpm-macros
-    /// as its own package; rawhide has it in cargo-rpm-macros).
-    #[arg(long, value_name = "BRANCH", default_value = "rawhide")]
-    branch: String,
+    /// Run all checks regardless of tier.
+    #[arg(long, conflicts_with_all = ["cheap", "medium", "expensive"], help_heading = "Checks")]
+    all: bool,
 
-    /// A dependency graph saved by `poi-tracker deps --graph`
-    /// (repeatable); with one, each package's dependencies are
-    /// checked too and dependency_health is computed.
-    #[arg(long, value_name = "PATH")]
-    graph: Vec<String>,
+    /// Run all cheap-tier checks.
+    #[arg(long, conflicts_with_all = ["medium", "expensive", "all"], help_heading = "Checks")]
+    cheap: bool,
+
+    /// Run only these checks (repeatable).
+    #[arg(long = "check", value_name = "ID", help_heading = "Checks")]
+    checks: Vec<String>,
 
     /// How many levels of dependencies to walk for dependency_health:
     /// 1 is the direct ones. Through build dependencies nearly every
     /// package reaches the whole toolchain within a few levels.
-    #[arg(long, value_name = "N", default_value_t = 1)]
+    #[arg(long, value_name = "N", default_value_t = 1, help_heading = "Checks")]
     dependency_depth: usize,
-
-    /// Path to report TOML file (read if exists, written after run).
-    #[arg(short, long, value_name = "PATH")]
-    output: String,
-
-    /// Run only these checks (repeatable).
-    #[arg(long = "check", value_name = "ID")]
-    checks: Vec<String>,
-
-    /// Run all cheap-tier checks.
-    #[arg(long, conflicts_with_all = ["medium", "expensive", "all"])]
-    cheap: bool,
-
-    /// Run all medium-tier checks.
-    #[arg(long, conflicts_with_all = ["cheap", "expensive", "all"])]
-    medium: bool,
-
-    /// Run all expensive-tier checks.
-    #[arg(long, conflicts_with_all = ["cheap", "medium", "all"])]
-    expensive: bool,
-
-    /// Run all checks regardless of tier.
-    #[arg(long, conflicts_with_all = ["cheap", "medium", "expensive"])]
-    all: bool,
-
-    /// Re-run any selected check whose stored result is older than
-    /// this duration (e.g. "7d", "24h").
-    #[arg(long, value_name = "DURATION")]
-    max_age: Option<String>,
-
-    /// Limit to specific packages (repeatable).
-    #[arg(long = "package", value_name = "NAME")]
-    packages: Vec<String>,
-
-    /// Output summary as JSON.
-    #[arg(long)]
-    json: bool,
-
-    /// Fedora version(s) for FTBFS / FTI tracker lookup (CSV or
-    /// repeated). Rawhide trackers are always included.
-    #[arg(long = "fedora-version", value_name = "N", value_delimiter = ',')]
-    fedora_versions: Vec<u32>,
 
     /// EPEL version(s) for FTBFS / FTI tracker lookup (CSV or
     /// repeated).
-    #[arg(long = "epel-version", value_name = "N", value_delimiter = ',')]
+    #[arg(
+        long = "epel-version",
+        value_name = "N",
+        value_delimiter = ',',
+        help_heading = "Checks"
+    )]
     epel_versions: Vec<u32>,
 
+    /// Run all expensive-tier checks.
+    #[arg(long, conflicts_with_all = ["cheap", "medium", "all"], help_heading = "Checks")]
+    expensive: bool,
+
+    /// Fedora version(s) for FTBFS / FTI tracker lookup (CSV or
+    /// repeated). Rawhide trackers are always included.
+    #[arg(
+        long = "fedora-version",
+        value_name = "N",
+        value_delimiter = ',',
+        help_heading = "Checks"
+    )]
+    fedora_versions: Vec<u32>,
+
+    /// A dependency graph saved by `poi-tracker deps --graph`
+    /// (repeatable); with one, each package's dependencies are
+    /// checked too and dependency_health is computed.
+    #[arg(long, value_name = "PATH", help_heading = "Checks")]
+    graph: Vec<String>,
+
+    /// Re-run any selected check whose stored result is older than
+    /// this duration (e.g. "7d", "24h").
+    #[arg(long, value_name = "DURATION", help_heading = "Checks")]
+    max_age: Option<String>,
+
+    /// Run all medium-tier checks.
+    #[arg(long, conflicts_with_all = ["cheap", "expensive", "all"], help_heading = "Checks")]
+    medium: bool,
+
+    /// Output summary as JSON.
+    #[arg(long, help_heading = "Output")]
+    json: bool,
+
+    /// Path to report TOML file (read if exists, written after run).
+    #[arg(short, long, value_name = "PATH", help_heading = "Output")]
+    output: String,
+
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
@@ -125,13 +141,13 @@ struct ShowArgs {
     /// Path to an existing report TOML file.
     report: String,
 
-    /// Limit to specific packages (repeatable).
-    #[arg(long = "package", value_name = "NAME")]
-    packages: Vec<String>,
-
     /// Output as JSON instead of human-readable.
     #[arg(long)]
     json: bool,
+
+    /// Limit to specific packages (repeatable).
+    #[arg(long = "package", value_name = "NAME")]
+    packages: Vec<String>,
 }
 
 /// Outcome of running a single (package, check, variant) work item.

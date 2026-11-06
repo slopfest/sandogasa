@@ -48,35 +48,50 @@ struct RunArgs {
     bug: String,
 
     /// COPR(s) with staged deps (owner/project; CSV ok)
-    #[arg(long, value_delimiter = ',', value_name = "OWNER/PROJECT")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "OWNER/PROJECT",
+        help_heading = "Build"
+    )]
     copr: Vec<String>,
 
-    /// Extra repo baseurl(s) to build against (CSV ok)
-    #[arg(long, value_delimiter = ',', value_name = "URL")]
-    repo: Vec<String>,
-
     /// Mock config; doubles as the COPR chroot name
-    #[arg(short, long, value_name = "NAME")]
+    #[arg(short, long, value_name = "NAME", help_heading = "Build")]
     mock_config: Option<String>,
 
     /// Extra mock option(s), appended to fedora-review -o
-    #[arg(long, value_name = "OPT", allow_hyphen_values = true)]
+    #[arg(
+        long,
+        value_name = "OPT",
+        allow_hyphen_values = true,
+        help_heading = "Build"
+    )]
     mock_option: Vec<String>,
 
-    /// Unique mock buildroot suffix (mock --uniqueext)
-    #[arg(long, value_name = "TEXT")]
-    uniqueext: Option<String>,
-
-    /// Print the fedora-review command without running it
-    #[arg(long)]
-    dry_run: bool,
-
     /// Stop after the fedora-review build (skip digest)
-    #[arg(long)]
+    #[arg(long, help_heading = "Build")]
     no_digest: bool,
 
-    #[command(flatten)]
+    /// Extra repo baseurl(s) to build against (CSV ok)
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "URL",
+        help_heading = "Build"
+    )]
+    repo: Vec<String>,
+
+    /// Unique mock buildroot suffix (mock --uniqueext)
+    #[arg(long, value_name = "TEXT", help_heading = "Build")]
+    uniqueext: Option<String>,
+
+    #[command(flatten, next_help_heading = "Digest")]
     opts: DigestOpts,
+
+    /// Print the fedora-review command without running it
+    #[arg(long, help_heading = "Writing")]
+    dry_run: bool,
 }
 
 #[derive(Args)]
@@ -97,14 +112,6 @@ struct DigestOpts {
     #[arg(short, long, value_name = "TEXT")]
     comment: Option<String>,
 
-    /// Accept inferred checklist marks without prompting
-    #[arg(short = 'y', long)]
-    yes: bool,
-
-    /// Base directory for bug-id lookup
-    #[arg(long, value_name = "DIR", default_value = ".")]
-    reviews_dir: PathBuf,
-
     /// Skip the crates.io latest-version check
     #[arg(long)]
     no_net: bool,
@@ -112,6 +119,14 @@ struct DigestOpts {
     /// Post to Bugzilla: comment, review flag, claim
     #[arg(long)]
     post: bool,
+
+    /// Base directory for bug-id lookup
+    #[arg(long, value_name = "DIR", default_value = ".")]
+    reviews_dir: PathBuf,
+
+    /// Accept inferred checklist marks without prompting
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 fn main() -> ExitCode {

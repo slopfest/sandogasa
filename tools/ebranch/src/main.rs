@@ -46,51 +46,45 @@ struct ResolveArgs {
     /// Source RPM names to analyze.
     packages: Vec<String>,
 
+    /// Base-distro branch to probe (e.g. c10s).
+    #[arg(
+        help_heading = "Selection",
+        long,
+        value_name = "BRANCH",
+        long_help = "\
+Base-distro branch behind the target, probed to
+detect deps whose provider exists in the base
+at a too-old version (EPEL must not replace
+base packages).
+
+Inferred for EPEL targets: epel10 uses c10s,
+epel9 uses al9 (fedrq's c9s layers epel9 +
+epel9-next, and UBI is incomplete, so AlmaLinux
+stands in for RHEL 9). Pass this to override
+the mapping or to enable the guard for targets
+it can't infer (e.g. epel8)."
+    )]
+    base_branch: Option<String>,
+
     /// Branch to take packages from (e.g. rawhide).
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Selection")]
     source: Option<String>,
 
     /// Repository class for the source branch (fedrq -r).
-    #[arg(long, value_name = "REPO")]
+    #[arg(long, value_name = "REPO", help_heading = "Selection")]
     source_repo: Option<String>,
 
     /// Branch to port packages to (e.g. epel10).
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Selection")]
     target: Option<String>,
 
     /// Repository class for the target branch (fedrq -r).
-    #[arg(long, value_name = "REPO")]
+    #[arg(long, value_name = "REPO", help_heading = "Selection")]
     target_repo: Option<String>,
-
-    /// Output as JSON instead of human-readable text.
-    #[arg(long)]
-    json: bool,
-
-    /// Write a TOML report (package list + dependency edges) for
-    /// the branch-request subcommands to consume.
-    #[arg(long, value_name = "FILE")]
-    report: Option<String>,
-
-    /// Output build-order as a Koji chain build string.
-    #[arg(long)]
-    koji: bool,
-
-    /// Generate a shell script for Copr batch builds.
-    #[arg(
-        long = "copr-script",
-        long_help = "\
-Generate a shell script for Copr batch builds
-(check-crate's --copr names the staging COPR a
-check reads from).
-
-The script accepts the Copr repo as its first
-argument, followed by any extra flags to pass
-to copr build-package."
-    )]
-    copr_script: bool,
 
     /// Check that subpackages are installable.
     #[arg(
+        help_heading = "Resolution",
         long,
         long_help = "\
 Check that subpackages are installable.
@@ -104,6 +98,7 @@ in the closure."
 
     /// Exclude packages from the closure.
     #[arg(
+        help_heading = "Resolution",
         long,
         value_name = "PKG,...",
         value_delimiter = ',',
@@ -122,6 +117,7 @@ May be passed multiple times."
 
     /// Exclude packages from installability checks.
     #[arg(
+        help_heading = "Resolution",
         long,
         value_name = "PKG,...",
         value_delimiter = ',',
@@ -139,8 +135,31 @@ May be passed multiple times."
     )]
     exclude_install: Vec<String>,
 
+    /// Saved dependency graph of the source branch (a `poi-tracker
+    /// deps` graph JSON): source-side lookups it can answer are
+    /// served offline; only the frontier, the target and the base
+    /// go to fedrq.
+    #[arg(long, value_name = "PATH", help_heading = "Resolution")]
+    graph: Option<String>,
+
+    /// Number of parallel fedrq queries (0 = CPUs).
+    #[arg(short = 'j', long, default_value = "0", help_heading = "Resolution")]
+    jobs: usize,
+
+    /// Local mock results (a mock --chain --localrepo directory, with
+    /// repodata) for packages no release builds as-is for the target:
+    /// those built there take their BuildRequires from their SRPM,
+    /// and dependencies their binaries provide resolve to them.
+    #[arg(long, value_name = "DIR", help_heading = "Resolution")]
+    local_repo: Option<std::path::PathBuf>,
+
+    /// Max recursion depth (0 = unlimited).
+    #[arg(long, default_value = "0", help_heading = "Resolution")]
+    max_depth: usize,
+
     /// Base-distro packages to override with alternate packages.
     #[arg(
+        help_heading = "Resolution",
         long = "override",
         value_name = "PKG,...",
         value_delimiter = ',',
@@ -164,54 +183,41 @@ May be passed multiple times."
     )]
     overrides: Vec<String>,
 
-    /// Base-distro branch to probe (e.g. c10s).
-    #[arg(
-        long,
-        value_name = "BRANCH",
-        long_help = "\
-Base-distro branch behind the target, probed to
-detect deps whose provider exists in the base
-at a too-old version (EPEL must not replace
-base packages).
-
-Inferred for EPEL targets: epel10 uses c10s,
-epel9 uses al9 (fedrq's c9s layers epel9 +
-epel9-next, and UBI is incomplete, so AlmaLinux
-stands in for RHEL 9). Pass this to override
-the mapping or to enable the guard for targets
-it can't infer (e.g. epel8)."
-    )]
-    base_branch: Option<String>,
-
-    /// Max recursion depth (0 = unlimited).
-    #[arg(long, default_value = "0")]
-    max_depth: usize,
-
-    /// Print progress to stderr.
-    #[arg(short, long)]
-    verbose: bool,
-
-    /// Number of parallel fedrq queries (0 = CPUs).
-    #[arg(short = 'j', long, default_value = "0")]
-    jobs: usize,
-
     /// Clear fedrq + libdnf5 repo metadata caches before querying.
-    #[arg(long)]
+    #[arg(long, help_heading = "Resolution")]
     refresh: bool,
 
-    /// Saved dependency graph of the source branch (a `poi-tracker
-    /// deps` graph JSON): source-side lookups it can answer are
-    /// served offline; only the frontier, the target and the base
-    /// go to fedrq.
-    #[arg(long, value_name = "PATH")]
-    graph: Option<String>,
+    /// Generate a shell script for Copr batch builds.
+    #[arg(
+        help_heading = "Output",
+        long = "copr-script",
+        long_help = "\
+Generate a shell script for Copr batch builds
+(check-crate's --copr names the staging COPR a
+check reads from).
 
-    /// Local mock results (a mock --chain --localrepo directory, with
-    /// repodata) for packages no release builds as-is for the target:
-    /// those built there take their BuildRequires from their SRPM,
-    /// and dependencies their binaries provide resolve to them.
-    #[arg(long, value_name = "DIR")]
-    local_repo: Option<std::path::PathBuf>,
+The script accepts the Copr repo as its first
+argument, followed by any extra flags to pass
+to copr build-package."
+    )]
+    copr_script: bool,
+
+    /// Output as JSON instead of human-readable text.
+    #[arg(long, help_heading = "Output")]
+    json: bool,
+
+    /// Output build-order as a Koji chain build string.
+    #[arg(long, help_heading = "Output")]
+    koji: bool,
+
+    /// Write a TOML report (package list + dependency edges) for
+    /// the branch-request subcommands to consume.
+    #[arg(long, value_name = "FILE", help_heading = "Output")]
+    report: Option<String>,
+
+    /// Print progress to stderr.
+    #[arg(short, long, help_heading = "Output")]
+    verbose: bool,
 }
 
 #[derive(clap::Args, Clone)]
@@ -247,6 +253,7 @@ minors are one rebuild for them, not three."
 
     /// Branch to check against (e.g. epel9).
     #[arg(
+        help_heading = "Selection",
         short = 'b',
         long,
         long_help = "\
@@ -267,6 +274,7 @@ override, e.g. -b c9s -r @epel."
 
     /// Repository class for the branch (fedrq -r).
     #[arg(
+        help_heading = "Selection",
         short = 'r',
         long,
         value_name = "REPO",
@@ -283,6 +291,7 @@ with a base branch, e.g. -b c9s -r @epel."
 
     /// Override branch for @testing / COPR-chroot queries.
     #[arg(
+        help_heading = "Selection",
         long,
         long_help = "\
 Override branch for the new-provides queries:
@@ -297,38 +306,40 @@ defaults to --branch."
     )]
     testing_branch: Option<String>,
 
+    /// Parallel fedrq queries (0 = CPUs).
+    #[arg(
+        short = 'j',
+        long,
+        default_value = "0",
+        hide_default_value = true,
+        help_heading = "Check"
+    )]
+    jobs: usize,
+
     /// Koji CLI profile (e.g. cbs for CentOS).
-    #[arg(long)]
+    #[arg(long, help_heading = "Check")]
     koji_profile: Option<String>,
 
-    /// Machine-readable JSON output.
-    #[arg(long)]
-    json: bool,
-
-    /// Show full lists instead of counts.
-    #[arg(
-        long,
-        long_help = "\
-Show full lists (every package, Provide, and
-reverse dep) instead of counts plus the
-actionable problems."
-    )]
-    detailed: bool,
-
-    /// Print progress to stderr.
-    #[arg(short, long)]
-    verbose: bool,
-
     /// Clear fedrq + libdnf5 repo metadata caches before querying.
-    #[arg(long)]
+    #[arg(long, help_heading = "Check")]
     refresh: bool,
 
-    /// Parallel fedrq queries (0 = CPUs).
-    #[arg(short = 'j', long, default_value = "0", hide_default_value = true)]
-    jobs: usize,
+    /// Reviewer notes added near the top of the report.
+    #[arg(
+        help_heading = "Writing",
+        long,
+        long_help = "\
+Reviewer notes added as a section near the top
+of the posted report (with --give-karma, or the
+review comment --submit posts after creating
+the update). Prompted for interactively when
+omitted; --yes skips the prompt."
+    )]
+    comment: Option<String>,
 
     /// Cast karma on the update based on the check result.
     #[arg(
+        help_heading = "Writing",
         long = "give-karma",
         conflicts_with = "json",
         long_help = "\
@@ -351,24 +362,9 @@ shown for confirmation before posting."
     )]
     give_karma: bool,
 
-    /// Reviewer notes added near the top of the report.
-    #[arg(
-        long,
-        long_help = "\
-Reviewer notes added as a section near the top
-of the posted report (with --give-karma, or the
-review comment --submit posts after creating
-the update). Prompted for interactively when
-omitted; --yes skips the prompt."
-    )]
-    comment: Option<String>,
-
-    /// Skip vote/submit confirmations; non-update bugs get 0.
-    #[arg(short = 'y', long)]
-    yes: bool,
-
     /// Submit the side tag to Bodhi if the check passes.
     #[arg(
+        help_heading = "Writing",
         long,
         conflicts_with_all = ["give_karma", "json"],
         long_help = "\
@@ -400,27 +396,45 @@ failing update."
     )]
     submit: bool,
 
+    /// Skip vote/submit confirmations; non-update bugs get 0.
+    #[arg(short = 'y', long, help_heading = "Writing")]
+    yes: bool,
+
+    /// Bug ID(s) to associate and close (repeated or CSV).
+    #[arg(
+        help_heading = "Update",
+        long = "bug",
+        value_name = "ID",
+        value_delimiter = ',',
+        requires = "submit"
+    )]
+    bug: Vec<u64>,
+
+    /// Don't auto-push at the karma thresholds.
+    #[arg(long, requires = "submit", help_heading = "Update")]
+    disable_autokarma: bool,
+
     /// Update notes/description (inline).
-    #[arg(long, requires = "submit", conflicts_with = "notes_file")]
+    #[arg(
+        long,
+        requires = "submit",
+        conflicts_with = "notes_file",
+        help_heading = "Update"
+    )]
     notes: Option<String>,
 
     /// Read the update notes from a file.
-    #[arg(long, value_name = "PATH", requires = "submit")]
-    notes_file: Option<std::path::PathBuf>,
-
-    /// Type: bugfix, enhancement, security, newpackage.
     #[arg(
-        long = "type",
-        value_name = "TYPE",
-        default_value = "bugfix",
+        long,
+        value_name = "PATH",
         requires = "submit",
-        hide_possible_values = true,
-        value_parser = ["bugfix", "enhancement", "security", "newpackage"]
+        help_heading = "Update"
     )]
-    update_type: String,
+    notes_file: Option<std::path::PathBuf>,
 
     /// Severity: low, medium, high, urgent.
     #[arg(
+        help_heading = "Update",
         long,
         value_name = "LEVEL",
         default_value = "unspecified",
@@ -435,21 +449,31 @@ severity for --type security.",
     )]
     severity: String,
 
-    /// Bug ID(s) to associate and close (repeated or CSV).
-    #[arg(
-        long = "bug",
-        value_name = "ID",
-        value_delimiter = ',',
-        requires = "submit"
-    )]
-    bug: Vec<u64>,
-
     /// Karma needed to push stable (default 3).
-    #[arg(long, value_name = "N", default_value = "3", requires = "submit")]
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "3",
+        requires = "submit",
+        help_heading = "Update"
+    )]
     stable_karma: i32,
+
+    /// Type: bugfix, enhancement, security, newpackage.
+    #[arg(
+        help_heading = "Update",
+        long = "type",
+        value_name = "TYPE",
+        default_value = "bugfix",
+        requires = "submit",
+        hide_possible_values = true,
+        value_parser = ["bugfix", "enhancement", "security", "newpackage"]
+    )]
+    update_type: String,
 
     /// Negative karma that unpushes (default -3).
     #[arg(
+        help_heading = "Update",
         long,
         value_name = "N",
         default_value = "-3",
@@ -458,31 +482,15 @@ severity for --type security.",
     )]
     unstable_karma: i32,
 
-    /// Don't auto-push at the karma thresholds.
-    #[arg(long, requires = "submit")]
-    disable_autokarma: bool,
-
-    /// RPM Fusion inventory (poi-tracker sync-rpmfusion). A package
-    /// with a counterpart there never auto-pushes. Without a path,
-    /// the inventory you generated is used, or the one your packages
-    /// shipped.
-    #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "")]
-    rpmfusion_inventory: Option<String>,
-
-    /// Fedora-to-RPM-Fusion renames for counterparts the naming does
-    /// not make guessable (configs/rpmfusion/renames.toml). Found
-    /// beside the inventory when not given.
-    #[arg(long, value_name = "PATH", requires = "rpmfusion_inventory")]
-    rpmfusion_renames: Option<String>,
-
     /// Do everything except send: show the RPM Fusion bug or comment
     /// that would be written, and where.
-    #[arg(long, requires = "rpmfusion_inventory")]
+    #[arg(long, requires = "rpmfusion_inventory", help_heading = "RPM Fusion")]
     rpmfusion_dry_run: bool,
 
     /// File the RPM Fusion rebuild request for an update that already
     /// exists, instead of only naming the counterpart.
     #[arg(
+        help_heading = "RPM Fusion",
         long,
         requires = "rpmfusion_inventory",
         long_help = "\
@@ -500,6 +508,43 @@ run, so they become one bug listing all of
 them, exactly as a batch of side tags would."
     )]
     rpmfusion_file: bool,
+
+    /// RPM Fusion inventory (poi-tracker sync-rpmfusion). A package
+    /// with a counterpart there never auto-pushes. Without a path,
+    /// the inventory you generated is used, or the one your packages
+    /// shipped.
+    #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "", help_heading = "RPM Fusion")]
+    rpmfusion_inventory: Option<String>,
+
+    /// Fedora-to-RPM-Fusion renames for counterparts the naming does
+    /// not make guessable (configs/rpmfusion/renames.toml). Found
+    /// beside the inventory when not given.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "rpmfusion_inventory",
+        help_heading = "RPM Fusion"
+    )]
+    rpmfusion_renames: Option<String>,
+
+    /// Show full lists instead of counts.
+    #[arg(
+        help_heading = "Output",
+        long,
+        long_help = "\
+Show full lists (every package, Provide, and
+reverse dep) instead of counts plus the
+actionable problems."
+    )]
+    detailed: bool,
+
+    /// Machine-readable JSON output.
+    #[arg(long, help_heading = "Output")]
+    json: bool,
+
+    /// Print progress to stderr.
+    #[arg(short, long, help_heading = "Output")]
+    verbose: bool,
 }
 
 #[derive(clap::Args, Clone)]
@@ -511,52 +556,9 @@ struct CheckCrateArgs {
     /// Crate version (default: latest).
     version: Option<String>,
 
-    /// Render a report saved earlier with --toml instead of
-    /// querying crates.io and the repo again.
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["name", "version", "transitive"])]
-    from: Option<String>,
-
     /// Target branch (e.g. epel9, rawhide).
-    #[arg(short = 'b', long)]
+    #[arg(short = 'b', long, help_heading = "Selection")]
     branch: Option<String>,
-
-    /// Repository class for the branch (fedrq -r).
-    #[arg(short = 'r', long, value_name = "REPO")]
-    repo: Option<String>,
-
-    /// Expand missing deps transitively.
-    #[arg(short = 't', long)]
-    transitive: bool,
-
-    /// Exclude dev dependencies from transitive expansion.
-    #[arg(long, requires = "transitive")]
-    exclude_dev: bool,
-
-    /// For an application root, also count optional dependencies
-    /// its default features do not enable. Library roots and every
-    /// transitive crate count all features, as Fedora builds them.
-    #[arg(long, requires = "transitive")]
-    include_optional: bool,
-
-    /// Non-default features the Fedora build enables for an
-    /// application root, as `%cargo_generate_buildrequires -f`
-    /// (CSV or repeated). Default: read from the package's rawhide
-    /// spec when it already exists.
-    #[arg(long, value_delimiter = ',', value_name = "FEATURE,...")]
-    features: Vec<String>,
-
-    /// Build without default features (`-n`).
-    #[arg(long)]
-    no_default_features: bool,
-
-    /// Crates built in-tree from the root's own source (a
-    /// workspace's members, e.g. `uu_*,uucore*`): hidden as dependencies,
-    /// their own dependencies checked as the workspace's. Globs, CSV
-    /// or repeated; `@repository` also takes every crate published
-    /// from the root's repository. Merged with the config file's
-    /// `[check-crate.in-tree]` entry for the crate.
-    #[arg(long, value_delimiter = ',', value_name = "GLOB,...")]
-    in_tree: Vec<String>,
 
     /// Staging COPR (`owner/project`, `@group/project`) layered over
     /// the branch: dependencies the branch lacks are looked up there
@@ -564,17 +566,44 @@ struct CheckCrateArgs {
     /// of missing. The branch picks the chroot (rawhide → fedora-rawhide).
     /// Default: the config file's `[check-crate.copr]` entry for the
     /// crate. (The build-script generator is --copr-script.)
-    #[arg(long, value_name = "OWNER/PROJECT")]
+    #[arg(long, value_name = "OWNER/PROJECT", help_heading = "Selection")]
     copr: Option<String>,
+
+    /// Render a report saved earlier with --toml instead of
+    /// querying crates.io and the repo again.
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["name", "version", "transitive"], help_heading = "Selection")]
+    from: Option<String>,
 
     /// Fedora package name when it is not `rust-<crate>` (e.g. the
     /// `coreutils` crate is `uutils-coreutils`): used for the spec
     /// lookup and as the report's package name.
-    #[arg(long, value_name = "NAME")]
+    #[arg(long, value_name = "NAME", help_heading = "Selection")]
     package: Option<String>,
+
+    /// Repository class for the branch (fedrq -r).
+    #[arg(short = 'r', long, value_name = "REPO", help_heading = "Selection")]
+    repo: Option<String>,
+
+    /// Ignore these crates entirely, direct or transitive, as
+    /// dependencies Fedora will not package (CSV or repeated). Added
+    /// to the config file's `[check-crate] exclude`, or, when no
+    /// config sets one, to the built-in benchmark set (criterion,
+    /// codspeed-*, divan, iai, count_instructions).
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "CRATE,...",
+        help_heading = "Analysis"
+    )]
+    exclude: Vec<String>,
+
+    /// Exclude dev dependencies from transitive expansion.
+    #[arg(long, requires = "transitive", help_heading = "Analysis")]
+    exclude_dev: bool,
 
     /// Exclude unmet-version deps from transitive expansion.
     #[arg(
+        help_heading = "Analysis",
         long,
         requires = "transitive",
         long_help = "\
@@ -586,16 +615,63 @@ what needs (re)building."
     )]
     exclude_unmet: bool,
 
-    /// Ignore these crates entirely, direct or transitive, as
-    /// dependencies Fedora will not package (CSV or repeated). Added
-    /// to the config file's `[check-crate] exclude`, or, when no
-    /// config sets one, to the built-in benchmark set (criterion,
-    /// codspeed-*, divan, iai, count_instructions).
-    #[arg(long, value_delimiter = ',', value_name = "CRATE,...")]
-    exclude: Vec<String>,
+    /// Non-default features the Fedora build enables for an
+    /// application root, as `%cargo_generate_buildrequires -f`
+    /// (CSV or repeated). Default: read from the package's rawhide
+    /// spec when it already exists.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "FEATURE,...",
+        help_heading = "Analysis"
+    )]
+    features: Vec<String>,
+
+    /// Crates built in-tree from the root's own source (a
+    /// workspace's members, e.g. `uu_*,uucore*`): hidden as dependencies,
+    /// their own dependencies checked as the workspace's. Globs, CSV
+    /// or repeated; `@repository` also takes every crate published
+    /// from the root's repository. Merged with the config file's
+    /// `[check-crate.in-tree]` entry for the crate.
+    #[arg(
+        long,
+        value_delimiter = ',',
+        value_name = "GLOB,...",
+        help_heading = "Analysis"
+    )]
+    in_tree: Vec<String>,
+
+    /// For an application root, also count optional dependencies
+    /// its default features do not enable. Library roots and every
+    /// transitive crate count all features, as Fedora builds them.
+    #[arg(long, requires = "transitive", help_heading = "Analysis")]
+    include_optional: bool,
+
+    /// Parallel fedrq queries (0 = CPUs).
+    #[arg(
+        short = 'j',
+        long,
+        default_value = "0",
+        hide_default_value = true,
+        help_heading = "Analysis"
+    )]
+    jobs: usize,
+
+    /// Build without default features (`-n`).
+    #[arg(long, help_heading = "Analysis")]
+    no_default_features: bool,
+
+    /// Clear fedrq + libdnf5 repo metadata caches before querying.
+    #[arg(long, help_heading = "Analysis")]
+    refresh: bool,
+
+    /// Expand missing deps transitively.
+    #[arg(short = 't', long, help_heading = "Analysis")]
+    transitive: bool,
 
     /// Generate a shell script for Copr batch builds.
     #[arg(
+        help_heading = "Output",
         long = "copr-script",
         requires = "transitive",
         long_help = "\
@@ -610,32 +686,29 @@ to copr build-package."
     copr_script: bool,
 
     /// Output dependency graph in Graphviz DOT format.
-    #[arg(long, requires = "transitive")]
+    #[arg(long, requires = "transitive", help_heading = "Output")]
     dot: bool,
 
     /// Machine-readable JSON output.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 
     /// Output build-order as a Koji chain build string.
-    #[arg(long, requires = "transitive")]
+    #[arg(long, requires = "transitive", help_heading = "Output")]
     koji: bool,
 
     /// Write analysis to a TOML file.
-    #[arg(long, value_name = "PATH", requires = "transitive")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "transitive",
+        help_heading = "Output"
+    )]
     toml: Option<String>,
 
-    /// Clear fedrq + libdnf5 repo metadata caches before querying.
-    #[arg(long)]
-    refresh: bool,
-
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
-
-    /// Parallel fedrq queries (0 = CPUs).
-    #[arg(short = 'j', long, default_value = "0", hide_default_value = true)]
-    jobs: usize,
 }
 
 #[derive(Subcommand)]
@@ -732,11 +805,6 @@ claims are flagged first.")]
 /// day). Each entry is removed whole. Nothing else ever removes them.
 #[derive(clap::Args, Clone)]
 struct PruneCacheArgs {
-    /// Remove entries unused for more than DAYS, instead of each
-    /// cache's own age.
-    #[arg(long, value_name = "DAYS", value_parser = clap::value_parser!(u64).range(1..))]
-    older_than: Option<u64>,
-
     /// Report what would be removed, and remove nothing.
     #[arg(long)]
     dry_run: bool,
@@ -744,16 +812,17 @@ struct PruneCacheArgs {
     /// Print the report as JSON.
     #[arg(long)]
     json: bool,
+
+    /// Remove entries unused for more than DAYS, instead of each
+    /// cache's own age.
+    #[arg(long, value_name = "DAYS", value_parser = clap::value_parser!(u64).range(1..))]
+    older_than: Option<u64>,
 }
 
 #[derive(clap::Args, Clone)]
 struct CoprPruneArgs {
     /// COPR project: owner/project, @group/project, or its URL.
     copr: String,
-
-    /// Delete every caught-up package without asking.
-    #[arg(short = 'y', long)]
-    yes: bool,
 
     /// Print the plan as JSON (never deletes).
     #[arg(long)]
@@ -762,6 +831,10 @@ struct CoprPruneArgs {
     /// Print progress to stderr.
     #[arg(short, long)]
     verbose: bool,
+
+    /// Delete every caught-up package without asking.
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 #[derive(clap::Args)]
@@ -770,45 +843,50 @@ struct RebuildPlanArgs {
     library: String,
 
     /// Branch the library is bumped on.
-    #[arg(short = 'b', long, default_value = "rawhide")]
+    #[arg(
+        short = 'b',
+        long,
+        default_value = "rawhide",
+        help_heading = "Selection"
+    )]
     branch: String,
 
     /// Side tag the rebuilds go into, to show what is done.
-    #[arg(short = 's', long)]
+    #[arg(short = 's', long, help_heading = "Selection")]
     side_tag: Option<String>,
 
-    /// CSV of dist-git accounts whose pull requests carry the fixes
-    /// (the change owners); lists them per package, with CI results.
-    #[arg(long, value_name = "FAS", value_delimiter = ',')]
-    pr_author: Vec<String>,
+    /// Local mock results built against the branch as it is, to tell
+    /// failures the new library causes from older ones.
+    #[arg(long, value_name = "DIR", help_heading = "Plan")]
+    baseline_results: Option<std::path::PathBuf>,
 
     /// For each package left to rebuild, who to contact: its
     /// -maintainers alias, groups with commit access and their Matrix
     /// rooms, and its version-release.
-    #[arg(long)]
+    #[arg(long, help_heading = "Plan")]
     contacts: bool,
-
-    /// Local mock results built with the side tag: one directory per
-    /// build, named by NVR, with a success or fail marker. Read only.
-    #[arg(long, value_name = "DIR")]
-    sidetag_results: Option<std::path::PathBuf>,
-
-    /// Local mock results built against the branch as it is, to tell
-    /// failures the new library causes from older ones.
-    #[arg(long, value_name = "DIR")]
-    baseline_results: Option<std::path::PathBuf>,
 
     /// Existing dist-git checkouts, one per package (DIR/<package>), to
     /// clone from instead of downloading every object again. Read only.
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "DIR", help_heading = "Plan")]
     distgit_dir: Option<std::path::PathBuf>,
 
+    /// CSV of dist-git accounts whose pull requests carry the fixes
+    /// (the change owners); lists them per package, with CI results.
+    #[arg(long, value_name = "FAS", value_delimiter = ',', help_heading = "Plan")]
+    pr_author: Vec<String>,
+
+    /// Local mock results built with the side tag: one directory per
+    /// build, named by NVR, with a success or fail marker. Read only.
+    #[arg(long, value_name = "DIR", help_heading = "Plan")]
+    sidetag_results: Option<std::path::PathBuf>,
+
     /// Print the plan as JSON.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
@@ -819,18 +897,41 @@ struct BranchRequestCommon {
     /// EPEL branch to request (e.g. epel9, epel10).
     branch: String,
 
-    /// Bugzilla base URL.
-    #[arg(long, default_value = "https://bugzilla.redhat.com")]
-    bugzilla_url: String,
-
     /// Bugzilla API key (defaults to BUGZILLA_API_KEY env var or
     /// the key from `ebranch config`).
-    #[arg(long, env = "BUGZILLA_API_KEY")]
+    #[arg(long, env = "BUGZILLA_API_KEY", help_heading = "Bugzilla")]
     api_key: Option<String>,
+
+    /// Bugzilla base URL.
+    #[arg(
+        long,
+        default_value = "https://bugzilla.redhat.com",
+        help_heading = "Bugzilla"
+    )]
+    bugzilla_url: String,
+
+    /// Base-distro branch to pre-flight against (e.g. c10s).
+    #[arg(
+        help_heading = "Request",
+        long,
+        value_name = "BRANCH",
+        long_help = "\
+Base-distro branch behind the EPEL branch,
+checked before filing: a package present in
+the base distro is skipped (EPEL must not
+replace it; the request would be CANTFIX).
+
+Inferred from the branch: epel10 uses c10s,
+epel9 uses al9. Pass this to override the
+mapping or to enable the check for branches
+it can't infer (e.g. epel8)."
+    )]
+    base_branch: Option<String>,
 
     /// Volunteer as co-maintainer: bare for the FAS from `ebranch
     /// config`, or name one. Omit it to file without volunteering.
     #[arg(
+        help_heading = "Request",
         long,
         num_args(0..=1),
         default_missing_value = "",
@@ -851,36 +952,19 @@ with --:
     fas: Option<String>,
 
     /// Packaging SIG to offer as co-maintainer (requires --fas).
-    #[arg(long)]
+    #[arg(long, help_heading = "Request")]
     sig: Option<String>,
 
-    /// Base-distro branch to pre-flight against (e.g. c10s).
-    #[arg(
-        long,
-        value_name = "BRANCH",
-        long_help = "\
-Base-distro branch behind the EPEL branch,
-checked before filing: a package present in
-the base distro is skipped (EPEL must not
-replace it; the request would be CANTFIX).
-
-Inferred from the branch: epel10 uses c10s,
-epel9 uses al9. Pass this to override the
-mapping or to enable the check for branches
-it can't infer (e.g. epel8)."
-    )]
-    base_branch: Option<String>,
-
     /// Show what would happen without contacting Bugzilla.
-    #[arg(long)]
+    #[arg(long, help_heading = "Writing")]
     dry_run: bool,
 
     /// File releng tickets without confirming each one.
-    #[arg(short = 'y', long)]
+    #[arg(short = 'y', long, help_heading = "Writing")]
     yes: bool,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
@@ -893,22 +977,22 @@ struct FileRequestArgs {
     common: BranchRequestCommon,
 
     /// CSV of bugs/aliases this request blocks.
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', help_heading = "Request")]
     blocked: Vec<String>,
 
     /// CSV of bugs/aliases this request depends on.
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', help_heading = "Request")]
     dependson: Vec<String>,
-
-    /// check-crate or resolve report TOML to record the new bug ID in.
-    #[arg(long)]
-    toml: Option<String>,
 
     /// Ask for the build from this dist-git commit, for when the tip
     /// of rawhide does not build for the branch but an older commit
     /// does. Checked against dist-git before filing.
-    #[arg(long, value_name = "HASH")]
+    #[arg(long, value_name = "HASH", help_heading = "Request")]
     from_commit: Option<String>,
+
+    /// check-crate or resolve report TOML to record the new bug ID in.
+    #[arg(long, help_heading = "Output")]
+    toml: Option<String>,
 }
 
 #[derive(clap::Args, Clone)]
@@ -929,13 +1013,13 @@ struct CloseArgs {
     /// check-crate or resolve report TOML with recorded branch requests.
     toml: String,
 
-    /// Also take the bugs being closed (assigned_to = your Bugzilla
-    /// account), without asking.
-    #[arg(long)]
-    claim: bool,
-
     #[command(flatten)]
     common: BranchRequestCommon,
+
+    /// Also take the bugs being closed (assigned_to = your Bugzilla
+    /// account), without asking.
+    #[arg(long, help_heading = "Writing")]
+    claim: bool,
 }
 
 #[derive(clap::Args, Clone)]
@@ -953,16 +1037,53 @@ struct CheckWipArgs {
     ledger: std::path::PathBuf,
 
     /// COPR staging it (owner/project or URL).
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     copr: Vec<String>,
 
+    /// Limit to these packages (repeated or CSV).
+    #[arg(
+        long,
+        value_name = "NAME,...",
+        value_delimiter = ',',
+        help_heading = "Selection"
+    )]
+    package: Vec<String>,
+
+    /// Koji side tags built into (repeated or CSV).
+    #[arg(
+        long,
+        value_name = "TAG,...",
+        value_delimiter = ',',
+        help_heading = "Selection"
+    )]
+    side_tag: Vec<String>,
+
     /// Releases targeted (repeated or CSV).
-    #[arg(long, value_name = "BRANCH,...", value_delimiter = ',')]
+    #[arg(
+        long,
+        value_name = "BRANCH,...",
+        value_delimiter = ',',
+        help_heading = "Selection"
+    )]
     target: Vec<String>,
 
-    /// Report from the ledger, contacting nothing.
-    #[arg(long)]
-    offline: bool,
+    /// Track packages no COPR staged (repeated or CSV).
+    #[arg(
+        long,
+        value_name = "NAME,...",
+        value_delimiter = ',',
+        help_heading = "Ledger"
+    )]
+    add: Vec<String>,
+
+    /// Drop packages and stop tracking them (repeated or CSV).
+    #[arg(
+        long,
+        value_name = "NAME,...",
+        value_delimiter = ',',
+        help_heading = "Ledger"
+    )]
+    forget: Vec<String>,
 
     /// Refresh, overriding a config default.
     // `conflicts_with` rather than `overrides_with`: the defaults
@@ -972,11 +1093,16 @@ struct CheckWipArgs {
     // and order-sensitive, and injected defaults arrive after the
     // command line, so the injected `--offline` would arrive last,
     // win the override, and unset this flag.
-    #[arg(long, conflicts_with = "offline")]
+    #[arg(long, conflicts_with = "offline", help_heading = "Ledger")]
     no_offline: bool,
+
+    /// Report from the ledger, contacting nothing.
+    #[arg(long, help_heading = "Ledger")]
+    offline: bool,
 
     /// Forget what is gone: packages (default), side-tags.
     #[arg(
+        help_heading = "Ledger",
         long,
         value_name = "WHAT",
         value_enum,
@@ -987,31 +1113,15 @@ struct CheckWipArgs {
     prune: Vec<wip::Prunable>,
 
     /// Search for review requests again.
-    #[arg(long)]
+    #[arg(long, help_heading = "Ledger")]
     rescan_reviews: bool,
 
-    /// Koji side tags built into (repeated or CSV).
-    #[arg(long, value_name = "TAG,...", value_delimiter = ',')]
-    side_tag: Vec<String>,
-
-    /// Track packages no COPR staged (repeated or CSV).
-    #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
-    add: Vec<String>,
-
-    /// Drop packages and stop tracking them (repeated or CSV).
-    #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
-    forget: Vec<String>,
-
     /// Set a route: review:BUG, pr:ID, or direct
-    #[arg(long, value_name = "PKG=ROUTE")]
+    #[arg(long, value_name = "PKG=ROUTE", help_heading = "Ledger")]
     set: Vec<String>,
 
-    /// Limit to these packages (repeated or CSV).
-    #[arg(long, value_name = "NAME,...", value_delimiter = ',')]
-    package: Vec<String>,
-
     /// Machine-readable JSON output.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 }
 
@@ -1020,13 +1130,13 @@ struct CheckPkgReviewsArgs {
     /// Path to TOML analysis file from check-crate --toml.
     toml: String,
 
-    /// Bugzilla base URL.
-    #[arg(long, default_value = "https://bugzilla.redhat.com")]
-    bugzilla_url: String,
-
     /// Bugzilla API key (or set BUGZILLA_API_KEY env var).
     #[arg(long, env = "BUGZILLA_API_KEY")]
     api_key: Option<String>,
+
+    /// Bugzilla base URL.
+    #[arg(long, default_value = "https://bugzilla.redhat.com")]
+    bugzilla_url: String,
 
     /// Show changes without applying them.
     #[arg(long)]

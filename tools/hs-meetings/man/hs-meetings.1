@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-meetings 1 2026-11-04 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH hs-meetings 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 hs\-meetings \- Chair CentOS Hyperscale SIG meetings: day\-of script and meetbot archive sync
 .SH SYNOPSIS
@@ -16,65 +16,65 @@ Print help
 Print version
 .SH COMMANDS
 .SS hs-meetings list
-\fBhs\-meetings list\fR [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBhs\-meetings list\fR [\fB\-\-json\fR] [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-until\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 List SIG meetings recorded on meetbot
-.TP
-\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
-Meetbot search topic (matches meeting topic substrings)
-.TP
-\fB\-\-since\fR \fI<SINCE>\fR
-Start date filter (inclusive, YYYY\-MM\-DD)
-.TP
-\fB\-\-until\fR \fI<UNTIL>\fR
-End date filter (inclusive, YYYY\-MM\-DD, default: today)
-.TP
-\fB\-\-period\fR \fI<PERIOD>\fR
-Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`
 .TP
 \fB\-\-json\fR
 Emit JSON instead of the human\-readable table
 .TP
+\fB\-\-period\fR \fI<PERIOD>\fR
+Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`
+.TP
+\fB\-\-since\fR \fI<SINCE>\fR
+Start date filter (inclusive, YYYY\-MM\-DD)
+.TP
+\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
+Meetbot search topic (matches meeting topic substrings)
+.TP
+\fB\-\-until\fR \fI<UNTIL>\fR
+End date filter (inclusive, YYYY\-MM\-DD, default: today)
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS hs-meetings script
-\fBhs\-meetings script\fR [\fB\-\-date\fR] [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBhs\-meetings script\fR [\fB\-\-date\fR] [\fB\-\-json\fR] [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Print the day\-of zodbot script for chairing a SIG meeting
 .TP
 \fB\-\-date\fR \fI<DATE>\fR
 Meeting date (YYYY\-MM\-DD, default: the coming Wednesday)
 .TP
-\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
-Meetbot topic the previous meeting was recorded under
-.TP
 \fB\-\-json\fR
 Emit JSON (the script plus what it was built from)
+.TP
+\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
+Meetbot topic the previous meeting was recorded under
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS hs-meetings sync
-\fBhs\-meetings sync\fR [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-period\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-f\fR|\fB\-\-file\fR>
+\fBhs\-meetings sync\fR [\fB\-\-dry\-run\fR] [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-t\fR|\fB\-\-topic\fR] [\fB\-\-until\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-f\fR|\fB\-\-file\fR>
 .PP
 Sync SIG meetings into a tool\-managed markdown list file
+.TP
+\fB\-\-dry\-run\fR
+Print planned changes without writing
 .TP
 \fB\-f\fR, \fB\-\-file\fR \fI<PATH>\fR
 Path to the tool\-managed meetings list file
 .TP
-\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
-Meetbot search topic
+\fB\-\-period\fR \fI<PERIOD>\fR
+Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`
 .TP
 \fB\-\-since\fR \fI<SINCE>\fR
 Start date filter (inclusive, YYYY\-MM\-DD)
 .TP
+\fB\-t\fR, \fB\-\-topic\fR \fI<TOPIC>\fR [default: centos\-hyperscale\-sig]
+Meetbot search topic
+.TP
 \fB\-\-until\fR \fI<UNTIL>\fR
 End date filter (inclusive, YYYY\-MM\-DD, default: today)
-.TP
-\fB\-\-period\fR \fI<PERIOD>\fR
-Calendar period filter — e.g. `2026`, `2026Q1`, `2026H1`
-.TP
-\fB\-\-dry\-run\fR
-Print planned changes without writing
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

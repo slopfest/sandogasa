@@ -41,10 +41,6 @@ written.
 Keeps debcargo's own generated stanzas, placing the smoke test above
 them, so a crate's cargo tests keep running too.")]
     Autopkgtest {
-        /// Run in this package working directory.
-        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
-        repo: PathBuf,
-
         /// Built package(s) whose programs to probe (repeatable/CSV).
         #[arg(
             long,
@@ -62,6 +58,10 @@ them, so a crate's cargo tests keep running too.")]
         /// Run, but narrate each step + command first (follow along).
         #[arg(long)]
         explain: bool,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
     },
 
     /// Check packaging files instead of trusting them.
@@ -78,17 +78,9 @@ reaches a package, and whether the programs it installs actually run
 -- the second being the one a build can never do for you.
 Writes nothing. Exits non-zero when something would block a sponsor.")]
     Check {
-        /// Run in this package working directory.
-        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
-        repo: PathBuf,
-
         /// Built package(s) to check against (repeatable or CSV).
         #[arg(long, num_args = 1.., value_delimiter = ',', value_name = "DEB")]
         deb: Vec<PathBuf>,
-
-        /// Print findings as JSON.
-        #[arg(long, conflicts_with = "dry_run")]
-        json: bool,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
@@ -97,6 +89,14 @@ Writes nothing. Exits non-zero when something would block a sponsor.")]
         /// Run, but narrate each step + command first (follow along).
         #[arg(long)]
         explain: bool,
+
+        /// Print findings as JSON.
+        #[arg(long, conflicts_with = "dry_run")]
+        json: bool,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
     },
 
     /// Clone upstream's git to package it straight from its tags.
@@ -124,54 +124,64 @@ debian/ is left to you.")]
         #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
 
-        /// Upstream release to start from (default: the newest tag).
-        #[arg(long, value_name = "VERSION")]
-        upstream_version: Option<String>,
-
         /// Debian packaging branch to create.
-        #[arg(long, value_name = "BRANCH", default_value = "debian/latest")]
+        #[arg(
+            long,
+            value_name = "BRANCH",
+            default_value = "debian/latest",
+            help_heading = "Branches"
+        )]
         debian_branch: String,
 
-        /// Name for the remote holding upstream's git.
-        #[arg(long, value_name = "NAME", default_value = "upstream")]
-        upstream_remote: String,
-
         /// Start from upstream's own debian/* branch without asking.
-        #[arg(long, conflicts_with = "fresh")]
+        #[arg(long, conflicts_with = "fresh", help_heading = "Branches")]
         from_upstream_packaging: bool,
 
         /// Ignore any debian/* branch upstream carries; start at the tag.
-        #[arg(long)]
+        #[arg(long, help_heading = "Branches")]
         fresh: bool,
+
+        /// Name for the remote holding upstream's git.
+        #[arg(
+            long,
+            value_name = "NAME",
+            default_value = "upstream",
+            help_heading = "Branches"
+        )]
+        upstream_remote: String,
+
+        /// Upstream release to start from (default: the newest tag).
+        #[arg(long, value_name = "VERSION", help_heading = "Branches")]
+        upstream_version: Option<String>,
+
+        /// Register the clone with myrepos (mr config).
+        #[arg(long, help_heading = "Setup")]
+        mr: bool,
+
+        /// mrconfig to register in (default: ~/.mrconfig).
+        #[arg(long, value_name = "PATH", requires = "mr", help_heading = "Setup")]
+        mrconfig: Option<PathBuf>,
 
         /// Create the packaging project on salsa.debian.org in this
         /// namespace and add it as origin (pushing is update's job).
-        #[arg(long, value_name = "NAMESPACE")]
+        #[arg(long, value_name = "NAMESPACE", help_heading = "Setup")]
         salsa: Option<String>,
 
         /// Normalize adopted debian/ with wrap-and-sort, in its own
         /// commit (devscripts).
-        #[arg(long)]
+        #[arg(long, help_heading = "Setup")]
         wrap_and_sort: bool,
 
-        /// Register the clone with myrepos (mr config).
-        #[arg(long)]
-        mr: bool,
-
-        /// mrconfig to register in (default: ~/.mrconfig).
-        #[arg(long, value_name = "PATH", requires = "mr")]
-        mrconfig: Option<PathBuf>,
-
         /// Print the commands without running anything (a tutorial).
-        #[arg(long)]
+        #[arg(long, help_heading = "Writing")]
         dry_run: bool,
 
         /// Run, but narrate each step + command first (follow along).
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         explain: bool,
 
         /// Suppress tool output, showing it only when a step fails.
-        #[arg(short, long, conflicts_with = "explain")]
+        #[arg(short, long, conflicts_with = "explain", help_heading = "Output")]
         quiet: bool,
     },
 
@@ -182,18 +192,6 @@ debian/ is left to you.")]
     /// are not: a package built from a debcargo tree, say, which has
     /// no packaging repository for them to work in.
     DebusineRepo {
-        /// Repository owner's Debusine name (workspace r-NAME-PROJECT).
-        #[arg(long, value_name = "NAME")]
-        owner: String,
-
-        /// Project the repository serves (its suite is SUITE-PROJECT).
-        #[arg(long, value_name = "PROJECT")]
-        project: String,
-
-        /// Base Debian suite the repository publishes to.
-        #[arg(long, default_value = "sid", value_name = "SUITE")]
-        suite: String,
-
         /// Create what is missing without asking.
         #[arg(short = 'y', long)]
         assume_yes: bool,
@@ -205,6 +203,18 @@ debian/ is left to you.")]
         /// Run, but narrate each step + command first (follow along).
         #[arg(long)]
         explain: bool,
+
+        /// Repository owner's Debusine name (workspace r-NAME-PROJECT).
+        #[arg(long, value_name = "NAME")]
+        owner: String,
+
+        /// Project the repository serves (its suite is SUITE-PROJECT).
+        #[arg(long, value_name = "PROJECT")]
+        project: String,
+
+        /// Base Debian suite the repository publishes to.
+        #[arg(long, default_value = "sid", value_name = "SUITE")]
+        suite: String,
     },
 
     /// Write the DEP-3 commit template a patch is written with.
@@ -226,14 +236,6 @@ not set commit.template, which git cannot scope to one branch and
 which would then apply to packaging commits too, where DEP-3 fields
 mean nothing.")]
     Dep3Template {
-        /// Run in this package working directory.
-        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
-        repo: PathBuf,
-
-        /// Print the template instead of writing it.
-        #[arg(long)]
-        print: bool,
-
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
         dry_run: bool,
@@ -241,6 +243,14 @@ mean nothing.")]
         /// Run, but narrate each step + command first (follow along).
         #[arg(long)]
         explain: bool,
+
+        /// Print the template instead of writing it.
+        #[arg(long)]
+        print: bool,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
     },
 
     /// Fix up gbp.conf / salsa-ci.yml on existing branch(es).
@@ -248,10 +258,6 @@ mean nothing.")]
         /// Branch(es) to fix up (default: the current branch).
         #[arg(value_name = "BRANCH")]
         branches: Vec<String>,
-
-        /// Run in this package working directory.
-        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
-        repo: PathBuf,
 
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
@@ -264,6 +270,10 @@ mean nothing.")]
         /// Suppress tool output, showing it only when a step fails.
         #[arg(short, long, conflicts_with = "explain")]
         quiet: bool,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
     },
 
     /// Rebuild a Debian package across its Ubuntu/PPA branches.
@@ -282,8 +292,18 @@ upstream / pristine-tar branches are rebuilt."
         )]
         branches: Vec<String>,
 
+        /// Bulk run: include EOL Ubuntu releases (default skips them).
+        #[arg(long, help_heading = "Selection")]
+        include_eol: bool,
+
         /// Run in this package working directory.
-        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        #[arg(
+            short = 'C',
+            long,
+            default_value = ".",
+            value_name = "DIR",
+            help_heading = "Selection"
+        )]
         repo: PathBuf,
 
         /// Stages to run (repeatable or CSV).
@@ -312,26 +332,26 @@ Defaults to merge (the others are opt-in for now)."
         )]
         stage: Vec<String>,
 
-        /// Merge source branch (default: the checked-out branch).
-        #[arg(long, value_name = "BRANCH", help_heading = "Stages")]
-        source: Option<String>,
-
-        /// Git remote to push to and configure CI on (default: the
-        /// branch's own, else the only one; asks when several could).
-        #[arg(long, value_name = "NAME", help_heading = "Stages")]
-        remote: Option<String>,
+        /// Build stage: never auto-refresh the pbuilder chroot.
+        #[arg(long, help_heading = "Stages")]
+        no_refresh_chroot: bool,
 
         /// In the push stage, push but don't wait for / watch CI.
         #[arg(long, help_heading = "Stages")]
         nowait: bool,
 
         /// Build stage: force-refresh the pbuilder chroot first.
-        #[arg(long, help_heading = "Stages", conflicts_with = "no_refresh_chroot")]
+        #[arg(long, conflicts_with = "no_refresh_chroot", help_heading = "Stages")]
         refresh_chroot: bool,
 
-        /// Build stage: never auto-refresh the pbuilder chroot.
-        #[arg(long, help_heading = "Stages")]
-        no_refresh_chroot: bool,
+        /// Git remote to push to and configure CI on (default: the
+        /// branch's own, else the only one; asks when several could).
+        #[arg(long, value_name = "NAME", help_heading = "Stages")]
+        remote: Option<String>,
+
+        /// Merge source branch (default: the checked-out branch).
+        #[arg(long, value_name = "BRANCH", help_heading = "Stages")]
+        source: Option<String>,
 
         /// Changelog urgency (default medium; e.g. high for security).
         #[arg(
@@ -342,33 +362,12 @@ Defaults to merge (the others are opt-in for now)."
         )]
         urgency: String,
 
-        /// Bulk run: skip the branch-set confirmation prompt.
-        #[arg(short = 'y', long, help_heading = "Bulk (no branches given)")]
-        yes: bool,
-
-        /// Bulk run: include EOL Ubuntu releases (default skips them).
-        #[arg(long, help_heading = "Bulk (no branches given)")]
-        include_eol: bool,
-
-        /// Upload stage: target PPA (e.g. user/name; ppa: optional).
-        #[arg(
-            long,
-            value_name = "PPA",
-            help_heading = "Upload",
-            conflicts_with = "upload_target"
-        )]
-        ppa: Option<String>,
-
-        /// Upload stage: dput target host (e.g. mentors, ftp-master).
-        #[arg(long, value_name = "TARGET", help_heading = "Upload")]
-        upload_target: Option<String>,
-
         /// Upload stage: Debusine repo owner (uploads to r-NAME-<pkg>).
         #[arg(
             long,
             value_name = "NAME",
-            help_heading = "Upload",
             conflicts_with_all = ["ppa", "upload_target"],
+            help_heading = "Upload",
             long_help = "\
 Upload stage: publish to a Debusine personal repository instead of a
 dput archive. NAME is the repository owner (the r-NAME-* workspace
@@ -387,8 +386,8 @@ See wiki.debian.org/DebusineDebianNet#Repositories."
         #[arg(
             long,
             value_name = "PROJECT",
-            help_heading = "Upload",
             requires = "debusine",
+            help_heading = "Upload",
             long_help = "\
 Upload stage: the Debusine project name — the part after the owner
 in the r-NAME-PROJECT workspace and publish-to-<suite>-PROJECT
@@ -398,16 +397,33 @@ names its project here. Requires --debusine."
         )]
         debusine_project: Option<String>,
 
+        /// Upload stage: target PPA (e.g. user/name; ppa: optional).
+        #[arg(
+            long,
+            value_name = "PPA",
+            conflicts_with = "upload_target",
+            help_heading = "Upload"
+        )]
+        ppa: Option<String>,
+
+        /// Upload stage: dput target host (e.g. mentors, ftp-master).
+        #[arg(long, value_name = "TARGET", help_heading = "Upload")]
+        upload_target: Option<String>,
+
         /// Print the commands without running anything (a tutorial).
-        #[arg(long, help_heading = "Output")]
+        #[arg(long, help_heading = "Writing")]
         dry_run: bool,
+
+        /// Bulk run: skip the branch-set confirmation prompt.
+        #[arg(short = 'y', long, help_heading = "Writing")]
+        yes: bool,
 
         /// Run, but narrate each step + command first (follow along).
         #[arg(long, help_heading = "Output")]
         explain: bool,
 
         /// Suppress tool output, showing it only when a step fails.
-        #[arg(short, long, help_heading = "Output", conflicts_with = "explain")]
+        #[arg(short, long, conflicts_with = "explain", help_heading = "Output")]
         quiet: bool,
     },
 
@@ -418,7 +434,13 @@ names its project here. Requires --debusine."
         branch: Option<String>,
 
         /// Run in this package working directory.
-        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        #[arg(
+            short = 'C',
+            long,
+            default_value = ".",
+            value_name = "DIR",
+            help_heading = "Selection"
+        )]
         repo: PathBuf,
 
         /// Stages to run (repeatable or CSV).
@@ -459,6 +481,18 @@ Defaults to import."
         )]
         build_suite: String,
 
+        /// Build stage: never auto-refresh the pbuilder chroot.
+        #[arg(long, help_heading = "Stages")]
+        no_refresh_chroot: bool,
+
+        /// In the push stage, push but don't wait for / watch CI.
+        #[arg(long, help_heading = "Stages")]
+        nowait: bool,
+
+        /// Build stage: force-refresh the pbuilder chroot first.
+        #[arg(long, conflicts_with = "no_refresh_chroot", help_heading = "Stages")]
+        refresh_chroot: bool,
+
         /// Remote holding upstream's git, to merge releases from
         /// (default: one named upstream, if present).
         #[arg(long, value_name = "NAME", help_heading = "Stages")]
@@ -467,23 +501,6 @@ Defaults to import."
         /// Upstream release to merge in (default: the newest tag).
         #[arg(long, value_name = "VERSION", help_heading = "Stages")]
         upstream_version: Option<String>,
-
-        /// In the push stage, push but don't wait for / watch CI.
-        #[arg(long, help_heading = "Stages")]
-        nowait: bool,
-
-        /// Answer yes to prompts (e.g. create a missing Debusine
-        /// workspace) instead of asking.
-        #[arg(short = 'y', long)]
-        yes: bool,
-
-        /// Build stage: force-refresh the pbuilder chroot first.
-        #[arg(long, help_heading = "Stages", conflicts_with = "no_refresh_chroot")]
-        refresh_chroot: bool,
-
-        /// Build stage: never auto-refresh the pbuilder chroot.
-        #[arg(long, help_heading = "Stages")]
-        no_refresh_chroot: bool,
 
         /// Changelog urgency (default medium; e.g. high for security).
         #[arg(
@@ -494,16 +511,12 @@ Defaults to import."
         )]
         urgency: String,
 
-        /// Upload stage: dput target (default: dput's own; e.g. mentors).
-        #[arg(long, value_name = "TARGET", help_heading = "Upload")]
-        upload_target: Option<String>,
-
         /// Upload stage: Debusine repo owner (uploads to r-NAME-<pkg>).
         #[arg(
             long,
             value_name = "NAME",
-            help_heading = "Upload",
             conflicts_with = "upload_target",
+            help_heading = "Upload",
             long_help = "\
 Upload stage: publish to a Debusine personal repository instead of a
 dput archive. NAME is the repository owner (the r-NAME-* workspace
@@ -521,8 +534,8 @@ See wiki.debian.org/DebusineDebianNet#Repositories."
         #[arg(
             long,
             value_name = "PROJECT",
-            help_heading = "Upload",
             requires = "debusine",
+            help_heading = "Upload",
             long_help = "\
 Upload stage: the Debusine project name — the part after the owner
 in the r-NAME-PROJECT workspace and publish-to-sid-PROJECT
@@ -532,16 +545,25 @@ names its project here. Requires --debusine."
         )]
         debusine_project: Option<String>,
 
+        /// Upload stage: dput target (default: dput's own; e.g. mentors).
+        #[arg(long, value_name = "TARGET", help_heading = "Upload")]
+        upload_target: Option<String>,
+
         /// Print the commands without running anything (a tutorial).
-        #[arg(long, help_heading = "Output")]
+        #[arg(long, help_heading = "Writing")]
         dry_run: bool,
+
+        /// Answer yes to prompts (e.g. create a missing Debusine
+        /// workspace) instead of asking.
+        #[arg(short = 'y', long, help_heading = "Writing")]
+        yes: bool,
 
         /// Run, but narrate each step + command first (follow along).
         #[arg(long, help_heading = "Output")]
         explain: bool,
 
         /// Suppress tool output, showing it only when a step fails.
-        #[arg(short, long, help_heading = "Output", conflicts_with = "explain")]
+        #[arg(short, long, conflicts_with = "explain", help_heading = "Output")]
         quiet: bool,
     },
 
@@ -551,10 +573,6 @@ names its project here. Requires --debusine."
         #[arg(value_name = "BRANCH")]
         branch: Option<String>,
 
-        /// Run in this package working directory.
-        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
-        repo: PathBuf,
-
         /// Print the commands without running anything (a tutorial).
         #[arg(long)]
         dry_run: bool,
@@ -562,6 +580,10 @@ names its project here. Requires --debusine."
         /// Run, but narrate each step + command first (follow along).
         #[arg(long)]
         explain: bool,
+
+        /// Run in this package working directory.
+        #[arg(short = 'C', long, default_value = ".", value_name = "DIR")]
+        repo: PathBuf,
     },
 }
 

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-11-04 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH ebranch 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -16,42 +16,41 @@ Print help
 Print version
 .SH COMMANDS
 .SS ebranch check-crate
-\fBebranch check\-crate\fR [\fB\-\-from\fR] [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-include\-optional\fR] [\fB\-\-features\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-copr\fR] [\fB\-\-package\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-exclude\fR] [\fB\-\-copr\-script\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-\-refresh\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR]
+\fBebranch check\-crate\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-\-copr\fR] [\fB\-\-from\fR] [\fB\-\-package\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-include\-optional\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-refresh\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-copr\-script\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR]
 .PP
 Analyze a crates.io crate\*(Aqs dependencies
 .TP
-\fB\-\-from\fR \fI<PATH>\fR
-Render a report saved earlier with \-\-toml instead of querying crates.io and the repo again
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fINAME\fR]
+Crate name on crates.io
+.TP
+[\fIVERSION\fR]
+Crate version (default: latest)
+.SH SELECTION
 .TP
 \fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR
 Target branch (e.g. epel9, rawhide)
 .TP
-\fB\-r\fR, \fB\-\-repo\fR \fI<REPO>\fR
-Repository class for the branch (fedrq \-r)
-.TP
-\fB\-t\fR, \fB\-\-transitive\fR
-Expand missing deps transitively
-.TP
-\fB\-\-exclude\-dev\fR
-Exclude dev dependencies from transitive expansion
-.TP
-\fB\-\-include\-optional\fR
-For an application root, also count optional dependencies its default features do not enable. Library roots and every transitive crate count all features, as Fedora builds them
-.TP
-\fB\-\-features\fR \fI<FEATURE,...>\fR
-Non\-default features the Fedora build enables for an application root, as `%cargo_generate_buildrequires \-f` (CSV or repeated). Default: read from the package\*(Aqs rawhide spec when it already exists
-.TP
-\fB\-\-no\-default\-features\fR
-Build without default features (`\-n`)
-.TP
-\fB\-\-in\-tree\fR \fI<GLOB,...>\fR
-Crates built in\-tree from the root\*(Aqs own source (a workspace\*(Aqs members, e.g. `uu_*,uucore*`): hidden as dependencies, their own dependencies checked as the workspace\*(Aqs. Globs, CSV or repeated; `@repository` also takes every crate published from the root\*(Aqs repository. Merged with the config file\*(Aqs `[check\-crate.in\-tree]` entry for the crate
-.TP
 \fB\-\-copr\fR \fI<OWNER/PROJECT>\fR
 Staging COPR (`owner/project`, `@group/project`) layered over the branch: dependencies the branch lacks are looked up there too and reported as staged — built, still in flight — instead of missing. The branch picks the chroot (rawhide → fedora\-rawhide). Default: the config file\*(Aqs `[check\-crate.copr]` entry for the crate. (The build\-script generator is \-\-copr\-script.)
 .TP
+\fB\-\-from\fR \fI<PATH>\fR
+Render a report saved earlier with \-\-toml instead of querying crates.io and the repo again
+.TP
 \fB\-\-package\fR \fI<NAME>\fR
 Fedora package name when it is not `rust\-<crate>` (e.g. the `coreutils` crate is `uutils\-coreutils`): used for the spec lookup and as the report\*(Aqs package name
+.TP
+\fB\-r\fR, \fB\-\-repo\fR \fI<REPO>\fR
+Repository class for the branch (fedrq \-r)
+.SH ANALYSIS
+.TP
+\fB\-\-exclude\fR \fI<CRATE,...>\fR
+Ignore these crates entirely, direct or transitive, as dependencies Fedora will not package (CSV or repeated). Added to the config file\*(Aqs `[check\-crate] exclude`, or, when no config sets one, to the built\-in benchmark set (criterion, codspeed\-*, divan, iai, count_instructions)
+.TP
+\fB\-\-exclude\-dev\fR
+Exclude dev dependencies from transitive expansion
 .TP
 \fB\-\-exclude\-unmet\fR
 Exclude unmet\-version dependencies (packaged,
@@ -60,8 +59,27 @@ transitive expansion. They are included by
 default: omitting them silently under\-reports
 what needs (re)building.
 .TP
-\fB\-\-exclude\fR \fI<CRATE,...>\fR
-Ignore these crates entirely, direct or transitive, as dependencies Fedora will not package (CSV or repeated). Added to the config file\*(Aqs `[check\-crate] exclude`, or, when no config sets one, to the built\-in benchmark set (criterion, codspeed\-*, divan, iai, count_instructions)
+\fB\-\-features\fR \fI<FEATURE,...>\fR
+Non\-default features the Fedora build enables for an application root, as `%cargo_generate_buildrequires \-f` (CSV or repeated). Default: read from the package\*(Aqs rawhide spec when it already exists
+.TP
+\fB\-\-in\-tree\fR \fI<GLOB,...>\fR
+Crates built in\-tree from the root\*(Aqs own source (a workspace\*(Aqs members, e.g. `uu_*,uucore*`): hidden as dependencies, their own dependencies checked as the workspace\*(Aqs. Globs, CSV or repeated; `@repository` also takes every crate published from the root\*(Aqs repository. Merged with the config file\*(Aqs `[check\-crate.in\-tree]` entry for the crate
+.TP
+\fB\-\-include\-optional\fR
+For an application root, also count optional dependencies its default features do not enable. Library roots and every transitive crate count all features, as Fedora builds them
+.TP
+\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR
+Parallel fedrq queries (0 = CPUs)
+.TP
+\fB\-\-no\-default\-features\fR
+Build without default features (`\-n`)
+.TP
+\fB\-\-refresh\fR
+Clear fedrq + libdnf5 repo metadata caches before querying
+.TP
+\fB\-t\fR, \fB\-\-transitive\fR
+Expand missing deps transitively
+.SH OUTPUT
 .TP
 \fB\-\-copr\-script\fR
 Generate a shell script for Copr batch builds
@@ -84,36 +102,21 @@ Output build\-order as a Koji chain build string
 \fB\-\-toml\fR \fI<PATH>\fR
 Write analysis to a TOML file
 .TP
-\fB\-\-refresh\fR
-Clear fedrq + libdnf5 repo metadata caches before querying
-.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR
-Parallel fedrq queries (0 = CPUs)
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
-.TP
-[\fINAME\fR]
-Crate name on crates.io
-.TP
-[\fIVERSION\fR]
-Crate version (default: latest)
 .SS ebranch check-pkg-reviews
-\fBebranch check\-pkg\-reviews\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR>
+\fBebranch check\-pkg\-reviews\fR [\fB\-\-api\-key\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR>
 .PP
 Find and link Bugzilla package review requests
-.TP
-\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
-Bugzilla base URL
 .TP
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (or set BUGZILLA_API_KEY env var)
 .RS
 May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
+.TP
+\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
+Bugzilla base URL
 .TP
 \fB\-\-dry\-run\fR
 Show changes without applying them
@@ -127,9 +130,36 @@ Print help
 <\fITOML\fR>
 Path to TOML analysis file from check\-crate \-\-toml
 .SS ebranch check-update
-\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-json\fR] [\fB\-\-detailed\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-refresh\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-give\-karma\fR] [\fB\-\-comment\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-submit\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-type\fR] [\fB\-\-severity\fR] [\fB\-\-bug\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-\-rpmfusion\-dry\-run\fR] [\fB\-\-rpmfusion\-file\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR>
+\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-refresh\fR] [\fB\-\-comment\fR] [\fB\-\-give\-karma\fR] [\fB\-\-submit\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-bug\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-severity\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-type\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-rpmfusion\-dry\-run\fR] [\fB\-\-rpmfusion\-file\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-\-detailed\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR>
 .PP
 Check if an update would break reverse dependencies
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIINPUT\fR>
+The update(s) to check, each one of:
+\- a Koji side tag (f45\-build\-side\-143123)
+\- a Bodhi update alias or URL
+  (FEDORA\-EPEL\-2026\-f9eaa11e18)
+\- a COPR project: owner/project spec
+  (@rust/uutils\-and\-nushell) or its URL. COPR
+  input requires \-b (\-b epel9 also picks the
+  chroot, epel\-9\-*).
+
+Several may be given, comma\-separated or
+repeated, to carry one change across releases
+in a single run:
+
+  ebranch check\-update f45\-build\-side\-1,f44\-build\-side\-2 \-\-submit
+
+They are checked and submitted in order, and
+every input is validated before any of them is
+submitted. RPM Fusion is told once per package
+afterwards, with every update linked — which is
+why a fan\-out belongs in one run: three EPEL
+minors are one rebuild for them, not three.
+.SH SELECTION
 .TP
 \fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR
 Branch to check against (e.g. epel9).
@@ -164,26 +194,24 @@ its base (epel9 → al9 queries epel9 here);
 auto\-detected for EPEL side tags
 (epel9\-build\-side\-* uses epel9). Otherwise
 defaults to \-\-branch.
+.SH CHECK
+.TP
+\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR
+Parallel fedrq queries (0 = CPUs)
 .TP
 \fB\-\-koji\-profile\fR \fI<KOJI_PROFILE>\fR
 Koji CLI profile (e.g. cbs for CentOS)
 .TP
-\fB\-\-json\fR
-Machine\-readable JSON output
-.TP
-\fB\-\-detailed\fR
-Show full lists (every package, Provide, and
-reverse dep) instead of counts plus the
-actionable problems.
-.TP
-\fB\-v\fR, \fB\-\-verbose\fR
-Print progress to stderr
-.TP
 \fB\-\-refresh\fR
 Clear fedrq + libdnf5 repo metadata caches before querying
+.SH WRITING
 .TP
-\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR
-Parallel fedrq queries (0 = CPUs)
+\fB\-\-comment\fR \fI<COMMENT>\fR
+Reviewer notes added as a section near the top
+of the posted report (with \-\-give\-karma, or the
+review comment \-\-submit posts after creating
+the update). Prompted for interactively when
+omitted; \-\-yes skips the prompt.
 .TP
 \fB\-\-give\-karma\fR
 Cast karma on the Bodhi update. The check
@@ -202,16 +230,6 @@ auto\-voted +1 when the update delivers at least
 the requested version and \-1 otherwise; for
 other bugs you are prompted. The full plan is
 shown for confirmation before posting.
-.TP
-\fB\-\-comment\fR \fI<COMMENT>\fR
-Reviewer notes added as a section near the top
-of the posted report (with \-\-give\-karma, or the
-review comment \-\-submit posts after creating
-the update). Prompted for interactively when
-omitted; \-\-yes skips the prompt.
-.TP
-\fB\-y\fR, \fB\-\-yes\fR
-Skip vote/submit confirmations; non\-update bugs get 0
 .TP
 \fB\-\-submit\fR
 Submit the side tag as a Bodhi update once the
@@ -240,37 +258,36 @@ asked whether to submit anyway (default no).
 Non\-interactive runs and \-\-yes never submit a
 failing update.
 .TP
+\fB\-y\fR, \fB\-\-yes\fR
+Skip vote/submit confirmations; non\-update bugs get 0
+.SH UPDATE
+.TP
+\fB\-\-bug\fR \fI<ID>\fR
+Bug ID(s) to associate and close (repeated or CSV)
+.TP
+\fB\-\-disable\-autokarma\fR
+Don\*(Aqt auto\-push at the karma thresholds
+.TP
 \fB\-\-notes\fR \fI<NOTES>\fR
 Update notes/description (inline)
 .TP
 \fB\-\-notes\-file\fR \fI<PATH>\fR
 Read the update notes from a file
 .TP
-\fB\-\-type\fR \fI<TYPE>\fR [default: bugfix]
-Type: bugfix, enhancement, security, newpackage
-.TP
 \fB\-\-severity\fR \fI<LEVEL>\fR
 Update severity: unspecified (default), low,
 medium, high, or urgent. Bodhi requires a real
 severity for \-\-type security.
 .TP
-\fB\-\-bug\fR \fI<ID>\fR
-Bug ID(s) to associate and close (repeated or CSV)
-.TP
 \fB\-\-stable\-karma\fR \fI<N>\fR [default: 3]
 Karma needed to push stable (default 3)
 .TP
+\fB\-\-type\fR \fI<TYPE>\fR [default: bugfix]
+Type: bugfix, enhancement, security, newpackage
+.TP
 \fB\-\-unstable\-karma\fR \fI<N>\fR [default: \-3]
 Negative karma that unpushes (default \-3)
-.TP
-\fB\-\-disable\-autokarma\fR
-Don\*(Aqt auto\-push at the karma thresholds
-.TP
-\fB\-\-rpmfusion\-inventory\fR [\fI<PATH>\fR]
-RPM Fusion inventory (poi\-tracker sync\-rpmfusion). A package with a counterpart there never auto\-pushes. Without a path, the inventory you generated is used, or the one your packages shipped
-.TP
-\fB\-\-rpmfusion\-renames\fR \fI<PATH>\fR
-Fedora\-to\-RPM\-Fusion renames for counterparts the naming does not make guessable (configs/rpmfusion/renames.toml). Found beside the inventory when not given
+.SH "RPM FUSION"
 .TP
 \fB\-\-rpmfusion\-dry\-run\fR
 Do everything except send: show the RPM Fusion bug or comment that would be written, and where
@@ -289,47 +306,59 @@ Give every alias for the same change in one
 run, so they become one bug listing all of
 them, exactly as a batch of side tags would.
 .TP
+\fB\-\-rpmfusion\-inventory\fR [\fI<PATH>\fR]
+RPM Fusion inventory (poi\-tracker sync\-rpmfusion). A package with a counterpart there never auto\-pushes. Without a path, the inventory you generated is used, or the one your packages shipped
+.TP
+\fB\-\-rpmfusion\-renames\fR \fI<PATH>\fR
+Fedora\-to\-RPM\-Fusion renames for counterparts the naming does not make guessable (configs/rpmfusion/renames.toml). Found beside the inventory when not given
+.SH OUTPUT
+.TP
+\fB\-\-detailed\fR
+Show full lists (every package, Provide, and
+reverse dep) instead of counts plus the
+actionable problems.
+.TP
+\fB\-\-json\fR
+Machine\-readable JSON output
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.SS ebranch check-wip
+\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-package\fR] [\fB\-\-side\-tag\fR] [\fB\-\-target\fR] [\fB\-\-add\fR] [\fB\-\-forget\fR] [\fB\-\-no\-offline\fR] [\fB\-\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-set\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR>
+.PP
+Track packages on their way into the distro
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIINPUT\fR>
-The update(s) to check, each one of:
-\- a Koji side tag (f45\-build\-side\-143123)
-\- a Bodhi update alias or URL
-  (FEDORA\-EPEL\-2026\-f9eaa11e18)
-\- a COPR project: owner/project spec
-  (@rust/uutils\-and\-nushell) or its URL. COPR
-  input requires \-b (\-b epel9 also picks the
-  chroot, epel\-9\-*).
-
-Several may be given, comma\-separated or
-repeated, to carry one change across releases
-in a single run:
-
-  ebranch check\-update f45\-build\-side\-1,f44\-build\-side\-2 \-\-submit
-
-They are checked and submitted in order, and
-every input is validated before any of them is
-submitted. RPM Fusion is told once per package
-afterwards, with every update linked — which is
-why a fan\-out belongs in one run: three EPEL
-minors are one rebuild for them, not three.
-.SS ebranch check-wip
-\fBebranch check\-wip\fR [\fB\-\-copr\fR] [\fB\-\-target\fR] [\fB\-\-offline\fR] [\fB\-\-no\-offline\fR] [\fB\-\-prune\fR] [\fB\-\-rescan\-reviews\fR] [\fB\-\-side\-tag\fR] [\fB\-\-add\fR] [\fB\-\-forget\fR] [\fB\-\-set\fR] [\fB\-\-package\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILEDGER\fR>
-.PP
-Track packages on their way into the distro
+<\fILEDGER\fR>
+Ledger file tracking the effort (created if absent)
+.SH SELECTION
 .TP
 \fB\-\-copr\fR \fI<COPR>\fR
 COPR staging it (owner/project or URL)
 .TP
+\fB\-\-package\fR \fI<NAME,...>\fR
+Limit to these packages (repeated or CSV)
+.TP
+\fB\-\-side\-tag\fR \fI<TAG,...>\fR
+Koji side tags built into (repeated or CSV)
+.TP
 \fB\-\-target\fR \fI<BRANCH,...>\fR
 Releases targeted (repeated or CSV)
+.SH LEDGER
 .TP
-\fB\-\-offline\fR
-Report from the ledger, contacting nothing
+\fB\-\-add\fR \fI<NAME,...>\fR
+Track packages no COPR staged (repeated or CSV)
+.TP
+\fB\-\-forget\fR \fI<NAME,...>\fR
+Drop packages and stop tracking them (repeated or CSV)
 .TP
 \fB\-\-no\-offline\fR
 Refresh, overriding a config default
+.TP
+\fB\-\-offline\fR
+Report from the ledger, contacting nothing
 .TP
 \fB\-\-prune\fR [\fI<WHAT>...\fR]
 Forget what is gone: packages (default), side\-tags
@@ -347,45 +376,47 @@ side\-tags: Side tags Koji says no longer exist
 \fB\-\-rescan\-reviews\fR
 Search for review requests again
 .TP
-\fB\-\-side\-tag\fR \fI<TAG,...>\fR
-Koji side tags built into (repeated or CSV)
-.TP
-\fB\-\-add\fR \fI<NAME,...>\fR
-Track packages no COPR staged (repeated or CSV)
-.TP
-\fB\-\-forget\fR \fI<NAME,...>\fR
-Drop packages and stop tracking them (repeated or CSV)
-.TP
 \fB\-\-set\fR \fI<PKG=ROUTE>\fR
 Set a route: review:BUG, pr:ID, or direct
-.TP
-\fB\-\-package\fR \fI<NAME,...>\fR
-Limit to these packages (repeated or CSV)
+.SH OUTPUT
 .TP
 \fB\-\-json\fR
 Machine\-readable JSON output
+.SS ebranch close
+\fBebranch close\fR [\fB\-\-api\-key\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-base\-branch\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-claim\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
+.PP
+Close branch requests whose package has landed
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fILEDGER\fR>
-Ledger file tracking the effort (created if absent)
-.SS ebranch close
-\fBebranch close\fR [\fB\-\-claim\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
-.PP
-Close branch requests whose package has landed
+<\fITOML\fR>
+check\-crate or resolve report TOML with recorded branch requests
 .TP
-\fB\-\-claim\fR
-Also take the bugs being closed (assigned_to = your Bugzilla account), without asking
-.TP
-\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
-Bugzilla base URL
+<\fIBRANCH\fR>
+EPEL branch to request (e.g. epel9, epel10)
+.SH BUGZILLA
 .TP
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
 .RS
 May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
+.TP
+\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
+Bugzilla base URL
+.SH REQUEST
+.TP
+\fB\-\-base\-branch\fR \fI<BRANCH>\fR
+Base\-distro branch behind the EPEL branch,
+checked before filing: a package present in
+the base distro is skipped (EPEL must not
+replace it; the request would be CANTFIX).
+
+Inferred from the branch: epel10 uses c10s,
+epel9 uses al9. Pass this to override the
+mapping or to enable the check for branches
+it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-\-fas\fR [\fI<FAS>\fR]
 Volunteer as co\-maintainer of the package.
@@ -402,17 +433,7 @@ with \-\-:
 .TP
 \fB\-\-sig\fR \fI<SIG>\fR
 Packaging SIG to offer as co\-maintainer (requires \-\-fas)
-.TP
-\fB\-\-base\-branch\fR \fI<BRANCH>\fR
-Base\-distro branch behind the EPEL branch,
-checked before filing: a package present in
-the base distro is skipped (EPEL must not
-replace it; the request would be CANTFIX).
-
-Inferred from the branch: epel10 uses c10s,
-epel9 uses al9. Pass this to override the
-mapping or to enable the check for branches
-it can\*(Aqt infer (e.g. epel8).
+.SH WRITING
 .TP
 \fB\-\-dry\-run\fR
 Show what would happen without contacting Bugzilla
@@ -420,17 +441,12 @@ Show what would happen without contacting Bugzilla
 \fB\-y\fR, \fB\-\-yes\fR
 File releng tickets without confirming each one
 .TP
+\fB\-\-claim\fR
+Also take the bugs being closed (assigned_to = your Bugzilla account), without asking
+.SH OUTPUT
+.TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
-.TP
-<\fITOML\fR>
-check\-crate or resolve report TOML with recorded branch requests
-.TP
-<\fIBRANCH\fR>
-EPEL branch to request (e.g. epel9, epel10)
 .SS ebranch config
 \fBebranch config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
@@ -442,12 +458,9 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS ebranch copr-prune
-\fBebranch copr\-prune\fR [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICOPR\fR>
+\fBebranch copr\-prune\fR [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICOPR\fR>
 .PP
 Prune a staging COPR of what its target releases caught up on
-.TP
-\fB\-y\fR, \fB\-\-yes\fR
-Delete every caught\-up package without asking
 .TP
 \fB\-\-json\fR
 Print the plan as JSON (never deletes)
@@ -455,60 +468,18 @@ Print the plan as JSON (never deletes)
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
 .TP
+\fB\-y\fR, \fB\-\-yes\fR
+Delete every caught\-up package without asking
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
 <\fICOPR\fR>
 COPR project: owner/project, @group/project, or its URL
 .SS ebranch escalate
-\fBebranch escalate\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
+\fBebranch escalate\fR [\fB\-\-api\-key\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-base\-branch\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
 .PP
 Escalate (needinfo) stale branch requests in a report
-.TP
-\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
-Bugzilla base URL
-.TP
-\fB\-\-api\-key\fR \fI<API_KEY>\fR
-Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
-.RS
-May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
-.RE
-.TP
-\fB\-\-fas\fR [\fI<FAS>\fR]
-Volunteer as co\-maintainer of the package.
-
-  (omitted)     file without volunteering
-  \-\-fas         the FAS from `ebranch config`
-  \-\-fas NAME    that FAS
-
-A bare \-\-fas takes the next word as the name,
-so put it last or separate the positionals
-with \-\-:
-
-  ebranch file\-requests \-\-fas \-\- pkgs.toml epel10
-.TP
-\fB\-\-sig\fR \fI<SIG>\fR
-Packaging SIG to offer as co\-maintainer (requires \-\-fas)
-.TP
-\fB\-\-base\-branch\fR \fI<BRANCH>\fR
-Base\-distro branch behind the EPEL branch,
-checked before filing: a package present in
-the base distro is skipped (EPEL must not
-replace it; the request would be CANTFIX).
-
-Inferred from the branch: epel10 uses c10s,
-epel9 uses al9. Pass this to override the
-mapping or to enable the check for branches
-it can\*(Aqt infer (e.g. epel8).
-.TP
-\fB\-\-dry\-run\fR
-Show what would happen without contacting Bugzilla
-.TP
-\fB\-y\fR, \fB\-\-yes\fR
-File releng tickets without confirming each one
-.TP
-\fB\-v\fR, \fB\-\-verbose\fR
-Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -518,19 +489,28 @@ check\-crate or resolve report TOML with recorded branch requests
 .TP
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
-.SS ebranch file-request
-\fBebranch file\-request\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-toml\fR] [\fB\-\-from\-commit\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR>
-.PP
-File a branch request for one package
-.TP
-\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
-Bugzilla base URL
+.SH BUGZILLA
 .TP
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
 .RS
 May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
+.TP
+\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
+Bugzilla base URL
+.SH REQUEST
+.TP
+\fB\-\-base\-branch\fR \fI<BRANCH>\fR
+Base\-distro branch behind the EPEL branch,
+checked before filing: a package present in
+the base distro is skipped (EPEL must not
+replace it; the request would be CANTFIX).
+
+Inferred from the branch: epel10 uses c10s,
+epel9 uses al9. Pass this to override the
+mapping or to enable the check for branches
+it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-\-fas\fR [\fI<FAS>\fR]
 Volunteer as co\-maintainer of the package.
@@ -547,38 +527,21 @@ with \-\-:
 .TP
 \fB\-\-sig\fR \fI<SIG>\fR
 Packaging SIG to offer as co\-maintainer (requires \-\-fas)
-.TP
-\fB\-\-base\-branch\fR \fI<BRANCH>\fR
-Base\-distro branch behind the EPEL branch,
-checked before filing: a package present in
-the base distro is skipped (EPEL must not
-replace it; the request would be CANTFIX).
-
-Inferred from the branch: epel10 uses c10s,
-epel9 uses al9. Pass this to override the
-mapping or to enable the check for branches
-it can\*(Aqt infer (e.g. epel8).
+.SH WRITING
 .TP
 \fB\-\-dry\-run\fR
 Show what would happen without contacting Bugzilla
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 File releng tickets without confirming each one
+.SH OUTPUT
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-\-blocked\fR \fI<BLOCKED>\fR
-CSV of bugs/aliases this request blocks
-.TP
-\fB\-\-dependson\fR \fI<DEPENDSON>\fR
-CSV of bugs/aliases this request depends on
-.TP
-\fB\-\-toml\fR \fI<TOML>\fR
-check\-crate or resolve report TOML to record the new bug ID in
-.TP
-\fB\-\-from\-commit\fR \fI<HASH>\fR
-Ask for the build from this dist\-git commit, for when the tip of rawhide does not build for the branch but an older commit does. Checked against dist\-git before filing
+.SS ebranch file-request
+\fBebranch file\-request\fR [\fB\-\-api\-key\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-base\-branch\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-\-dependson\fR] [\fB\-\-from\-commit\fR] [\fB\-\-toml\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIPACKAGE\fR> <\fIBRANCH\fR>
+.PP
+File a branch request for one package
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -588,19 +551,28 @@ Source package to request a branch for
 .TP
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
-.SS ebranch file-requests
-\fBebranch file\-requests\fR [\fB\-\-bugzilla\-url\fR] [\fB\-\-api\-key\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-base\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
-.PP
-File branch requests for all missing packages in a report
-.TP
-\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
-Bugzilla base URL
+.SH BUGZILLA
 .TP
 \fB\-\-api\-key\fR \fI<API_KEY>\fR
 Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
 .RS
 May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
 .RE
+.TP
+\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
+Bugzilla base URL
+.SH REQUEST
+.TP
+\fB\-\-base\-branch\fR \fI<BRANCH>\fR
+Base\-distro branch behind the EPEL branch,
+checked before filing: a package present in
+the base distro is skipped (EPEL must not
+replace it; the request would be CANTFIX).
+
+Inferred from the branch: epel10 uses c10s,
+epel9 uses al9. Pass this to override the
+mapping or to enable the check for branches
+it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-\-fas\fR [\fI<FAS>\fR]
 Volunteer as co\-maintainer of the package.
@@ -618,25 +590,32 @@ with \-\-:
 \fB\-\-sig\fR \fI<SIG>\fR
 Packaging SIG to offer as co\-maintainer (requires \-\-fas)
 .TP
-\fB\-\-base\-branch\fR \fI<BRANCH>\fR
-Base\-distro branch behind the EPEL branch,
-checked before filing: a package present in
-the base distro is skipped (EPEL must not
-replace it; the request would be CANTFIX).
-
-Inferred from the branch: epel10 uses c10s,
-epel9 uses al9. Pass this to override the
-mapping or to enable the check for branches
-it can\*(Aqt infer (e.g. epel8).
+\fB\-\-blocked\fR \fI<BLOCKED>\fR
+CSV of bugs/aliases this request blocks
+.TP
+\fB\-\-dependson\fR \fI<DEPENDSON>\fR
+CSV of bugs/aliases this request depends on
+.TP
+\fB\-\-from\-commit\fR \fI<HASH>\fR
+Ask for the build from this dist\-git commit, for when the tip of rawhide does not build for the branch but an older commit does. Checked against dist\-git before filing
+.SH WRITING
 .TP
 \fB\-\-dry\-run\fR
 Show what would happen without contacting Bugzilla
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 File releng tickets without confirming each one
+.SH OUTPUT
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.TP
+\fB\-\-toml\fR \fI<TOML>\fR
+check\-crate or resolve report TOML to record the new bug ID in
+.SS ebranch file-requests
+\fBebranch file\-requests\fR [\fB\-\-api\-key\fR] [\fB\-\-bugzilla\-url\fR] [\fB\-\-base\-branch\fR] [\fB\-\-fas\fR] [\fB\-\-sig\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-\-blocked\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITOML\fR> <\fIBRANCH\fR>
+.PP
+File branch requests for all missing packages in a report
 .TP
 \fB\-\-blocked\fR \fI<BLOCKED>\fR
 CSV of bugs/aliases each filed request blocks
@@ -649,10 +628,79 @@ check\-crate or resolve report TOML listing the missing packages
 .TP
 <\fIBRANCH\fR>
 EPEL branch to request (e.g. epel9, epel10)
+.SH BUGZILLA
+.TP
+\fB\-\-api\-key\fR \fI<API_KEY>\fR
+Bugzilla API key (defaults to BUGZILLA_API_KEY env var or the key from `ebranch config`)
+.RS
+May also be specified with the \fBBUGZILLA_API_KEY\fR environment variable.
+.RE
+.TP
+\fB\-\-bugzilla\-url\fR \fI<BUGZILLA_URL>\fR [default: https://bugzilla.redhat.com]
+Bugzilla base URL
+.SH REQUEST
+.TP
+\fB\-\-base\-branch\fR \fI<BRANCH>\fR
+Base\-distro branch behind the EPEL branch,
+checked before filing: a package present in
+the base distro is skipped (EPEL must not
+replace it; the request would be CANTFIX).
+
+Inferred from the branch: epel10 uses c10s,
+epel9 uses al9. Pass this to override the
+mapping or to enable the check for branches
+it can\*(Aqt infer (e.g. epel8).
+.TP
+\fB\-\-fas\fR [\fI<FAS>\fR]
+Volunteer as co\-maintainer of the package.
+
+  (omitted)     file without volunteering
+  \-\-fas         the FAS from `ebranch config`
+  \-\-fas NAME    that FAS
+
+A bare \-\-fas takes the next word as the name,
+so put it last or separate the positionals
+with \-\-:
+
+  ebranch file\-requests \-\-fas \-\- pkgs.toml epel10
+.TP
+\fB\-\-sig\fR \fI<SIG>\fR
+Packaging SIG to offer as co\-maintainer (requires \-\-fas)
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Show what would happen without contacting Bugzilla
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+File releng tickets without confirming each one
+.SH OUTPUT
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
 .SS ebranch find-cycles
-\fBebranch find\-cycles\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-\-local\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
+\fBebranch find\-cycles\fR [\fB\-\-base\-branch\fR] [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-graph\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-local\-repo\fR] [\fB\-\-max\-depth\fR] [\fB\-\-override\fR] [\fB\-\-refresh\fR] [\fB\-\-copr\-script\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-report\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
 .PP
 Detect dependency cycles in the build graph
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fIPACKAGES\fR]
+Source RPM names to analyze
+.SH SELECTION
+.TP
+\fB\-\-base\-branch\fR \fI<BRANCH>\fR
+Base\-distro branch behind the target, probed to
+detect deps whose provider exists in the base
+at a too\-old version (EPEL must not replace
+base packages).
+
+Inferred for EPEL targets: epel10 uses c10s,
+epel9 uses al9 (fedrq\*(Aqs c9s layers epel9 +
+epel9\-next, and UBI is incomplete, so AlmaLinux
+stands in for RHEL 9). Pass this to override
+the mapping or to enable the guard for targets
+it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-s\fR, \fB\-\-source\fR \fI<SOURCE>\fR
 Branch to take packages from (e.g. rawhide)
@@ -665,24 +713,7 @@ Branch to port packages to (e.g. epel10)
 .TP
 \fB\-\-target\-repo\fR \fI<REPO>\fR
 Repository class for the target branch (fedrq \-r)
-.TP
-\fB\-\-json\fR
-Output as JSON instead of human\-readable text
-.TP
-\fB\-\-report\fR \fI<FILE>\fR
-Write a TOML report (package list + dependency edges) for the branch\-request subcommands to consume
-.TP
-\fB\-\-koji\fR
-Output build\-order as a Koji chain build string
-.TP
-\fB\-\-copr\-script\fR
-Generate a shell script for Copr batch builds
-(check\-crate\*(Aqs \-\-copr names the staging COPR a
-check reads from).
-
-The script accepts the Copr repo as its first
-argument, followed by any extra flags to pass
-to copr build\-package.
+.SH RESOLUTION
 .TP
 \fB\-\-check\-install\fR
 Check that subpackages are installable.
@@ -715,6 +746,18 @@ older releases is expected.
 
 May be passed multiple times.
 .TP
+\fB\-\-graph\fR \fI<PATH>\fR
+Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
+.TP
+\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR [default: 0]
+Number of parallel fedrq queries (0 = CPUs)
+.TP
+\fB\-\-local\-repo\fR \fI<DIR>\fR
+Local mock results (a mock \-\-chain \-\-localrepo directory, with repodata) for packages no release builds as\-is for the target: those built there take their BuildRequires from their SRPM, and dependencies their binaries provide resolve to them
+.TP
+\fB\-\-max\-depth\fR \fI<MAX_DEPTH>\fR [default: 0]
+Max recursion depth (0 = unlimited)
+.TP
 \fB\-\-override\fR \fI<PKG,...>\fR
 Base\-distro packages to treat as deliberate
 overrides (alternate, non\-conflicting EPEL
@@ -733,49 +776,34 @@ review, not a branch request.
 
 May be passed multiple times.
 .TP
-\fB\-\-base\-branch\fR \fI<BRANCH>\fR
-Base\-distro branch behind the target, probed to
-detect deps whose provider exists in the base
-at a too\-old version (EPEL must not replace
-base packages).
-
-Inferred for EPEL targets: epel10 uses c10s,
-epel9 uses al9 (fedrq\*(Aqs c9s layers epel9 +
-epel9\-next, and UBI is incomplete, so AlmaLinux
-stands in for RHEL 9). Pass this to override
-the mapping or to enable the guard for targets
-it can\*(Aqt infer (e.g. epel8).
+\fB\-\-refresh\fR
+Clear fedrq + libdnf5 repo metadata caches before querying
+.SH OUTPUT
 .TP
-\fB\-\-max\-depth\fR \fI<MAX_DEPTH>\fR [default: 0]
-Max recursion depth (0 = unlimited)
+\fB\-\-copr\-script\fR
+Generate a shell script for Copr batch builds
+(check\-crate\*(Aqs \-\-copr names the staging COPR a
+check reads from).
+
+The script accepts the Copr repo as its first
+argument, followed by any extra flags to pass
+to copr build\-package.
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable text
+.TP
+\fB\-\-koji\fR
+Output build\-order as a Koji chain build string
+.TP
+\fB\-\-report\fR \fI<FILE>\fR
+Write a TOML report (package list + dependency edges) for the branch\-request subcommands to consume
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR [default: 0]
-Number of parallel fedrq queries (0 = CPUs)
-.TP
-\fB\-\-refresh\fR
-Clear fedrq + libdnf5 repo metadata caches before querying
-.TP
-\fB\-\-graph\fR \fI<PATH>\fR
-Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
-.TP
-\fB\-\-local\-repo\fR \fI<DIR>\fR
-Local mock results (a mock \-\-chain \-\-localrepo directory, with repodata) for packages no release builds as\-is for the target: those built there take their BuildRequires from their SRPM, and dependencies their binaries provide resolve to them
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
-.TP
-[\fIPACKAGES\fR]
-Source RPM names to analyze
 .SS ebranch prune-cache
-\fBebranch prune\-cache\fR [\fB\-\-older\-than\fR] [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBebranch prune\-cache\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-\-older\-than\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Remove cached data ebranch has not used for a while
-.TP
-\fB\-\-older\-than\fR \fI<DAYS>\fR
-Remove entries unused for more than DAYS, instead of each cache\*(Aqs own age
 .TP
 \fB\-\-dry\-run\fR
 Report what would be removed, and remove nothing
@@ -783,10 +811,13 @@ Report what would be removed, and remove nothing
 \fB\-\-json\fR
 Print the report as JSON
 .TP
+\fB\-\-older\-than\fR \fI<DAYS>\fR
+Remove entries unused for more than DAYS, instead of each cache\*(Aqs own age
+.TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS ebranch rebuild-plan
-\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-pr\-author\fR] [\fB\-\-contacts\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
+\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-contacts\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-pr\-author\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
 .PP
 Plan the rebuilds a library\*(Aqs SONAME bump calls for.
 .PP
@@ -834,42 +865,65 @@ superseded are left out. Builds whose
 buildroot had another version of the library than their directory
 claims are flagged first.
 .TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fILIBRARY\fR>
+The library\*(Aqs source package (e.g. libical)
+.SH SELECTION
+.TP
 \fB\-b\fR, \fB\-\-branch\fR \fI<BRANCH>\fR [default: rawhide]
 Branch the library is bumped on
 .TP
 \fB\-s\fR, \fB\-\-side\-tag\fR \fI<SIDE_TAG>\fR
 Side tag the rebuilds go into, to show what is done
-.TP
-\fB\-\-pr\-author\fR \fI<FAS>\fR
-CSV of dist\-git accounts whose pull requests carry the fixes (the change owners); lists them per package, with CI results
-.TP
-\fB\-\-contacts\fR
-For each package left to rebuild, who to contact: its \-maintainers alias, groups with commit access and their Matrix rooms, and its version\-release
-.TP
-\fB\-\-sidetag\-results\fR \fI<DIR>\fR
-Local mock results built with the side tag: one directory per build, named by NVR, with a success or fail marker. Read only
+.SH PLAN
 .TP
 \fB\-\-baseline\-results\fR \fI<DIR>\fR
 Local mock results built against the branch as it is, to tell failures the new library causes from older ones
 .TP
+\fB\-\-contacts\fR
+For each package left to rebuild, who to contact: its \-maintainers alias, groups with commit access and their Matrix rooms, and its version\-release
+.TP
 \fB\-\-distgit\-dir\fR \fI<DIR>\fR
 Existing dist\-git checkouts, one per package (DIR/<package>), to clone from instead of downloading every object again. Read only
+.TP
+\fB\-\-pr\-author\fR \fI<FAS>\fR
+CSV of dist\-git accounts whose pull requests carry the fixes (the change owners); lists them per package, with CI results
+.TP
+\fB\-\-sidetag\-results\fR \fI<DIR>\fR
+Local mock results built with the side tag: one directory per build, named by NVR, with a success or fail marker. Read only
+.SH OUTPUT
 .TP
 \fB\-\-json\fR
 Print the plan as JSON
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.SS ebranch resolve
+\fBebranch resolve\fR [\fB\-\-base\-branch\fR] [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-graph\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-local\-repo\fR] [\fB\-\-max\-depth\fR] [\fB\-\-override\fR] [\fB\-\-refresh\fR] [\fB\-\-copr\-script\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-report\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
+.PP
+Resolve the full dependency closure for porting
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fILIBRARY\fR>
-The library\*(Aqs source package (e.g. libical)
-.SS ebranch resolve
-\fBebranch resolve\fR [\fB\-s\fR|\fB\-\-source\fR] [\fB\-\-source\-repo\fR] [\fB\-t\fR|\fB\-\-target\fR] [\fB\-\-target\-repo\fR] [\fB\-\-json\fR] [\fB\-\-report\fR] [\fB\-\-koji\fR] [\fB\-\-copr\-script\fR] [\fB\-\-check\-install\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-install\fR] [\fB\-\-override\fR] [\fB\-\-base\-branch\fR] [\fB\-\-max\-depth\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-refresh\fR] [\fB\-\-graph\fR] [\fB\-\-local\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGES\fR]
-.PP
-Resolve the full dependency closure for porting
+[\fIPACKAGES\fR]
+Source RPM names to analyze
+.SH SELECTION
+.TP
+\fB\-\-base\-branch\fR \fI<BRANCH>\fR
+Base\-distro branch behind the target, probed to
+detect deps whose provider exists in the base
+at a too\-old version (EPEL must not replace
+base packages).
+
+Inferred for EPEL targets: epel10 uses c10s,
+epel9 uses al9 (fedrq\*(Aqs c9s layers epel9 +
+epel9\-next, and UBI is incomplete, so AlmaLinux
+stands in for RHEL 9). Pass this to override
+the mapping or to enable the guard for targets
+it can\*(Aqt infer (e.g. epel8).
 .TP
 \fB\-s\fR, \fB\-\-source\fR \fI<SOURCE>\fR
 Branch to take packages from (e.g. rawhide)
@@ -882,24 +936,7 @@ Branch to port packages to (e.g. epel10)
 .TP
 \fB\-\-target\-repo\fR \fI<REPO>\fR
 Repository class for the target branch (fedrq \-r)
-.TP
-\fB\-\-json\fR
-Output as JSON instead of human\-readable text
-.TP
-\fB\-\-report\fR \fI<FILE>\fR
-Write a TOML report (package list + dependency edges) for the branch\-request subcommands to consume
-.TP
-\fB\-\-koji\fR
-Output build\-order as a Koji chain build string
-.TP
-\fB\-\-copr\-script\fR
-Generate a shell script for Copr batch builds
-(check\-crate\*(Aqs \-\-copr names the staging COPR a
-check reads from).
-
-The script accepts the Copr repo as its first
-argument, followed by any extra flags to pass
-to copr build\-package.
+.SH RESOLUTION
 .TP
 \fB\-\-check\-install\fR
 Check that subpackages are installable.
@@ -932,6 +969,18 @@ older releases is expected.
 
 May be passed multiple times.
 .TP
+\fB\-\-graph\fR \fI<PATH>\fR
+Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
+.TP
+\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR [default: 0]
+Number of parallel fedrq queries (0 = CPUs)
+.TP
+\fB\-\-local\-repo\fR \fI<DIR>\fR
+Local mock results (a mock \-\-chain \-\-localrepo directory, with repodata) for packages no release builds as\-is for the target: those built there take their BuildRequires from their SRPM, and dependencies their binaries provide resolve to them
+.TP
+\fB\-\-max\-depth\fR \fI<MAX_DEPTH>\fR [default: 0]
+Max recursion depth (0 = unlimited)
+.TP
 \fB\-\-override\fR \fI<PKG,...>\fR
 Base\-distro packages to treat as deliberate
 overrides (alternate, non\-conflicting EPEL
@@ -950,39 +999,27 @@ review, not a branch request.
 
 May be passed multiple times.
 .TP
-\fB\-\-base\-branch\fR \fI<BRANCH>\fR
-Base\-distro branch behind the target, probed to
-detect deps whose provider exists in the base
-at a too\-old version (EPEL must not replace
-base packages).
-
-Inferred for EPEL targets: epel10 uses c10s,
-epel9 uses al9 (fedrq\*(Aqs c9s layers epel9 +
-epel9\-next, and UBI is incomplete, so AlmaLinux
-stands in for RHEL 9). Pass this to override
-the mapping or to enable the guard for targets
-it can\*(Aqt infer (e.g. epel8).
+\fB\-\-refresh\fR
+Clear fedrq + libdnf5 repo metadata caches before querying
+.SH OUTPUT
 .TP
-\fB\-\-max\-depth\fR \fI<MAX_DEPTH>\fR [default: 0]
-Max recursion depth (0 = unlimited)
+\fB\-\-copr\-script\fR
+Generate a shell script for Copr batch builds
+(check\-crate\*(Aqs \-\-copr names the staging COPR a
+check reads from).
+
+The script accepts the Copr repo as its first
+argument, followed by any extra flags to pass
+to copr build\-package.
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable text
+.TP
+\fB\-\-koji\fR
+Output build\-order as a Koji chain build string
+.TP
+\fB\-\-report\fR \fI<FILE>\fR
+Write a TOML report (package list + dependency edges) for the branch\-request subcommands to consume
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
-.TP
-\fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR [default: 0]
-Number of parallel fedrq queries (0 = CPUs)
-.TP
-\fB\-\-refresh\fR
-Clear fedrq + libdnf5 repo metadata caches before querying
-.TP
-\fB\-\-graph\fR \fI<PATH>\fR
-Saved dependency graph of the source branch (a `poi\-tracker deps` graph JSON): source\-side lookups it can answer are served offline; only the frontier, the target and the base go to fedrq
-.TP
-\fB\-\-local\-repo\fR \fI<DIR>\fR
-Local mock results (a mock \-\-chain \-\-localrepo directory, with repodata) for packages no release builds as\-is for the target: those built there take their BuildRequires from their SRPM, and dependencies their binaries provide resolve to them
-.TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
-.TP
-[\fIPACKAGES\fR]
-Source RPM names to analyze

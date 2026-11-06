@@ -62,6 +62,22 @@ Valid names:
         )]
         distros: Option<String>,
 
+        /// File a GitLab issue if outdated.
+        #[arg(long, num_args = 0..=1, default_missing_value = "",
+            value_name = "URL", long_help = "\
+File or update a GitLab issue if the package is
+outdated. Searches for an open issue labeled
+rfe::new-version and updates its title, or creates
+a new one. Defaults to
+https://gitlab.com/CentOS/Hyperscale/rpms/PKG.
+Uses the token from 'hs-relmon config', or
+GITLAB_TOKEN env var as an override.")]
+        file_issue: Option<String>,
+
+        /// Output as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+
         /// Override Repology project name.
         #[arg(
             long,
@@ -87,22 +103,6 @@ Valid names:
   centos-stream    Latest CentOS Stream"
         )]
         track: String,
-
-        /// Output as JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-
-        /// File a GitLab issue if outdated.
-        #[arg(long, num_args = 0..=1, default_missing_value = "",
-            value_name = "URL", long_help = "\
-File or update a GitLab issue if the package is
-outdated. Searches for an open issue labeled
-rfe::new-version and updates its title, or creates
-a new one. Defaults to
-https://gitlab.com/CentOS/Hyperscale/rpms/PKG.
-Uses the token from 'hs-relmon config', or
-GITLAB_TOKEN env var as an override.")]
-        file_issue: Option<String>,
     },
 
     /// Check all packages listed in a manifest file.
@@ -110,9 +110,17 @@ GITLAB_TOKEN env var as an override.")]
         /// Path to the TOML manifest file.
         manifest: PathBuf,
 
-        /// Output as JSON instead of tables.
-        #[arg(long)]
-        json: bool,
+        /// Only show packages whose issue is assigned to this user.
+        #[arg(
+            long,
+            value_name = "USERNAME",
+            long_help = "\
+Only show packages whose GitLab issue is assigned
+to this username. Use \"none\" to match unassigned
+issues. Packages without an issue or without a
+matching assignee are excluded."
+        )]
+        issue_assignee: Option<String>,
 
         /// Only show packages whose issue matches this status.
         #[arg(
@@ -131,17 +139,9 @@ Default statuses:
         )]
         issue_status: Option<String>,
 
-        /// Only show packages whose issue is assigned to this user.
-        #[arg(
-            long,
-            value_name = "USERNAME",
-            long_help = "\
-Only show packages whose GitLab issue is assigned
-to this username. Use \"none\" to match unassigned
-issues. Packages without an issue or without a
-matching assignee are excluded."
-        )]
-        issue_assignee: Option<String>,
+        /// Output as JSON instead of tables.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Check every manifest package's GitLab repo against the SIG's
@@ -151,30 +151,30 @@ matching assignee are excluded."
         /// Path to the TOML manifest file.
         manifest: PathBuf,
 
-        /// Comma-separated packages to check (default: all).
-        #[arg(long, value_name = "LIST")]
-        package: Option<String>,
-
-        /// GitLab group the packages' repos live under.
-        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
-        gitlab_group: String,
-
         /// Set what differs, asking per repo (`a` for the rest, `q`
         /// to stop).
         #[arg(long)]
         apply: bool,
 
-        /// Apply to every repo without asking.
-        #[arg(short, long)]
-        yes: bool,
+        /// GitLab group the packages' repos live under.
+        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
+        gitlab_group: String,
 
         /// Output as JSON instead of human-readable.
         #[arg(long)]
         json: bool,
 
+        /// Comma-separated packages to check (default: all).
+        #[arg(long, value_name = "LIST")]
+        package: Option<String>,
+
         /// Print progress to stderr.
         #[arg(short, long)]
         verbose: bool,
+
+        /// Apply to every repo without asking.
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Compare every manifest package's Hyperscale builds against
@@ -183,6 +183,20 @@ matching assignee are excluded."
     CheckStock {
         /// Path to the TOML manifest file.
         manifest: PathBuf,
+
+        /// Colorize the verdicts, as `ls --color`: `--color` alone
+        /// is `always`; `auto` (the default) colors a TTY unless
+        /// NO_COLOR is set; `never`.
+        #[arg(
+            long,
+            value_enum,
+            value_name = "WHEN",
+            default_value_t = sandogasa_cli::style::ColorChoice::Auto,
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "always"
+        )]
+        color: sandogasa_cli::style::ColorChoice,
 
         /// Comma-separated Hyperscale repositories to judge by.
         #[arg(
@@ -201,20 +215,6 @@ stock. The repository is the segment between
         #[arg(long, value_name = "LIST")]
         skip: Option<String>,
 
-        /// Colorize the verdicts, as `ls --color`: `--color` alone
-        /// is `always`; `auto` (the default) colors a TTY unless
-        /// NO_COLOR is set; `never`.
-        #[arg(
-            long,
-            value_enum,
-            value_name = "WHEN",
-            default_value_t = sandogasa_cli::style::ColorChoice::Auto,
-            num_args = 0..=1,
-            require_equals = true,
-            default_missing_value = "always"
-        )]
-        color: sandogasa_cli::style::ColorChoice,
-
         /// Print progress to stderr.
         #[arg(short, long)]
         verbose: bool,
@@ -225,48 +225,6 @@ stock. The repository is the segment between
 
     /// Find binary RPMs shipped by 2+ source packages in a tag.
     DupeSubpkgs {
-        /// Comma-separated Hyperscale repositories to scan.
-        #[arg(
-            long,
-            default_value = prune_tags::DEFAULT_REPOSITORY,
-            long_help = "\
-Comma-separated Hyperscale repositories to scan.
-The repository is the segment between `-packages-`
-and the stage suffix, e.g. `main` in
-`hyperscale10s-packages-main-release`. Each
-repository's `-release` and `-testing` tags across
-EL9/EL10 (and the Stream variants) are scanned."
-        )]
-        repositories: String,
-
-        /// Hyperscale release(s) to scan (repeatable or CSV).
-        #[arg(
-            long,
-            value_delimiter = ',',
-            value_name = "RELEASE",
-            long_help = "\
-Hyperscale release(s) to scan, repeatable or comma-
-separated. Each value is a short EL token (`9`, `9s`,
-`10`, `10s`) or the equivalent full release name
-(`hyperscale9s`, `hyperscale10s`, ...) — both forms
-mean the same release. Defaults to all four."
-        )]
-        release: Vec<String>,
-
-        /// Source package(s) to limit the report to (repeatable
-        /// or CSV).
-        #[arg(
-            long,
-            value_delimiter = ',',
-            value_name = "PACKAGE",
-            long_help = "\
-Source package name(s), repeatable or comma-separated.
-Only collisions that involve one of these sources are
-reported (the whole tag is still scanned to find what
-they collide with). Defaults to all packages."
-        )]
-        package: Vec<String>,
-
         /// Interactively untag the redundant build of each
         /// collision.
         #[arg(
@@ -285,25 +243,19 @@ terminal the plan is printed and nothing is untagged."
         #[arg(long)]
         json: bool,
 
-        /// Print progress to stderr.
-        #[arg(short, long)]
-        verbose: bool,
-    },
-
-    /// Find files shipped by 2+ sources across enabled repos.
-    FileConflicts {
-        /// Comma-separated repositories enabled together to scan.
+        /// Source package(s) to limit the report to (repeatable
+        /// or CSV).
         #[arg(
             long,
+            value_delimiter = ',',
+            value_name = "PACKAGE",
             long_help = "\
-Comma-separated repositories that are enabled together
-on a host, compared per EL version. Overrides the
-per-EL defaults (main + kernel on EL10/10s; main only
-on EL9/9s, which has no kernel repo). The `-release`
-tag of each is combined and files owned by two or more
-distinct source packages are flagged."
+Source package name(s), repeatable or comma-separated.
+Only collisions that involve one of these sources are
+reported (the whole tag is still scanned to find what
+they collide with). Defaults to all packages."
         )]
-        repositories: Option<String>,
+        package: Vec<String>,
 
         /// Hyperscale release(s) to scan (repeatable or CSV).
         #[arg(
@@ -319,6 +271,31 @@ mean the same release. Defaults to all four."
         )]
         release: Vec<String>,
 
+        /// Comma-separated Hyperscale repositories to scan.
+        #[arg(
+            long,
+            default_value = prune_tags::DEFAULT_REPOSITORY,
+            long_help = "\
+Comma-separated Hyperscale repositories to scan.
+The repository is the segment between `-packages-`
+and the stage suffix, e.g. `main` in
+`hyperscale10s-packages-main-release`. Each
+repository's `-release` and `-testing` tags across
+EL9/EL10 (and the Stream variants) are scanned."
+        )]
+        repositories: String,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Find files shipped by 2+ sources across enabled repos.
+    FileConflicts {
+        /// Output as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+
         /// Source package(s) to limit the report to (repeatable
         /// or CSV).
         #[arg(
@@ -333,9 +310,32 @@ what they conflict with). Defaults to all packages."
         )]
         package: Vec<String>,
 
-        /// Output as JSON instead of a table.
-        #[arg(long)]
-        json: bool,
+        /// Hyperscale release(s) to scan (repeatable or CSV).
+        #[arg(
+            long,
+            value_delimiter = ',',
+            value_name = "RELEASE",
+            long_help = "\
+Hyperscale release(s) to scan, repeatable or comma-
+separated. Each value is a short EL token (`9`, `9s`,
+`10`, `10s`) or the equivalent full release name
+(`hyperscale9s`, `hyperscale10s`, ...) — both forms
+mean the same release. Defaults to all four."
+        )]
+        release: Vec<String>,
+
+        /// Comma-separated repositories enabled together to scan.
+        #[arg(
+            long,
+            long_help = "\
+Comma-separated repositories that are enabled together
+on a host, compared per EL version. Overrides the
+per-EL defaults (main + kernel on EL10/10s; main only
+on EL9/9s, which has no kernel repo). The `-release`
+tag of each is combined and files owned by two or more
+distinct source packages are flagged."
+        )]
+        repositories: Option<String>,
 
         /// Print progress to stderr.
         #[arg(short, long)]
@@ -344,9 +344,30 @@ what they conflict with). Defaults to all packages."
 
     /// List GitLab issues labeled rfe::new-version.
     ListIssues {
+        /// Add missing packages to the manifest.
+        #[arg(
+            long,
+            requires = "manifest",
+            long_help = "\
+Add packages that have rfe::new-version issues but
+are missing from the manifest. Requires --manifest.
+Packages are inserted in sorted order."
+        )]
+        add_missing: bool,
+
         /// GitLab group URL to search.
         #[arg(long, default_value = "https://gitlab.com/CentOS/Hyperscale/rpms")]
         group: String,
+
+        /// Only show issues assigned to this user.
+        #[arg(
+            long,
+            value_name = "USERNAME",
+            long_help = "\
+Only show issues assigned to this username.
+Use \"none\" to match unassigned issues."
+        )]
+        issue_assignee: Option<String>,
 
         /// Only show issues matching this status.
         #[arg(
@@ -363,16 +384,6 @@ Default statuses:
         )]
         issue_status: Option<String>,
 
-        /// Only show issues assigned to this user.
-        #[arg(
-            long,
-            value_name = "USERNAME",
-            long_help = "\
-Only show issues assigned to this username.
-Use \"none\" to match unassigned issues."
-        )]
-        issue_assignee: Option<String>,
-
         /// Output as JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -387,23 +398,16 @@ output shows which packages with rfe::new-version
 issues are missing from the manifest."
         )]
         manifest: Option<PathBuf>,
-
-        /// Add missing packages to the manifest.
-        #[arg(
-            long,
-            requires = "manifest",
-            long_help = "\
-Add packages that have rfe::new-version issues but
-are missing from the manifest. Requires --manifest.
-Packages are inserted in sorted order."
-        )]
-        add_missing: bool,
     },
 
     /// Untag CBS builds for archived-upstream packages stock caught up to.
     PruneArchived {
         /// Path to the TOML manifest file.
         manifest: PathBuf,
+
+        /// Preview operations without applying them.
+        #[arg(long)]
+        dry_run: bool,
 
         /// Comma-separated Hyperscale repositories to manage.
         #[arg(
@@ -422,18 +426,14 @@ repository is not in this list are not touched."
         #[arg(long, value_name = "LIST")]
         skip: Option<String>,
 
-        /// Preview operations without applying them.
-        #[arg(long)]
-        dry_run: bool,
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
 
         /// Untag at/behind-stock without prompting; skip
         /// ahead-of-stock.
         #[arg(short, long)]
         yes: bool,
-
-        /// Print progress to stderr.
-        #[arg(short, long)]
-        verbose: bool,
     },
 
     /// Untag old hyperscale builds for every package in a
@@ -443,16 +443,9 @@ repository is not in this list are not touched."
         /// Path to the TOML manifest file.
         manifest: PathBuf,
 
-        /// Builds to keep per `-release` tag.
-        #[arg(long, default_value_t = prune_tags::DEFAULT_RELEASE_KEEP)]
-        release_keep: usize,
-
-        /// Builds to keep per `-testing` tag.
-        #[arg(long, default_value_t = prune_tags::DEFAULT_TESTING_KEEP)]
-        testing_keep: usize,
-
         /// Comma-separated Hyperscale repositories to manage.
         #[arg(
+            help_heading = "Selection",
             long,
             default_value = prune_tags::DEFAULT_REPOSITORY,
             long_help = "\
@@ -466,6 +459,7 @@ repository is not in this list are not touched."
 
         /// Comma-separated packages to skip.
         #[arg(
+            help_heading = "Selection",
             long,
             value_name = "LIST",
             long_help = "\
@@ -476,16 +470,24 @@ tool to touch it."
         )]
         skip: Option<String>,
 
+        /// Builds to keep per `-release` tag.
+        #[arg(long, default_value_t = prune_tags::DEFAULT_RELEASE_KEEP, help_heading = "Retention")]
+        release_keep: usize,
+
+        /// Builds to keep per `-testing` tag.
+        #[arg(long, default_value_t = prune_tags::DEFAULT_TESTING_KEEP, help_heading = "Retention")]
+        testing_keep: usize,
+
         /// Preview operations without applying them.
-        #[arg(long)]
+        #[arg(long, help_heading = "Writing")]
         dry_run: bool,
 
         /// Skip the per-package confirmation prompt.
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Writing")]
         yes: bool,
 
         /// Print progress to stderr.
-        #[arg(short, long)]
+        #[arg(short, long, help_heading = "Output")]
         verbose: bool,
     },
 
@@ -495,13 +497,13 @@ tool to touch it."
         /// Source package name (e.g. ethtool).
         package: String,
 
+        /// Preview operations without applying them.
+        #[arg(long)]
+        dry_run: bool,
+
         /// Builds to keep per `-release` tag.
         #[arg(long, default_value_t = prune_tags::DEFAULT_RELEASE_KEEP)]
         release_keep: usize,
-
-        /// Builds to keep per `-testing` tag.
-        #[arg(long, default_value_t = prune_tags::DEFAULT_TESTING_KEEP)]
-        testing_keep: usize,
 
         /// Comma-separated Hyperscale repositories to manage.
         #[arg(
@@ -516,17 +518,17 @@ repository is not in this list are not touched."
         )]
         repositories: String,
 
-        /// Preview operations without applying them.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Skip the confirmation prompt.
-        #[arg(short, long)]
-        yes: bool,
+        /// Builds to keep per `-testing` tag.
+        #[arg(long, default_value_t = prune_tags::DEFAULT_TESTING_KEEP)]
+        testing_keep: usize,
 
         /// Print progress to stderr.
         #[arg(short, long)]
         verbose: bool,
+
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Retire package(s) stock now carries: untag their builds
@@ -537,14 +539,6 @@ repository is not in this list are not touched."
         #[arg(required = true, value_name = "PACKAGE")]
         packages: Vec<String>,
 
-        /// Path to the TOML manifest file to drop them from.
-        #[arg(long, value_name = "PATH")]
-        manifest: PathBuf,
-
-        /// GitLab group the packages' repos live under.
-        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
-        gitlab_group: String,
-
         /// Show the plan without untagging, editing or archiving.
         #[arg(long)]
         dry_run: bool,
@@ -554,14 +548,22 @@ repository is not in this list are not touched."
         #[arg(long)]
         force: bool,
 
-        /// Retire without confirming; never untags a build newer
-        /// than stock, and then leaves the package in place.
-        #[arg(short, long)]
-        yes: bool,
+        /// GitLab group the packages' repos live under.
+        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
+        gitlab_group: String,
+
+        /// Path to the TOML manifest file to drop them from.
+        #[arg(long, value_name = "PATH")]
+        manifest: PathBuf,
 
         /// Print progress to stderr.
         #[arg(short, long)]
         verbose: bool,
+
+        /// Retire without confirming; never untags a build newer
+        /// than stock, and then leaves the package in place.
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Interactively review builds in hyperscale `-testing` tags and
@@ -572,6 +574,23 @@ repository is not in this list are not touched."
         /// with an NVR, reviews that specific build; omitted,
         /// reviews everything in testing.
         target: Option<String>,
+
+        /// Changelog lines to show for a brand-new package.
+        #[arg(
+            long,
+            default_value_t = review::DEFAULT_CHANGELOG_LINES,
+            long_help = "\
+For a package with nothing yet in release, show at
+most this many lines of its changelog (a new package
+has no prior version to diff against). Packages that
+are already in release always show just the entries
+newer than the released build."
+        )]
+        changelog_lines: usize,
+
+        /// List the builds that would be reviewed, then exit.
+        #[arg(long)]
+        dry_run: bool,
 
         /// Comma-separated Hyperscale repositories to scan.
         #[arg(
@@ -596,23 +615,6 @@ release pipeline (e.g. systemd) that should never be
 promoted through this tool."
         )]
         skip: Vec<String>,
-
-        /// Changelog lines to show for a brand-new package.
-        #[arg(
-            long,
-            default_value_t = review::DEFAULT_CHANGELOG_LINES,
-            long_help = "\
-For a package with nothing yet in release, show at
-most this many lines of its changelog (a new package
-has no prior version to diff against). Packages that
-are already in release always show just the entries
-newer than the released build."
-        )]
-        changelog_lines: usize,
-
-        /// List the builds that would be reviewed, then exit.
-        #[arg(long)]
-        dry_run: bool,
 
         /// Print progress to stderr.
         #[arg(short, long)]

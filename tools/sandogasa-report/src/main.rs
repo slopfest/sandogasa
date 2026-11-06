@@ -55,79 +55,84 @@ enum Axis {
 
 #[derive(clap::Args)]
 struct ReportArgs {
-    /// Path to main config file (domains, groups).
-    #[arg(short, long, value_name = "PATH")]
-    config: Option<String>,
-
-    /// FAS username to report on.
-    #[arg(short, long)]
-    user: Option<String>,
-
     /// Domain(s) to report on (defined in config).
-    #[arg(short, long, required = true)]
+    #[arg(short, long, required = true, help_heading = "Selection")]
     domain: Vec<String>,
 
-    /// Add a breakdown grouped this way (repeat or comma-separate).
-    #[arg(long, value_name = "AXIS", value_delimiter = ',')]
-    by: Vec<Axis>,
+    /// Reporting period (e.g. 2026Q1, 2026H1).
+    #[arg(long, group = "date_range", help_heading = "Selection")]
+    period: Option<String>,
 
     /// Start date (inclusive, YYYY-MM-DD).
-    #[arg(long, group = "date_range")]
+    #[arg(long, group = "date_range", help_heading = "Selection")]
     since: Option<NaiveDate>,
 
     /// End date (inclusive, YYYY-MM-DD, default: today).
-    #[arg(long, requires = "since")]
+    #[arg(long, requires = "since", help_heading = "Selection")]
     until: Option<NaiveDate>,
 
-    /// Reporting period (e.g. 2026Q1, 2026H1).
-    #[arg(long, group = "date_range")]
-    period: Option<String>,
+    /// FAS username to report on.
+    #[arg(short, long, help_heading = "Selection")]
+    user: Option<String>,
 
-    /// Skip Bugzilla queries.
-    #[arg(long)]
-    no_bugzilla: bool,
+    /// Path to main config file (domains, groups).
+    #[arg(short, long, value_name = "PATH", help_heading = "Sources")]
+    config: Option<String>,
 
     /// Skip Bodhi queries.
-    #[arg(long)]
+    #[arg(long, help_heading = "Sources")]
     no_bodhi: bool,
 
-    /// Skip Koji queries.
-    #[arg(long)]
-    no_koji: bool,
-
-    /// Skip GitLab queries.
-    #[arg(long)]
-    no_gitlab: bool,
-
-    /// Skip GitHub queries.
-    #[arg(long)]
-    no_github: bool,
+    /// Skip Bugzilla queries.
+    #[arg(long, help_heading = "Sources")]
+    no_bugzilla: bool,
 
     /// Skip Forgejo queries.
-    #[arg(long)]
+    #[arg(long, help_heading = "Sources")]
     no_forgejo: bool,
 
+    /// Skip GitHub queries.
+    #[arg(long, help_heading = "Sources")]
+    no_github: bool,
+
+    /// Skip GitLab queries.
+    #[arg(long, help_heading = "Sources")]
+    no_gitlab: bool,
+
+    /// Skip Koji queries.
+    #[arg(long, help_heading = "Sources")]
+    no_koji: bool,
+
     /// Skip Sourcehut queries.
-    #[arg(long)]
+    #[arg(long, help_heading = "Sources")]
     no_sourcehut: bool,
+
+    /// Add a breakdown grouped this way (repeat or comma-separate).
+    #[arg(
+        long,
+        value_name = "AXIS",
+        value_delimiter = ',',
+        help_heading = "Output"
+    )]
+    by: Vec<Axis>,
 
     /// Add detail. Once: counts per repo, project or component
     /// under each heading. Twice: the items themselves — every
     /// PR, bug, patch and ticket, and every build of a Bodhi
     /// update.
-    #[arg(long, action = clap::ArgAction::Count)]
+    #[arg(long, action = clap::ArgAction::Count, help_heading = "Output")]
     detailed: u8,
 
     /// Output as JSON instead of Markdown.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     json: bool,
 
     /// Write output to file instead of stdout.
-    #[arg(short, long, value_name = "PATH")]
+    #[arg(short, long, value_name = "PATH", help_heading = "Output")]
     output: Option<String>,
 
     /// Print progress to stderr.
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Output")]
     verbose: bool,
 }
 
