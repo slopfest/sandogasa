@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a tracker fixed on some releases records those builds in Fixed In Version
+
+A `[fedora-all]` or `[epel-all]` tracker fixed on some releases but
+not all named the fixing builds only in a comment; its Fixed In
+Version field was written only when the bug was closed as ERRATA. So
+a rawhide fix, often weeks ahead of the stable releases, was not where
+people and tools look for it, though Bodhi itself appends to the field
+for a stable update on a bug that stays open. Resolves #67.
+
+The partial-fix write now adds the fixing builds to Fixed In Version,
+keeping whatever is already there in front and skipping builds it
+already names. The bug stays open, and the ERRATA close still writes
+the full list once every release is fixed.
+
 ### fedora-cve-triage: a tracker fixed on only some releases gets its assignee asked, once
 
 When a run's only actionable bodhi-check results were trackers fixed
