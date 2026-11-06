@@ -19,6 +19,7 @@ use sandogasa_bodhi::models::{NewUpdateFromTag, UpdateSource};
 use sandogasa_bodhi::{BodhiClient, auth};
 
 /// What to submit alongside the side tag.
+#[derive(Clone)]
 pub struct SubmitOptions {
     /// Update notes/description (from `--notes` / `--notes-file`).
     pub notes: String,
@@ -350,6 +351,121 @@ fn plan_text(
 }
 
 /// Print the submission plan and confirm (default yes).
+/// Bodhi's severities, lowest first; anything else ranks as
+/// `unspecified`.
+const SEVERITIES: [&str; 5] = ["unspecified", "low", "medium", "high", "urgent"];
+
+fn severity_rank(severity: &str) -> usize {
+    SEVERITIES
+        .iter()
+        .position(|s| s.eq_ignore_ascii_case(severity))
+        .unwrap_or(0)
+}
+
+/// The CVE trackers among `ids`, with their Bugzilla severity.
+fn cve_trackers(bugs: &crate::karma::BugMap, ids: &[u64]) -> Vec<(u64, String)> {
+    ids.iter()
+        .filter_map(|id| {
+            let b = bugs.get(id)?;
+            sandogasa_cve::facts::is_security_tracker(&b.summary, &b.keywords)
+                .then(|| (*id, b.severity.to_ascii_lowercase()))
+        })
+        .collect()
+}
+
+/// What the attached CVE trackers suggest for an update's type and
+/// severity, each with the bug that suggests it.
+#[derive(Debug, PartialEq, Eq)]
+struct Suggested {
+    /// `security`, when the type is something else and `.0` is a CVE
+    /// tracker.
+    security: Option<u64>,
+    /// The highest tracker severity, when it is above the update's.
+    severity: Option<(String, u64)>,
+}
+
+/// What `trackers` (bug, severity) suggest for an update of
+/// `update_type` at `severity`. Tracker severity is Product Security's
+/// impact rating and maps one to one onto Bodhi's levels; an
+/// `unspecified` tracker suggests nothing.
+fn suggest(update_type: &str, severity: &str, trackers: &[(u64, String)]) -> Suggested {
+    let security = (update_type != "security")
+        .then(|| trackers.first().map(|(id, _)| *id))
+        .flatten();
+    // The first tracker at the top severity, to name: `max_by_key`
+    // alone would name the last.
+    let highest = trackers
+        .iter()
+        .filter(|(_, s)| severity_rank(s) > 0)
+        .rev()
+        .max_by_key(|(_, s)| severity_rank(s));
+    let severity = highest
+        .filter(|(_, s)| severity_rank(s) > severity_rank(severity))
+        .map(|(id, s)| (SEVERITIES[severity_rank(s)].to_string(), *id));
+    Suggested { security, severity }
+}
+
+/// The update's type and severity, after offering what the attached
+/// CVE trackers suggest (see [`suggest`]).
+///
+/// At a terminal each suggestion is asked, defaulting to yes. Under
+/// `--yes` or with no terminal it is only reported, and what was
+/// passed is kept: an explicit choice is never overridden unasked. A
+/// security update still without a severity is refused, since Bodhi
+/// refuses it too.
+fn settle_type_and_severity(
+    opts: &SubmitOptions,
+    trackers: &[(u64, String)],
+) -> Result<SubmitOptions, String> {
+    let mut out = opts.clone();
+    let ask = !opts.assume_yes && std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let s = suggest(&out.update_type, &out.severity, trackers);
+    if let Some(id) = s.security {
+        let why = format!(
+            "#{id} is a CVE tracker, and the update type is {}",
+            out.update_type
+        );
+        if ask {
+            eprintln!("\n{why}.");
+            if sandogasa_cli::confirm("Submit it as a security update?", true)
+                .map_err(|e| e.to_string())?
+            {
+                out.update_type = "security".to_string();
+            }
+        } else {
+            eprintln!("note: {why}; pass --type security to submit it as one");
+        }
+    }
+    if out.update_type == "security" {
+        // Asked again for the type just settled: a security update
+        // without one has every tracker's severity above it.
+        let s = suggest(&out.update_type, &out.severity, trackers);
+        if let Some((level, id)) = s.severity {
+            let why = format!(
+                "the attached trackers rate up to {level} (#{id}), and the update's severity is {}",
+                out.severity
+            );
+            if ask {
+                eprintln!("\n{}{}.", why[..1].to_uppercase(), &why[1..]);
+                if sandogasa_cli::confirm(&format!("Use severity {level}?"), true)
+                    .map_err(|e| e.to_string())?
+                {
+                    out.severity = level;
+                }
+            } else {
+                eprintln!("note: {why}; pass --severity {level} to match");
+            }
+        }
+        if out.severity == "unspecified" {
+            return Err(
+                "a security update needs a severity: pass --severity (low/medium/high/urgent)"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(out)
+}
+
 /// The bugs among `ids` that are a security team tracker for a whole
 /// release family, `[fedora-all]` or `[epel-all]`.
 fn family_trackers(bugs: &crate::karma::BugMap, ids: &[u64]) -> Vec<u64> {
@@ -455,12 +571,17 @@ pub fn run(
     // Bodhi closes every attached bug when the update goes stable, or
     // none: a tracker for the whole family is rarely fixed by one
     // release's update, so its presence changes the default (#75).
-    let family = if bugs.is_empty() {
-        Vec::new()
+    let fetched = if bugs.is_empty() {
+        crate::karma::BugMap::new()
     } else {
-        family_trackers(&rt.block_on(crate::karma::fetch_bugs(&bz, &bugs)), &bugs)
+        rt.block_on(crate::karma::fetch_bugs(&bz, &bugs))
     };
+    let family = family_trackers(&fetched, &bugs);
     let close_bugs = decide_close(opts, &bugs, &family, report.dist_branch())?;
+    // A CVE tracker among the bugs says what kind of update this is
+    // and how severe: offered, never imposed (#76).
+    let settled = settle_type_and_severity(opts, &cve_trackers(&fetched, &bugs))?;
+    let opts = &settled;
 
     if opts.assume_yes {
         // No prompt, but still show what is being submitted.
@@ -590,6 +711,71 @@ mod tests {
         assert!(err.contains("--notes"), "{err}");
         let err = resolve_notes(Some("  \n"), None).unwrap_err();
         assert!(err.contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn cve_trackers_suggest_a_security_update_at_their_highest_severity() {
+        // Issue #76: the F45 asahi-installer update fixes trackers
+        // rated low, medium and high, and goes out as a bugfix unless
+        // told otherwise.
+        let trackers: Vec<(u64, String)> = [
+            (2444701, "low"),
+            (2457938, "medium"),
+            (2458010, "high"),
+            (2546328, "high"),
+        ]
+        .map(|(id, s)| (id, s.to_string()))
+        .to_vec();
+        assert_eq!(
+            suggest("bugfix", "unspecified", &trackers),
+            Suggested {
+                security: Some(2444701),
+                severity: Some(("high".to_string(), 2458010)),
+            }
+        );
+        // Already a security update at that severity: nothing to say.
+        assert_eq!(
+            suggest("security", "high", &trackers),
+            Suggested {
+                security: None,
+                severity: None
+            }
+        );
+        // A higher severity than the trackers' is the submitter's call.
+        assert_eq!(suggest("security", "urgent", &trackers).severity, None);
+        // A lower one is raised to the highest tracker's.
+        assert_eq!(
+            suggest("security", "medium", &trackers).severity,
+            Some(("high".to_string(), 2458010))
+        );
+        // No trackers, or none rated: nothing.
+        assert_eq!(
+            suggest("bugfix", "unspecified", &[]),
+            Suggested {
+                security: None,
+                severity: None
+            }
+        );
+        assert_eq!(
+            suggest("security", "unspecified", &[(1, "unspecified".to_string())]).severity,
+            None
+        );
+
+        // Under --yes the suggestions are reported, not applied.
+        let mut o = opts();
+        o.assume_yes = true;
+        let kept = settle_type_and_severity(&o, &trackers).unwrap();
+        assert_eq!(kept.update_type, "enhancement");
+        // And a security update with nothing to give it a severity is
+        // refused, as Bodhi would.
+        o.update_type = "security".to_string();
+        o.severity = "unspecified".to_string();
+        assert!(settle_type_and_severity(&o, &[]).is_err());
+        o.severity = "low".to_string();
+        assert_eq!(
+            settle_type_and_severity(&o, &trackers).unwrap().severity,
+            "low"
+        );
     }
 
     #[test]

@@ -832,6 +832,16 @@ default, and `--close-bugs`/`--no-close-bugs` decide outright. The plan
 says which: `bugs (closed on stable)` or `bugs (linked, left open on
 stable)`.
 
+CVE trackers among the bugs also say what kind of update it is. When
+one is attached and `--type` is not `security`, you are offered to
+submit it as a security update; and a security update's severity is
+offered as the highest Bugzilla severity among the attached trackers,
+Product Security's impact rating, when `--severity` is missing or
+lower, naming the bug that sets it. So at a terminal `--type security`
+may leave `--severity` out. `--yes` and non-interactive runs report a
+mismatch and keep what was passed, and there `--type security` still
+needs `--severity`.
+
 The pass gate reuses the karma derivation: a clean `+1` check submits
 after showing the plan (packages, type, bugs, thresholds, notes
 preview) for confirmation. A non-passing check first goes through the

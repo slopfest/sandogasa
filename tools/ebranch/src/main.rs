@@ -458,7 +458,8 @@ failing update."
         long_help = "\
 Update severity: unspecified (default), low,
 medium, high, or urgent. Bodhi requires a real
-severity for --type security.",
+severity for --type security; at a terminal,
+the attached CVE trackers' highest is offered.",
         value_parser = ["unspecified", "low", "medium", "high", "urgent"]
     )]
     severity: String,
@@ -1795,8 +1796,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         // Bodhi rejects security updates without a real severity;
-        // catch it before the analysis rather than at POST time.
-        if a.submit && a.update_type == "security" && a.severity == "unspecified" {
+        // catch it before the analysis rather than at POST time. A run
+        // at a terminal may leave it out: the attached CVE trackers can
+        // supply it, and it is asked for there (#76).
+        if a.submit
+            && a.update_type == "security"
+            && a.severity == "unspecified"
+            && (a.yes || !std::io::IsTerminal::is_terminal(&std::io::stdin()))
+        {
             eprintln!("error: --type security requires --severity (low/medium/high/urgent)");
             return ExitCode::FAILURE;
         }

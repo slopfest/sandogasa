@@ -38,6 +38,9 @@ pub(crate) struct BugFacts {
     pub product: Option<String>,
     pub version: Vec<String>,
     pub keywords: Vec<String>,
+    /// Bugzilla's severity: on a CVE tracker, Product Security's
+    /// impact rating, which a security update's severity follows.
+    pub severity: String,
     /// For a security tracker on a package the update builds, filed
     /// against the update's release: where the CVE is fixed, from NVD
     /// or GitHub's advisories. Filled by [`attach_cve_facts`]; `None`
@@ -785,6 +788,7 @@ pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -
                         product: Some(bug.product),
                         version: bug.version,
                         keywords: bug.keywords,
+                        severity: bug.severity,
                         cve_fix: None,
                         bundled: None,
                     },

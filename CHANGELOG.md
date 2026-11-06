@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### ebranch: check-update --submit suggests type security and a severity from the attached CVE trackers
+
+An update fixing CVEs went out as whatever `--type` said, `bugfix` by
+default, and a security update's severity had to be worked out by hand
+from the trackers: the F45 asahi-installer update fixing trackers
+rated low, medium and high should be `--type security --severity
+high`, and nothing said so. Resolves #76.
+
+Once the bug list is settled, a CVE tracker among the bugs offers
+`--type security`, and a security update is offered the highest
+Bugzilla severity among the attached trackers (Product Security's
+impact rating) when its own is missing or lower, with the bug that
+sets it named. Both are asked at a terminal, defaulting to yes; `--yes`
+and non-interactive runs report the mismatch and keep what was passed.
+At a terminal `--type security` may now leave `--severity` out for the
+trackers to supply; elsewhere it is still refused before the analysis.
+
 ### ebranch: check-update --submit can leave the bugs open when the update goes stable
 
 `ebranch check-update --submit` created every update with Bodhi's
