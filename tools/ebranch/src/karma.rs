@@ -43,6 +43,25 @@ pub(crate) struct BugFacts {
     /// or GitHub's advisories. Filled by [`attach_cve_facts`]; `None`
     /// when no source has a fixed version.
     pub cve_fix: Option<sandogasa_cve::CveFix>,
+    /// For a security tracker whose fix names a library the update's
+    /// build bundles rather than the package: that copy, judged
+    /// against the fix. Filled by [`attach_cve_facts`] when `cve_fix`
+    /// finds nothing for the package itself.
+    pub bundled: Option<BundledCopy>,
+}
+
+/// A library copy an update's build bundles, judged against a CVE's
+/// fix (issue #74).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BundledCopy {
+    /// The build that declares it.
+    pub nvr: String,
+    pub library: String,
+    pub version: String,
+    /// Whether the copy carries the fix.
+    pub fixed: bool,
+    /// The fix it was measured against, for the reason.
+    pub what: String,
 }
 
 impl BugFacts {
@@ -85,6 +104,8 @@ type BugMap = std::collections::HashMap<u64, BugFacts>;
 pub(crate) struct UpdateFacts<'a> {
     /// `(source name, version)` for each build in the update.
     pub builds: &'a [(String, String)],
+    /// The same builds as NVRs, for asking Koji what they bundle.
+    pub nvrs: &'a [String],
     /// The release trackers for the branch this update targets, so an
     /// FTBFS bug for a *different* release is not answered here.
     pub trackers: &'a sandogasa_bugclass::bugzilla::BranchTrackers,
@@ -256,7 +277,27 @@ pub(crate) fn bug_verdict(bug: &BugFacts, update: &UpdateFacts<'_>) -> Verdict {
             return Verdict::Unknown;
         };
         let Some(fix) = &bug.cve_fix else {
-            return Verdict::Unknown;
+            // The CVE is in a library the build bundles: the copy is
+            // what carries the fix or not, whatever the package's own
+            // version says.
+            return match &bug.bundled {
+                Some(copy) => Verdict::Decided {
+                    karma: if copy.fixed { 1 } else { -1 },
+                    reason: format!(
+                        "update bundles {} {} ({}), {} the fix in {}",
+                        copy.library,
+                        copy.version,
+                        copy.nvr,
+                        if copy.fixed {
+                            "at or past"
+                        } else {
+                            "older than"
+                        },
+                        copy.what
+                    ),
+                },
+                None => Verdict::Unknown,
+            };
         };
         let addressed = sandogasa_cve::is_fix(build_version, &fix.fixed, &fix.ranges);
         return Verdict::Decided {
@@ -745,6 +786,7 @@ pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -
                         version: bug.version,
                         keywords: bug.keywords,
                         cve_fix: None,
+                        bundled: None,
                     },
                 )
             })
@@ -766,6 +808,62 @@ pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -
 /// per CVE, paced to NVD's limit (an API key in `[nvd]` lifts it) and
 /// cached a day under ebranch's cache directory; GitHub's advisories
 /// fill in when NVD has no fixed version.
+/// The bundled copy of a library that `cve_id` is about, in the build
+/// `nvr`, judged against the fix: by the fixed versions a source
+/// records for the library, or, when none does, by whether the copy's
+/// own release tag holds one of the fix commits OSV records. `None`
+/// when the build declares no copy the CVE names, or the copy cannot
+/// be judged.
+#[allow(clippy::too_many_arguments)]
+async fn bundled_copy(
+    cve_id: &str,
+    nvr: &str,
+    summary: &str,
+    copies: &sandogasa_cve::bundled::Copies,
+    nvd: &mut sandogasa_cve::NvdCache<sandogasa_cve::CveResponse>,
+    http: &reqwest::Client,
+    advisories: &sandogasa_cli::cache::DiskCache,
+    token: Option<&str>,
+) -> Option<BundledCopy> {
+    let provides = copies.build_provides(nvr)?;
+    let products: Vec<String> = nvd
+        .get(cve_id, |r| r)
+        .await
+        .map(|r| {
+            sandogasa_cve::CveFacts::from_response(r)
+                .affected
+                .into_iter()
+                .map(|a| a.product)
+                .collect()
+        })
+        .unwrap_or_default();
+    let (library, version) = sandogasa_cve::bundled::copy_for_cve(&provides, summary, &products)?;
+    let judged =
+        match sandogasa_cve::fix_facts(cve_id, &library, nvd, http, advisories, token).await {
+            Some(fix) => Some((
+                sandogasa_cve::is_fix(&version, &fix.fixed, &fix.ranges),
+                format!("{} ({})", fix.fixed_versions(), fix.source),
+            )),
+            None => {
+                let osv = sandogasa_cve::sources::Sources::new(http, advisories, token)
+                    .osv_fix(cve_id)
+                    .await?;
+                copies
+                    .git_verdict(&osv, cve_id, &version)
+                    .await
+                    .map(|g| (g.fixed, g.what))
+            }
+        };
+    let (fixed, what) = judged?;
+    Some(BundledCopy {
+        nvr: nvr.to_string(),
+        library,
+        version,
+        fixed,
+        what,
+    })
+}
+
 pub(crate) async fn attach_cve_facts(bugs: &mut BugMap, update: &UpdateFacts<'_>, verbose: bool) {
     let wanted: Vec<(u64, String, String)> = bugs
         .iter()
@@ -796,6 +894,7 @@ pub(crate) async fn attach_cve_facts(bugs: &mut BugMap, update: &UpdateFacts<'_>
             wanted.len()
         );
     }
+    let copies = sandogasa_cve::bundled::Copies::new(http.clone(), token.clone(), false, verbose);
     for (id, cve, component) in wanted {
         let fix = sandogasa_cve::fix_facts(
             &cve,
@@ -806,8 +905,36 @@ pub(crate) async fn attach_cve_facts(bugs: &mut BugMap, update: &UpdateFacts<'_>
             token.as_deref(),
         )
         .await;
+        // No fix names the package itself: the CVE may be in a library
+        // its build bundles, which is judged by the copy (issue #74).
+        let bundled = match &fix {
+            Some(_) => None,
+            None => {
+                let summary = bugs.get(&id).map(|b| b.summary.clone()).unwrap_or_default();
+                let nvr = update.nvrs.iter().find(|n| {
+                    sandogasa_koji::parse_nvr_name(n).is_some_and(|name| name == component)
+                });
+                match nvr {
+                    Some(nvr) => {
+                        bundled_copy(
+                            &cve,
+                            nvr,
+                            &summary,
+                            &copies,
+                            &mut nvd,
+                            &http,
+                            &advisories,
+                            token.as_deref(),
+                        )
+                        .await
+                    }
+                    None => None,
+                }
+            }
+        };
         if let Some(b) = bugs.get_mut(&id) {
             b.cve_fix = fix;
+            b.bundled = bundled;
         }
     }
     if !nvd.refused.is_empty() {
@@ -894,8 +1021,10 @@ async fn run_async(
         .map(|(n, v, _)| (n.to_string(), v.to_string()))
         .collect();
 
+    let nvrs: Vec<String> = update.builds.iter().map(|b| b.nvr.clone()).collect();
     let facts = UpdateFacts {
         builds: &builds,
+        nvrs: &nvrs,
         trackers: &trackers,
         branch: report.dist_branch(),
         unsatisfied: &report.installability_issues,
@@ -1172,6 +1301,7 @@ mod tests {
         let trackers = trackers();
         let update = UpdateFacts {
             builds: &builds,
+            nvrs: &[],
             trackers: &trackers,
             branch: "epel10.4",
             unsatisfied: &[],
@@ -1241,11 +1371,61 @@ mod tests {
     }
 
     #[test]
+    fn a_cve_in_a_bundled_library_is_judged_by_the_copy() {
+        // Issue #74: asahi-installer bundles Python, and no source
+        // names a fix for asahi-installer itself. The copy the update's
+        // build declares is what carries the fix or not.
+        let builds = vec![("asahi-installer".to_string(), "0.9.2".to_string())];
+        let nvrs = vec!["asahi-installer-0.9.2-4.fc46".to_string()];
+        let trackers = trackers();
+        let update = UpdateFacts {
+            builds: &builds,
+            nvrs: &nvrs,
+            trackers: &trackers,
+            branch: "rawhide",
+            unsatisfied: &[],
+            full_analysis: true,
+        };
+        let copy = |fixed: bool, what: &str| BundledCopy {
+            nvr: "asahi-installer-0.9.2-4.fc46".to_string(),
+            library: "python".to_string(),
+            version: "3.13.17".to_string(),
+            fixed,
+            what: what.to_string(),
+        };
+        let bug = |bundled| BugFacts {
+            bundled: Some(bundled),
+            ..cve_bug("asahi-installer", "rawhide", None)
+        };
+        let (karma, note) = decided(bug_verdict(
+            &bug(copy(true, "commit 0478bd83d82b (in v3.13.17)")),
+            &update,
+        ))
+        .unwrap();
+        assert_eq!(karma, 1);
+        assert_eq!(
+            note,
+            "update bundles python 3.13.17 (asahi-installer-0.9.2-4.fc46), at or past \
+             the fix in commit 0478bd83d82b (in v3.13.17)"
+        );
+        let (karma, note) = decided(bug_verdict(&bug(copy(false, "3.13.18")), &update)).unwrap();
+        assert_eq!(karma, -1);
+        assert!(note.contains("older than the fix in 3.13.18"), "{note}");
+        // A fix stated for the package itself still decides first.
+        let own = BugFacts {
+            bundled: Some(copy(false, "3.13.18")),
+            ..cve_bug("asahi-installer", "rawhide", Some("0.9.0"))
+        };
+        assert_eq!(decided(bug_verdict(&own, &update)).unwrap().0, 1);
+    }
+
+    #[test]
     fn bug_verdict_judges_a_cve_tracker_by_the_fix_a_source_states() {
         let builds = vec![("libheif".to_string(), "1.23.5".to_string())];
         let trackers = trackers();
         let update = UpdateFacts {
             builds: &builds,
+            nvrs: &[],
             trackers: &trackers,
             branch: "epel10.2",
             unsatisfied: &[],
@@ -1328,6 +1508,7 @@ mod tests {
     ) -> UpdateFacts<'a> {
         UpdateFacts {
             builds,
+            nvrs: &[],
             trackers,
             branch: "f44",
             unsatisfied,
@@ -1614,6 +1795,7 @@ mod tests {
         let builds = builds();
         let facts = UpdateFacts {
             builds: &builds,
+            nvrs: &[],
             trackers: &trackers(),
             branch: "f44",
             unsatisfied: &[],

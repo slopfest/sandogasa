@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch: check-update judges a CVE in a bundled library by the copy the build carries
+
+`ebranch check-update` left every CVE tracker on asahi-installer to
+the user: the fixes name Python, not asahi-installer, so no fix
+matched the package and its own version could not be compared with
+anything, though the build declares `bundled(python) = 3.13.17` and
+that copy settles most of them. Resolves #74.
+
+When no source states a fix for the package itself, the build's
+declared copies are read from Koji, and the one the tracker's title or
+NVD's product names is judged with sandogasa-cve's shared logic,
+against the library's fixed version or, failing one, by git: `+1`
+("update bundles python 3.13.17 (asahi-installer-0.9.2-4.fc46), at or
+past the fix in commit 0478bd83d82b (in v3.13.17)") or `-1`. Both
+voting and the bugs `--submit` proposes use it, and the answers come
+from the cache fedora-cve-triage shares. sandogasa-cve gains
+`bundled::declarations`, `bundled::copy_for_cve`,
+`bundled::fedora_spelling` and re-exports NVD's `CveResponse`.
+
 ### sandogasa-cve: judge a bundled copy of a library against a CVE's fix
 
 Whether a package carries a CVE fix for a library it bundles was

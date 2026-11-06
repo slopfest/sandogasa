@@ -209,8 +209,17 @@ async fn propose_bugs(
 
     let trackers =
         sandogasa_bugclass::bugzilla::lookup_branch_trackers(bz, report.dist_branch()).await;
+    // Koji's NVRs carry no epoch.
+    let nvrs: Vec<String> = builds
+        .iter()
+        .map(|(pkg, evr)| {
+            let vr = evr.split_once(':').map_or(evr.as_str(), |(_, vr)| vr);
+            format!("{pkg}-{vr}")
+        })
+        .collect();
     let facts = crate::karma::UpdateFacts {
         builds: &builds,
+        nvrs: &nvrs,
         trackers: &trackers,
         branch: report.dist_branch(),
         unsatisfied: &report.installability_issues,

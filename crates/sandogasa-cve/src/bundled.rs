@@ -318,6 +318,60 @@ pub fn bundled_version(text: &str, library: &str) -> Option<Option<String>> {
     )
 }
 
+/// Every library `provides` declares a versioned bundled copy of, as
+/// `(library, version)`, lowercased. Vendored crates and Go modules
+/// (`bundled(crate(…))`, `bundled(golang(…))`) are left out: they are
+/// named by their ecosystem, not by a library a CVE tracker names.
+pub fn declarations(provides: &str) -> Vec<(String, String)> {
+    provides
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("bundled(")?;
+            let (name, after) = rest.split_once(')')?;
+            if name.contains('(') || name.is_empty() {
+                return None;
+            }
+            let version = after
+                .trim_start()
+                .strip_prefix('=')?
+                .split_whitespace()
+                .next()?;
+            Some((name.to_ascii_lowercase(), version.to_string()))
+        })
+        .collect()
+}
+
+/// A project's name as Fedora packages it: CPython is `python`.
+pub fn fedora_spelling(name: &str) -> String {
+    let lower = name.to_ascii_lowercase();
+    match lower.as_str() {
+        "cpython" => "python".to_string(),
+        _ => lower,
+    }
+}
+
+/// The bundled copy a CVE is about, among those `provides` declares:
+/// one whose library the tracker's `summary` names as a word
+/// (`asahi-installer: python: …`, `CPython: …`), or one of the
+/// `products` NVD says the CVE affects. `None` when no declared copy is
+/// named, which is most packages and most CVEs: the CVE is then the
+/// package's own.
+pub fn copy_for_cve(
+    provides: &str,
+    summary: &str,
+    products: &[String],
+) -> Option<(String, String)> {
+    let mut named: Vec<String> = summary
+        .split(|c: char| !(c.is_ascii_alphanumeric() || "-_.+".contains(c)))
+        .map(|w| fedora_spelling(w.trim_end_matches(['.', '-'])))
+        .filter(|w| !w.is_empty())
+        .collect();
+    named.extend(products.iter().map(|p| fedora_spelling(p)));
+    declarations(provides)
+        .into_iter()
+        .find(|(library, _)| named.iter().any(|n| n == library))
+}
+
 /// Whether a copy of `library` at `version` carries the fix, judged by
 /// the fixed versions and vulnerable ranges recorded for it (entries
 /// for other products are ignored): at or past a fixed version, and
@@ -395,6 +449,51 @@ mod tests {
         // A binding crate named for the library is not a copy of it.
         assert_eq!(
             bundled_version("bundled(crate(gstreamer)) = 0.23.0\n", "gstreamer"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_copy_a_cve_is_about_is_the_one_its_tracker_names() {
+        let provides = "asahi-installer-package = 0.9.2-4.fc46\n\
+                        bundled(libffi) = 3.5.2\n\
+                        bundled(python) = 3.13.17\n\
+                        bundled(python-asn1) = 2.5.0\n\
+                        bundled(crate(serde)) = 1.0.0\n";
+        assert_eq!(
+            declarations(provides).len(),
+            3,
+            "crates are not libraries here"
+        );
+        let python = Some(("python".to_string(), "3.13.17".to_string()));
+        assert_eq!(
+            copy_for_cve(
+                provides,
+                "CVE-2026-12345 asahi-installer: python: Arbitrary file deletion",
+                &[]
+            ),
+            python
+        );
+        assert_eq!(
+            copy_for_cve(
+                provides,
+                "CVE-2026-2297 asahi-installer: CPython: Logging Bypass",
+                &[]
+            ),
+            python
+        );
+        // NVD's product names it when the summary does not.
+        assert_eq!(
+            copy_for_cve(
+                provides,
+                "CVE-2025-15366 asahi-installer: IMAP command injection",
+                &["cpython".to_string()]
+            ),
+            python
+        );
+        // A CVE that names no declared copy is the package's own.
+        assert_eq!(
+            copy_for_cve(provides, "CVE-2026-1 asahi-installer: installer flaw", &[]),
             None
         );
     }

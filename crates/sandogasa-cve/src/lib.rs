@@ -23,5 +23,6 @@ pub mod version;
 
 pub use cache::NvdCache;
 pub use facts::{CveFacts, CveFix, fix_facts, is_fix, product_matches_component};
+pub use sandogasa_nvd::models::CveResponse;
 pub use sandogasa_nvd::{FixedVersion, VulnerableRange};
 pub use version::{Nvr, version_gte};

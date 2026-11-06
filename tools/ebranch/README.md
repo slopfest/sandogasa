@@ -713,8 +713,13 @@ at the top, then the single release NVD's references point at — and is
 auto-voted `+1` when the build is at or past the
 fix and outside every range still marked vulnerable, `-1` when it is
 below the fix, with the CVE, the version and the source in the reason.
-A tracker for another release, or a CVE no source has a fixed version
-for, is left to you. NVD answers are paced to its limit — one request
+A CVE in a library the package bundles — asahi-installer's Python, say
+— is judged by the copy the update's build declares
+(`bundled(python) = 3.13.17`, read from Koji): against the library's
+fixed version when a source states one, otherwise by whether that
+release's tag holds one of the fix commits OSV records. The copy is
+the one the tracker's title or NVD's product names. A tracker for
+another release, or a CVE nothing can judge, is left to you. NVD answers are paced to its limit — one request
 per 6 s without a key — and cached a day under `~/.cache/ebranch`; an
 API key in the config's `[nvd]` table (`ebranch config` asks for one,
 optional) lifts the pace tenfold. A plain bug report gets no
