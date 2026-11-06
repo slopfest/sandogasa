@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### sandogasa-koji: read everything a build provides
+
+fedora-cve-triage read a build's provides from Koji with its own
+code, so another tool wanting a build's `bundled(<library>)`
+declaration would have had to copy it. Refs #74.
+
+`build_provides(nvr, profile)` returns every provide of a build's
+binary RPMs, one RPM per subpackage (`subpackage_nvras`), debuginfo
+and debugsource left out. An RPM whose provides cannot be read now
+fails the call: fedora-cve-triage used to keep the partial list, which
+reads as a build that bundles nothing, and cache it. fedora-cve-triage
+uses the new function.
+
 ### Every tool's `--help` groups its flags by topic
 
 Most tools listed their flags in the order they had been added, so

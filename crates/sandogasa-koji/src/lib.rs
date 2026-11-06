@@ -810,6 +810,47 @@ pub fn parse_rpm_deps(json: &str, dep_type: u64) -> Result<Vec<(String, Option<S
         .collect())
 }
 
+/// One binary RPM per subpackage among `nvras`, debuginfo and
+/// debugsource left out: the arches of a build agree on what a
+/// subpackage provides, so one of each is enough to read.
+pub fn subpackage_nvras(nvras: &[String]) -> Vec<&str> {
+    let mut seen = std::collections::HashSet::new();
+    nvras
+        .iter()
+        .map(String::as_str)
+        .filter(|nvra| {
+            let Some(name) = nvra.rfind('.').and_then(|dot| parse_nvr_name(&nvra[..dot])) else {
+                return false;
+            };
+            !name.ends_with("-debuginfo")
+                && !name.ends_with("-debugsource")
+                && seen.insert(name.to_string())
+        })
+        .collect()
+}
+
+/// Everything a build's binary RPMs provide, one per line, as
+/// `name = version` or `name`: what `bundled(python) = 3.13.17` is
+/// read from, for a build the repositories may not have yet. One RPM
+/// per subpackage is asked (see [`subpackage_nvras`]).
+///
+/// An RPM whose provides cannot be read fails the whole call: a list
+/// missing the subpackage that declares a bundled copy would read as
+/// a build that bundles nothing.
+pub fn build_provides(nvr: &str, profile: Option<&str>) -> Result<String, String> {
+    let nvras = build_rpm_nvras(nvr, profile)?;
+    let mut text = String::new();
+    for nvra in subpackage_nvras(&nvras) {
+        for (name, version) in rpm_provides(nvra, profile)? {
+            match version {
+                Some(v) => text.push_str(&format!("{name} = {v}\n")),
+                None => text.push_str(&format!("{name}\n")),
+            }
+        }
+    }
+    Ok(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,6 +874,26 @@ mod tests {
         assert!(
             parse_list_external_repos("Tag Pri Mode External repo name\n---- --- ---- ----\n")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn one_rpm_is_read_per_subpackage() {
+        let nvras: Vec<String> = [
+            "asahi-installer-package-0.9.2-4.fc46.noarch",
+            "python3-asahi_firmware-0.9.2-4.fc46.aarch64",
+            "python3-asahi_firmware-0.9.2-4.fc46.x86_64",
+            "asahi-installer-debuginfo-0.9.2-4.fc46.aarch64",
+            "asahi-installer-debugsource-0.9.2-4.fc46.aarch64",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            subpackage_nvras(&nvras),
+            [
+                "asahi-installer-package-0.9.2-4.fc46.noarch",
+                "python3-asahi_firmware-0.9.2-4.fc46.aarch64",
+            ]
         );
     }
 
