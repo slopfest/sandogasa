@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### fedora-cve-triage: bugs are read logged in, so a needinfo reaches the assignee; `run --bug` names bugs to triage
+
+A run read its bugs from Bugzilla anonymously, and Red Hat's Bugzilla
+hides email addresses from anonymous readers: the assignee came back
+as a name ("Davide Cavalca"). The partial-fix write addressed its
+needinfo to that name, Bugzilla refused the whole update -- comment,
+needinfo and Fixed In Version -- and nothing said so: the run printed
+"Done.", and the findings step then posted its own comment in their
+place.
+
+Bugs are now read logged in when an API key is configured, so
+assignees are logins. A failed partial-fix write is reported, and an
+assignee that still reads as a name, as without a key, costs only the
+needinfo, with a warning, not the whole update.
+
+`run -b/--bug ID,...` narrows a run to the named bugs among those it
+finds, triaging them even when their recorded finding is current,
+which is how a write that failed is redone without re-reading
+everything else.
+
 ### fedora-cve-triage: a finding confirmed under a new analysis is remembered, so its bug is not re-read every run
 
 After the analysis number went up, every triaged bug was read again,
