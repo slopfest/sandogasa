@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### fedora-cve-triage: bundled copies are judged by the newest build, not the last compose
+
+bundled-library read a package's `bundled(<library>) = <version>`
+declaration from the branch's repository, which holds what was last
+composed. Right after a rebuild it judged the previous build: the
+asahi-installer rawhide build bundling Python 3.13.17 was still
+reported as bundling 3.13.9, and with findings now recorded against
+Bodhi's newest build, the old verdict would have been recorded
+against the new build. Fixes #68.
+
+The declaration is now read through Koji from the newest build Bodhi
+lists for the bug's branch, in any update state; everything else still
+comes from the repository, and without Koji the repository's
+declaration is used as before.
+
 ### fedora-cve-triage: findings record the builds they judged, and are re-checked when those change
 
 A bug the tool had recorded a finding on was skipped by every later
