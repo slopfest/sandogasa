@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### fedora-cve-triage: findings record the builds they judged, and are re-checked when those change
+
+A bug the tool had recorded a finding on was skipped by every later
+run with the same analysis, whatever happened in Bodhi since. A
+rebuild that fixes a statically linked or bundled copy, a new update,
+or a fix moving from testing to stable never reached the bug: the
+asahi-installer rawhide build bundling Python 3.13.17, which fixes
+most of its 35 open CVEs, would not have been looked at.
+
+The comment's marker now also names the builds the finding was
+reached against — for each release the bug covers, the package's
+builds in its newest stable, testing or pending update, with the
+state when it is not stable — and a run skips a bug only when both
+the analysis and those builds match what Bodhi shows now. `run
+--recheck` reads every bug again regardless. The analysis is now 2,
+since the bundled-copy verdicts of #66 can differ from what analysis 1
+recorded, so every finding is read once more; a finding whose words
+are unchanged is posted again once, so the bug records its builds.
+
 ### sandogasa-report: config prompts handle backspace, and can clear a field
 
 `sandogasa-report config` read its answers as raw lines, so on a
