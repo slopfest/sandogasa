@@ -400,7 +400,7 @@ failing update."
     #[arg(short = 'y', long, help_heading = "Writing")]
     yes: bool,
 
-    /// Bug ID(s) to associate and close (repeated or CSV).
+    /// Bug ID(s) to associate (repeated or CSV).
     #[arg(
         help_heading = "Update",
         long = "bug",
@@ -410,9 +410,23 @@ failing update."
     )]
     bug: Vec<u64>,
 
+    /// Close the bugs when the update goes stable (default, unless one
+    /// is a [fedora-all]/[epel-all] tracker)
+    #[arg(
+        long,
+        requires = "submit",
+        conflicts_with = "no_close_bugs",
+        help_heading = "Update"
+    )]
+    close_bugs: bool,
+
     /// Don't auto-push at the karma thresholds.
     #[arg(long, requires = "submit", help_heading = "Update")]
     disable_autokarma: bool,
+
+    /// Link the bugs but leave them open when the update goes stable
+    #[arg(long, requires = "submit", help_heading = "Update")]
+    no_close_bugs: bool,
 
     /// Update notes/description (inline).
     #[arg(
@@ -2029,6 +2043,11 @@ fn main() -> ExitCode {
                             update_type: a.update_type.clone(),
                             severity: a.severity.clone(),
                             bugs: a.bug.clone(),
+                            close_bugs: match (a.close_bugs, a.no_close_bugs) {
+                                (true, _) => Some(true),
+                                (_, true) => Some(false),
+                                _ => None,
+                            },
                             autokarma: !a.disable_autokarma,
                             stable_karma: a.stable_karma,
                             unstable_karma: a.unstable_karma,

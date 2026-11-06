@@ -26,8 +26,12 @@ pub struct SubmitOptions {
     pub update_type: String,
     /// `unspecified` | `low` | `medium` | `high` | `urgent`.
     pub severity: String,
-    /// Bug IDs to associate (closed when the update goes stable).
+    /// Bug IDs to associate with the update.
     pub bugs: Vec<u64>,
+    /// Whether Bodhi closes them when the update goes stable, from
+    /// `--close-bugs` / `--no-close-bugs`; `None` decides at submit
+    /// time (see [`decide_close`]).
+    pub close_bugs: Option<bool>,
     /// Push automatically at the karma thresholds. Forced off when
     /// `rpmfusion` is non-empty — see [`SubmitOptions::autokarma`].
     pub autokarma: bool,
@@ -277,7 +281,13 @@ fn source_label(source: &UpdateSource) -> String {
     }
 }
 
-fn plan_text(tag: &str, packages: &[String], bugs: &[u64], opts: &SubmitOptions) -> String {
+fn plan_text(
+    tag: &str,
+    packages: &[String],
+    bugs: &[u64],
+    close_bugs: bool,
+    opts: &SubmitOptions,
+) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
     let _ = writeln!(o, "\nSubmission plan for {tag}:");
@@ -298,7 +308,12 @@ fn plan_text(tag: &str, packages: &[String], bugs: &[u64], opts: &SubmitOptions)
             .map(|b| format!("#{b}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = writeln!(o, "  bugs (closed on stable): {listed}");
+        let fate = if close_bugs {
+            "closed on stable"
+        } else {
+            "linked, left open on stable"
+        };
+        let _ = writeln!(o, "  bugs ({fate}): {listed}");
     }
     if effective_autokarma(opts) {
         let _ = writeln!(
@@ -335,13 +350,67 @@ fn plan_text(tag: &str, packages: &[String], bugs: &[u64], opts: &SubmitOptions)
 }
 
 /// Print the submission plan and confirm (default yes).
+/// The bugs among `ids` that are a security team tracker for a whole
+/// release family, `[fedora-all]` or `[epel-all]`.
+fn family_trackers(bugs: &crate::karma::BugMap, ids: &[u64]) -> Vec<u64> {
+    ids.iter()
+        .copied()
+        .filter(|id| {
+            bugs.get(id).is_some_and(|b| {
+                b.summary.contains("[fedora-all]") || b.summary.contains("[epel-all]")
+            })
+        })
+        .collect()
+}
+
+/// Whether the attached bugs close when the update goes stable.
+///
+/// What `--close-bugs` or `--no-close-bugs` said, when either was
+/// given. Otherwise yes, unless one of them is a tracker for a whole
+/// release family (`family`): one release's update rarely fixes every
+/// release such a tracker covers, and Bodhi has one switch for all of
+/// an update's bugs. Asked at a terminal, with that default; under
+/// `--yes`, or with no terminal, the default stands, so a family
+/// tracker is never closed unasked.
+fn decide_close(
+    opts: &SubmitOptions,
+    bugs: &[u64],
+    family: &[u64],
+    branch: &str,
+) -> Result<bool, String> {
+    if let Some(close) = opts.close_bugs {
+        return Ok(close);
+    }
+    let default = family.is_empty();
+    if bugs.is_empty() || opts.assume_yes || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Ok(default);
+    }
+    if !family.is_empty() {
+        let listed = family
+            .iter()
+            .map(|b| format!("#{b}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "\n{listed} cover every release of their family, and this update is for {branch} \
+             only: closing them when it goes stable would mark the other releases fixed too."
+        );
+    }
+    sandogasa_cli::confirm(
+        "Close the attached bugs when the update goes stable?",
+        default,
+    )
+    .map_err(|e| e.to_string())
+}
+
 fn confirm_plan(
     tag: &str,
     packages: &[String],
     bugs: &[u64],
+    close_bugs: bool,
     opts: &SubmitOptions,
 ) -> Result<bool, String> {
-    eprint!("{}", plan_text(tag, packages, bugs, opts));
+    eprint!("{}", plan_text(tag, packages, bugs, close_bugs, opts));
     sandogasa_cli::confirm("Submit this update?", true).map_err(|e| e.to_string())
 }
 
@@ -383,10 +452,20 @@ pub fn run(
         ))?
     };
 
+    // Bodhi closes every attached bug when the update goes stable, or
+    // none: a tracker for the whole family is rarely fixed by one
+    // release's update, so its presence changes the default (#75).
+    let family = if bugs.is_empty() {
+        Vec::new()
+    } else {
+        family_trackers(&rt.block_on(crate::karma::fetch_bugs(&bz, &bugs)), &bugs)
+    };
+    let close_bugs = decide_close(opts, &bugs, &family, report.dist_branch())?;
+
     if opts.assume_yes {
         // No prompt, but still show what is being submitted.
-        eprint!("{}", plan_text(&label, packages, &bugs, opts));
-    } else if !confirm_plan(&label, packages, &bugs, opts)? {
+        eprint!("{}", plan_text(&label, packages, &bugs, close_bugs, opts));
+    } else if !confirm_plan(&label, packages, &bugs, close_bugs, opts)? {
         return Err("aborted: update not submitted".to_string());
     }
 
@@ -407,7 +486,7 @@ pub fn run(
             update_type: opts.update_type.clone(),
             severity: opts.severity.clone(),
             bugs: bugs.clone(),
-            close_bugs: true,
+            close_bugs,
             autokarma: effective_autokarma(opts),
             stable_karma: opts.stable_karma,
             unstable_karma: opts.unstable_karma,
@@ -440,6 +519,7 @@ mod tests {
             update_type: "enhancement".to_string(),
             severity: "unspecified".to_string(),
             bugs: vec![2482250],
+            close_bugs: None,
             autokarma: true,
             stable_karma: 3,
             unstable_karma: -3,
@@ -457,7 +537,7 @@ mod tests {
         let mut o = opts();
         o.rpmfusion = vec![("libheif".to_string(), "libheif-freeworld".to_string())];
         assert!(!effective_autokarma(&o));
-        let text = plan_text("f43-build-side-1", &["libheif".to_string()], &[], &o);
+        let text = plan_text("f43-build-side-1", &["libheif".to_string()], &[], true, &o);
         assert!(text.contains("autopush: disabled"), "{text}");
         assert!(text.contains("libheif -> libheif-freeworld"), "{text}");
         assert!(text.contains("needs rebuilding"), "{text}");
@@ -474,14 +554,14 @@ mod tests {
         // plan says what it always said.
         let o = opts();
         assert!(effective_autokarma(&o));
-        let text = plan_text("f43-build-side-1", &["zlib".to_string()], &[], &o);
+        let text = plan_text("f43-build-side-1", &["zlib".to_string()], &[], true, &o);
         assert!(text.contains("autopush at karma +3"), "{text}");
         assert!(!text.contains("RPM Fusion"), "{text}");
         // And --disable-autokarma still disables it on its own, with
         // no counterpart to explain.
         let mut off = opts();
         off.autokarma = false;
-        let text = plan_text("f43-build-side-1", &["zlib".to_string()], &[], &off);
+        let text = plan_text("f43-build-side-1", &["zlib".to_string()], &[], true, &off);
         assert!(text.contains("autopush: disabled"), "{text}");
         assert!(!text.contains("RPM Fusion"), "{text}");
     }
@@ -513,12 +593,67 @@ mod tests {
     }
 
     #[test]
+    fn a_family_tracker_is_left_open_unless_asked() {
+        // Issue #75: one release's update rarely fixes every release
+        // a [fedora-all] tracker covers, and Bodhi closes all of an
+        // update's bugs or none.
+        let bug = |summary: &str| crate::karma::BugFacts {
+            summary: summary.to_string(),
+            ..Default::default()
+        };
+        let fetched = crate::karma::BugMap::from([
+            (
+                2525129,
+                bug("CVE-2026-7774 asahi-installer: Python tarfile [fedora-all]"),
+            ),
+            (
+                2431623,
+                bug("CVE-2025-15366 asahi-installer: IMAP [fedora-43]"),
+            ),
+            (
+                2457936,
+                bug("CVE-2026-1502 asahi-installer: Python [epel-all]"),
+            ),
+        ]);
+        assert_eq!(
+            family_trackers(&fetched, &[2525129, 2431623, 2457936]),
+            [2525129, 2457936]
+        );
+
+        // Under --yes the default stands: open with a family tracker,
+        // closed without one, and nothing at all to decide without bugs.
+        let mut o = opts();
+        o.assume_yes = true;
+        assert!(!decide_close(&o, &[2525129], &[2525129], "f45").unwrap());
+        assert!(decide_close(&o, &[2431623], &[], "f45").unwrap());
+        // The flags decide whatever the bugs are.
+        o.close_bugs = Some(true);
+        assert!(decide_close(&o, &[2525129], &[2525129], "f45").unwrap());
+        o.close_bugs = Some(false);
+        assert!(!decide_close(&o, &[2431623], &[], "f45").unwrap());
+
+        // The plan says which.
+        let text = plan_text(
+            "f45-build-side-1",
+            &["asahi-installer".into()],
+            &[2525129],
+            false,
+            &o,
+        );
+        assert!(
+            text.contains("bugs (linked, left open on stable): #2525129"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn plan_text_lists_packages_and_settings() {
         let o = opts();
         let text = plan_text(
             "epel9-build-side-133287",
             &["rust-uucore".to_string(), "uutils-coreutils".to_string()],
             &o.bugs,
+            true,
             &o,
         );
         assert!(text.contains("epel9-build-side-133287"), "{text}");
@@ -547,7 +682,7 @@ mod tests {
         o.autokarma = false;
         o.bugs.clear();
         o.notes = "One-liner".to_string();
-        let text = plan_text("f44-build-side-1", &["fish".to_string()], &o.bugs, &o);
+        let text = plan_text("f44-build-side-1", &["fish".to_string()], &o.bugs, true, &o);
         assert!(text.contains("autopush: disabled"), "{text}");
         assert!(!text.contains("bugs"), "{text}");
         assert!(text.contains("notes: One-liner\n"), "{text}");

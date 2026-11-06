@@ -196,22 +196,22 @@ pub async fn candidates(
     let mut out = Vec::new();
     for id in wanted {
         let Some(bug) = facts.get(&id) else { continue };
-        if !matches!(
-            crate::karma::bug_verdict(bug, update),
-            Verdict::Decided { karma: 1, .. }
-        ) {
+        let Verdict::Decided { karma: 1, reason } = crate::karma::bug_verdict(bug, update) else {
             continue;
-        }
+        };
         let source = from_changelog.get(&id).cloned().unwrap_or_else(|| {
-            match (&bug.cve_fix, open.get(&id)) {
-                (Some(fix), _) => format!(
+            match (&bug.cve_fix, &bug.bundled, open.get(&id)) {
+                (Some(fix), _, _) => format!(
                     "{} tracker, fixed in {} per {}",
                     fix.cve_id,
                     fix.fixed_versions(),
                     fix.source
                 ),
-                (None, Some(c)) => format!("open against {c}"),
-                (None, None) => "open".to_string(),
+                // Why the copy counts as fixed is what the user needs
+                // to judge the proposal, not where the bug turned up.
+                (None, Some(_), _) => reason,
+                (None, None, Some(c)) => format!("open against {c}"),
+                (None, None, None) => "open".to_string(),
             }
         });
         out.push(Candidate {

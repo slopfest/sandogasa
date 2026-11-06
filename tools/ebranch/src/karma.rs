@@ -98,7 +98,7 @@ impl BugFacts {
 }
 
 /// Bug ID to what Bugzilla says about it.
-type BugMap = std::collections::HashMap<u64, BugFacts>;
+pub(crate) type BugMap = std::collections::HashMap<u64, BugFacts>;
 
 /// What the update and its check say, for judging bugs against.
 pub(crate) struct UpdateFacts<'a> {

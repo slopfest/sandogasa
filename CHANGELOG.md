@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch: check-update --submit can leave the bugs open when the update goes stable
+
+`ebranch check-update --submit` created every update with Bodhi's
+"close bugs when stable" on, so a `[fedora-all]` CVE tracker attached
+to an F45 update would be closed when it went stable, marking F43 and
+F44 fixed too. The bug proposal also said only where a bundled-copy
+CVE tracker had turned up ("open against asahi-installer"), not why
+the update fixes it. Resolves #75.
+
+The update's bugs now close on stable only when the submitter agrees.
+The default is to close them unless one is a `[fedora-all]` or
+`[epel-all]` tracker; at a terminal the question is asked with that
+default and the trackers that set it named, `--yes` and
+non-interactive runs keep the default, and `--close-bugs` /
+`--no-close-bugs` decide outright. The plan says which. A proposed
+bundled-copy tracker is now shown with the copy's verdict ("update
+bundles python 3.13.17 (asahi-installer-0.9.2-4.fc45), at or past the
+fix in …").
+
 ### ebranch: check-update judges a CVE in a bundled library by the copy the build carries
 
 `ebranch check-update` left every CVE tracker on asahi-installer to

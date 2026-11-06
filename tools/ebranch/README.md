@@ -761,9 +761,10 @@ anything is published. Update notes are required, either inline with
 descriptions (the two are mutually exclusive). Optional fields mirror
 the bodhi CLI: `--type` (bugfix/enhancement/security/newpackage,
 default bugfix), `--severity` (required for `--type security`),
-`--bug <ID,...>` (repeated or CSV; associated bugs are closed when the
-update goes stable), and `--stable-karma`/`--unstable-karma`/
-`--disable-autokarma` for the autopush thresholds.
+`--bug <ID,...>` (repeated or CSV), `--close-bugs`/`--no-close-bugs`
+(whether Bodhi closes the bugs when the update goes stable, below), and
+`--stable-karma`/`--unstable-karma`/`--disable-autokarma` for the
+autopush thresholds.
 
 The bug list is settled before the plan is shown. First ebranch
 proposes bugs the update looks like it closes, from two places: bugs
@@ -780,7 +781,10 @@ Rawhide and package reviews under Fedora, so an EPEL update's bugs are
 mostly not EPEL bugs. CVE
 trackers among them are judged as described above, so a security
 update is offered the trackers filed against its release whose fix its
-build reaches, each with the CVE, the fixed version and the source:
+build reaches, each with the CVE, the fixed version and the source, or
+for a bundled library with the copy the build carries ("update bundles
+python 3.13.17 (asahi-installer-0.9.2-4.fc45), at or past the fix in
+…"):
 
 ```console
 This update looks like it closes:
@@ -817,6 +821,16 @@ the release outright. `--yes` skips proposing entirely and keeps
 whatever you listed: attaching a bug closes it when the update goes
 stable, and dropping one you asked for is equally not something to do
 unprompted.
+
+Bodhi closes all of an update's bugs when it goes stable, or none.
+When one of them is a `[fedora-all]` or `[epel-all]` tracker, which
+covers every release of its family, the default is none: the bugs are
+linked to the update and left open, since one release's update rarely
+fixes the rest. At a terminal you are asked, with that default and the
+trackers that set it named; `--yes` and non-interactive runs keep the
+default, and `--close-bugs`/`--no-close-bugs` decide outright. The plan
+says which: `bugs (closed on stable)` or `bugs (linked, left open on
+stable)`.
 
 The pass gate reuses the karma derivation: a clean `+1` check submits
 after showing the plan (packages, type, bugs, thresholds, notes
