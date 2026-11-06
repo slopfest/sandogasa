@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### sandogasa-cve: judge a bundled copy of a library against a CVE's fix
+
+Whether a package carries a CVE fix for a library it bundles was
+answered only inside fedora-cve-triage, so `ebranch check-update` could
+not tell that an asahi-installer update bundling Python 3.13.17 fixes
+CVEs fixed in 3.13.17. Refs #74.
+
+The new `sandogasa_cve::bundled` module holds the shared pieces:
+
+- `bundled_version` reads a `bundled(<library>) = <version>`
+  declaration from a provides list;
+- `Copies::declared` reads it from a build in Koji (through
+  `sandogasa_koji::build_provides`);
+- `against_fixes` judges a copy against the fixed versions and
+  vulnerable ranges recorded for the library;
+- `Copies::git_verdict` judges it by whether the copy's own release
+  tag holds one of the fix commits OSV records, with the first release
+  on its line that does.
+
+What a finished build provides and whether a tag contains a commit
+never change, so those answers are kept under
+`$XDG_CACHE_HOME/sandogasa-cve/` and shared by every tool; a
+repository's tag list is kept there for a day. fedora-cve-triage uses
+the module in place of its own copies, with the same verdicts; its
+`koji-builds` provides and `git-contains` answers can be moved to
+`build-provides/` and `git-contains/` there and are reused as they
+are. sandogasa-cve now depends on sandogasa-koji.
+
 ### sandogasa-koji: read everything a build provides
 
 fedora-cve-triage read a build's provides from Koji with its own

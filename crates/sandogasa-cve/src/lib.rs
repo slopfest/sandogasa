@@ -14,6 +14,7 @@
 //! CVE bugs a security update closes.
 
 pub mod advisory;
+pub mod bundled;
 pub mod cache;
 pub mod facts;
 pub mod osv;
