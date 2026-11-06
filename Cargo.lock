@@ -2027,6 +2027,7 @@ dependencies = [
  "sandogasa-cli",
  "sandogasa-nvd",
  "serde_json",
+ "tempfile",
  "tokio",
  "version-compare",
  "wiremock",

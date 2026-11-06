@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### sandogasa-cve: one set of advisory sources for every tool (breaking)
+
+ebranch's karma check, through `sandogasa_cve::fix_facts`, looked a
+CVE's fix up in GitHub's advisory database and, for an advisory NVD's
+references name, only on the project's own endpoint. fedora-cve-triage
+had its own copy of the same lookups, which also asked GitHub's global
+database first, a range per affected series instead of one for all of
+them, and added OSV. Refs #66.
+
+`sandogasa_cve::sources::Sources` is now the one place they are
+looked up, in order: GitHub's database by CVE; the advisories the
+references name, global database first; OSV's upstream databases when
+nothing so far has a patched version. Each answer is cached, and the
+caller is told about each request that actually goes out. `fix_facts`
+and fedora-cve-triage both use it, so ebranch now also reads OSV and
+the per-series ranges.
+
+Breaking: `sandogasa_cve::facts::VersionSource` is `#[non_exhaustive]`,
+so further sources can be added without another breaking release. A
+match on it needs a wildcard arm.
+
 ### fedora-cve-triage: bodhi-check judges a bundled copy on its own release line (breaking)
 
 On asahi-installer, bodhi-check still offered "Treat CVE-2026-12345 as

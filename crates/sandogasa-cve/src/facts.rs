@@ -95,8 +95,9 @@ pub fn release_tag_candidates(references: &[String]) -> Vec<String> {
 
 /// The fix for `cve_id` as it applies to `component`, from the
 /// sources that need no one's confirmation, in order of authority:
-/// NVD's CPE data; GitHub's advisory database by CVE; the repository
-/// advisories NVD's references name; a range NVD closes at the top
+/// NVD's CPE data; the advisory sources of [`crate::sources`] (GitHub's
+/// database by CVE, the advisories NVD's references name, OSV's
+/// upstream databases); a range NVD closes at the top
 /// with no fix recorded; and, when every one of those is silent, the
 /// single release NVD's references point at (`…/releases/tag/v1.23.5`),
 /// which names the fixing version without a page to read — two
@@ -145,24 +146,11 @@ pub async fn fix_facts(
     if let Some((fixed, ranges)) = matching(&facts.fixed, &facts.ranges) {
         return Some(done(fixed, ranges, "NVD".to_string()));
     }
-    // GitHub's database by CVE, then the project's own advisories.
-    let mut records = ghsa_json(
-        http,
-        advisories,
-        &crate::advisory::ghsa_search_url(cve_id),
-        github_token,
-    )
-    .await
-    .map(|j| crate::advisory::ghsa_records(&j))
-    .unwrap_or_default();
-    if records.is_empty() {
-        for (owner, repo, ghsa) in crate::advisory::repo_advisory_refs(&facts.references) {
-            let url = crate::advisory::repo_advisory_url(&owner, &repo, &ghsa);
-            if let Some(json) = ghsa_json(http, advisories, &url, github_token).await {
-                records.extend(crate::advisory::repo_advisory_records(&json));
-            }
-        }
-    }
+    // GitHub's database by CVE, the advisories the references name,
+    // then OSV's upstream databases.
+    let records = crate::sources::Sources::new(http, advisories, github_token)
+        .advisory_records(cve_id, &facts.references, None)
+        .await;
     if let (Some(found), _) = resolved_from_ghsa(&records)
         && let Some((fixed, ranges)) = matching(&found.fixed, &found.ranges)
     {
@@ -187,22 +175,6 @@ pub async fn fix_facts(
         Vec::new(),
         "the release NVD's references name".to_string(),
     ))
-}
-
-/// A GitHub advisory answer, from the day cache or the API.
-async fn ghsa_json(
-    http: &reqwest::Client,
-    advisories: &DiskCache,
-    url: &str,
-    token: Option<&str>,
-) -> Option<String> {
-    let key = sandogasa_cli::cache::url_key(url);
-    if let Some(json) = advisories.load(&key) {
-        return Some(json);
-    }
-    let json = crate::advisory::fetch_github(http, url, token).await?;
-    advisories.store(&key, &json);
-    Some(json)
 }
 
 /// Whether a build at `version` fixes the CVE: at or past one of the
@@ -323,6 +295,7 @@ impl Resolved {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum VersionSource {
     /// From the config's `[fixed_versions]` table.
     Config,
