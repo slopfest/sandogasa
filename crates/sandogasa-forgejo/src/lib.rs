@@ -389,6 +389,21 @@ struct CompareResult {
 }
 
 /// A Forgejo / Gitea API client bound to one instance.
+/// What an instance says about a token asked to read, or read and
+/// write, a repository's issues; see [`check_issue_read`] and
+/// [`check_issue_access`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IssueAccess {
+    /// The token has the access asked about.
+    Granted,
+    /// The instance does not accept the token at all (401).
+    Refused,
+    /// The token is valid but lacks a scope the request needs (403);
+    /// the instance's message, which names the scope.
+    MissingScope(String),
+}
+
 pub struct Client {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -992,6 +1007,97 @@ pub fn validate_token(base_url: &str, token: &str) -> Result<bool, Box<dyn std::
     }
     let text = resp.text().unwrap_or_default();
     Err(format!("Forgejo /user check failed: {status}: {text}").into())
+}
+
+/// Check that `token` can read `owner/repo`'s issues: one listing,
+/// enough to tell a token that has expired or been revoked (401) from
+/// one that still works. For a token that has passed
+/// [`check_issue_access`] before, this is the check worth repeating.
+pub fn check_issue_read(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+) -> Result<IssueAccess, Box<dyn std::error::Error>> {
+    sandogasa_cli::ensure_secure_url(base_url)?;
+    let http = build_http_client(Some(token))?;
+    let read = http
+        .get(issues_url(base_url, owner, repo))
+        .query(&[("limit", "1")])
+        .send()?;
+    Ok(access_refusal(read, "read")?.unwrap_or(IssueAccess::Granted))
+}
+
+/// Check that `token` can read and write `owner/repo`'s issues: what a
+/// tool that searches and files issues there needs, without the
+/// `read:user` scope [`validate_token`] requires. `Err` when the
+/// instance could not be asked, which says nothing about the token.
+///
+/// Reading is asked directly. Writing is asked without writing
+/// anything: Forgejo checks a token's scopes before the request itself
+/// and requires the write scope for any method but GET, so an empty
+/// comment on issue 0, which cannot exist, is refused for the scope
+/// (403) by a read-only token and for the missing issue (404) or the
+/// empty body (422) by one that may write.
+pub fn check_issue_access(
+    base_url: &str,
+    token: &str,
+    owner: &str,
+    repo: &str,
+) -> Result<IssueAccess, Box<dyn std::error::Error>> {
+    let read = check_issue_read(base_url, token, owner, repo)?;
+    if read != IssueAccess::Granted {
+        return Ok(read);
+    }
+    let http = build_http_client(Some(token))?;
+    let url = issues_url(base_url, owner, repo);
+    let write = http
+        .post(format!("{url}/0/comments"))
+        .json(&serde_json::json!({}))
+        .send()?;
+    let status = write.status();
+    if matches!(status.as_u16(), 404 | 422) {
+        return Ok(IssueAccess::Granted);
+    }
+    match access_refusal(write, "write")? {
+        Some(answer) => Ok(answer),
+        // Success would mean a comment on an issue that cannot
+        // exist; whatever happened, it says nothing either way.
+        None => Err(format!("Forgejo issue write check: unexpected {status}").into()),
+    }
+}
+
+/// The API URL of `owner/repo`'s issues.
+fn issues_url(base_url: &str, owner: &str, repo: &str) -> String {
+    format!(
+        "{}/api/v1/repos/{owner}/{repo}/issues",
+        base_url.trim_end_matches('/')
+    )
+}
+
+/// The refusal in an access check's response: `None` when it succeeded,
+/// [`IssueAccess::Refused`] for 401, [`IssueAccess::MissingScope`]
+/// with the instance's message for 403, and `Err` for anything else.
+fn access_refusal(
+    resp: reqwest::blocking::Response,
+    what: &str,
+) -> Result<Option<IssueAccess>, Box<dyn std::error::Error>> {
+    let status = resp.status();
+    if status.is_success() {
+        return Ok(None);
+    }
+    let text = resp.text().unwrap_or_default();
+    match status.as_u16() {
+        401 => Ok(Some(IssueAccess::Refused)),
+        403 => {
+            let message = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v["message"].as_str().map(str::to_string))
+                .unwrap_or(text);
+            Ok(Some(IssueAccess::MissingScope(message)))
+        }
+        _ => Err(format!("Forgejo issue {what} check failed: {status}: {text}").into()),
+    }
 }
 
 /// Build a reqwest client preconfigured for the Forgejo API: the
@@ -1620,6 +1726,101 @@ mod tests {
             .create();
         assert!(!validate_token(&server.url(), "bad").unwrap());
         bad.assert();
+    }
+
+    #[test]
+    fn issue_access_tells_a_bad_token_from_a_missing_scope() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v1/repos/releng/tickets/issues";
+        let comment = "/api/v1/repos/releng/tickets/issues/0/comments";
+        let read = server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::UrlEncoded("limit".into(), "1".into()))
+            .match_header("authorization", "token good")
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        // Past the scope check, the missing issue is what refuses it.
+        let write = server
+            .mock("POST", comment)
+            .match_header("authorization", "token good")
+            .with_status(404)
+            .create();
+        let access = check_issue_access(&server.url(), "good", "releng", "tickets").unwrap();
+        assert_eq!(access, IssueAccess::Granted);
+        read.assert();
+        write.assert();
+
+        // Re-checking a token that passed before reads, and never
+        // probes writing: no POST is mounted, so one would 501.
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let still = check_issue_read(&server.url(), "good", "releng", "tickets").unwrap();
+        assert_eq!(still, IssueAccess::Granted);
+
+        // A token that reads but may not write is refused at the
+        // write probe, with the scope it lacks.
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        server
+            .mock("POST", comment)
+            .with_status(403)
+            .with_body(
+                r#"{"message":"token does not have at least one of required scope(s): [write:issue]"}"#,
+            )
+            .create();
+        let access = check_issue_access(&server.url(), "readonly", "releng", "tickets").unwrap();
+        assert_eq!(
+            access,
+            IssueAccess::MissingScope(
+                "token does not have at least one of required scope(s): [write:issue]".into()
+            )
+        );
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::Any)
+            .with_status(401)
+            .with_body("unauthorized")
+            .create();
+        let access = check_issue_access(&server.url(), "bad", "releng", "tickets").unwrap();
+        assert_eq!(access, IssueAccess::Refused);
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::Any)
+            .with_status(403)
+            .with_body(
+                r#"{"message":"token does not have at least one of required scope(s): [read:issue]"}"#,
+            )
+            .create();
+        let access = check_issue_access(&server.url(), "narrow", "releng", "tickets").unwrap();
+        assert_eq!(
+            access,
+            IssueAccess::MissingScope(
+                "token does not have at least one of required scope(s): [read:issue]".into()
+            )
+        );
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", path)
+            .match_query(mockito::Matcher::Any)
+            .with_status(502)
+            .create();
+        assert!(check_issue_access(&server.url(), "good", "releng", "tickets").is_err());
     }
 
     #[test]

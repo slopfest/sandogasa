@@ -65,6 +65,13 @@ pub struct Options {
     /// reports that a request has earned its ticket rather than
     /// filing one -- the work is still shown, never discarded.
     pub forge_token: String,
+    /// Whether a missing [`Options::forge_token`] may be asked for at
+    /// the terminal when a ticket is due: a run someone is watching,
+    /// not a dry run and not `--yes`.
+    pub ask_forge_token: bool,
+    /// The answer to that question once asked, so a run with several
+    /// tickets due asks once: `Some(None)` when none was given.
+    pub forge_token_entered: std::sync::Mutex<Option<Option<String>>>,
     /// Skip the per-ticket confirmation (`--yes`).
     pub assume_yes: bool,
 }
@@ -1788,6 +1795,31 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
     escalate_with(report, opts, &standings, &present).await
 }
 
+/// The Forgejo token to file a releng ticket with: the configured one,
+/// or one asked for now and saved, so the work this run did reaching
+/// the ticket is not thrown away for want of it (issue #71). `None`
+/// when there is none and none may be asked for, or none was given.
+async fn releng_token(opts: &Options, due: &str) -> Result<Option<String>, String> {
+    if !opts.forge_token.is_empty() {
+        return Ok(Some(opts.forge_token.clone()));
+    }
+    if !opts.ask_forge_token {
+        return Ok(None);
+    }
+    let asked = opts
+        .forge_token_entered
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    if let Some(answer) = asked {
+        return Ok(answer);
+    }
+    println!("\n{due}; filing the releng ticket needs a Fedora Forgejo token.");
+    let answer = crate::config::ask_and_save_forgejo_token(&opts.forge_url).await?;
+    *opts.forge_token_entered.lock().map_err(|e| e.to_string())? = Some(answer.clone());
+    Ok(answer)
+}
+
 /// File the releng ticket for a request whose ping went unanswered.
 ///
 /// Returns the ticket number when one was filed, `None` when the run
@@ -1811,10 +1843,10 @@ async fn file_releng(
         println!("{due} — set packager.fas to file the releng ticket");
         return Ok(None);
     };
-    if opts.forge_token.is_empty() {
-        println!("{due} — set [forgejo] token to file the releng ticket");
+    let Some(token) = releng_token(opts, &due).await? else {
+        println!("{due} — set a Forgejo token with `ebranch config` to file the releng ticket");
         return Ok(None);
-    }
+    };
     let (title, body) = releng_ticket(
         pkg,
         &opts.branch,
@@ -1826,16 +1858,13 @@ async fn file_releng(
         println!("would file releng ticket: {title}");
         return Ok(None);
     }
-    let (url, token, title2) = (
-        opts.forge_url.clone(),
-        opts.forge_token.clone(),
-        title.clone(),
-    );
+    let (url, title2) = (opts.forge_url.clone(), title.clone());
+    let search_token = token.clone();
     let (owner, repo) = RELENG_REPO;
     // reqwest's blocking client off the async worker, the way
     // sandogasa-hattrack drives the same client.
     let open_dupe = tokio::task::spawn_blocking(move || -> Result<Option<u64>, String> {
-        let c = sandogasa_forgejo::Client::new(&url, &token).map_err(|e| e.to_string())?;
+        let c = sandogasa_forgejo::Client::new(&url, &search_token).map_err(|e| e.to_string())?;
         let hits = c
             .search_repo_issues(owner, repo, &title2, "all")
             .map_err(|e| e.to_string())?;
@@ -1860,7 +1889,7 @@ async fn file_releng(
             return Ok(None);
         }
     }
-    let (url, token) = (opts.forge_url.clone(), opts.forge_token.clone());
+    let url = opts.forge_url.clone();
     let issue = tokio::task::spawn_blocking(move || -> Result<sandogasa_forgejo::Issue, String> {
         let c = sandogasa_forgejo::Client::new(&url, &token).map_err(|e| e.to_string())?;
         let labels = c
@@ -3146,6 +3175,8 @@ mod tests {
             identity: None,
             forge_url: String::new(),
             forge_token: String::new(),
+            ask_forge_token: false,
+            forge_token_entered: Default::default(),
             assume_yes: false,
         }
     }
@@ -3966,6 +3997,32 @@ mod tests {
             .await
             .expect("a missing token is reported, not an error");
         assert_eq!(filed, None);
+    }
+
+    #[tokio::test]
+    async fn a_missing_token_is_asked_for_once_and_only_where_someone_can_answer() {
+        // Issue #71. The configured token wins; without one, a run
+        // nobody is watching reports the step rather than asking.
+        let mut opts = mock_opts("http://127.0.0.1:1", false);
+        opts.forge_token = "configured".into();
+        assert_eq!(
+            releng_token(&opts, "due").await.unwrap().as_deref(),
+            Some("configured")
+        );
+        opts.forge_token = String::new();
+        assert_eq!(releng_token(&opts, "due").await.unwrap(), None);
+
+        // Asked already in this run: the answer stands for every later
+        // ticket, a refusal included, so nobody is asked twice. (A
+        // first ask reads the terminal, which a test cannot answer.)
+        opts.ask_forge_token = true;
+        *opts.forge_token_entered.lock().unwrap() = Some(Some("entered".into()));
+        assert_eq!(
+            releng_token(&opts, "due").await.unwrap().as_deref(),
+            Some("entered")
+        );
+        *opts.forge_token_entered.lock().unwrap() = Some(None);
+        assert_eq!(releng_token(&opts, "due").await.unwrap(), None);
     }
 
     #[tokio::test]

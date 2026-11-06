@@ -1558,8 +1558,10 @@ than filing a second one.
 
 It asks before filing; `--yes` skips the question, and a run with
 no terminal says what it would file instead of filing it. Without
-a `[forgejo]` token or a `packager.fas` the step is reported, not
-taken. A `needinfo?` that has been answered or cleared is never
+a `packager.fas` the step is reported, not taken. Without a Forgejo
+token, a run at a terminal asks for one when the first ticket is due,
+saves it to your config and goes on to file; with `--yes`, `--dry-run`
+or no terminal the step is reported instead. A `needinfo?` that has been answered or cleared is never
 escalated automatically — it is printed for you to read, because
 the policy counts some replies as no action and some as action,
 and only a person can tell which:
@@ -1625,7 +1627,12 @@ looks the name up in dist-git's copy of the provenpackager group and
 offers what it found as the answer to confirm.
 
 A `[forgejo]` table holds the token `escalate` files a releng ticket
-with, on Fedora's Forgejo:
+with, on Fedora's Forgejo. `ebranch config` asks for it; create it at
+https://forge.fedoraproject.org/user/settings/applications with the
+issue scope at Read and Write. It is checked for both against the
+releng tracker when it is entered, without writing anything there,
+and only for still working when it is kept; a token Forgejo refuses,
+or one missing a scope, is offered for replacement:
 
 ```toml
 [forgejo]
@@ -1634,9 +1641,7 @@ url = "https://forge.fedoraproject.org"
 ```
 
 `url` defaults to that value and only needs setting to point at
-another instance. Without a token `escalate` reports the requests
-that have earned a ticket instead of filing them, so the rest of the
-run is unaffected.
+another instance.
 
 A `[check-crate]` table lists crates to ignore in every run, direct
 or transitive, as if they were not dependencies — Fedora almost

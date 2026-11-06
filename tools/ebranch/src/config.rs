@@ -279,6 +279,100 @@ pub fn forgejo() -> ForgejoConfig {
         .unwrap_or_default()
 }
 
+/// Ask for the Forgejo token `escalate` files releng tickets with,
+/// check it against `forge.url`, and keep the answer in `forge`.
+/// Optional: an empty answer leaves escalate reporting the step
+/// instead of taking it.
+pub async fn ask_forgejo_token(forge: &mut ForgejoConfig, review: bool) -> Result<(), String> {
+    use sandogasa_cli::credential::{KeyVerdict, validated_key};
+    use sandogasa_config::{Setting, ask};
+    let hint = format!(
+        "\nescalate files a releng ticket for a branch request whose maintainers \
+         have not answered. Create a token at {}/user/settings/applications with \
+         the issue scope at Read and Write, or leave empty to skip.",
+        forge.url.trim_end_matches('/')
+    );
+    let saved = forge.token.clone();
+    forge.token = ask(
+        &Setting::new("Fedora Forgejo", "token (optional, empty to skip)")
+            .sensitive()
+            .optional()
+            .hint(&hint),
+        &forge.token,
+        review,
+    )
+    .map_err(|e| format!("failed to read Forgejo token: {e}"))?
+    .trim()
+    .to_string();
+    if forge.token.is_empty() {
+        return Ok(());
+    }
+    let url = forge.url.clone();
+    forge.token = validated_key("Fedora Forgejo", "token", forge.token.clone(), move |k| {
+        let url = url.clone();
+        // A new token is checked for everything escalate needs. One
+        // kept from before passed that when it was entered, and scopes
+        // do not change, so it is only checked for still working:
+        // reading, not the write probe.
+        let full = k != saved;
+        Box::pin(async move {
+            use sandogasa_forgejo::IssueAccess;
+            let (owner, repo) = crate::branch_request::RELENG_REPO;
+            let checked = tokio::task::spawn_blocking(move || {
+                if full {
+                    sandogasa_forgejo::check_issue_access(&url, &k, owner, repo)
+                } else {
+                    sandogasa_forgejo::check_issue_read(&url, &k, owner, repo)
+                }
+                .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            match checked {
+                Ok(IssueAccess::Granted) if full => {
+                    KeyVerdict::Accepted(format!("may search and file on {owner}/{repo}."))
+                }
+                Ok(IssueAccess::Granted) => KeyVerdict::Accepted("still accepted.".to_string()),
+                Ok(IssueAccess::Refused) => KeyVerdict::Refused(
+                    "refused (401): the token is mistyped, expired or revoked.".to_string(),
+                ),
+                // A scope missing is a fact about the token, not a
+                // failure to check it, so it is worth replacing.
+                Ok(IssueAccess::MissingScope(why)) => {
+                    KeyVerdict::Refused(format!("lacks a scope it needs (403): {why}"))
+                }
+                Ok(_) => KeyVerdict::Unknown("could not tell.".to_string()),
+                Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
+            }
+        })
+    })
+    .await
+    .key;
+    Ok(())
+}
+
+/// Ask for the Forgejo token now and save it to the user's config
+/// file, for `escalate` finding a releng ticket due and no token to
+/// file it with. `url` is the Forgejo the run is using. The token, or
+/// `None` when none was given.
+pub async fn ask_and_save_forgejo_token(url: &str) -> Result<Option<String>, String> {
+    let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
+    let mut config: EbranchConfig = cf.load_user().unwrap_or_default();
+    // Checked against the Forgejo the run uses, which may come from
+    // the system-wide file; that URL is not copied into the user's.
+    let own_url = std::mem::replace(&mut config.forgejo.url, url.to_string());
+    ask_forgejo_token(&mut config.forgejo, false).await?;
+    config.forgejo.url = own_url;
+    if config.forgejo.token.is_empty() {
+        return Ok(None);
+    }
+    cf.save(&config)
+        .map_err(|e| format!("failed to save config: {e}"))?;
+    println!("Saved the token to {}", cf.path().display());
+    Ok(Some(config.forgejo.token))
+}
+
 /// The Bugzilla account to claim bookkeeping requests as, if set.
 pub fn bugzilla_email() -> Option<String> {
     sandogasa_config::ConfigFile::for_tool("ebranch")
@@ -518,6 +612,10 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         })
         .await.key;
     }
+
+    // Fedora's Forgejo: only escalate's last step, the releng ticket
+    // for a request nobody answered, needs it.
+    ask_forgejo_token(&mut config.forgejo, review).await?;
 
     // RPM Fusion's Bugzilla: a separate instance with a separate
     // account, asked for last because it is only needed by someone

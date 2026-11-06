@@ -1307,6 +1307,12 @@ fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Opt
         provenpackager: config::is_provenpackager(),
         forge_url: forge.url,
         forge_token: forge.token,
+        // Asked only where someone can answer; a dry run files
+        // nothing, so it needs no token.
+        ask_forge_token: !c.yes
+            && !c.dry_run
+            && std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        forge_token_entered: Default::default(),
         assume_yes: c.yes,
     })
 }

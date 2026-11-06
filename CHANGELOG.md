@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### ebranch: config and escalate ask for the Forgejo token releng tickets need
+
+`ebranch config` never asked for the Fedora Forgejo token that
+`escalate` files releng tickets with, so the first sign one was needed
+was a request already due: "needinfo unanswered for 22 days — set
+[forgejo] token to file the releng ticket", and the step skipped,
+leaving a hand edit of the config and a second run. Fixes #71.
+
+`ebranch config` now asks for it with the other credentials, says
+which scope it needs, and checks that it may read and write the
+releng tracker's issues, without writing anything there, so a token
+missing either is offered for replacement rather than saved. A token
+kept from before is only checked for still working. `escalate` run at a terminal asks for
+it when the first ticket is due, saves it to the user's config and
+files the ticket in the same run, asking at most once; with `--yes`,
+`--dry-run` or no terminal it reports the step as before.
+
+sandogasa-forgejo gains `check_issue_read` and `check_issue_access`,
+which tell a token the instance refuses (401) from one missing a scope
+(403), for reading a repository's issues and for reading and writing
+them. Writing is probed with an empty
+comment on issue 0: Forgejo checks scopes before the request, so a
+read-only token is refused for the scope while one that may write is
+refused for the missing issue, and nothing is ever created. The
+existing `validate_token` asks `/api/v1/user`, which needs a
+`read:user` scope that filing issues does not.
+
 ### fedora-cve-triage: bundled copies are judged by the newest build, not the last compose
 
 bundled-library read a package's `bundled(<library>) = <version>`
