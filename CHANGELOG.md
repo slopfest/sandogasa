@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### fedora-cve-triage: fix versions confirmed at the prompt are kept per product
+
+A fixed version confirmed at the prompt was recorded under the CVE
+alone, and reused within the run the same way. Confirming "fixed in
+3.15.0" for a CVE filed against python3.13 would then have served the
+same CVE's bug against python3.12, whose line is fixed in 3.12.15.
+Refs #66.
+
+Answers are now recorded under the CVE and the product they were
+confirmed for (`["CVE-…"]` with `python3_13 = "…"`) and reused that
+way within a run. A profile's `fixed_versions` table can use the same
+per-product form. A bare `"CVE-…" = "…"` still works, in both places,
+for any product; a product's own entry wins over it.
+
 ### sandogasa-cve: one set of advisory sources for every tool (breaking)
 
 ebranch's karma check, through `sandogasa_cve::fix_facts`, looked a
