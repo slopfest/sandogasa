@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a family tracker's bundled copy is judged on every release it covers
+
+On a `[fedora-all]` or `[epel-all]` tracker, bundled-library judged
+only the release the bug is filed against, while the tracker is about
+every release in its family. After an asahi-installer rawhide rebuild
+bundling Python 3.13.17, two trackers filed against rawhide were
+recorded as "already fixed" though F43–F45 still bundle 3.13.9, and
+four filed against F45 as bundling 3.13.9 with no word that rawhide
+was fixed. Fixes #69.
+
+When the finding rests on a declared bundled version, the newest
+build on each covered release is now asked for its own declaration
+through Koji. Releases that disagree give one real finding naming
+which are fixed and which are not ("asahi-installer is fixed on F46
+(bundles python 3.13.17, …) but not on F43, F44, F45 (bundles python
+3.13.9, …) — the bug is real"); releases that agree leave the filed
+release's verdict as it was. The analysis is now 3, so findings
+recorded under 2 are read again and corrected.
+
 ### ebranch: a releng ticket's labels need the organization scope, and the token is checked for it
 
 `ebranch escalate` failed to file a releng ticket with "no such
