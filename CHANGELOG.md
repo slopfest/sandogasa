@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### fedora-cve-triage: a tracker fixed on only some releases gets its assignee asked, once
+
+When a run's only actionable bodhi-check results were trackers fixed
+on some releases but not others, `run --apply` listed them as "Fixed
+in some releases, not all" and stopped: the comment and needinfo to
+the assignee were never offered. Fixes #70.
+
+They are now offered on their own. The comment is the bug's only one
+in the run: it opens with the triage marker and the builds it was
+judged against, adds the `Triaged` keyword, and carries any finding an
+earlier check reached, which is then not posted separately. A later
+run leaves the bug alone, and does not ask again, until its builds in
+Bodhi change.
+
 ### fedora-cve-triage: a family tracker's bundled copy is judged on every release it covers
 
 On a `[fedora-all]` or `[epel-all]` tracker, bundled-library judged
