@@ -111,6 +111,20 @@
   place: it also needs its own explicit flag (the same reasoning as
   `-y` alone not reassigning bugs), so a scripted run files only when
   it was told to file
+- **Offer dbranch's `--explain` where a person could do the steps by
+  hand.** When a tool's steps map to commands a person could run (`git`,
+  `gbp`, `cbs`, `koji`, `fedpkg`, `mock`), give it an opt-in `--explain`
+  that narrates each step and shows the exact command before running
+  it, pausing so the user can follow along, with `--dry-run` showing the
+  same steps without running anything. A plain run just does the work.
+  Since dbranch, this is the default for such tools: it is how someone
+  learns the workflow, or checks the tool, and the printed commands must
+  be enough to do it by hand (see `tools/dbranch/CLAUDE.md`). Don't add
+  it where the steps are API requests nobody would replay by hand, such
+  as a JQL search or a JSON body sent to Jira or Bodhi: narrating those
+  buries the decisions under transport. There, `--verbose` names each
+  request in a line, and anything written is previewed in full (the
+  rule above)
 
 
 ## Workspace layout
