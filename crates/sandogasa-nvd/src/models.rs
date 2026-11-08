@@ -32,6 +32,51 @@ pub struct CveItem {
     pub configurations: Vec<Configuration>,
     #[serde(default)]
     pub references: Vec<CveReference>,
+    /// CVSS scores, per version, from NVD and the CNA.
+    #[serde(default)]
+    pub metrics: Metrics,
+}
+
+/// A CVE's CVSS scores, as NVD lists them per version.
+#[derive(Debug, Default, Deserialize)]
+#[non_exhaustive]
+pub struct Metrics {
+    #[serde(default, rename = "cvssMetricV40")]
+    pub v40: Vec<CvssMetric>,
+    #[serde(default, rename = "cvssMetricV31")]
+    pub v31: Vec<CvssMetric>,
+    #[serde(default, rename = "cvssMetricV30")]
+    pub v30: Vec<CvssMetric>,
+    #[serde(default, rename = "cvssMetricV2")]
+    pub v2: Vec<CvssMetric>,
+}
+
+/// One CVSS score and who gave it.
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct CvssMetric {
+    /// Who scored it: `nvd@nist.gov`, or the CNA's address.
+    #[serde(default)]
+    pub source: String,
+    /// `Primary` for NVD's own score, `Secondary` for another's.
+    #[serde(default, rename = "type")]
+    pub kind: String,
+    pub cvss_data: CvssData,
+    /// CVSS 2 keeps the severity here rather than in `cvss_data`.
+    #[serde(default)]
+    pub base_severity: Option<String>,
+}
+
+/// The score itself.
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct CvssData {
+    pub version: String,
+    pub base_score: f64,
+    #[serde(default)]
+    pub base_severity: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -377,6 +422,33 @@ impl CveResponse {
             .collect()
     }
 
+    /// The CVSS score to quote for the CVE: version 3.1 first, as Red
+    /// Hat's issues quote it, then 4.0, 3.0 and 2, so a CVE its CNA
+    /// scored only in 4.0 still has a severity; within a version, NVD's
+    /// own score before another's. `None` when nobody has scored it.
+    pub fn cvss(&self) -> Option<Cvss> {
+        let m = &self.vulnerabilities.first()?.cve.metrics;
+        [&m.v31, &m.v40, &m.v30, &m.v2]
+            .into_iter()
+            .find_map(|scores| {
+                let pick = scores
+                    .iter()
+                    .find(|s| s.kind.eq_ignore_ascii_case("primary"))
+                    .or_else(|| scores.first())?;
+                let severity = pick
+                    .cvss_data
+                    .base_severity
+                    .clone()
+                    .or_else(|| pick.base_severity.clone())?;
+                Some(Cvss {
+                    version: pick.cvss_data.version.clone(),
+                    score: pick.cvss_data.base_score,
+                    severity: severity.to_ascii_lowercase(),
+                    source: pick.source.clone(),
+                })
+            })
+    }
+
     /// The CVE's English description, as NVD records it.
     ///
     /// What makes a bare CVE number mean something to a person being
@@ -485,6 +557,18 @@ impl CveResponse {
 /// `cpe:2.3:part:vendor:product:...` — vendor is index 3, product
 /// index 4.
 /// One upstream product a CVE affects, from its CPE name: the vendor
+/// The one CVSS score to quote for a CVE; see [`CveResponse::cvss`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cvss {
+    /// `3.1`, `4.0`, …
+    pub version: String,
+    pub score: f64,
+    /// Lower case: `critical`, `high`, `medium`, `low`, `none`.
+    pub severity: String,
+    /// Who scored it: `nvd@nist.gov`, or the CNA's address.
+    pub source: String,
+}
+
 /// and product fields, and the `target_sw` when NVD set one (`rust`,
 /// `node.js`, `python`), which is how the same product name in two
 /// ecosystems is told apart.
@@ -648,6 +732,56 @@ fn looks_like_binary_name(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_cvss_quoted_prefers_3_1_and_nvd_s_own_score() {
+        let resp = |metrics: serde_json::Value| -> CveResponse {
+            serde_json::from_value(serde_json::json!({"vulnerabilities": [{"cve": {
+                "id": "CVE-2026-6100", "metrics": metrics,
+            }}]}))
+            .expect("a response")
+        };
+        let metric = |kind: &str, source: &str, version: &str, score: f64, severity: &str| {
+            serde_json::json!({
+                "source": source, "type": kind,
+                "cvssData": {"version": version, "baseScore": score, "baseSeverity": severity},
+            })
+        };
+        // CVE-2026-6100: the CNA scored 4.0 critical, another source
+        // 3.1 high. 3.1 is what Red Hat quotes.
+        let both = resp(serde_json::json!({
+            "cvssMetricV40": [metric("Secondary", "cna@python.org", "4.0", 9.1, "CRITICAL")],
+            "cvssMetricV31": [metric("Secondary", "other@example.org", "3.1", 8.1, "HIGH")],
+        }));
+        let cvss = both.cvss().expect("scored");
+        assert_eq!((cvss.version.as_str(), cvss.score), ("3.1", 8.1));
+        assert_eq!(cvss.severity, "high");
+
+        // Only 4.0: still a severity.
+        let v4 = resp(serde_json::json!({
+            "cvssMetricV40": [metric("Secondary", "cna@python.org", "4.0", 5.7, "MEDIUM")],
+        }));
+        assert_eq!(v4.cvss().unwrap().severity, "medium");
+
+        // NVD's own score wins within a version.
+        let two = resp(serde_json::json!({
+            "cvssMetricV31": [
+                metric("Secondary", "cna@example.org", "3.1", 9.8, "CRITICAL"),
+                metric("Primary", "nvd@nist.gov", "3.1", 7.5, "HIGH"),
+            ],
+        }));
+        assert_eq!(two.cvss().unwrap().source, "nvd@nist.gov");
+
+        // CVSS 2 keeps its severity outside the score.
+        let old = resp(serde_json::json!({"cvssMetricV2": [{
+            "source": "nvd@nist.gov", "type": "Primary", "baseSeverity": "LOW",
+            "cvssData": {"version": "2.0", "baseScore": 2.1},
+        }]}));
+        assert_eq!(old.cvss().unwrap().severity, "low");
+
+        // Unscored.
+        assert!(resp(serde_json::json!({})).cvss().is_none());
+    }
+
     use super::*;
 
     // ---- helpers ----
@@ -676,6 +810,7 @@ mod tests {
         CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-15337".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -693,6 +828,7 @@ mod tests {
         CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -714,6 +850,7 @@ mod tests {
         let cve = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2025-13836".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -754,6 +891,7 @@ mod tests {
         let cve = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0990".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -806,6 +944,7 @@ mod tests {
         CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0002".to_string(),
                     source_identifier: source_id.to_string(),
                     vuln_status: String::new(),
@@ -821,6 +960,7 @@ mod tests {
         CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0003".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -839,6 +979,7 @@ mod tests {
         CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0004".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -857,6 +998,7 @@ mod tests {
         CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0000".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -1090,6 +1232,7 @@ mod tests {
         let resp = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-1234".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -1283,6 +1426,7 @@ mod tests {
         let resp = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-27951".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -1310,6 +1454,7 @@ mod tests {
         let resp = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -1337,6 +1482,7 @@ mod tests {
         let resp = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-0001".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),
@@ -1396,6 +1542,7 @@ mod tests {
         let resp = CveResponse {
             vulnerabilities: vec![Vulnerability {
                 cve: CveItem {
+                    metrics: Metrics::default(),
                     id: "CVE-2026-27951".to_string(),
                     source_identifier: String::new(),
                     vuln_status: String::new(),

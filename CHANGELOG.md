@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### sandogasa-nvd: read a CVE's CVSS scores
+
+Nothing in the workspace could say how severe a CVE is: sandogasa-nvd
+ignored the CVSS scores in NVD's answer, so a tool filing a Jira issue
+for a CVE had no severity to quote or to set a priority from.
+
+A CVE's `metrics` are now read (every version, with who scored it),
+and `CveResponse::cvss()` picks the one to quote: version 3.1 first,
+as Red Hat's issues quote it, then 4.0, 3.0 and 2, so a CVE its CNA
+scored only in 4.0 still has a severity; within a version, NVD's own
+score before another's.
+
 ### sandogasa-jira: search, project versions, create metadata and filing issues
 
 cpu-sig-tracker can link a Proposed Update's tracking item to an
