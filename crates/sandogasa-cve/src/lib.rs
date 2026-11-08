@@ -18,6 +18,7 @@ pub mod bundled;
 pub mod cache;
 pub mod facts;
 pub mod osv;
+pub mod severity;
 pub mod sources;
 pub mod version;
 

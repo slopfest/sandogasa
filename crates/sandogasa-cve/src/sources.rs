@@ -148,6 +148,26 @@ impl<'a> Sources<'a> {
         records
     }
 
+    /// Red Hat's security data for `cve_id`, as JSON
+    /// (see [`crate::severity::redhat_url`]); `None` when Red Hat has
+    /// not assessed it or does not answer.
+    pub async fn redhat_cve(&self, cve_id: &str) -> Option<String> {
+        let url = crate::severity::redhat_url(cve_id);
+        self.cached(&url, &format!("Asking Red Hat about {cve_id}"), false)
+            .await
+    }
+
+    /// GitHub's advisory database asked by CVE, as JSON: what
+    /// [`Self::ghsa_records`] reads the affected packages from and
+    /// [`crate::severity::ghsa_rating`] the severity.
+    pub async fn ghsa_json(&self, cve_id: &str) -> Option<String> {
+        self.github(
+            &advisory::ghsa_search_url(cve_id),
+            &format!("Asking GitHub's advisory database about {cve_id}"),
+        )
+        .await
+    }
+
     /// One OSV record as JSON.
     async fn osv_record(&self, id: &str) -> Option<String> {
         let url = osv::vuln_url(id);

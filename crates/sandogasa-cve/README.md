@@ -25,11 +25,25 @@ Where a CVE is fixed, and whether a build has that fix.
   `ghsa_range`) and a fixed-version candidate read out of advisory
   prose (`fixed_version_candidates`) — a candidate a caller confirms,
   never a decision.
+- **`bundled`** — judging a library copy a package bundles: the
+  `bundled(<library>) = <version>` declaration (`bundled_version`,
+  `declarations`, `copy_for_cve`), read from a build in Koji
+  (`Copies::declared`), against the library's fixed versions
+  (`against_fixes`) or by whether the copy's own release tag holds one
+  of the fix commits OSV records (`Copies::git_verdict`). Answers that
+  never change are kept under `$XDG_CACHE_HOME/sandogasa-cve/`, shared
+  by every tool.
+- **`severity`** — how severe a CVE is according to each source that
+  says (`ratings`): Red Hat's security data, NVD's answer (with the
+  CNA's and others' scores), and GitHub's advisory database, in that
+  order, each as a `Rating` with a `Level` and the source's own words.
 - **`version`** — `Nvr` parsing and `version_gte` on upstream version
   strings.
 
 Used by `fedora-cve-triage` (closing CVE bugs a Bodhi update already
-fixes) and `ebranch` (which CVE bugs a security update closes).
+fixes), `ebranch` (which CVE bugs a security update closes) and
+`cpu-sig-tracker` (a Proposed Update's Jira issue). DEVELOPMENT.md
+records the design decisions.
 
 ## License
 

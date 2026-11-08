@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### sandogasa-cve: rate a CVE's severity from Red Hat, NVD and GitHub
+
+There was no way to ask how severe a CVE is, and no one source would
+do: Red Hat's rating is the one an RHEL issue is weighed by, but Red
+Hat may not have assessed a CVE yet, which is often exactly when a
+CentOS Proposed Update is filed; NVD's answer may carry only a CNA's
+score, or none. The sources also disagree: CVE-2026-2297 is Low (CVSS
+3 3.3) to Red Hat and medium (CVSS 4.0 5.7) to Python's CNA.
+
+The new `severity` module asks Red Hat's security data, NVD's answer
+and GitHub's advisory database, in that order, and keeps every answer
+(`ratings`), each a `Rating` with a `Level` and the source's own
+words, so a caller uses the first and can show the rest. `Sources`
+gains `redhat_cve` and `ghsa_json`, cached like the other advisory
+answers. Computing a score from OSV's CVSS vectors is parked in the
+crate's new DEVELOPMENT.md, for if the three sources ever fall short.
+
 ### sandogasa-nvd: read a CVE's CVSS scores
 
 Nothing in the workspace could say how severe a CVE is: sandogasa-nvd
