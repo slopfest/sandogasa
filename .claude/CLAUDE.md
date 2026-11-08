@@ -92,6 +92,25 @@
     data" default no), and must not fire in `--json` mode or when
     stdin isn't a terminal — non-interactive runs keep the
     warn-and-continue or fail-with-remedy behavior
+- **A field the tool can derive from evidence it already has is filled
+  from that evidence, and an explicit value that disagrees is
+  confirmed.** When no flag sets it, the derived value fills it and the
+  preview names where it came from. An explicit value that disagrees
+  with the evidence is confirmed at a terminal, defaulting to the
+  evidence. Under `--yes` or without a terminal, the explicit value is
+  kept and the mismatch is reported, never silently replaced. Examples:
+  `ebranch check-update --submit` offering `--type security` and the
+  attached CVE trackers' highest severity (#76), and a Jira issue's
+  priority taken from its CVE's severity
+- **Before filing somewhere the author cannot edit afterwards, preview
+  the exact payload.** Red Hat's Jira accepts only comments once an
+  issue exists, unlike Bugzilla, where the reporter can edit the
+  description. So the preview shows every field and the full
+  description as they will appear, not a summary, and filing needs a
+  confirmation at a terminal. `--yes` alone does not file into such a
+  place: it also needs its own explicit flag (the same reasoning as
+  `-y` alone not reassigning bugs), so a scripted run files only when
+  it was told to file
 
 
 ## Workspace layout
