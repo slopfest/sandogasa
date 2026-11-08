@@ -15,6 +15,7 @@ mod list_issues;
 mod ping;
 mod retire;
 mod status;
+mod sync_updates;
 #[cfg(test)]
 mod test_support;
 mod timeline;
@@ -28,6 +29,7 @@ use list_issues::ListIssuesArgs;
 use ping::PingArgs;
 use retire::RetireArgs;
 use status::StatusArgs;
+use sync_updates::SyncUpdatesArgs;
 use timeline::TimelineArgs;
 use untag::UntagArgs;
 
@@ -78,6 +80,10 @@ enum Command {
     /// active tracking issue.
     Status(StatusArgs),
 
+    /// Write the SIG site's list of updates: open tracking issues with
+    /// a build in -testing or -release, public ones only.
+    SyncUpdates(SyncUpdatesArgs),
+
     /// How long each Proposed Update took and where the time went:
     /// filed, covered, fixed in stock, RHEL's advisory, shadowed.
     Timeline(TimelineArgs),
@@ -99,6 +105,7 @@ fn main() -> ExitCode {
         Command::Ping(args) => ping::run(&args),
         Command::Retire(args) => retire::run(&args),
         Command::Status(args) => status::run(&args),
+        Command::SyncUpdates(args) => sync_updates::run(&args),
         Command::Timeline(args) => timeline::run(&args),
         Command::Untag(args) => untag::run(&args),
     }

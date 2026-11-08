@@ -322,6 +322,27 @@ missing `start_date` / `due_date` via the GraphQL work-item API.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
 
+### `sync-updates`
+
+```sh
+cpu-sig-tracker sync-updates --file docs/content/updates-list.md [--dry-run]
+```
+
+Writes the list of updates the Proposed Updates site includes: one
+section per release, newest first (`# CentOS Stream 10`, then 9), and
+in each a table of the open tracking issues with a build in the SIG's
+`-release` (`released`) or `-testing` (`testing`) tag, sorted by
+package. Each row links the tracking issue and names the build, the
+type label, the CVEs, the upstream merge request and the Jira issue. A
+release with none reads "No updates at the moment."
+
+The file is rewritten whole on each run and carries no timestamps, so
+it changes only when the state does; `--dry-run` shows the lines that
+would change instead. Nothing embargoed is listed: tracking issues are
+read anonymously, so a confidential one is never seen, and an update
+whose Jira issue cannot be read anonymously is left out, whatever
+credentials are configured. Needs `koji` with the `cbs` profile.
+
 ### `timeline`
 
 ```sh

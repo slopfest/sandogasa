@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: write the Proposed Updates site's list of updates
+
+The Proposed Updates SIG site had no list of the updates it ships,
+and keeping one by hand would drift from the tracking issues and CBS
+tags it would describe. It also has to be safe for an embargoed
+update in the works: nothing about it may appear before it is public.
+
+`cpu-sig-tracker sync-updates --file docs/content/updates-list.md`
+writes the Markdown the site includes: a section per release, newest
+first, each a table of the open tracking issues with a build in the
+SIG's `-release` or `-testing` tag (package, build, type, CVEs, merge
+request, Jira issue, and whether it is released or in testing). The
+file is rewritten whole, without timestamps, so it changes only when
+the state does; `--dry-run` shows the lines that would change.
+Tracking issues are listed anonymously and a confidential one is
+skipped, as is an update whose Jira issue cannot be read anonymously.
+
+sandogasa-gitlab's `Issue` now reads GitLab's `confidential` flag.
+
 ### cpu-sig-tracker: find or file the RHEL Jira issue a Proposed Update's MR needs
 
 A CentOS Stream merge request needs an approved RHEL Jira issue, one

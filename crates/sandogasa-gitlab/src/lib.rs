@@ -45,6 +45,11 @@ pub struct Issue {
     /// When the issue was closed (RFC 3339), for a closed one.
     #[serde(default)]
     pub closed_at: Option<String>,
+    /// Visible only to project members and the author. A token that
+    /// can see it lists it like any other, so anything published from
+    /// a listing has to check this.
+    #[serde(default)]
+    pub confidential: bool,
 }
 
 /// A project's status flags relevant to filing issues. Fetched
@@ -1851,6 +1856,16 @@ mod tests {
         let issue: Issue = serde_json::from_str(json).unwrap();
         assert!(issue.description.is_none());
         assert!(issue.assignees.is_empty());
+        // Absent means public, as GitLab omits nothing it sends.
+        assert!(!issue.confidential);
+    }
+
+    #[test]
+    fn a_confidential_issue_says_so() {
+        let json = r#"{"iid": 2, "title": "embargoed", "description": null,
+            "state": "opened", "web_url": "u", "confidential": true}"#;
+        let issue: Issue = serde_json::from_str(json).unwrap();
+        assert!(issue.confidential);
     }
 
     #[test]

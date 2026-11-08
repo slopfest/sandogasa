@@ -314,6 +314,22 @@ Emit JSON instead of grouped text
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.SS cpu-sig-tracker sync-updates
+\fBcpu\-sig\-tracker sync\-updates\fR [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-file\fR>
+.PP
+Write the SIG site\*(Aqs list of updates: open tracking issues with a build in \-testing or \-release, public ones only
+.TP
+\fB\-\-dry\-run\fR
+Print what would change in the file, without writing it
+.TP
+\fB\-\-file\fR \fI<PATH>\fR
+The Markdown file to write, e.g. docs/content/updates\-list.md
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Name each lookup on stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS cpu-sig-tracker timeline
 \fBcpu\-sig\-tracker timeline\fR [\fB\-\-csv\fR] [\fB\-\-json\fR] [\fB\-\-open\-only\fR] [\fB\-\-package\fR] [\fB\-\-release\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP

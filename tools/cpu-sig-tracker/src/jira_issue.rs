@@ -180,23 +180,7 @@ pub fn search_jql(package: &str, branch: &str, cve: Option<&str>) -> Result<Stri
 
 /// The first CVE id in `text`, upper-cased.
 pub fn extract_cve(text: &str) -> Option<String> {
-    let upper = text.to_ascii_uppercase();
-    let mut rest = upper.as_str();
-    while let Some(at) = rest.find("CVE-") {
-        let tail = &rest[at + 4..];
-        let year: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if year.len() == 4 && tail[4..].starts_with('-') {
-            let num: String = tail[5..]
-                .chars()
-                .take_while(|c| c.is_ascii_digit())
-                .collect();
-            if num.len() >= 4 {
-                return Some(format!("CVE-{year}-{num}"));
-            }
-        }
-        rest = &rest[at + 4..];
-    }
-    None
+    crate::sync_updates::cve_ids(text).into_iter().next()
 }
 
 /// The issue's description: the submitter's own text first, then the
