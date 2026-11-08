@@ -269,7 +269,7 @@ struct BodyFields<'a> {
 /// Extract the final path segment of a GitLab project path —
 /// by convention the package name for `rpms/<pkg>`-style
 /// projects.
-fn package_from_project(project: &str) -> Option<&str> {
+pub(crate) fn package_from_project(project: &str) -> Option<&str> {
     project.rsplit('/').next().filter(|s| !s.is_empty())
 }
 

@@ -3,7 +3,7 @@
 Track [CentOS Proposed Updates (CPU) SIG][cpu-sig] package state across
 Koji, GitLab, and JIRA.
 
-[cpu-sig]: https://sigs.centos.org/proposed-updates/
+[cpu-sig]: https://sigs.centos.org/proposed_updates/
 
 The CPU SIG temporarily ships fixed packages (typically CVE backports)
 while CentOS Stream catches up to RHEL's security fixes. This tool
@@ -47,8 +47,9 @@ tracker is an Atlassian Cloud site (`issues.redhat.com` redirects to
 `redhat.atlassian.net`), so those are an API token created at
 <https://id.atlassian.com/manage-profile/security/api-tokens> — for a
 scoped token, `read:jira-user` and `read:jira-work`, plus
-`write:jira-work` to comment — together with the email of the Atlassian
-account it belongs to; both are checked against the site before being
+`write:jira-work` to comment or file an issue — together with the
+email of the Atlassian account it belongs to; both are checked against
+the site before being
 kept. Authenticated calls go through Atlassian's API gateway, the only
 place a scoped token is honoured; anonymous reads go to the site. Credentials are
 written to `~/.config/cpu-sig-tracker/config.toml` with 0600
@@ -97,6 +98,49 @@ stamps `start_date` from the Koji build's creation time.
 
 The issue body follows a canonical format that `status` parses back
 (MR, JIRA, Release, Affected build, Expected fix).
+
+### `jira`
+
+```sh
+cpu-sig-tracker jira <mr-url>                       # find, or draft
+cpu-sig-tracker jira <package> --branch c9s --cve CVE-YYYY-N \
+    --summary "..." [--description "..." | --description-file PATH] \
+    [--priority Major] [--type enhancement] [--file [--yes]] [--json]
+```
+
+Finds the RHEL Jira issue a Proposed Update's merge request needs,
+or drafts one. CentOS Stream's merge request template asks for an
+approved ticket, and Red Hat wants one issue per branch, so each MR
+has its own. Given an MR URL, the package, branch and any CVE are read
+from it; given a package name, `--branch` says which.
+
+It first searches RHEL for an open issue on that package and branch
+(`CentOS Stream N`, or `rhel-8.10` for c8s), about the CVE when there
+is one, and prints the `Resolves: RHEL-N` line for the MR when it
+finds one. Otherwise it drafts an issue:
+
+- type Bug, as Red Hat files enhancement requests too, with an
+  `RFE: ` summary for `--type enhancement`;
+- the package as the component;
+- affected versions `CentOS Stream N` and the upcoming minor (the
+  lowest `rhel-N.M` neither released nor archived, after the newest
+  released one), plus the current minor's z-stream for a CVE; c8s
+  names `rhel-8.10` and `rhel-8.10.z`;
+- a priority from the CVE's severity, taken from Red Hat's rating,
+  else NVD's, else GitHub's advisory: critical → Critical, high (Red
+  Hat's Important) → Major, medium → Normal, low → Minor. Blocker is
+  left to Red Hat. A `--priority` that disagrees is confirmed at a
+  terminal and kept with a note otherwise;
+- a description of your text, the CVE's severity by every source that
+  rated it, NVD's description and link, and the MR.
+
+The draft is printed exactly as it would be filed, every field and
+the whole description, because Red Hat's Jira cannot edit an issue
+once it is filed, only take comments. With Jira credentials it is also
+checked against the fields RHEL requires and the versions it offers.
+`--file` files it after asking (default no); `--file --yes` files
+without asking, for scripts. A public MR is read without a GitLab
+token.
 
 ### `list-issues`
 
@@ -335,6 +379,10 @@ tracking issue after the build is gone.
 ```sh
 # Refresh the inventory from CBS.
 cpu-sig-tracker dump-inventory --release c9s,c10s -o cpu-sig.toml --prune
+
+# Find or draft the RHEL Jira issue the MR needs; file it once it reads right.
+cpu-sig-tracker jira https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42
+cpu-sig-tracker jira https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42 --file
 
 # File a tracking issue for a new MR.
 cpu-sig-tracker file-issue https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42 \

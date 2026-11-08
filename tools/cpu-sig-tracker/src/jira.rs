@@ -92,7 +92,7 @@ pub enum FetchError {
 /// Process-wide tokio runtime for the blocking JIRA lookups.
 /// Built on first use so a `status` run over many issues pays
 /// for one runtime, not one per issue.
-fn runtime() -> Result<&'static tokio::runtime::Runtime, String> {
+pub(crate) fn runtime() -> Result<&'static tokio::runtime::Runtime, String> {
     static RUNTIME: std::sync::OnceLock<Result<tokio::runtime::Runtime, String>> =
         std::sync::OnceLock::new();
     RUNTIME

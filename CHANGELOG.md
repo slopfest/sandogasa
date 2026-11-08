@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: find or file the RHEL Jira issue a Proposed Update's MR needs
+
+A CentOS Stream merge request needs an approved RHEL Jira issue, one
+per branch, and filing one by hand is easy to get wrong: which
+affected versions (the CentOS Stream version, the upcoming minor, and
+for a CVE the current minor's z-stream, whose naming does not help),
+which priority, and a description that cannot be fixed afterwards,
+since Red Hat's Jira accepts only comments once an issue exists.
+
+`cpu-sig-tracker jira <MR URL>` (or `<package> --branch cNs`) searches
+RHEL for an open issue on the package and branch, about the MR's CVE
+when it names one, and prints the `Resolves:` line the MR needs.
+Failing that it drafts the issue: type Bug, the package as component,
+the affected versions above, a priority from the CVE's severity (Red
+Hat's rating first, then NVD's, then GitHub's; critical → Critical,
+high → Major, medium → Normal, low → Minor), and a description with
+every source's rating, NVD's text and the MR. The draft is shown
+exactly as it would be filed, checked against RHEL's required fields
+when Jira credentials are configured, and filed only with `--file`
+and a confirmation (or `--file --yes`). A `--priority` that disagrees
+with the severity is confirmed. Reading a public MR no longer needs a
+GitLab token.
+
+The Proposed Updates site's address in the README is now
+`https://sigs.centos.org/proposed_updates/`, with an underscore,
+matching the release package and the GitLab group.
+
 ### sandogasa-cve: rate a CVE's severity from Red Hat, NVD and GitHub
 
 There was no way to ask how severe a CVE is, and no one source would

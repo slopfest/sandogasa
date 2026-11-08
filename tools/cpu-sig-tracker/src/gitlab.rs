@@ -28,6 +28,13 @@ pub fn client(base_url: &str, project_path: &str) -> Result<Client, Box<dyn std:
     Client::new(base_url, project_path, &load_token()?)
 }
 
+/// A client for reading a public project: with the token when one is
+/// configured, anonymous otherwise, since reading a public merge
+/// request needs none. Writes go through [`client`], which insists.
+pub fn reader(base_url: &str, project_path: &str) -> Result<Client, Box<dyn std::error::Error>> {
+    Client::new(base_url, project_path, &load_token().unwrap_or_default())
+}
+
 /// Group-level client for `group_path`, with the token loaded
 /// from the environment or config file.
 pub fn group_client(

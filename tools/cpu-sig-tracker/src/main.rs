@@ -10,6 +10,7 @@ mod dump_inventory;
 mod file_issue;
 mod gitlab;
 mod jira;
+mod jira_issue;
 mod list_issues;
 mod ping;
 mod retire;
@@ -22,6 +23,7 @@ mod utils;
 
 use dump_inventory::DumpInventoryArgs;
 use file_issue::FileIssueArgs;
+use jira_issue::JiraArgs;
 use list_issues::ListIssuesArgs;
 use ping::PingArgs;
 use retire::RetireArgs;
@@ -54,6 +56,10 @@ enum Command {
     /// File a tracking issue in the proposed_updates GitLab
     /// group for a given Merge Request URL.
     FileIssue(FileIssueArgs),
+
+    /// Find the RHEL Jira issue a Proposed Update's MR needs, one per
+    /// branch, or draft one and, with --file, file it.
+    Jira(JiraArgs),
 
     /// List the SIG's tracking issues per release and package, with
     /// the MR each names; with an inventory, the packages missing one
@@ -88,6 +94,7 @@ fn main() -> ExitCode {
         Command::Config(args) => configure::run(&args),
         Command::DumpInventory(args) => dump_inventory::run(&args),
         Command::FileIssue(args) => file_issue::run(&args),
+        Command::Jira(args) => jira_issue::run(&args),
         Command::ListIssues(args) => list_issues::run(&args),
         Command::Ping(args) => ping::run(&args),
         Command::Retire(args) => retire::run(&args),

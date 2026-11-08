@@ -6,7 +6,7 @@ Track state for the [CentOS Proposed Updates SIG][cpu-sig] — the group
 that temporarily builds fixed packages while CentOS Stream catches up
 to RHEL-first security fixes.
 
-[cpu-sig]: https://sigs.centos.org/proposed-updates/
+[cpu-sig]: https://sigs.centos.org/proposed_updates/
 
 For each package the SIG ships, there is a tracking issue in the
 [proposed_updates GitLab group][cpu-gitlab], which links to a

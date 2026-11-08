@@ -190,12 +190,11 @@ fill are the user's to define before anything is built.
 
 What has to exist first:
 
-- **Jira writes.** `sandogasa-jira` today fetches one issue
-  (`JiraClient::new`, `with_api_key`); filing needs issue creation,
-  a JQL search (is there already an issue for this package and
-  release?), the create-metadata endpoint for the project's required
-  fields, and transitions to follow the issue's progress. Grow the
-  crate, with wiremock coverage, before touching the tool.
+- **Jira writes.** Done (2026-11-08): `sandogasa-jira` searches,
+  reads project versions and create metadata, and files issues, and
+  `cpu-sig-tracker jira` finds or files the RHEL issue an MR needs,
+  one per branch. Still open: transitions, to follow an issue's
+  progress.
 - **Repo setup, shared by Hyperscale and CPU.** SIG repos are
   created by *mirroring* the `redhat/centos-stream/rpms/<pkg>` project
   into the SIG namespace, not by forking — so a push to the SIG repo

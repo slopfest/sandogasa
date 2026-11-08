@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-11-06 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-11-08 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates SIG package state across Koji, GitLab and JIRA
 .SH SYNOPSIS
@@ -98,6 +98,81 @@ Print the issue that would be filed and exit without making any GitLab API calls
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.SS cpu-sig-tracker jira
+\fBcpu\-sig\-tracker jira\fR [\fB\-\-branch\fR] [\fB\-\-cve\fR] [\fB\-\-description\fR] [\fB\-\-description\-file\fR] [\fB\-\-priority\fR] [\fB\-\-summary\fR] [\fB\-\-type\fR] [\fB\-\-file\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
+.PP
+Find the RHEL Jira issue a Proposed Update\*(Aqs MR needs, one per branch, or draft one and, with \-\-file, file it
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fITARGET\fR>
+A CentOS Stream merge request URL (the package, branch and any CVE are read from it), or a package name with \-\-branch
+.SH SELECTION
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+CentOS Stream branch: c8s, c9s or c10s (default: the MR\*(Aqs target branch)
+.SH ISSUE
+.TP
+\fB\-\-cve\fR \fI<CVE\-ID>\fR
+CVE the update fixes (default: one named in the MR)
+.TP
+\fB\-\-description\fR \fI<TEXT>\fR
+Text for the description, before the CVE details and links
+.TP
+\fB\-\-description\-file\fR \fI<PATH>\fR
+Read the description text from a file
+.TP
+\fB\-\-priority\fR \fI<LEVEL>\fR
+Priority (default: from the CVE\*(Aqs severity)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+Critical
+.IP \(bu 2
+Major
+.IP \(bu 2
+Normal
+.IP \(bu 2
+Minor
+.RE
+.TP
+\fB\-\-summary\fR \fI<TEXT>\fR
+Issue summary (default: the MR\*(Aqs title)
+.TP
+\fB\-\-type\fR \fI<TYPE>\fR
+Kind of update; an enhancement\*(Aqs summary starts "RFE: "
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+enhancement
+.IP \(bu 2
+bugfix
+.IP \(bu 2
+arch\-enablement
+.IP \(bu 2
+security
+.RE
+.SH WRITING
+.TP
+\fB\-\-file\fR
+File the drafted issue (asked first at a terminal; with \-\-yes, without asking)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Don\*(Aqt ask: keep explicit values, file only with \-\-file
+.SH OUTPUT
+.TP
+\fB\-\-json\fR
+Print what was found, drafted and filed as JSON
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Name each request on stderr
 .SS cpu-sig-tracker list-issues
 \fBcpu\-sig\-tracker list\-issues\fR [\fB\-\-adopt\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-json\fR] [\fB\-\-package\fR] [\fB\-\-release\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
