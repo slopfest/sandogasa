@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Minimal JIRA REST v2 response types.
+//! Minimal JIRA REST v2 types.
 //!
-//! We only model what callers actually need: issue key, summary,
-//! status, and resolution. Everything else is ignored.
+//! We only model what callers actually need: an issue's key,
+//! summary, status, resolution, type, priority, components and
+//! affected versions; a project's versions; the fields an issue type
+//! takes; and a new issue to file. Everything else is ignored.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The account behind the credentials, from `GET myself`.
 #[derive(Debug, Clone, Deserialize)]
@@ -90,6 +92,19 @@ pub struct IssueFields {
     /// When the issue was filed, same spelling.
     #[serde(default)]
     pub created: Option<String>,
+    /// Bug, Story, Task, …
+    #[serde(default)]
+    pub issuetype: Option<NamedField>,
+    #[serde(default)]
+    pub priority: Option<NamedField>,
+    #[serde(default)]
+    pub components: Vec<NamedField>,
+    /// The affected versions (`CentOS Stream 9`, `rhel-9.5`), which
+    /// is how an issue says which release it is about.
+    #[serde(default)]
+    pub versions: Vec<NamedField>,
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 /// JIRA exposes many fields as `{name: ..., ...}`; we only need
@@ -98,4 +113,119 @@ pub struct IssueFields {
 #[non_exhaustive]
 pub struct NamedField {
     pub name: String,
+}
+
+/// One of a project's versions, from `GET project/<key>/versions`:
+/// what an issue's affected and fix versions are chosen from.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "camelCase")]
+pub struct Version {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub released: bool,
+    /// `YYYY-MM-DD`, when set.
+    #[serde(default)]
+    pub release_date: Option<String>,
+}
+
+/// A field an issue type takes when an issue is created, from the
+/// create metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FieldMeta {
+    /// `summary`, `versions`, `customfield_10868`, …
+    pub field_id: String,
+    pub name: String,
+    pub required: bool,
+    /// Whether Jira fills it in when left out.
+    pub has_default_value: bool,
+    /// The names (or values) it accepts, when it is a choice; empty
+    /// for a free field.
+    pub allowed_values: Vec<String>,
+}
+
+/// An issue to file with [`crate::JiraClient::create_issue`].
+///
+/// The named fields cover what a bug report needs; anything else a
+/// project requires goes in `extra`, keyed by field id, in the shape
+/// the REST API takes (`{"value": "…"}` for a choice).
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
+pub struct NewIssue {
+    /// Project key, e.g. `RHEL`.
+    pub project: String,
+    /// Issue type name, e.g. `Bug`.
+    pub issue_type: String,
+    pub summary: String,
+    /// Plain text or Jira wiki markup, as REST v2 takes it.
+    pub description: String,
+    pub components: Vec<String>,
+    /// Affected version names.
+    pub versions: Vec<String>,
+    /// Priority name, e.g. `Critical`; `None` leaves Jira's default.
+    pub priority: Option<String>,
+    pub labels: Vec<String>,
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl NewIssue {
+    /// A new issue of `issue_type` in `project` with `summary`; the
+    /// rest is set on the fields.
+    pub fn new(project: &str, issue_type: &str, summary: &str) -> Self {
+        NewIssue {
+            project: project.to_string(),
+            issue_type: issue_type.to_string(),
+            summary: summary.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// The request body REST v2's `POST issue` takes.
+    pub fn to_json(&self) -> serde_json::Value {
+        let named = |names: &[String]| -> Vec<serde_json::Value> {
+            names
+                .iter()
+                .map(|n| serde_json::json!({ "name": n }))
+                .collect()
+        };
+        let mut fields = serde_json::Map::new();
+        fields.insert("project".into(), serde_json::json!({ "key": self.project }));
+        fields.insert(
+            "issuetype".into(),
+            serde_json::json!({ "name": self.issue_type }),
+        );
+        fields.insert("summary".into(), self.summary.clone().into());
+        if !self.description.is_empty() {
+            fields.insert("description".into(), self.description.clone().into());
+        }
+        if !self.components.is_empty() {
+            fields.insert("components".into(), named(&self.components).into());
+        }
+        if !self.versions.is_empty() {
+            fields.insert("versions".into(), named(&self.versions).into());
+        }
+        if let Some(p) = &self.priority {
+            fields.insert("priority".into(), serde_json::json!({ "name": p }));
+        }
+        if !self.labels.is_empty() {
+            fields.insert("labels".into(), self.labels.clone().into());
+        }
+        for (k, v) in &self.extra {
+            fields.insert(k.clone(), v.clone());
+        }
+        serde_json::json!({ "fields": fields })
+    }
+}
+
+/// What Jira answers to a created issue.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct CreatedIssue {
+    pub id: String,
+    /// The new issue's key, e.g. `RHEL-170528`.
+    pub key: String,
 }

@@ -2,7 +2,7 @@
 
 use reqwest::Client;
 
-use crate::models::{Issue, Myself};
+use crate::models::{CreatedIssue, FieldMeta, Issue, Myself, NewIssue, Version};
 
 /// Minimal JIRA REST v2 client.
 ///
@@ -115,6 +115,214 @@ impl JiraClient {
         let issue: Issue = resp.error_for_status()?.json().await?;
         Ok(Some(issue))
     }
+
+    /// The issues `jql` matches, with `fields` read (an empty list
+    /// reads Jira's default set), up to `limit`, through Jira Cloud's
+    /// paginated `search/jql`. Public issues are found anonymously.
+    pub async fn search(
+        &self,
+        jql: &str,
+        fields: &[&str],
+        limit: usize,
+    ) -> Result<Vec<Issue>, reqwest::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Page {
+            #[serde(default)]
+            issues: Vec<Issue>,
+            #[serde(default)]
+            next_page_token: Option<String>,
+            #[serde(default)]
+            is_last: Option<bool>,
+        }
+        let mut out: Vec<Issue> = Vec::new();
+        let mut token: Option<String> = None;
+        let fields = fields.join(",");
+        while out.len() < limit {
+            let page_size = (limit - out.len()).min(100).to_string();
+            let mut query: Vec<(&str, &str)> = vec![("jql", jql), ("maxResults", &page_size)];
+            if !fields.is_empty() {
+                query.push(("fields", &fields));
+            }
+            if let Some(t) = &token {
+                query.push(("nextPageToken", t));
+            }
+            let page: Page = self
+                .auth(self.client.get(self.url("search/jql")).query(&query))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let done = page.issues.is_empty()
+                || page.is_last.unwrap_or(true)
+                || page.next_page_token.is_none();
+            out.extend(page.issues);
+            if done {
+                break;
+            }
+            token = page.next_page_token;
+        }
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// A project's versions, released and archived ones included:
+    /// what affected versions are chosen from. Public for a public
+    /// project.
+    pub async fn project_versions(&self, project: &str) -> Result<Vec<Version>, reqwest::Error> {
+        self.auth(
+            self.client
+                .get(self.url(&format!("project/{project}/versions"))),
+        )
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await
+    }
+
+    /// The fields an issue of type `issue_type` (by name) takes in
+    /// `project`, from the create metadata: which are required, and
+    /// what a choice accepts. `Ok(None)` when the project has no such
+    /// issue type for these credentials. Needs credentials that may
+    /// create issues there; anonymously Jira answers 404.
+    pub async fn create_metadata(
+        &self,
+        project: &str,
+        issue_type: &str,
+    ) -> Result<Option<Vec<FieldMeta>>, reqwest::Error> {
+        let types = self
+            .paged(
+                &format!("issue/createmeta/{project}/issuetypes"),
+                "issueTypes",
+            )
+            .await?;
+        let Some(id) = types.iter().find_map(|t| {
+            (t["name"].as_str()?.eq_ignore_ascii_case(issue_type))
+                .then(|| t["id"].as_str().map(str::to_string))
+                .flatten()
+        }) else {
+            return Ok(None);
+        };
+        let fields = self
+            .paged(
+                &format!("issue/createmeta/{project}/issuetypes/{id}"),
+                "fields",
+            )
+            .await?;
+        Ok(Some(fields.iter().filter_map(field_meta).collect()))
+    }
+
+    /// File `issue`, answering its key. Jira's own complaint is kept
+    /// in the error (a required field left out, a version the project
+    /// does not have), since it is what says how to fix the request.
+    pub async fn create_issue(&self, issue: &NewIssue) -> Result<CreatedIssue, String> {
+        let resp = self
+            .auth(self.client.post(self.url("issue")).json(&issue.to_json()))
+            .send()
+            .await
+            .map_err(|e| format!("could not reach Jira: {e}"))?;
+        let status = resp.status();
+        if status.is_success() {
+            return resp
+                .json()
+                .await
+                .map_err(|e| format!("Jira filed the issue but its answer did not parse: {e}"));
+        }
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!(
+            "Jira refused the issue ({status}): {}",
+            jira_errors(&body)
+        ))
+    }
+
+    /// Every item under `key` in a paginated answer (`startAt`,
+    /// `maxResults`); the create metadata lists both issue types and
+    /// fields this way. `values` is accepted too, as Jira names the
+    /// list that in some answers.
+    async fn paged(&self, path: &str, key: &str) -> Result<Vec<serde_json::Value>, reqwest::Error> {
+        let mut out = Vec::new();
+        loop {
+            let start = out.len().to_string();
+            let page: serde_json::Value = self
+                .auth(
+                    self.client
+                        .get(self.url(path))
+                        .query(&[("startAt", start.as_str()), ("maxResults", "50")]),
+                )
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let items = page[key]
+                .as_array()
+                .or_else(|| page["values"].as_array())
+                .cloned()
+                .unwrap_or_default();
+            let total = page["total"].as_u64();
+            let got = items.len();
+            out.extend(items);
+            if got == 0 || total.is_none_or(|t| out.len() as u64 >= t) {
+                break;
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// One field of the create metadata.
+fn field_meta(f: &serde_json::Value) -> Option<FieldMeta> {
+    Some(FieldMeta {
+        field_id: f["fieldId"]
+            .as_str()
+            .or_else(|| f["key"].as_str())?
+            .to_string(),
+        name: f["name"].as_str().unwrap_or_default().to_string(),
+        required: f["required"].as_bool().unwrap_or(false),
+        has_default_value: f["hasDefaultValue"].as_bool().unwrap_or(false),
+        allowed_values: f["allowedValues"]
+            .as_array()
+            .map(|vs| {
+                vs.iter()
+                    .filter_map(|v| v["name"].as_str().or_else(|| v["value"].as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
+/// Jira's complaint in an error body: its `errorMessages` and the
+/// per-field `errors`, or the body itself when it is neither.
+fn jira_errors(body: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return body.trim().to_string();
+    };
+    let mut parts: Vec<String> = v["errorMessages"]
+        .as_array()
+        .map(|m| {
+            m.iter()
+                .filter_map(|x| x.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(errors) = v["errors"].as_object() {
+        let mut fields: Vec<_> = errors.iter().collect();
+        fields.sort_by(|a, b| a.0.cmp(b.0));
+        parts.extend(
+            fields
+                .into_iter()
+                .map(|(k, e)| format!("{k}: {}", e.as_str().unwrap_or_default())),
+        );
+    }
+    if parts.is_empty() {
+        body.trim().to_string()
+    } else {
+        parts.join("; ")
+    }
 }
 
 /// An Atlassian Cloud site's tenant id, from its public
@@ -161,7 +369,9 @@ fn build_http_client() -> Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{
+        body_json, header, method, path, query_param, query_param_is_missing,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
@@ -367,5 +577,227 @@ mod tests {
 
         let issue = client.issue("RHEL-2").await.unwrap().unwrap();
         assert!(!issue.is_resolved());
+    }
+
+    #[tokio::test]
+    async fn search_follows_the_page_token_and_reads_the_fields() {
+        let server = MockServer::start().await;
+        let client = JiraClient::new(&server.uri());
+        let issue = |key: &str, versions: &[&str]| {
+            serde_json::json!({
+                "key": key,
+                "fields": {
+                    "summary": "CVE-2025-27363: out of bounds write in FreeType <= 2.13.0",
+                    "status": {"name": "Closed"},
+                    "resolution": {"name": "Duplicate"},
+                    "issuetype": {"name": "Bug"},
+                    "priority": {"name": "Critical"},
+                    "components": [{"name": "freetype"}],
+                    "versions": versions.iter().map(|v| serde_json::json!({"name": v})).collect::<Vec<_>>(),
+                }
+            })
+        };
+        let jql = "project = RHEL AND component = freetype";
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/search/jql"))
+            .and(query_param("jql", jql))
+            .and(query_param("fields", "summary,versions"))
+            .and(query_param_is_missing("nextPageToken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issues": [issue("RHEL-83280", &["CentOS Stream 9", "rhel-9.5"])],
+                "nextPageToken": "page2",
+                "isLast": false,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/search/jql"))
+            .and(query_param("nextPageToken", "page2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issues": [issue("RHEL-83281", &["rhel-8.10"])],
+                "isLast": true,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let found = client
+            .search(jql, &["summary", "versions"], 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            found.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            ["RHEL-83280", "RHEL-83281"]
+        );
+        let first = &found[0].fields;
+        assert_eq!(first.issuetype.as_ref().unwrap().name, "Bug");
+        assert_eq!(first.priority.as_ref().unwrap().name, "Critical");
+        assert_eq!(first.components[0].name, "freetype");
+        assert_eq!(
+            first
+                .versions
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect::<Vec<_>>(),
+            ["CentOS Stream 9", "rhel-9.5"]
+        );
+    }
+
+    #[tokio::test]
+    async fn search_stops_at_the_limit() {
+        let server = MockServer::start().await;
+        let client = JiraClient::new(&server.uri());
+        let issue = |key: &str| serde_json::json!({"key": key, "fields": {"summary": "s", "status": {"name": "New"}}});
+        // One page holding more than asked for, and a token that must
+        // not be followed.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/search/jql"))
+            .and(query_param("maxResults", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issues": [issue("RHEL-1"), issue("RHEL-2")],
+                "nextPageToken": "more",
+                "isLast": false,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let found = client.search("project = RHEL", &[], 1).await.unwrap();
+        assert_eq!(found.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn project_versions_lists_released_and_archived_state() {
+        let server = MockServer::start().await;
+        let client = JiraClient::new(&server.uri());
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/project/RHEL/versions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"id": "1", "name": "rhel-9.8", "archived": false, "released": true, "releaseDate": "2026-05-19"},
+                {"id": "2", "name": "rhel-9.9", "archived": false, "released": false},
+            ])))
+            .mount(&server)
+            .await;
+        let versions = client.project_versions("RHEL").await.unwrap();
+        assert_eq!(versions.len(), 2);
+        assert!(versions[0].released);
+        assert_eq!(versions[0].release_date.as_deref(), Some("2026-05-19"));
+        assert!(!versions[1].released && !versions[1].archived);
+    }
+
+    #[tokio::test]
+    async fn create_metadata_finds_the_type_and_its_fields() {
+        let server = MockServer::start().await;
+        let client = JiraClient::new(&server.uri())
+            .with_api_token("me@example.com".into(), "tok".into())
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/issue/createmeta/RHEL/issuetypes"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issueTypes": [{"id": "1", "name": "Story"}, {"id": "2", "name": "Bug"}],
+                "total": 2,
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/issue/createmeta/RHEL/issuetypes/2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "fields": [
+                    {"fieldId": "summary", "name": "Summary", "required": true, "hasDefaultValue": false},
+                    {"fieldId": "versions", "name": "Affects Versions", "required": true,
+                     "allowedValues": [{"name": "CentOS Stream 9"}, {"name": "rhel-9.9"}]},
+                    {"fieldId": "customfield_10868", "name": "Product", "required": false,
+                     "hasDefaultValue": true, "allowedValues": [{"value": "Red Hat Enterprise Linux"}]},
+                ],
+                "total": 3,
+            })))
+            .mount(&server)
+            .await;
+
+        let fields = client
+            .create_metadata("RHEL", "bug")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fields.len(), 3);
+        let versions = fields.iter().find(|f| f.field_id == "versions").unwrap();
+        assert!(versions.required);
+        assert_eq!(versions.allowed_values, ["CentOS Stream 9", "rhel-9.9"]);
+        let product = fields
+            .iter()
+            .find(|f| f.field_id == "customfield_10868")
+            .unwrap();
+        assert!(product.has_default_value);
+        assert_eq!(product.allowed_values, ["Red Hat Enterprise Linux"]);
+        // A type the project does not have is not an error.
+        assert!(
+            client
+                .create_metadata("RHEL", "Epic")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_issue_sends_the_fields_and_answers_the_key() {
+        let server = MockServer::start().await;
+        let client = JiraClient::new(&server.uri())
+            .with_api_token("me@example.com".into(), "tok".into())
+            .unwrap();
+        let mut issue = NewIssue::new(
+            "RHEL",
+            "Bug",
+            "CVE-2025-27363: out of bounds write in FreeType <= 2.13.0",
+        );
+        issue.description = "severity: high (CVSS 3.1: 8.1)".into();
+        issue.components = vec!["freetype".into()];
+        issue.versions = vec!["CentOS Stream 9".into(), "rhel-9.9".into()];
+        issue.priority = Some("Critical".into());
+        Mock::given(method("POST"))
+            .and(path("/rest/api/2/issue"))
+            .and(body_json(serde_json::json!({"fields": {
+                "project": {"key": "RHEL"},
+                "issuetype": {"name": "Bug"},
+                "summary": "CVE-2025-27363: out of bounds write in FreeType <= 2.13.0",
+                "description": "severity: high (CVSS 3.1: 8.1)",
+                "components": [{"name": "freetype"}],
+                "versions": [{"name": "CentOS Stream 9"}, {"name": "rhel-9.9"}],
+                "priority": {"name": "Critical"},
+            }})))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(serde_json::json!({"id": "1", "key": "RHEL-200001"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let created = client.create_issue(&issue).await.unwrap();
+        assert_eq!(created.key, "RHEL-200001");
+    }
+
+    #[tokio::test]
+    async fn a_refused_issue_says_what_jira_objected_to() {
+        let server = MockServer::start().await;
+        let client = JiraClient::new(&server.uri())
+            .with_api_token("me@example.com".into(), "tok".into())
+            .unwrap();
+        Mock::given(method("POST"))
+            .and(path("/rest/api/2/issue"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "errorMessages": [],
+                "errors": {"versions": "Version name 'rhel-9.99' is not valid"},
+            })))
+            .mount(&server)
+            .await;
+        let err = client
+            .create_issue(&NewIssue::new("RHEL", "Bug", "x"))
+            .await
+            .unwrap_err();
+        assert!(err.contains("400"), "{err}");
+        assert!(
+            err.contains("versions: Version name 'rhel-9.99' is not valid"),
+            "{err}"
+        );
     }
 }

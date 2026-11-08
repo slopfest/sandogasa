@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### sandogasa-jira: search, project versions, create metadata and filing issues
+
+cpu-sig-tracker can link a Proposed Update's tracking item to an
+existing RHEL Jira issue, but not find one or file one: sandogasa-jira
+could only read a single issue by its key. Refs the TODO entry
+"cpu-sig-tracker: automate the Proposed Updates paperwork".
+
+`JiraClient` gains:
+
+- `search(jql, fields, limit)`, through Jira Cloud's paginated
+  `search/jql`; public issues are found anonymously;
+- `project_versions(project)`, the versions affected versions are
+  chosen from, with their released and archived state;
+- `create_metadata(project, issue_type)`, the fields an issue type
+  takes, which are required and what a choice accepts (as `FieldMeta`);
+- `create_issue(&NewIssue)`, which answers the new key (`CreatedIssue`)
+  or Jira's own objection to the request.
+
+An `Issue`'s fields now also carry its type, priority, components,
+affected versions and labels.
+
 ### ebranch: check-update --submit suggests type security and a severity from the attached CVE trackers
 
 An update fixing CVEs went out as whatever `--type` said, `bugfix` by
