@@ -536,6 +536,14 @@ The summary counts each kind and every broken requirement is labeled
 `[FTI]`/`[FTBFS]`. (If a touched capability is also provided by an
 unrelated package, the check can over-report — the safe direction.)
 
+The update's own binary packages are checked for installability one
+requirement at a time: each Requires must have a provider, in the
+update or in the target release. This is not a resolver transaction,
+so it does not check `Conflicts:` or `Obsoletes:`, or whether the
+packages can be installed together: a new conflict with a package's
+usual companions, or packages that each install alone but not side by
+side, go unnoticed.
+
 The input can also be a Bodhi update alias or URL:
 
 ```sh
