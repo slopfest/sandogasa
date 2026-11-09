@@ -222,6 +222,11 @@ to copr build-package."
 }
 
 #[derive(clap::Args, Clone)]
+// The shared notes flags only mean something with --submit.
+#[command(
+    mut_arg("notes", |a| a.requires("submit")),
+    mut_arg("notes_file", |a| a.requires("submit"))
+)]
 struct CheckUpdateArgs {
     /// Koji side tags, Bodhi update aliases/URLs, or COPR projects.
     #[arg(
@@ -1795,12 +1800,6 @@ fn main() -> ExitCode {
             eprintln!("error: --type security requires --severity (low/medium/high/urgent)");
             return ExitCode::FAILURE;
         }
-        // The shared flags cannot carry clap's `requires`, so the
-        // pairing with --submit is checked here.
-        if a.notes.given() && !a.submit {
-            eprintln!("error: --notes and --notes-file are only used with --submit");
-            return ExitCode::FAILURE;
-        }
         // Notes are required for submission; resolve (and read the
         // file) up front so a typo'd path fails in seconds.
         let submit_notes = if a.submit {
@@ -2703,6 +2702,23 @@ fn print_cycles(cycles: &[dag::Cycle], closure: &resolve::Closure) {
 mod tests {
     use super::input_identity;
     use crate::check_update::detect_input_type;
+
+    #[test]
+    fn update_notes_are_accepted_only_with_submit() {
+        use clap::Parser;
+        let parse = |extra: &[&str]| {
+            let mut args = vec!["ebranch", "check-update", "f45-build-side-1"];
+            args.extend_from_slice(extra);
+            super::Cli::try_parse_from(args)
+        };
+        for flag in [["--notes", "x"], ["--notes-file", "n.md"]] {
+            let err = parse(&flag).err().expect("refused without --submit");
+            assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+            let mut with = flag.to_vec();
+            with.push("--submit");
+            assert!(parse(&with).is_ok(), "{flag:?} --submit");
+        }
+    }
 
     #[test]
     fn fas_is_offered_only_when_asked_for() {

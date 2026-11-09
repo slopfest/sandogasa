@@ -479,9 +479,18 @@ across the workspace. Where a flag pair recurs, define it once in
 `sandogasa-cli` and flatten it in, so the name, value name, help text
 and errors cannot drift: `ConfigArgs` (`config --all`) and
 `NotesArgs` (`--notes`/`--notes-file`) are shared that way, and
-`parse_with_defaults` adds `--no-defaults` to every tool. A flattened
-group cannot carry clap's `requires`, so a pairing such as ebranch's
-"notes need `--submit`" is checked after parsing.
+`parse_with_defaults` adds `--no-defaults` to every tool. A rule that
+holds only in one command, such as ebranch's "notes need `--submit`",
+is added where the group is flattened, with `mut_arg` on that
+command's struct, so clap still enforces it and reports it:
+
+```rust
+#[command(
+    mut_arg("notes", |a| a.requires("submit")),
+    mut_arg("notes_file", |a| a.requires("submit"))
+)]
+struct CheckUpdateArgs { … }
+```
 
 Before naming a new flag, check this table; add a row when a name
 starts to recur.

@@ -18,10 +18,10 @@ headings, as it has more than six.
 The flags are the ones `ebranch check-update --submit` already takes
 for Bodhi update notes, and both tools now get them from one shared
 definition, `sandogasa_cli::NotesArgs`, so their names, help and errors
-stay the same. ebranch's `--notes` without `--submit` is still refused,
-now after parsing rather than by clap. DEVELOPMENT.md gains a table of
-the flag names in use across the tools and what each means, to check
-before naming a new one. Resolves #94.
+stay the same. ebranch still refuses `--notes` without `--submit`: it
+adds that rule to the shared flags with clap's `mut_arg`. DEVELOPMENT.md
+gains a table of the flag names in use across the tools and what each
+means, to check before naming a new one. Resolves #94.
 
 ### cpu-sig-tracker: mr waits for a new fork before pushing to it
 
