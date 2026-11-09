@@ -152,11 +152,13 @@ For the CVEs no issue covers on the branch it drafts one issue: type
 Bug; a summary from `--summary` or the MR's title, or, for a single
 CVE, the CVE's title as Red Hat's bug for it reads (several CVEs need
 a summary a person wrote); the package as component; one affected
-version, `CentOS Stream N` (RHEL's single-value policy keeps only the
-first, as Red Hat's bot did to two old blktrace issues,
+version, `CentOS Stream N` (RHEL's single-value policy allows one, and
+Red Hat's bot trims issues listing more without keeping a predictable
+one: two old blktrace issues,
 <https://redhat.atlassian.net/browse/RHEL-123605> and
-<https://redhat.atlassian.net/browse/RHEL-123606>, and Red Hat sets the
-RHEL versions itself); a priority from the most severe CVE's severity
+<https://redhat.atlassian.net/browse/RHEL-123606>, were left with a
+RHEL minor beside CentOS Stream; Red Hat sets the RHEL versions
+itself); a priority from the most severe CVE's severity
 (Red Hat's rating first, then NVD's, then GitHub's; critical →
 Critical, high → Major, medium → Normal, low → Minor), not counting
 a CVE Red Hat assesses as not applicable to the release, which is

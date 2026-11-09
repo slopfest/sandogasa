@@ -121,8 +121,10 @@ pub fn branch_major(branch: &str) -> Result<u32, String> {
 /// The affected version an issue for `branch` names, and is searched
 /// by: the branch's CentOS Stream version, or `rhel-8.10` for c8s,
 /// whose last minor stands in for it. One, because RHEL takes one: since
-/// 2026-10 its "single-value policy" keeps only the first affected
-/// version an issue lists, and Red Hat sets the RHEL versions itself.
+/// 2026-10 its "single-value policy" allows a single affected version,
+/// Red Hat's bot trims issues listing more, and which of them survives
+/// is not predictable (RHEL-123605 and RHEL-123606 kept a RHEL minor
+/// beside CentOS Stream). Red Hat sets the RHEL versions itself.
 pub fn branch_version(branch: &str) -> Result<String, String> {
     Ok(match branch_major(branch)? {
         8 => "rhel-8.10".to_string(),

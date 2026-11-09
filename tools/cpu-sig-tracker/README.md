@@ -147,8 +147,8 @@ drafts one issue covering every CVE without one:
   the change. Without a summary there is no draft, only the search;
 - the package as the component;
 - one affected version, `CentOS Stream N` (`rhel-8.10` for c8s): RHEL
-  keeps only the first affected version an issue lists, and sets the
-  RHEL versions itself;
+  allows a single affected version, trims issues listing more in a way
+  that keeps no predictable one, and sets the RHEL versions itself;
 - a priority from the most severe CVE's severity, each taken from
   Red Hat's rating, else NVD's, else GitHub's advisory: critical → Critical, high (Red
   Hat's Important) → Major, medium → Normal, low → Minor. Blocker is
