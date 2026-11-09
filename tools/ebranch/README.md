@@ -1302,6 +1302,26 @@ addresses are not listed. The Matrix rooms come from a built-in list
 perl-sig = "#perl:fedoraproject.org"
 ```
 
+With `--copr <owner>/<project>`, the change owner's COPR, where the
+dependents' rebuilds are often trialled before the side tag exists, is
+read for each package left to rebuild that it has a succeeded build of
+(the branch's chroot preferred):
+
+- **version gap:** a COPR build of an older version than the branch's
+  spec (when the spec writes the version out) is marked as a hint only,
+  since its patches were made for other sources;
+- **carried patches:** the `Patch:` entries in the COPR's spec that
+  dist-git's spec on the branch lacks, which point at the packages that
+  needed source changes;
+- **where each came from:** its `From:`, `Subject:` and `X-Git-Url:`
+  header and the spec's comment above its `Patch:` line, so a patch is
+  credited and linked to its real source.
+
+The SRPMs come from COPR's Pulp storage. Only their spec and patches are
+extracted (`rpm2cpio` and `cpio`, into a scratch directory), and nothing
+in them is built or evaluated. dist-git's spec is fetched from dist-git.
+An SRPM too old to be kept is reported as no longer available.
+
 Local mock builds can be folded in with `--sidetag-results <dir>` (built
 with the side tag) and `--baseline-results <dir>` (built against the
 branch as it is). Each directory holds one subdirectory per build, named

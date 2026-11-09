@@ -56,6 +56,32 @@ pub struct PackageStatus {
     pub chroots: BTreeMap<String, ChrootState>,
 }
 
+/// A build, from `/api_3/build/<id>`: what it was built from.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct Build {
+    pub id: u64,
+    #[serde(default)]
+    pub chroots: Vec<String>,
+    #[serde(default)]
+    pub source_package: SourcePackage,
+}
+
+/// A build's source package.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[non_exhaustive]
+pub struct SourcePackage {
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `V-R`, possibly with an `E:` prefix.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Where COPR once kept the SRPM. That location now answers 404
+    /// (COPR's results moved to Pulp), but its file name is the SRPM's.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct MonitorResponse {
     #[serde(default)]
@@ -113,6 +139,24 @@ impl Copr {
             http::blocking_json_ok(resp, &format!("COPR monitor for {owner}/{project}"))?;
         Ok(resp.packages)
     }
+
+    /// Build `id`.
+    pub fn build(&self, id: u64) -> Result<Build, Box<dyn std::error::Error>> {
+        let url = format!("{}/api_3/build/{id}", self.base_url);
+        let resp = self.http.get(&url).send()?;
+        Ok(http::blocking_json_ok(resp, &format!("COPR build {id}"))?)
+    }
+
+    /// The file at `url`, following redirects; `None` when the server
+    /// answers 404, as for an SRPM too old to be kept.
+    pub fn download(&self, url: &str) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        let resp = self.http.get(url).send()?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let resp = http::blocking_ok(resp, &format!("GET {url}"))?;
+        Ok(Some(resp.bytes()?.to_vec()))
+    }
 }
 
 /// The repoid fedrq gives a COPR's repo — `copr:<host>:<owner>:<project>`,
@@ -125,6 +169,22 @@ pub fn repoid(owner: &str, project: &str) -> String {
         None => owner.to_string(),
     };
     format!("copr:{host}:{owner}:{project}")
+}
+
+/// Where a build's SRPM is served now that COPR's results are in Pulp:
+/// the chroot's `Packages/` directory, under the first letter of the
+/// file name, lower case. `filename` is the last part of
+/// [`SourcePackage::url`].
+pub fn srpm_url(owner: &str, project: &str, chroot: &str, filename: &str) -> String {
+    let first = filename
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_lowercase())
+        .unwrap_or('_');
+    format!(
+        "https://packages.redhat.com/api/pulp-content/public-copr/{owner}/{project}/{chroot}/\
+         Packages/{first}/{filename}"
+    )
 }
 
 /// The COPR chroot-name prefix (trailing `-` included, so `epel-9-`
@@ -207,6 +267,47 @@ pub fn available_chroots(packages: &[PackageStatus]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_srpm_is_found_under_the_chroots_packages_by_its_first_letter() {
+        assert_eq!(
+            srpm_url(
+                "mcrha",
+                "libical-4.x",
+                "fedora-rawhide-x86_64",
+                "Claws-mail-4.3.1-3.fc45.src.rpm"
+            ),
+            "https://packages.redhat.com/api/pulp-content/public-copr/mcrha/libical-4.x/\
+             fedora-rawhide-x86_64/Packages/c/Claws-mail-4.3.1-3.fc45.src.rpm"
+        );
+    }
+
+    #[test]
+    fn a_build_says_what_it_was_built_from() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api_3/build/42")
+            .with_status(200)
+            .with_body(
+                r#"{"id": 42, "chroots": ["fedora-rawhide-x86_64"],
+                    "source_package": {"name": "orage", "version": "4.20.1-2",
+                    "url": "https://download.copr.fedorainfracloud.org/results/mcrha/libical-4.x/srpm-builds/42/orage-4.20.1-2.src.rpm"}}"#,
+            )
+            .create();
+        server
+            .mock("GET", "/gone.src.rpm")
+            .with_status(404)
+            .create();
+        let copr = Copr::with_base_url(&server.url());
+        let b = copr.build(42).unwrap();
+        assert_eq!(b.chroots, ["fedora-rawhide-x86_64"]);
+        assert_eq!(b.source_package.version.as_deref(), Some("4.20.1-2"));
+        assert_eq!(
+            copr.download(&format!("{}/gone.src.rpm", server.url()))
+                .unwrap(),
+            None
+        );
+    }
 
     #[test]
     fn repoid_spells_groups_the_way_fedrq_does() {

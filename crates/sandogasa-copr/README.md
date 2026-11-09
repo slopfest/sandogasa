@@ -6,6 +6,10 @@ read-only `monitor` endpoint (every package's latest build per chroot,
 with state and version), which lets `ebranch check-update` treat a
 staging COPR project as an update source without authentication.
 
+`build` reads one build (its chroots and source package), `srpm_url`
+gives where its SRPM is served now that COPR's results are in Pulp, and
+`download` fetches a file, `None` when it is gone.
+
 Also ships the pure helpers around it: mapping a Fedora-ecosystem
 branch to a COPR chroot prefix (`epel9` → `epel-9-`, `rawhide` →
 `fedora-rawhide-`, `c10s` → `centos-stream-10-`), and extracting the

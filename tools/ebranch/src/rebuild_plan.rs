@@ -32,6 +32,9 @@ pub struct Options {
     pub pr_authors: Vec<String>,
     /// Look up who to contact about each package left to rebuild.
     pub contacts: bool,
+    /// The change owner's COPR (`owner/project`) to read for version gaps
+    /// and carried patches (#61).
+    pub copr: Option<String>,
     /// FAS group → Matrix room, for `contacts`.
     pub matrix_rooms: BTreeMap<String, String>,
     /// Local mock results built against the side tag (one directory
@@ -336,6 +339,13 @@ pub struct RebuildPlan {
     /// Who to contact about each package left to rebuild, when asked.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contacts: Vec<Contact>,
+    /// The COPR read for hints, when one was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copr: Option<String>,
+    /// What that COPR says about packages left to rebuild: version gaps
+    /// and the patches it carries that dist-git does not.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub copr_hints: Vec<crate::copr_hints::CoprHint>,
     /// What local mock builds say, when results were given.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub local_builds: Vec<LocalResult>,
@@ -639,6 +649,8 @@ pub(crate) fn plan(
         pr_authors: Vec::new(),
         pull_requests: BTreeMap::new(),
         contacts: Vec::new(),
+        copr: None,
+        copr_hints: Vec::new(),
         local_builds: Vec::new(),
         local_libraries: None,
         incomplete: Vec::new(),
@@ -1199,6 +1211,7 @@ pub fn render(plan: &RebuildPlan) -> String {
     render_pull_requests(&mut out, plan);
     render_local_builds(&mut out, plan);
     render_contacts(&mut out, plan);
+    render_copr(&mut out, plan);
 
     if !plan.blocked_by.is_empty() {
         let _ = writeln!(out, "## Blocked ({})\n", plan.blocked_by.len());
@@ -1682,6 +1695,67 @@ fn render_local_builds(out: &mut String, plan: &RebuildPlan) {
 }
 
 /// Who to contact about the packages left to rebuild.
+/// What the change owner's COPR says about the packages left.
+fn render_copr(out: &mut String, plan: &RebuildPlan) {
+    let Some(copr) = &plan.copr else {
+        return;
+    };
+    if plan.copr_hints.is_empty() {
+        let _ = writeln!(
+            out,
+            "## In {copr}\n\nThe COPR has no succeeded build of a package left to rebuild.\n"
+        );
+        return;
+    }
+    let _ = writeln!(out, "## In {copr} ({})\n", plan.copr_hints.len());
+    let _ = writeln!(
+        out,
+        "The COPR's newest succeeded builds of packages left to rebuild, and the patches \
+         their specs carry that {}'s do not: packages that needed source changes. A build \
+         of an older version than the branch's is a hint only.\n",
+        plan.branch
+    );
+    for h in &plan.copr_hints {
+        let _ = write!(out, "- {} ({}", h.package, h.copr_version);
+        if h.older {
+            let _ = write!(
+                out,
+                "; older than {}'s {}",
+                plan.branch,
+                h.branch_version.as_deref().unwrap_or("?")
+            );
+        }
+        out.push(')');
+        if let Some(why) = &h.unchecked {
+            let _ = write!(out, ": patches not compared, {why}");
+        } else if h.carried.is_empty() {
+            out.push_str(": no patches beyond dist-git's");
+        }
+        out.push('\n');
+        for p in &h.carried {
+            let _ = write!(out, "  - `{}`", p.file);
+            let mut said: Vec<String> = Vec::new();
+            if let Some(s) = &p.subject {
+                said.push(format!("\"{s}\""));
+            }
+            if let Some(f) = &p.from {
+                said.push(format!("by {f}"));
+            }
+            if let Some(u) = &p.git_url {
+                said.push(u.clone());
+            }
+            if let Some(c) = &p.comment {
+                said.push(format!("spec: {c}"));
+            }
+            if !said.is_empty() {
+                let _ = write!(out, ": {}", said.join("; "));
+            }
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+}
+
 fn render_contacts(out: &mut String, plan: &RebuildPlan) {
     if plan.contacts.is_empty() {
         return;
@@ -1887,6 +1961,16 @@ pub fn run(opts: &Options) -> Result<(), String> {
             plan.contacts = contacts(&plan, &opts.matrix_rooms, &distgit, &mut gaps, opts.verbose);
             plan.incomplete.extend(gaps);
         }
+    }
+    if let Some(copr) = &opts.copr {
+        let left: Vec<String> = plan.rounds.iter().flatten().cloned().collect();
+        let (hints, gaps) = crate::copr_hints::hints(copr, &left, &plan.branch, opts.verbose);
+        plan.copr = Some(copr.clone());
+        plan.copr_hints = hints;
+        plan.incomplete.extend(
+            gaps.into_iter()
+                .map(|(pkg, e)| Gap::new(pkg.as_deref(), "COPR hints", e)),
+        );
     }
     if sidetag_builds.is_some() || baseline_builds.is_some() {
         let sidetag_builds = sidetag_builds.unwrap_or_default();

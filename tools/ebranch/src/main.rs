@@ -10,6 +10,7 @@ mod branch_request;
 mod check_crate;
 mod check_update;
 mod config;
+mod copr_hints;
 mod copr_prune;
 mod dag;
 mod discover;
@@ -874,6 +875,10 @@ struct RebuildPlanArgs {
     #[arg(long, help_heading = "Plan")]
     contacts: bool,
 
+    /// The change owner's COPR (owner/project) to read for version gaps
+    /// and patches its specs carry that dist-git's do not
+    #[arg(long, value_name = "OWNER/PROJECT", help_heading = "Plan")]
+    copr: Option<String>,
     /// Existing dist-git checkouts, one per package (DIR/<package>), to
     /// clone from instead of downloading every object again. Read only.
     #[arg(long, value_name = "DIR", help_heading = "Plan")]
@@ -1526,6 +1531,7 @@ fn main() -> ExitCode {
             side_tag: a.side_tag.clone(),
             pr_authors: a.pr_author.clone(),
             contacts: a.contacts,
+            copr: a.copr.clone(),
             matrix_rooms: if a.contacts {
                 config::matrix_rooms()
             } else {

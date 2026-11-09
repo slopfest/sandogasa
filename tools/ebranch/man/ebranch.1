@@ -824,7 +824,7 @@ Remove entries unused for more than DAYS, instead of each cache\*(Aqs own age
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS ebranch rebuild-plan
-\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-contacts\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-pr\-author\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
+\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-contacts\fR] [\fB\-\-copr\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-pr\-author\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
 .PP
 Plan the rebuilds a library\*(Aqs SONAME bump calls for.
 .PP
@@ -893,6 +893,9 @@ Local mock results built against the branch as it is, to tell failures the new l
 .TP
 \fB\-\-contacts\fR
 For each package left to rebuild, who to contact: its \-maintainers alias, groups with commit access and their Matrix rooms, and its version\-release
+.TP
+\fB\-\-copr\fR \fI<OWNER/PROJECT>\fR
+The change owner\*(Aqs COPR (owner/project) to read for version gaps and patches its specs carry that dist\-git\*(Aqs do not
 .TP
 \fB\-\-distgit\-dir\fR \fI<DIR>\fR
 Existing dist\-git checkouts, one per package (DIR/<package>), to clone from instead of downloading every object again. Read only

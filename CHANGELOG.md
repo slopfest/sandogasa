@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan reads the change owner's COPR for version gaps and carried patches
+
+During the libical 4 rebuild, the change owner had already trialled the
+dependents' rebuilds in a COPR (`mcrha/libical-4.x`), which knew which
+packages had needed source changes. `rebuild-plan` never read it, so
+that had to be worked out by downloading SRPMs and comparing specs by
+hand. Even then one "COPR patch" turned out to be someone else's
+upstream commit, and another came from openmamba.
+
+`rebuild-plan --copr <owner>/<project>` reads it for each package left
+to rebuild:
+- **version gap:** a build of an older version than the branch's,
+  marked as a hint only;
+- **carried patches:** the `Patch:` entries its spec has and dist-git's
+  lacks;
+- **provenance:** each patch's `From:`, `Subject:` and `X-Git-Url:`,
+  and the spec comment above it.
+
+The SRPMs are fetched from COPR's Pulp storage, since the URL COPR's API
+gives now answers 404. They are treated as untrusted: only the spec and
+the patches are extracted, and nothing is built or evaluated. The plan's
+`--json` output carries the same hints. sandogasa-copr gains `build`,
+`srpm_url` and `download`. Resolves #61.
+
 ### cpu-sig-tracker: sync-updates decides embargo by public disclosure, not by whether Jira can be read
 
 `sync-updates` left an update off the SIG's site whenever its RHEL Jira
