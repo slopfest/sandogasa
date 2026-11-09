@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: mr opens the MR description with an AI-assistance disclosure
+
+The merge requests `cpu-sig-tracker mr` opened said nothing about AI
+assistance, even when every commit on the branch carried an
+`Assisted-by:` trailer: the trailers were dropped from the summary with
+the rest, so a CentOS Stream reviewer was not told. Both rsync
+CVE-2026-119741 merge requests would have gone out that way. `--notes`
+could not help, because a disclosure has to come before anything else,
+so that a maintainer who would rather write the fix themselves can
+decide that before reading ours. When any commit names an assistant, the
+description now opens with a line naming each agent and model and
+inviting the maintainer to close the merge request in favour of their
+own fix; commits without the trailer, such as a reused fix, get none.
+The line shows in the preview and `--dry-run`. Resolves #95.
+
 ### cpu-sig-tracker: mr takes --notes and --notes-file for the MR description
 
 `cpu-sig-tracker mr` wrote the merge request's description only from

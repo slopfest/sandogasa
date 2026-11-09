@@ -230,6 +230,11 @@ commit; a branch with several needs `--title`. Open merge requests
 into the same branch about the same CVE (or the first Jira issue) are
 listed first, so a duplicate is seen, but they do not stop it.
 
+When any of the commits has an `Assisted-by: <agent>:<model>` trailer,
+the description opens with a disclosure naming each agent and model,
+and saying the maintainer is free to write their own fix and close the
+merge request. Commits without the trailer get no such line.
+
 `--notes` (or `--notes-file`, for longer text) adds paragraphs to the
 end of the summary of changes, before the tickets, for what does not
 belong in the commit messages and so in dist-git history: what the

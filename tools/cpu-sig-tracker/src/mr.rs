@@ -210,10 +210,41 @@ pub fn ticket_lines(commits: &[BranchCommit]) -> Vec<String> {
     out
 }
 
+/// The AI-assistance disclosure that opens the description, naming each
+/// agent and model the commits' `Assisted-by: <agent>:<model>` trailers
+/// name; `None` when no commit has one, as for a fix reused from someone
+/// else and committed without the trailer.
+pub fn disclosure(commits: &[BranchCommit]) -> Option<String> {
+    let mut assisted: Vec<String> = Vec::new();
+    for line in commits.iter().flat_map(|c| c.body.lines()) {
+        let Some(value) = line.trim().strip_prefix("Assisted-by:") else {
+            continue;
+        };
+        let value = value.trim();
+        let named = match value.split_once(':') {
+            Some((agent, model)) if !agent.trim().is_empty() && !model.trim().is_empty() => {
+                format!("{}, {}", agent.trim(), model.trim())
+            }
+            _ => value.to_string(),
+        };
+        if !named.is_empty() && !assisted.contains(&named) {
+            assisted.push(named);
+        }
+    }
+    (!assisted.is_empty()).then(|| {
+        format!(
+            "*Disclosure: this change was written with AI assistance ({}) and reviewed by me. \
+             If you would rather implement it yourself, feel free to close this MR.*",
+            assisted.join("; ")
+        )
+    })
+}
+
 /// The merge request's description, in CentOS Stream's template: the
 /// commits' messages, trailers dropped, as the summary of changes,
 /// followed by `notes` (`--notes`), and the ticket lines after the
-/// template's instructions.
+/// template's instructions. When the commits name an AI assistant, the
+/// [`disclosure`] comes first, before anything a reviewer reads.
 pub fn description(commits: &[BranchCommit], notes: Option<&str>, tickets: &[String]) -> String {
     let mut summary: Vec<String> = match commits {
         [one] => vec![without_trailers(&one.body)],
@@ -232,8 +263,11 @@ pub fn description(commits: &[BranchCommit], notes: Option<&str>, tickets: &[Str
     if let Some(notes) = notes {
         summary.push(notes.trim().to_string());
     }
+    let opening = disclosure(commits)
+        .map(|d| format!("{d}\n\n"))
+        .unwrap_or_default();
     format!(
-        "# Merge Request Required Information\n\n\
+        "{opening}# Merge Request Required Information\n\n\
          ## Summary of Changes\n\n{}\n\n\
          ## Approved Development Ticket(s)\n\
          All submissions to CentOS Stream must reference a ticket in \
@@ -588,7 +622,10 @@ mod tests {
         let d = description(&commits, None, &tickets);
         assert!(
             d.starts_with(
-                "# Merge Request Required Information\n\n## Summary of Changes\n\n\
+                "*Disclosure: this change was written with AI assistance (Claude Code, \
+                 claude-opus-5-5) and reviewed by me. If you would rather implement it \
+                 yourself, feel free to close this MR.*\n\n\
+                 # Merge Request Required Information\n\n## Summary of Changes\n\n\
                  Backport upstream commit a7404a9a.\n\nsum2 keeps its SUM_LENGTH size.\n\n\
                  ## Approved Development Ticket(s)\n"
             ),
@@ -598,6 +635,28 @@ mod tests {
         // Trailers stay out of the summary, the ticket included.
         assert!(!d.contains("Signed-off-by"), "{d}");
         assert_eq!(d.matches("RHEL-303720").count(), 1, "{d}");
+    }
+
+    #[test]
+    fn the_disclosure_names_each_assistant_once_and_only_when_there_is_one() {
+        let plain = BranchCommit {
+            subject: "Bump release".into(),
+            body: "Resolves: RHEL-303720\n\nSigned-off-by: A <a@example.org>".into(),
+        };
+        // A reused fix committed without the trailer: no disclosure.
+        assert_eq!(disclosure(std::slice::from_ref(&plain)), None);
+        let d = description(std::slice::from_ref(&plain), None, &[]);
+        assert!(d.starts_with("# Merge Request Required Information"), "{d}");
+
+        let other = BranchCommit {
+            subject: "Add a test".into(),
+            body: "Assisted-by: Other Agent:model-x".into(),
+        };
+        let line = disclosure(&[rsync_commit(), plain, rsync_commit(), other]).unwrap();
+        assert!(
+            line.contains("(Claude Code, claude-opus-5-5; Other Agent, model-x)"),
+            "{line}"
+        );
     }
 
     #[test]
