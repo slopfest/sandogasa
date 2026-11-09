@@ -18,7 +18,7 @@ use crate::gitlab;
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-use crate::utils::{Check, gitlab_base, parse_jira_key_from_body, report_check};
+use crate::utils::{Check, gitlab_base, parse_jira_keys_from_body, report_check};
 const KOJI_PROFILE: &str = "cbs";
 
 #[derive(clap::Args)]
@@ -206,13 +206,15 @@ fn check_tracking_issue_jira(package: &str, release: &str, verbose: bool) -> Che
         }
     };
     let body = issue.description.as_deref().unwrap_or("");
-    let Some(key) = parse_jira_key_from_body(body) else {
+    let keys = parse_jira_keys_from_body(body);
+    if keys.is_empty() {
         return Check::Fail(format!(
             "tracking issue {} has no JIRA key in body",
             issue.web_url,
         ));
-    };
-    crate::jira::check_resolved(Some(&key), verbose).check
+    }
+    // Every fix the update carries has to have landed in stock.
+    crate::jira::check_all_resolved(&keys, verbose).check
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ use crate::status::{
     fetch_proposed_updates_nvrs, fetch_stream_nvrs, parse_mr_line, scan_mr_url_in_body,
     stream_newer_than_proposed,
 };
-use crate::utils::{Check, parse_jira_key_from_body, report_check};
+use crate::utils::{Check, parse_jira_keys_from_body, report_check};
 
 /// Why a Proposed Update is retired — the one question the operator
 /// answers: is the problem fixed in stock, or is the SIG giving up?
@@ -245,10 +245,11 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
         )?;
     let package = gitlab::package_from_issue_url(&issue.web_url)
         .ok_or("could not derive package name from issue URL")?;
-    let jira_key = parse_jira_key_from_body(body);
+    let jira_keys = parse_jira_keys_from_body(body);
 
-    // The RHEL issue: informational, and one source of the reason.
-    let jira_check = crate::jira::check_resolved(jira_key.as_deref(), args.verbose);
+    // The RHEL issues: informational, and one source of the reason.
+    // Every one the update resolves counts.
+    let jira_check = crate::jira::check_all_resolved(&jira_keys, args.verbose);
     report_check("JIRA resolved", &jira_check.check);
 
     // Precondition: no pu build tagged (retire follows untag).
@@ -345,7 +346,7 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     }
 
     let note = compose_audit_note(
-        jira_key.as_deref(),
+        &jira_keys,
         &jira_check.check,
         &build_check,
         args.force,
@@ -749,7 +750,7 @@ fn check_package_untagged(release: &str, package: &str, verbose: bool) -> Check 
 }
 
 fn compose_audit_note(
-    jira_key: Option<&str>,
+    jira_keys: &[String],
     jira_check: &Check,
     build_check: &Check,
     forced: bool,
@@ -759,9 +760,10 @@ fn compose_audit_note(
         Some((label, c)) => format!(" Reason: {label} — {}.", c.detail()),
         None => String::new(),
     };
-    let jira_part = match jira_key {
-        Some(k) => format!(" JIRA {k}: {}", jira_check.detail()),
-        None => String::new(),
+    let jira_part = if jira_keys.is_empty() {
+        String::new()
+    } else {
+        format!(" JIRA {}: {}", jira_keys.join(", "), jira_check.detail())
     };
     let build_part = format!(" Build: {}", build_check.detail());
     let forced_part = if forced { " (--force)" } else { "" };
@@ -1022,7 +1024,7 @@ mod tests {
     #[test]
     fn audit_note_includes_jira_and_build() {
         let note = compose_audit_note(
-            Some("RHEL-12345"),
+            &["RHEL-12345".to_string()],
             &Check::Pass("RHEL-12345 — Closed (Done)".to_string()),
             &Check::Pass("no xz build tagged in proposed_updates10s-…".to_string()),
             false,
@@ -1038,7 +1040,7 @@ mod tests {
     #[test]
     fn audit_note_marks_force() {
         let note = compose_audit_note(
-            None,
+            &[],
             &Check::Skipped("no JIRA key found".to_string()),
             &Check::Fail("still tagged".to_string()),
             true,

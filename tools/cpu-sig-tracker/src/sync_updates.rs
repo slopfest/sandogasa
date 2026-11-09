@@ -82,7 +82,8 @@ pub struct Update {
     pub cves: Vec<String>,
     /// The upstream merge request, as (iid, URL).
     pub mr: Option<(u64, String)>,
-    pub jira: Option<String>,
+    /// The RHEL issues the update resolves, one per fix it carries.
+    pub jira: Vec<String>,
 }
 
 /// A release and its updates: one section of the list.
@@ -170,9 +171,10 @@ pub fn render(sections: &[Section], jira_site: &str) -> String {
                     .unwrap_or_default();
             let jira = u
                 .jira
-                .as_deref()
+                .iter()
                 .map(|k| format!("[{k}]({jira_site}/browse/{k})"))
-                .unwrap_or_default();
+                .collect::<Vec<_>>()
+                .join(", ");
             o.push_str(&format!(
                 "| [{}]({}) | `{}` | {} | {} | {mr} | {jira} | {} |\n",
                 u.package,
@@ -283,8 +285,10 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
                 continue;
             };
             let body = issue.description.as_deref().unwrap_or("");
-            let jira_key = crate::utils::parse_jira_key_from_body(body);
-            if let Some(key) = &jira_key {
+            let jira_keys = crate::utils::parse_jira_keys_from_body(body);
+            // Any issue not public keeps the update off the list.
+            let mut public = true;
+            for key in &jira_keys {
                 if verbose {
                     eprintln!("[cpu-sig-tracker] checking {key} is public");
                 }
@@ -297,7 +301,8 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
                                  not public"
                             );
                         }
-                        continue;
+                        public = false;
+                        break;
                     }
                     // Not known to be public is not public.
                     Err(e) => {
@@ -305,9 +310,13 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
                             "warning: {package} ({release}) left out: could not read {key} \
                              anonymously ({e})"
                         );
-                        continue;
+                        public = false;
+                        break;
                     }
                 }
+            }
+            if !public {
+                continue;
             }
             let mr_url = crate::status::parse_mr_line(body)
                 .map(|(u, _)| u)
@@ -324,7 +333,7 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
                     .cloned(),
                 cves: cve_ids(&format!("{}\n{body}", issue.title)),
                 mr: mr_url.and_then(|u| mr_iid(&u).map(|iid| (iid, u))),
-                jira: jira_key,
+                jira: jira_keys,
             });
         }
         out.push((release, updates));
@@ -410,7 +419,7 @@ mod tests {
                     "https://gitlab.com/redhat/centos-stream/rpms/{package}/-/merge_requests/123"
                 ),
             )),
-            jira: Some("RHEL-12345".to_string()),
+            jira: vec!["RHEL-12345".to_string()],
         }
     }
 

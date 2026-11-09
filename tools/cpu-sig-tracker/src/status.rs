@@ -23,7 +23,7 @@ use crate::gitlab;
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-use crate::utils::{canonical_jira_suffix, format_jira_line, format_mr_line, gitlab_base};
+use crate::utils::{canonical_jira_suffix, format_jira_lines, format_mr_line, gitlab_base};
 const KOJI_PROFILE: &str = "cbs";
 
 #[derive(clap::Args)]
@@ -89,12 +89,11 @@ pub struct Row {
     pub issue_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mr_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jira_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jira_status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jira_resolution: Option<String>,
+    /// Each RHEL issue the update resolves, one per fix it carries
+    /// (#86).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub jira: Vec<JiraState>,
+    /// Whether every one of them is resolved.
     pub jira_resolved: bool,
     /// Currently-tagged NVR in the proposed_updates Koji tag.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -225,22 +224,24 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             let mr_url = parsed.mr_url.clone();
             let mr_title = parsed.mr_title.clone();
             let mr_state = parsed.mr_state.clone();
-            let jira_key = parsed.jira_key.clone();
+            let jira_keys = parsed.jira_keys.clone();
 
-            let jira_info = match jira_key.as_deref() {
-                Some(key) => fetch_jira(key, args.verbose),
-                None => None,
-            };
-            let (jira_status, jira_resolution, jira_resolved, jira_resolution_date) =
-                match jira_info {
-                    Some(info) => (
-                        Some(info.status),
-                        info.resolution,
-                        info.resolved,
-                        info.resolution_date,
-                    ),
-                    None => (None, None, false, None),
-                };
+            let infos: Vec<(String, Option<JiraInfo>)> = jira_keys
+                .iter()
+                .map(|k| (k.clone(), fetch_jira(k, args.verbose)))
+                .collect();
+            let jira: Vec<JiraState> = infos
+                .iter()
+                .map(|(key, info)| JiraState {
+                    key: key.clone(),
+                    status: info.as_ref().map(|i| i.status.clone()),
+                    resolution: info.as_ref().and_then(|i| i.resolution.clone()),
+                    resolved: info.as_ref().is_some_and(|i| i.resolved),
+                })
+                .collect();
+            // The update is resolved once every fix it carries is.
+            let (jira_resolved, jira_resolution, jira_resolution_date) =
+                combined_resolution(&infos);
 
             let pu_nvr = pu_nvrs.get(package).cloned();
             let stream_nvr = stream_nvrs.get(package).cloned();
@@ -255,7 +256,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                 }
             } else {
                 suggest_next_action(
-                    jira_key.as_deref(),
+                    jira_keys.first().map(String::as_str),
                     jira_resolved,
                     pu_nvr.as_deref(),
                     stream_nvr.as_deref(),
@@ -266,11 +267,14 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             // free (pure body parse); JIRA drift compares the
             // body's current JIRA suffix to the canonical form
             // of the JIRA fetch.
-            let jira_drift = jira_suffix_drift(
-                parsed.body_jira_suffix.as_deref(),
-                jira_status.as_deref(),
-                jira_resolution.as_deref(),
-            );
+            let jira_drift = jira.iter().any(|j| {
+                let body = parsed
+                    .body_jira_suffixes
+                    .iter()
+                    .find(|(k, _)| *k == j.key)
+                    .and_then(|(_, s)| s.as_deref());
+                jira_suffix_drift(body, j.status.as_deref(), j.resolution.as_deref())
+            });
             let drift_reasons = {
                 let mut reasons: Vec<String> = Vec::new();
                 if parsed.needs_refresh() {
@@ -322,9 +326,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         mr_url: mr_url.as_deref(),
                         mr_title: mr_title.as_deref(),
                         mr_state: mr_state.as_deref(),
-                        jira_key: jira_key.as_deref(),
-                        jira_status: jira_status.as_deref(),
-                        jira_resolution: jira_resolution.as_deref(),
+                        jira: &jira,
                     });
                     if changed {
                         eprintln!("refreshed {}: rewrote body", issue.web_url);
@@ -376,9 +378,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                 issue_state: issue.state.clone(),
                 issue_url: issue.web_url.clone(),
                 mr_url,
-                jira_key,
-                jira_status,
-                jira_resolution,
+                jira,
                 jira_resolved,
                 proposed_updates_nvr: pu_nvr,
                 stream_nvr,
@@ -391,6 +391,17 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
     Ok(rows)
 }
 
+/// One RHEL issue of an update, as Jira reports it now.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct JiraState {
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
+    pub resolved: bool,
+}
+
 /// Fields resolved from a tracking issue body, possibly
 /// augmented by fetching the MR it references.
 #[derive(Debug, Default)]
@@ -398,7 +409,8 @@ struct BodyRefs {
     mr_url: Option<String>,
     mr_title: Option<String>,
     mr_state: Option<String>,
-    jira_key: Option<String>,
+    /// The RHEL issues the update resolves.
+    jira_keys: Vec<String>,
     /// Whether the structured `- **MR**: [title](url)` line was
     /// parseable from the body.
     structured_mr: bool,
@@ -408,13 +420,13 @@ struct BodyRefs {
     /// Whether the structured `- **JIRA**: [KEY](url)` line was
     /// parseable from the body.
     structured_jira: bool,
-    /// Whether the JIRA line in the body carries a ` — <status>`
+    /// Whether every JIRA line in the body carries a ` — <status>`
     /// suffix (present in the current canonical format).
     jira_line_has_suffix: bool,
-    /// The `<status>` or `<status> (<resolution>)` text that
-    /// currently sits on the JIRA line, for drift comparison
-    /// against the live JIRA API value.
-    body_jira_suffix: Option<String>,
+    /// Each JIRA line's key and the `<status>` or `<status>
+    /// (<resolution>)` text that currently sits on it, for drift
+    /// comparison against the live JIRA API value.
+    body_jira_suffixes: Vec<(String, Option<String>)>,
     /// Whether the body still contains legacy format artifacts
     /// that the current canonical format dropped (standalone
     /// `- **Status**:` line, `* Stream MR:` bullet, etc.).
@@ -473,42 +485,43 @@ fn resolve_body_references(body: &str, verbose: bool, force_mr_fetch: bool) -> B
         .clone()
         .or_else(|| scan_mr_url_in_body(body));
 
-    let structured_jira = parse_jira_line(body);
-    let jira_from_body = structured_jira
-        .as_ref()
-        .map(|(k, _)| k.clone())
-        .or_else(|| scan_rhel_key(body));
+    let structured_jira = parse_jira_lines(body);
+    let jira_from_body: Vec<String> = if structured_jira.is_empty() {
+        scan_rhel_key(body).into_iter().collect()
+    } else {
+        structured_jira.iter().map(|(k, _)| k.clone()).collect()
+    };
 
-    let should_fetch_mr =
-        mr_url.is_some() && (force_mr_fetch || structured_mr.is_none() || jira_from_body.is_none());
+    let should_fetch_mr = mr_url.is_some()
+        && (force_mr_fetch || structured_mr.is_none() || jira_from_body.is_empty());
     let mr = if should_fetch_mr {
         mr_url.as_deref().and_then(|u| fetch_mr(u, verbose))
     } else {
         None
     };
 
-    let jira_key = jira_from_body.or_else(|| {
-        mr.as_ref().and_then(|m| {
-            scan_rhel_key(&m.title).or_else(|| m.description.as_deref().and_then(scan_rhel_key))
-        })
-    });
+    let jira_keys = if jira_from_body.is_empty() {
+        mr.as_ref()
+            .map(|m| crate::file_issue::extract_jira_keys(&m.title, m.description.as_deref()))
+            .unwrap_or_default()
+    } else {
+        jira_from_body
+    };
 
     BodyRefs {
         mr_url,
         mr_title: mr.as_ref().map(|m| m.title.clone()),
         mr_state: mr.as_ref().map(|m| m.state.clone()),
-        jira_key,
+        jira_keys,
         structured_mr: structured_mr.is_some(),
         mr_line_has_suffix: structured_mr
             .as_ref()
             .map(|(_, s)| s.is_some())
             .unwrap_or(false),
-        structured_jira: structured_jira.is_some(),
-        jira_line_has_suffix: structured_jira
-            .as_ref()
-            .map(|(_, s)| s.is_some())
-            .unwrap_or(false),
-        body_jira_suffix: structured_jira.and_then(|(_, s)| s),
+        jira_line_has_suffix: !structured_jira.is_empty()
+            && structured_jira.iter().all(|(_, s)| s.is_some()),
+        structured_jira: !structured_jira.is_empty(),
+        body_jira_suffixes: structured_jira,
         has_legacy_lines: body.lines().any(is_legacy_line),
     }
 }
@@ -539,7 +552,8 @@ pub(crate) fn parse_mr_line(body: &str) -> Option<(String, Option<String>)> {
 /// Parse the structured `- **JIRA**: [KEY](url)[ — suffix]`
 /// line. Returns (key, suffix) where suffix is the trimmed
 /// text after ` — ` / ` -- ` following the URL's closing paren.
-fn parse_jira_line(body: &str) -> Option<(String, Option<String>)> {
+fn parse_jira_lines(body: &str) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("- **JIRA**: [")
             && let Some(key_end) = rest.find(']')
@@ -559,10 +573,10 @@ fn parse_jira_line(body: &str) -> Option<(String, Option<String>)> {
             } else {
                 None
             };
-            return Some((key, suffix));
+            out.push((key, suffix));
         }
     }
-    None
+    out
 }
 
 /// Strip a leading em-dash or double-hyphen used as a suffix
@@ -831,9 +845,7 @@ struct RefreshCtx<'a> {
     mr_url: Option<&'a str>,
     mr_title: Option<&'a str>,
     mr_state: Option<&'a str>,
-    jira_key: Option<&'a str>,
-    jira_status: Option<&'a str>,
-    jira_resolution: Option<&'a str>,
+    jira: &'a [JiraState],
 }
 
 /// Rewrite the tracking issue body to the standardized format
@@ -849,9 +861,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
         mr_url: url,
         mr_title: title,
         mr_state: ctx.mr_state,
-        jira_key: ctx.jira_key,
-        jira_status: ctx.jira_status,
-        jira_resolution: ctx.jira_resolution,
+        jira: ctx.jira,
     });
     // GitLab strips trailing whitespace/newlines from stored
     // descriptions, so compare trimmed values — otherwise the
@@ -891,9 +901,7 @@ struct RefreshedBodyArgs<'a> {
     mr_url: &'a str,
     mr_title: &'a str,
     mr_state: Option<&'a str>,
-    jira_key: Option<&'a str>,
-    jira_status: Option<&'a str>,
-    jira_resolution: Option<&'a str>,
+    jira: &'a [JiraState],
 }
 
 /// Build a standardized body, preserving the original prose
@@ -902,7 +910,12 @@ struct RefreshedBodyArgs<'a> {
 fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
     let lead = extract_lead_paragraph(a.original_body);
     let mr_line = format_mr_line(a.mr_url, a.mr_title, a.mr_state);
-    let jira_line = format_jira_line(a.jira_key, a.jira_status, a.jira_resolution);
+    let issues: Vec<(&str, Option<&str>, Option<&str>)> = a
+        .jira
+        .iter()
+        .map(|j| (j.key.as_str(), j.status.as_deref(), j.resolution.as_deref()))
+        .collect();
+    let jira_line = format_jira_lines(&issues);
     // Lines that record something the live systems do not say — the
     // affected and expected builds the SIG named, the stock fix a
     // person established — survive the rewrite unchanged.
@@ -964,6 +977,27 @@ fn is_metadata_line(line: &str) -> bool {
     ];
     let trimmed = line.trim_start();
     PREFIXES.iter().any(|p| trimmed.starts_with(p))
+}
+
+/// Whether an update's RHEL issues are all resolved, and if so its
+/// resolution (a fix only when every one is: otherwise the first that
+/// is not, so the work item reads Won't do) and the day the last was
+/// resolved. Unresolved with no issues, or with one Jira did not show.
+fn combined_resolution(
+    infos: &[(String, Option<JiraInfo>)],
+) -> (bool, Option<String>, Option<chrono::NaiveDate>) {
+    let all: Option<Vec<&JiraInfo>> = infos.iter().map(|(_, i)| i.as_ref()).collect();
+    let Some(all) = all.filter(|a| !a.is_empty() && a.iter().all(|i| i.resolved)) else {
+        return (false, None, None);
+    };
+    let is_fix = |r: &str| matches!(r, "Done" | "Fixed" | "Resolved");
+    let resolution = all
+        .iter()
+        .filter_map(|i| i.resolution.clone())
+        .find(|r| !is_fix(r))
+        .or_else(|| all.iter().find_map(|i| i.resolution.clone()));
+    let date = all.iter().filter_map(|i| i.resolution_date).max();
+    (true, resolution, date)
 }
 
 struct JiraInfo {
@@ -1140,11 +1174,21 @@ fn print_human(rows: &[Row]) {
 
     let rel_width = col_width(H_REL, rows.iter().map(|r| r.release.as_str()));
     let pkg_width = col_width(H_PKG, rows.iter().map(|r| r.package.as_str()));
-    let jira_width = col_width(
-        H_JIRA,
-        rows.iter()
-            .map(|r| r.jira_key.as_deref().unwrap_or(UNKNOWN)),
-    );
+    let keys: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            if r.jira.is_empty() {
+                UNKNOWN.to_string()
+            } else {
+                r.jira
+                    .iter()
+                    .map(|j| j.key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+        })
+        .collect();
+    let jira_width = col_width(H_JIRA, keys.iter().map(|s| s.as_str()));
     let states: Vec<String> = rows.iter().map(format_jira_state).collect();
     let state_width = col_width(H_STATE, states.iter().map(|s| s.as_str()));
     let cur_vrs: Vec<String> = rows
@@ -1174,7 +1218,7 @@ fn print_human(rows: &[Row]) {
         H_REL, H_PKG, H_JIRA, H_STATE, H_CUR, H_STREAM, H_SUG, H_ISSUE,
     );
     for (i, r) in rows.iter().enumerate() {
-        let jira_key = r.jira_key.as_deref().unwrap_or(UNKNOWN);
+        let jira_key = &keys[i];
         println!(
             "{:<rel_width$}  {:<pkg_width$}  {:<jira_width$}  {:<state_width$}  {:<cur_width$}  {:<stream_width$}  {:<suggestion_width$}  {}",
             r.release,
@@ -1207,8 +1251,19 @@ fn format_jira_state(r: &Row) -> String {
     if r.issue_state == "closed" {
         return "closed".to_string();
     }
-    canonical_jira_suffix(r.jira_status.as_deref(), r.jira_resolution.as_deref())
-        .unwrap_or_else(|| "unknown".to_string())
+    let states: Vec<String> = r
+        .jira
+        .iter()
+        .map(|j| {
+            canonical_jira_suffix(j.status.as_deref(), j.resolution.as_deref())
+                .unwrap_or_else(|| "unknown".to_string())
+        })
+        .collect();
+    if states.is_empty() {
+        "unknown".to_string()
+    } else {
+        states.join("; ")
+    }
 }
 
 #[cfg(test)]
@@ -1234,7 +1289,7 @@ mod tests {
     #[test]
     fn parse_jira_line_returns_key_and_suffix() {
         let body = "- **JIRA**: [RHEL-1](https://example/) — Closed (Done)\n";
-        let (key, suffix) = parse_jira_line(body).unwrap();
+        let (key, suffix) = parse_jira_lines(body).remove(0);
         assert_eq!(key, "RHEL-1");
         assert_eq!(suffix.as_deref(), Some("Closed (Done)"));
     }
@@ -1242,7 +1297,7 @@ mod tests {
     #[test]
     fn parse_jira_line_without_suffix() {
         let body = "- **JIRA**: [RHEL-1](https://example/)\n";
-        let (_, suffix) = parse_jira_line(body).unwrap();
+        let (_, suffix) = parse_jira_lines(body).remove(0);
         assert_eq!(suffix, None);
     }
 
@@ -1251,7 +1306,7 @@ mod tests {
         // Placeholder text doesn't start with `[` so parser
         // returns None rather than a bogus key.
         let body = "- **JIRA**: _(not found in MR; set with `--jira`)_\n";
-        assert_eq!(parse_jira_line(body), None);
+        assert!(parse_jira_lines(body).is_empty());
     }
 
     #[test]
@@ -1621,9 +1676,12 @@ mod tests {
             mr_url: "https://example/-/merge_requests/1",
             mr_title: "Fix CVE-2026-0001",
             mr_state: Some("merged"),
-            jira_key: Some("RHEL-12345"),
-            jira_status: Some("Closed"),
-            jira_resolution: Some("Done"),
+            jira: &[JiraState {
+                key: "RHEL-12345".into(),
+                status: Some("Closed".into()),
+                resolution: Some("Done".into()),
+                resolved: true,
+            }],
         });
         assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
         assert!(out.contains(
@@ -1646,6 +1704,76 @@ mod tests {
     }
 
     #[test]
+    fn a_body_with_two_jira_lines_is_read_and_rewritten_with_both() {
+        let body = "- **MR**: [t](https://example/-/merge_requests/1) — opened\n\
+                    - **JIRA**: [RHEL-303720](https://example/browse/RHEL-303720) — New\n\
+                    - **JIRA**: [RHEL-303900](https://example/browse/RHEL-303900)\n\
+                    - **Release**: c9s\n";
+        let refs = resolve_body_references(body, false, false);
+        assert_eq!(refs.jira_keys, ["RHEL-303720", "RHEL-303900"]);
+        // The second line has no status yet: the body is not canonical.
+        assert!(refs.structured_jira && !refs.jira_line_has_suffix);
+        let jira = [
+            JiraState {
+                key: "RHEL-303720".into(),
+                status: Some("New".into()),
+                resolution: None,
+                resolved: false,
+            },
+            JiraState {
+                key: "RHEL-303900".into(),
+                status: Some("Closed".into()),
+                resolution: Some("Done".into()),
+                resolved: true,
+            },
+        ];
+        let out = refreshed_body(RefreshedBodyArgs {
+            original_body: body,
+            release: "c9s",
+            mr_url: "https://example/-/merge_requests/1",
+            mr_title: "t",
+            mr_state: Some("opened"),
+            jira: &jira,
+        });
+        assert!(out.contains("[RHEL-303720]("), "{out}");
+        assert!(out.contains("[RHEL-303900]("), "{out}");
+        assert!(
+            out.contains("/browse/RHEL-303900) — Closed (Done)\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_update_is_resolved_once_every_issue_is() {
+        let info = |resolved, resolution: Option<&str>, day: u32| JiraInfo {
+            status: "Closed".into(),
+            resolution: resolution.map(str::to_string),
+            resolved,
+            resolution_date: chrono::NaiveDate::from_ymd_opt(2026, 12, day),
+        };
+        let both = [
+            ("RHEL-1".to_string(), Some(info(true, Some("Done"), 1))),
+            ("RHEL-2".to_string(), Some(info(true, Some("Done"), 9))),
+        ];
+        assert_eq!(
+            combined_resolution(&both),
+            (
+                true,
+                Some("Done".into()),
+                chrono::NaiveDate::from_ymd_opt(2026, 12, 9)
+            )
+        );
+        let one_open = [
+            ("RHEL-1".to_string(), Some(info(true, Some("Done"), 1))),
+            ("RHEL-2".to_string(), Some(info(false, None, 1))),
+        ];
+        assert_eq!(combined_resolution(&one_open), (false, None, None));
+        let unread = [("RHEL-1".to_string(), None)];
+        assert_eq!(combined_resolution(&unread), (false, None, None));
+        assert_eq!(combined_resolution(&[]), (false, None, None));
+    }
+
+    #[test]
     fn refreshed_body_without_jira_uses_placeholder() {
         let out = refreshed_body(RefreshedBodyArgs {
             original_body: "",
@@ -1653,9 +1781,7 @@ mod tests {
             mr_url: "https://example/-/merge_requests/1",
             mr_title: "t",
             mr_state: None,
-            jira_key: None,
-            jira_status: None,
-            jira_resolution: None,
+            jira: &[],
         });
         assert!(out.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
         // MR state suffix omitted when unknown.
@@ -1692,9 +1818,12 @@ mod tests {
             issue_state: "opened".into(),
             issue_url: "u".into(),
             mr_url: None,
-            jira_key: Some("RHEL-1".into()),
-            jira_status: Some("Closed".into()),
-            jira_resolution: Some("Done".into()),
+            jira: vec![JiraState {
+                key: "RHEL-1".into(),
+                status: Some("Closed".into()),
+                resolution: Some("Done".into()),
+                resolved: true,
+            }],
             jira_resolved: true,
             proposed_updates_nvr: None,
             stream_nvr: None,
@@ -1711,9 +1840,12 @@ mod tests {
             issue_state: "opened".into(),
             issue_url: "u".into(),
             mr_url: None,
-            jira_key: Some("RHEL-1".into()),
-            jira_status: Some("In Progress".into()),
-            jira_resolution: None,
+            jira: vec![JiraState {
+                key: "RHEL-1".into(),
+                status: Some("In Progress".into()),
+                resolution: None,
+                resolved: false,
+            }],
             jira_resolved: false,
             proposed_updates_nvr: None,
             stream_nvr: None,
@@ -1732,9 +1864,12 @@ mod tests {
             issue_state: "closed".into(),
             issue_url: "u".into(),
             mr_url: None,
-            jira_key: Some("RHEL-1".into()),
-            jira_status: Some("Closed".into()),
-            jira_resolution: Some("Obsolete".into()),
+            jira: vec![JiraState {
+                key: "RHEL-1".into(),
+                status: Some("Closed".into()),
+                resolution: Some("Obsolete".into()),
+                resolved: true,
+            }],
             jira_resolved: true,
             proposed_updates_nvr: None,
             stream_nvr: None,
@@ -1751,9 +1886,7 @@ mod tests {
             issue_state: "opened".into(),
             issue_url: "u".into(),
             mr_url: None,
-            jira_key: None,
-            jira_status: None,
-            jira_resolution: None,
+            jira: vec![],
             jira_resolved: false,
             proposed_updates_nvr: None,
             stream_nvr: None,
@@ -1884,8 +2017,9 @@ name = "PackageKit"
         assert_eq!(r.release, "c10s");
         assert_eq!(r.package, "PackageKit");
         assert_eq!(r.issue_state, "opened");
-        assert_eq!(r.jira_key.as_deref(), Some("RHEL-1"));
-        assert_eq!(r.jira_status.as_deref(), Some("In Progress"));
+        assert_eq!(r.jira.len(), 1);
+        assert_eq!(r.jira[0].key, "RHEL-1");
+        assert_eq!(r.jira[0].status.as_deref(), Some("In Progress"));
         assert!(!r.jira_resolved);
         assert_eq!(
             r.proposed_updates_nvr.as_deref(),

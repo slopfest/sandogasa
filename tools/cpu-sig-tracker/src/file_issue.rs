@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use crate::gitlab;
 use crate::jira;
-use crate::utils::{format_jira_line, format_mr_line};
+use crate::utils::{format_jira_lines, format_mr_line};
 
 /// GitLab group where tracking issues are filed.
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
@@ -58,10 +58,15 @@ pub struct FileIssueArgs {
     #[arg(long = "expected-fix", help_heading = "Issue")]
     pub expected_fix: Option<String>,
 
-    /// Override the auto-extracted JIRA key (e.g. "RHEL-12345").
-    /// Useful when the MR description doesn't mention it verbatim.
-    #[arg(long, help_heading = "Issue")]
-    pub jira: Option<String>,
+    /// The RHEL issue(s) the MR resolves, overriding those read from
+    /// its Resolves: lines (repeatable, or comma-separated)
+    #[arg(
+        long,
+        value_name = "KEY",
+        value_delimiter = ',',
+        help_heading = "Issue"
+    )]
+    pub jira: Vec<String>,
 
     /// Free-form context note prepended to the issue body as
     /// a lead paragraph before the structured metadata.
@@ -115,28 +120,25 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         .clone()
         .unwrap_or_else(|| mr.target_branch.clone());
 
-    let jira_key = args
-        .jira
-        .clone()
-        .or_else(|| extract_jira_key(&mr.title, mr.description.as_deref()));
-
-    let jira_info = match jira_key.as_deref() {
-        Some(key) => fetch_jira_info(key, args.verbose),
-        None => None,
+    let jira_keys = if args.jira.is_empty() {
+        extract_jira_keys(&mr.title, mr.description.as_deref())
+    } else {
+        args.jira.clone()
     };
-    let (jira_status, jira_resolution) = match jira_info {
-        Some((s, r)) => (Some(s), r),
-        None => (None, None),
-    };
+    let jira: Vec<(String, Option<String>, Option<String>)> = jira_keys
+        .iter()
+        .map(|key| match fetch_jira_info(key, args.verbose) {
+            Some((s, r)) => (key.clone(), Some(s), r),
+            None => (key.clone(), None, None),
+        })
+        .collect();
 
     let body = format_body(&BodyFields {
         release: &release,
         mr_url: &mr.web_url,
         mr_title: &mr.title,
         mr_state: Some(&mr.state),
-        jira_key: jira_key.as_deref(),
-        jira_status: jira_status.as_deref(),
-        jira_resolution: jira_resolution.as_deref(),
+        jira: &jira,
         affected: args.affected.as_deref(),
         expected_fix: args.expected_fix.as_deref(),
         note: args.note.as_deref(),
@@ -258,9 +260,8 @@ struct BodyFields<'a> {
     mr_url: &'a str,
     mr_title: &'a str,
     mr_state: Option<&'a str>,
-    jira_key: Option<&'a str>,
-    jira_status: Option<&'a str>,
-    jira_resolution: Option<&'a str>,
+    /// `(key, status, resolution)` of each RHEL issue the MR resolves.
+    jira: &'a [(String, Option<String>, Option<String>)],
     affected: Option<&'a str>,
     expected_fix: Option<&'a str>,
     note: Option<&'a str>,
@@ -300,15 +301,30 @@ fn release_label(release: &str) -> Option<&str> {
     }
 }
 
-/// Scan text for the first `RHEL-\d+` occurrence. Avoids a
-/// regex dep for a single trivial pattern.
-fn extract_jira_key(title: &str, description: Option<&str>) -> Option<String> {
-    for text in [Some(title), description].into_iter().flatten() {
-        if let Some(key) = scan_rhel_key(text) {
-            return Some(key);
+/// The RHEL issues a merge request resolves: the keys on its
+/// `Resolves:` lines, each once, in order, as CentOS Stream's template
+/// lists them, one per fix it carries (#86); without any, the first
+/// `RHEL-\d+` in its title or description, as a hand-written MR may
+/// name its issue anywhere.
+pub(crate) fn extract_jira_keys(title: &str, description: Option<&str>) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for line in description.unwrap_or("").lines() {
+        if let Some(rest) = line.trim().strip_prefix("Resolves:")
+            && let Some(key) = scan_rhel_key(rest)
+            && !keys.contains(&key)
+        {
+            keys.push(key);
         }
     }
-    None
+    if keys.is_empty() {
+        keys.extend(
+            [Some(title), description]
+                .into_iter()
+                .flatten()
+                .find_map(scan_rhel_key),
+        );
+    }
+    keys
 }
 
 /// Scan `text` for the first RHEL-\d+ occurrence that isn't
@@ -363,7 +379,12 @@ fn format_body(f: &BodyFields<'_>) -> String {
     let affected = f.affected.unwrap_or("_(unknown)_");
     let expected_fix = f.expected_fix.unwrap_or("_(unknown)_");
     let mr_line = format_mr_line(f.mr_url, f.mr_title, f.mr_state);
-    let jira_line = format_jira_line(f.jira_key, f.jira_status, f.jira_resolution);
+    let issues: Vec<(&str, Option<&str>, Option<&str>)> = f
+        .jira
+        .iter()
+        .map(|(k, s, r)| (k.as_str(), s.as_deref(), r.as_deref()))
+        .collect();
+    let jira_line = format_jira_lines(&issues);
 
     let metadata = format!(
         "{mr_line}\n\
@@ -407,48 +428,63 @@ mod tests {
     #[test]
     fn scan_rhel_key_in_title() {
         assert_eq!(
-            extract_jira_key("Fix RHEL-12345 backport", None),
-            Some("RHEL-12345".to_string())
+            extract_jira_keys("Fix RHEL-12345 backport", None),
+            ["RHEL-12345"]
         );
     }
 
     #[test]
     fn scan_rhel_key_in_description_when_title_empty() {
         assert_eq!(
-            extract_jira_key("no key here", Some("see RHEL-42 for details")),
-            Some("RHEL-42".to_string())
+            extract_jira_keys("no key here", Some("see RHEL-42 for details")),
+            ["RHEL-42"]
         );
     }
 
     #[test]
     fn scan_rhel_key_title_wins_over_description() {
         assert_eq!(
-            extract_jira_key("RHEL-1 summary", Some("actually RHEL-999")),
-            Some("RHEL-1".to_string())
+            extract_jira_keys("RHEL-1 summary", Some("actually RHEL-999")),
+            ["RHEL-1"]
         );
     }
 
     #[test]
     fn scan_rhel_key_none_when_absent() {
-        assert_eq!(extract_jira_key("no JIRA here", Some("nor here")), None);
+        assert!(extract_jira_keys("no JIRA here", Some("nor here")).is_empty());
     }
 
     #[test]
     fn scan_rhel_key_ignores_embedded_in_word() {
         // "NOTRHEL-9" should not match — previous char is alnum.
-        assert_eq!(extract_jira_key("NOTRHEL-9 thing", None), None);
+        assert!(extract_jira_keys("NOTRHEL-9 thing", None).is_empty());
     }
 
     #[test]
     fn scan_rhel_key_requires_digits() {
-        assert_eq!(extract_jira_key("bare RHEL- prefix", None), None);
+        assert!(extract_jira_keys("bare RHEL- prefix", None).is_empty());
+    }
+
+    #[test]
+    fn every_resolves_line_names_an_issue() {
+        // CentOS Stream's template lists one per fix the MR carries.
+        let description = "## Approved Development Ticket(s)\n\
+                           List tickets like \"Resolves: RHEL-76229\".\n\
+                           </details>\n\n\
+                           Resolves: RHEL-303720\n\
+                           Resolves: RHEL-303900\n\
+                           Resolves: RHEL-303720\n";
+        assert_eq!(
+            extract_jira_keys("rsync: two fixes", Some(description)),
+            ["RHEL-303720", "RHEL-303900"]
+        );
     }
 
     #[test]
     fn scan_rhel_key_handles_url_context() {
         assert_eq!(
-            extract_jira_key("", Some("https://issues.redhat.com/browse/RHEL-7 please"),),
-            Some("RHEL-7".to_string())
+            extract_jira_keys("", Some("https://issues.redhat.com/browse/RHEL-7 please"),),
+            ["RHEL-7"]
         );
     }
 
@@ -483,9 +519,11 @@ mod tests {
             mr_url: "https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42",
             mr_title: "Fix CVE-2026-0001",
             mr_state: Some("opened"),
-            jira_key: Some("RHEL-12345"),
-            jira_status: Some("In Progress"),
-            jira_resolution: None,
+            jira: &[(
+                "RHEL-12345".to_string(),
+                Some("In Progress".to_string()),
+                None,
+            )],
             affected: Some("xz-5.4-1.el10"),
             expected_fix: Some("xz-5.6-1.el10"),
             note: None,
@@ -520,9 +558,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             mr_state: None,
-            jira_key: None,
-            jira_status: None,
-            jira_resolution: None,
+            jira: &[],
             affected: None,
             expected_fix: None,
             note: None,
@@ -541,9 +577,11 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             mr_state: Some("merged"),
-            jira_key: Some("RHEL-1"),
-            jira_status: Some("Closed"),
-            jira_resolution: Some("Done"),
+            jira: &[(
+                "RHEL-1".to_string(),
+                Some("Closed".to_string()),
+                Some("Done".to_string()),
+            )],
             affected: None,
             expected_fix: None,
             note: None,
@@ -621,10 +659,8 @@ mod tests {
             release: "c10s",
             mr_url: "https://example/mr",
             mr_title: "t",
-            jira_key: Some("RHEL-1"),
+            jira: &[("RHEL-1".to_string(), None, None)],
             mr_state: None,
-            jira_status: None,
-            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: None,
@@ -642,10 +678,8 @@ mod tests {
             release: "c10s",
             mr_url: "https://example/mr",
             mr_title: "t",
-            jira_key: None,
+            jira: &[],
             mr_state: None,
-            jira_status: None,
-            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: Some("Tracking for SIG decision 2026-04-22."),
@@ -659,10 +693,8 @@ mod tests {
             release: "c10s",
             mr_url: "https://example/mr",
             mr_title: "t",
-            jira_key: None,
+            jira: &[],
             mr_state: None,
-            jira_status: None,
-            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: Some("   \n\t"),
@@ -676,10 +708,8 @@ mod tests {
             release: "c10s",
             mr_url: "https://example/mr",
             mr_title: "t",
-            jira_key: None,
+            jira: &[],
             mr_state: None,
-            jira_status: None,
-            jira_resolution: None,
             affected: None,
             expected_fix: None,
             note: Some("  leading and trailing  \n\n"),
@@ -820,7 +850,7 @@ mod tests {
                 .to_string(),
             affected: Some("xz-5.6.2-3.el10".to_string()),
             expected_fix: Some("xz-5.6.4-1~proposed.el10".to_string()),
-            jira: None,
+            jira: vec![],
             release: None,
             issue_type: Some(IssueType::Security),
             note: None,

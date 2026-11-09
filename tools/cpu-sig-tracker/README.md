@@ -87,14 +87,17 @@ reason, team, …) survive a re-build.
 ```sh
 cpu-sig-tracker file-issue <mr-url> \
     [--affected VER-REL] [--expected-fix VER-REL] \
-    [--jira RHEL-N] [--release cNs] [--type security] \
+    [--jira RHEL-N[,RHEL-N…]] [--release cNs] [--type security] \
     [--note "context"] [--dry-run]
 ```
 
 Given a CentOS Stream MR URL, files a standardized tracking issue in
 the corresponding `CentOS/proposed_updates/rpms/<pkg>` project.
-Derives package / release / JIRA key automatically from the MR
-(overridable), applies `cpu-sig-tracker`, release, and optional
+Derives package / release / JIRA keys automatically from the MR
+(overridable): one `- **JIRA**:` line per `Resolves:` line in the MR,
+as an update can carry several fixes, each with its RHEL issue; an MR
+without one gives the first `RHEL-` key it names. Applies
+`cpu-sig-tracker`, release, and optional
 type labels, sets the GitLab work-item status to `In progress`, and
 stamps `start_date` from the Koji build's creation time.
 
@@ -373,11 +376,13 @@ cpu-sig-tracker status -i inventory.toml \
 ```
 
 Per-package report of every active tracking issue in the inventory's
-releases: JIRA key + status, currently-tagged NVR, current Stream
+releases: JIRA keys + statuses (every issue the update resolves, one
+JIRA line each in the tracking issue), currently-tagged NVR, current Stream
 NVR, and a suggested next action (`in-progress`, `rebase`,
 `untag-candidate`, `retire-issue`, `not-yet-tagged`, `no-jira`, or
-`—` once closed with no build tagged). `--json` emits a flat
-serde-serialized array.
+`—` once closed with no build tagged). An update counts as resolved
+once every one of its RHEL issues is. `--json` emits a flat
+serde-serialized array, each row's issues under `jira`.
 
 `--refresh` turns the read pass into a write pass: rewrites any body
 that's drifted from the canonical format, backfills stale MR / JIRA
@@ -398,14 +403,14 @@ section per release, newest first (`# CentOS Stream 10`, then 9), and
 in each a table of the open tracking issues with a build in the SIG's
 `-release` (`released`) or `-testing` (`testing`) tag, sorted by
 package. Each row links the tracking issue and names the build, the
-type label, the CVEs, the upstream merge request and the Jira issue. A
+type label, the CVEs, the upstream merge request and the Jira issues. A
 release with none reads "No updates at the moment."
 
 The file is rewritten whole on each run and carries no timestamps, so
 it changes only when the state does; `--dry-run` shows the lines that
 would change instead. Nothing embargoed is listed: tracking issues are
 read anonymously, so a confidential one is never seen, and an update
-whose Jira issue cannot be read anonymously is left out, whatever
+any of whose Jira issues cannot be read anonymously is left out, whatever
 credentials are configured. Needs `koji` with the `cbs` profile.
 
 ### `timeline`
@@ -455,7 +460,7 @@ cpu-sig-tracker untag <package|nvr> --release cNs [--yes] [--force]
 ```
 
 Removes a proposed_updates build from its CBS `-release` and
-`-testing` tags after verifying the linked JIRA is resolved. Accepts
+`-testing` tags after verifying the linked JIRA issues are all resolved. Accepts
 either a package name (auto-discovers currently-tagged NVRs across
 both tags) or a specific NVR. Pair with `retire` to close the
 tracking issue after the build is gone.

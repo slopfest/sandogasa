@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: a tracking issue carries one Jira line per fix (breaking JSON)
+
+The rsync Proposed Update for c9s carries two fixes in one CentOS
+Stream merge request, CVE-2026-119741 (RHEL-303720) and a sha1 `sum2`
+stack overflow only rsync 3.2.7 has, each with its own RHEL issue and
+`Resolves:` line. A tracking issue held one Jira key, so the second
+would have been dropped and every command would have judged the update
+by the first issue alone: `untag` could have removed the build with
+one fix still to land in stock.
+
+A tracking issue now has one `- **JIRA**:` line per RHEL issue; an
+older issue, with one, reads as before. `file-issue` writes one per
+`Resolves:` line in the merge request, and `--jira` takes several.
+`untag` and `retire` wait until every issue is resolved; `status`
+shows each issue and counts the update resolved once all are, and
+`--refresh` keeps every line; `sync-updates` links each, and leaves an
+update out if any is not public; `timeline` runs from the first
+filing to the last resolution. Resolves #86.
+
+Breaking for `status --json`: each row's `jira_key`, `jira_status` and
+`jira_resolution` are replaced by `jira`, a list of `{key, status,
+resolution, resolved}`; `jira_resolved` stays, true once every issue
+is resolved. Read `jira[0]` where the single key was read.
+
 ### cpu-sig-tracker: open a Proposed Update's CentOS Stream merge request
 
 With the RHEL Jira issues for the rsync update filed (RHEL-303720 and

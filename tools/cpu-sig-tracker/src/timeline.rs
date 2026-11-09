@@ -267,14 +267,19 @@ fn gather(issue: &gitlab::Issue, package: &str, release: &str, verbose: bool) ->
             Err(_) => {}
         }
     }
-    // Jira.
-    if let Some(key) = crate::utils::parse_jira_key_from_body(&body)
-        .or_else(|| crate::file_issue::scan_rhel_key(&body))
-        && let Ok(Some(j)) = crate::jira::fetch(&key, verbose)
-    {
-        s.jira_created = j.fields.created.clone();
-        s.jira_resolved = j.fields.resolutiondate.clone();
-    }
+    // Jira: every issue the update resolves (#86). It was filed when
+    // the first of them was, and is resolved once the last of them is.
+    let fetched: Vec<sandogasa_jira::Issue> = tracked_jira_keys(&body)
+        .iter()
+        .filter_map(|key| crate::jira::fetch(key, verbose).ok().flatten())
+        .collect();
+    let (created, resolved) = jira_span(
+        fetched
+            .iter()
+            .map(|j| (j.fields.created.clone(), j.fields.resolutiondate.clone())),
+    );
+    s.jira_created = created;
+    s.jira_resolved = resolved;
     // CBS: the SIG's builds.
     match package_history(package, Some(CBS_PROFILE)) {
         Ok(events) => s.cbs = events,
@@ -368,10 +373,8 @@ pub fn assemble(issue: &gitlab::Issue, package: &str, release: &str, s: &Sources
         issue_url: issue.web_url.clone(),
         issue_filed: s.issue_created.as_deref().and_then(rfc3339_day),
         issue_closed: s.issue_closed.as_deref().and_then(rfc3339_day),
-        jira_key: crate::utils::parse_jira_key_from_body(
-            issue.description.as_deref().unwrap_or(""),
-        )
-        .or_else(|| crate::file_issue::scan_rhel_key(issue.description.as_deref().unwrap_or(""))),
+        jira_key: Some(tracked_jira_keys(issue.description.as_deref().unwrap_or("")).join(" "))
+            .filter(|k| !k.is_empty()),
         jira_filed: s.jira_created.as_deref().and_then(rfc3339_day),
         jira_resolved: s.jira_resolved.as_deref().and_then(rfc3339_day),
         mr_url: issue.description.as_deref().and_then(|b| {
@@ -749,8 +752,74 @@ fn csv_cell(s: &str) -> String {
     }
 }
 
+/// The RHEL issues a tracking issue names: its `- **JIRA**:` lines,
+/// else the first `RHEL-` key anywhere in it, as an issue filed by hand
+/// may have one.
+fn tracked_jira_keys(body: &str) -> Vec<String> {
+    let keys = crate::utils::parse_jira_keys_from_body(body);
+    if keys.is_empty() {
+        crate::file_issue::scan_rhel_key(body).into_iter().collect()
+    } else {
+        keys
+    }
+}
+
+/// When several RHEL issues' span starts and ends, from each one's
+/// `(created, resolved)` timestamps (Jira's, which sort as text): the
+/// first filing, and the last resolution, only once every one of them
+/// is resolved.
+fn jira_span(
+    issues: impl Iterator<Item = (Option<String>, Option<String>)>,
+) -> (Option<String>, Option<String>) {
+    let issues: Vec<_> = issues.collect();
+    let created = issues.iter().filter_map(|(c, _)| c.clone()).min();
+    let resolved = if !issues.is_empty() && issues.iter().all(|(_, r)| r.is_some()) {
+        issues.iter().filter_map(|(_, r)| r.clone()).max()
+    } else {
+        None
+    };
+    (created, resolved)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn several_issues_span_from_the_first_filed_to_the_last_resolved() {
+        let at = |s: &str| Some(s.to_string());
+        let both = [
+            (
+                at("2026-11-05T10:00:00.000+0000"),
+                at("2026-12-01T10:00:00.000+0000"),
+            ),
+            (
+                at("2026-11-03T10:00:00.000+0000"),
+                at("2026-12-09T10:00:00.000+0000"),
+            ),
+        ];
+        assert_eq!(
+            jira_span(both.into_iter()),
+            (
+                at("2026-11-03T10:00:00.000+0000"),
+                at("2026-12-09T10:00:00.000+0000")
+            )
+        );
+        // One still open: not resolved yet.
+        let one_open = [
+            (
+                at("2026-11-05T10:00:00.000+0000"),
+                at("2026-12-01T10:00:00.000+0000"),
+            ),
+            (at("2026-11-03T10:00:00.000+0000"), None),
+        ];
+        assert_eq!(jira_span(one_open.into_iter()).1, None);
+        assert_eq!(jira_span(std::iter::empty()), (None, None));
+        assert_eq!(
+            tracked_jira_keys("- **JIRA**: [RHEL-1](u) — New\n- **JIRA**: [RHEL-2](u) — New\n"),
+            ["RHEL-1", "RHEL-2"]
+        );
+        assert_eq!(tracked_jira_keys("hand-filed, see RHEL-7"), ["RHEL-7"]);
+    }
+
     use super::*;
 
     fn ev(when: &str, nvr: &str, tag: &str) -> TagEvent {

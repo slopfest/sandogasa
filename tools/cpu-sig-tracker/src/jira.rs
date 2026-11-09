@@ -160,6 +160,66 @@ pub struct JiraCheck {
     pub resolution_date: Option<chrono::NaiveDate>,
 }
 
+/// Whether every RHEL issue an update resolves is resolved (#86):
+/// [`check_resolved`] for each, combined by [`combine_checks`]. No
+/// keys is `Skipped`, as for one missing key.
+pub fn check_all_resolved(keys: &[String], verbose: bool) -> JiraCheck {
+    if keys.is_empty() {
+        return check_resolved(None, verbose);
+    }
+    combine_checks(
+        keys.iter()
+            .map(|k| check_resolved(Some(k), verbose))
+            .collect(),
+    )
+}
+
+/// Several issues' checks as one: a failure if any is unresolved (the
+/// failures named), skipped if any could not be read, passed only when
+/// all are resolved. The resolution is a fix only when every one is
+/// (otherwise the first that is not, so the work item reads Won't do
+/// rather than Done for an update partly declined), and the date the
+/// latest, when the last of them was resolved.
+pub fn combine_checks(checks: Vec<JiraCheck>) -> JiraCheck {
+    if checks.len() == 1 {
+        return checks.into_iter().next().expect("one check");
+    }
+    let details = |pick: fn(&Check) -> bool| -> String {
+        checks
+            .iter()
+            .filter(|c| pick(&c.check))
+            .map(|c| c.check.detail().to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let check = if checks.iter().any(|c| matches!(c.check, Check::Fail(_))) {
+        Check::Fail(details(|c| matches!(c, Check::Fail(_))))
+    } else if checks.iter().any(|c| matches!(c.check, Check::Skipped(_))) {
+        Check::Skipped(details(|c| matches!(c, Check::Skipped(_))))
+    } else {
+        Check::Pass(details(|_| true))
+    };
+    let resolved = matches!(check, Check::Pass(_));
+    let is_fix = |r: &str| matches!(r, "Done" | "Fixed" | "Resolved");
+    let resolution_name = resolved
+        .then(|| {
+            checks
+                .iter()
+                .filter_map(|c| c.resolution_name.clone())
+                .find(|r| !is_fix(r))
+                .or_else(|| checks.iter().find_map(|c| c.resolution_name.clone()))
+        })
+        .flatten();
+    let resolution_date = resolved
+        .then(|| checks.iter().filter_map(|c| c.resolution_date).max())
+        .flatten();
+    JiraCheck {
+        check,
+        resolution_name,
+        resolution_date,
+    }
+}
+
 /// Check whether the JIRA issue behind `jira_key` is resolved.
 /// A missing key or a failed fetch is `Skipped`; an unresolved
 /// issue is `Fail`.
@@ -194,5 +254,68 @@ pub fn check_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
         Ok(None) => skipped(format!("JIRA {key} not visible")),
         Err(FetchError::Runtime(e)) => skipped(format!("tokio runtime init failed: {e}")),
         Err(FetchError::Lookup(e)) => skipped(format!("JIRA {key} fetch failed: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn checked(check: Check, resolution: Option<&str>, day: Option<u32>) -> JiraCheck {
+        JiraCheck {
+            check,
+            resolution_name: resolution.map(str::to_string),
+            resolution_date: day.and_then(|d| chrono::NaiveDate::from_ymd_opt(2026, 12, d)),
+        }
+    }
+
+    #[test]
+    fn several_issues_pass_only_when_every_one_is_resolved() {
+        let done = |key: &str, day| {
+            checked(
+                Check::Pass(format!("{key} — Closed (Done)")),
+                Some("Done"),
+                Some(day),
+            )
+        };
+        let all = combine_checks(vec![done("RHEL-1", 1), done("RHEL-2", 9)]);
+        assert!(
+            matches!(&all.check, Check::Pass(d) if d.contains("RHEL-1") && d.contains("RHEL-2"))
+        );
+        assert_eq!(all.resolution_name.as_deref(), Some("Done"));
+        assert_eq!(
+            all.resolution_date,
+            chrono::NaiveDate::from_ymd_opt(2026, 12, 9)
+        );
+
+        // One still open: the update is not resolved, and says which.
+        let one_open = combine_checks(vec![
+            done("RHEL-1", 1),
+            checked(
+                Check::Fail("RHEL-2 is New (not resolved)".into()),
+                None,
+                None,
+            ),
+        ]);
+        assert!(matches!(&one_open.check, Check::Fail(d) if d == "RHEL-2 is New (not resolved)"));
+        assert_eq!(one_open.resolution_date, None);
+
+        // One declined: resolved, but not as a fix.
+        let declined = combine_checks(vec![
+            done("RHEL-1", 1),
+            checked(
+                Check::Pass("RHEL-2 — Closed (Won't Do)".into()),
+                Some("Won't Do"),
+                Some(3),
+            ),
+        ]);
+        assert_eq!(declined.resolution_name.as_deref(), Some("Won't Do"));
+
+        // One unreadable: neither passed nor failed.
+        let unread = combine_checks(vec![
+            done("RHEL-1", 1),
+            checked(Check::Skipped("JIRA RHEL-2 not visible".into()), None, None),
+        ]);
+        assert!(matches!(unread.check, Check::Skipped(_)));
     }
 }

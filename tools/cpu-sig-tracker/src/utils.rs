@@ -48,16 +48,22 @@ pub fn jira_base() -> String {
         .unwrap_or_else(|_| "https://redhat.atlassian.net".to_string())
 }
 
-/// Find the `RHEL-\d+` key in `- **JIRA**: [KEY](...)`.
-pub fn parse_jira_key_from_body(body: &str) -> Option<String> {
+/// Every key in the body's `- **JIRA**: [KEY](...)` lines, in order,
+/// each once: one line per RHEL issue the update's merge request
+/// resolves (#86), so an older body, with one, gives one.
+pub fn parse_jira_keys_from_body(body: &str) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("- **JIRA**: [")
             && let Some(end) = rest.find(']')
         {
-            return Some(rest[..end].to_string());
+            let key = rest[..end].to_string();
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
         }
     }
-    None
+    keys
 }
 
 /// Build `- **MR**: [title](url) — state` (suffix omitted when
@@ -85,6 +91,20 @@ pub fn format_jira_line(
         None => String::new(),
     };
     format!("- **JIRA**: [{key}]({url}){suffix}")
+}
+
+/// One `- **JIRA**:` line per issue, as [`format_jira_line`] writes
+/// each, `(key, status, resolution)`; the "not found" line when there
+/// is none.
+pub fn format_jira_lines(issues: &[(&str, Option<&str>, Option<&str>)]) -> String {
+    if issues.is_empty() {
+        return format_jira_line(None, None, None);
+    }
+    issues
+        .iter()
+        .map(|(key, status, resolution)| format_jira_line(Some(key), *status, *resolution))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The `<status>` or `<status> (<resolution>)` text we'd put
@@ -167,12 +187,42 @@ mod tests {
     #[test]
     fn parse_jira_key_from_standard_body() {
         let body = "- **JIRA**: [RHEL-1](https://example/) — Closed (Done)\n";
-        assert_eq!(parse_jira_key_from_body(body).as_deref(), Some("RHEL-1"));
+        assert_eq!(parse_jira_keys_from_body(body), ["RHEL-1"]);
+    }
+
+    #[test]
+    fn every_jira_line_is_read_each_key_once() {
+        let body = "- **MR**: [t](u) — opened\n\
+                    - **JIRA**: [RHEL-303720](https://example/) — New\n\
+                    - **JIRA**: [RHEL-303900](https://example/) — New\n\
+                    - **JIRA**: [RHEL-303720](https://example/) — New\n\
+                    - **Release**: c9s\n";
+        assert_eq!(
+            parse_jira_keys_from_body(body),
+            ["RHEL-303720", "RHEL-303900"]
+        );
     }
 
     #[test]
     fn parse_jira_key_returns_none_when_missing() {
-        assert_eq!(parse_jira_key_from_body("no jira"), None);
+        assert!(parse_jira_keys_from_body("no jira").is_empty());
+    }
+
+    #[test]
+    fn one_jira_line_is_written_per_issue() {
+        let lines = format_jira_lines(&[
+            ("RHEL-1", Some("New"), None),
+            ("RHEL-2", Some("Closed"), Some("Done")),
+        ]);
+        let base = jira_base();
+        assert_eq!(
+            lines,
+            format!(
+                "- **JIRA**: [RHEL-1]({base}/browse/RHEL-1) — New\n\
+                 - **JIRA**: [RHEL-2]({base}/browse/RHEL-2) — Closed (Done)"
+            )
+        );
+        assert!(format_jira_lines(&[]).contains("not found in MR"));
     }
 
     #[test]

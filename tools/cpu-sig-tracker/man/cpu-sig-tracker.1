@@ -65,8 +65,8 @@ Affected (currently\-tagged) NVR. If omitted, left blank in the issue body; can 
 \fB\-\-expected\-fix\fR \fI<EXPECTED_FIX>\fR
 Expected fix NVR once the MR lands and is built
 .TP
-\fB\-\-jira\fR \fI<JIRA>\fR
-Override the auto\-extracted JIRA key (e.g. "RHEL\-12345"). Useful when the MR description doesn\*(Aqt mention it verbatim
+\fB\-\-jira\fR \fI<KEY>\fR
+The RHEL issue(s) the MR resolves, overriding those read from its Resolves: lines (repeatable, or comma\-separated)
 .TP
 \fB\-\-note\fR \fI<NOTE>\fR
 Free\-form context note prepended to the issue body as a lead paragraph before the structured metadata
