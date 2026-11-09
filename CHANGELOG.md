@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### cbspkg: add-pkg lists a package in its collection's CBS tags
+
+A package's first CBS build fails unless the package is already listed
+in its collection's `-candidate`, `-testing` and `-release` tags. rsync's
+first Proposed Update needed six `cbs add-pkg --owner=<user> <tag>
+<package>` commands, with every tag name typed by hand. A new
+contributor is unlikely to know the step exists, let alone get the
+names right.
+
+`cbspkg add-pkg` works out the collection from the branch through
+sandogasa-cbs, including the RHEL collection a Hyperscale Facebook
+branch also builds into. From a checkout on a Stream branch (`c9s`,
+`c10s-CVE-…`) whose only SIG remote is Proposed Updates', it takes that
+SIG's collection for the release, so no `--branch` is needed. `cbspkg
+sig-repo` now also makes a local branch tracking the SIG branch it
+pushes (without checking it out), so that branch is there to check out
+and work from. It takes the package from the checkout's
+remotes and the owner from the CBS login, and it lists the package only
+in the tags that don't list it yet. The CBS login is checked first.
+Like every write to CBS, it is confirmed at a terminal, with no option
+to skip the question. `--explain` and `--dry-run` show each `cbs`
+command. sandogasa-cbs gains a `packages` module (`stage_tags`,
+`listed`, `whoami`, `add_pkg_argv`). Resolves #97.
+
 ### cpu-sig-tracker: tracking issues record CVE severity and Jira priority, and offer to assign the filer
 
 rsync's two tracking issues were filed with no `security` label,

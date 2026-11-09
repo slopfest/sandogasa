@@ -4,10 +4,12 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod add_pkg;
 mod config;
 mod configure;
 mod sig_repo;
 
+use add_pkg::AddPkgArgs;
 use sig_repo::SigRepoArgs;
 
 /// Packaging for CentOS SIGs that build in the CentOS Build System
@@ -28,6 +30,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List a package in the CBS tags its branch builds through, as
+    /// its first build needs
+    AddPkg(AddPkgArgs),
+
     /// Set up the GitLab token.
     Config(sandogasa_cli::ConfigArgs),
 
@@ -40,6 +46,7 @@ fn main() -> ExitCode {
     sandogasa_cli::init();
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     match cli.command {
+        Command::AddPkg(args) => add_pkg::run(&args),
         Command::Config(args) => configure::run(&args),
         Command::SigRepo(args) => sig_repo::run(&args),
     }

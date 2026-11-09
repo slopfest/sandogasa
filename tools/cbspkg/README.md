@@ -17,11 +17,41 @@ branches sit beside them. CBS builds from that repo.
 cargo install cbspkg
 ```
 
-`sig-repo` needs `git`. Creating a repo needs a GitLab token with the
+`add-pkg` needs `koji` and `cbs` (centos-packager) and a CBS login
+(`~/.centos.cert`, from `centos-cert`). `sig-repo` needs `git`. Creating a repo needs a GitLab token with the
 `api` scope, from `GITLAB_TOKEN` or `cbspkg config`, belonging to an
 account with the Maintainer role in the SIG's group.
 
 ## Commands
+
+### `add-pkg`
+
+```sh
+cbspkg add-pkg [PACKAGE] [-C DIR] [--branch BRANCH] [--owner USER] \
+    [--explain] [--dry-run]
+```
+
+Lists a package in the CBS tags its branch builds through, which a
+package's first build needs: `-candidate` (where its build target puts
+a build), `-testing` and `-release`, for the collection the branch
+builds into. A Hyperscale Facebook branch also lists it in the
+matching RHEL collection. The branch is the one checked out, or
+`--branch`; the package is the one the checkout's CentOS Stream or SIG
+remote is for, or the argument. A branch no SIG names, such as Stream's
+`c9s` or a work branch `c10s-CVE-…`, is taken as Proposed Updates' for
+that release when the checkout's only SIG remote is the Proposed
+Updates repo; Hyperscale needs its own branch (`c9s-hs`, …), which
+names the repository.
+
+Tags that list the package already are left alone, so running it again
+changes nothing. The owner is your CBS login (as `cbs moshimoshi`
+greets it), or `--owner`; the login is checked first, and a missing or
+expired `~/.centos.cert` is explained with the commands that fix it.
+Listing the package is confirmed at a terminal and refused without
+one; there is no option to skip the question.
+
+`--explain` shows each `cbs list-pkgs` and `cbs add-pkg` command and
+pauses before each; `--dry-run` shows them without changing anything.
 
 ### `config`
 
@@ -60,6 +90,10 @@ current directory, or `-C`):
    them as `<release>-proposed-<RHEL key>`, named after the merge
    request's target branch and the first RHEL issue it resolves,
    without running the checkout's pre-push hook (see DEVELOPMENT.md).
+4. `git branch --track <branch> sig/<branch>` makes a local branch
+   tracking it, unless one exists, without switching to it:
+   `git checkout <branch>` is then the branch `add-pkg` and the other
+   cbspkg commands work from.
 
 `--explain` narrates each step, with the git commands as they would be
 typed, pausing before each; `--dry-run` shows the steps without doing

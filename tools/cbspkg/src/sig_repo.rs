@@ -348,6 +348,45 @@ fn push_change(
     if !ui.dry_run {
         println!("Pushed the merge request to {path} as {}.", change.branch);
     }
+    // A local branch tracking it, for the cbspkg commands that work from
+    // the checked-out branch (add-pkg, build); the checkout stays where
+    // it is.
+    let has_local = git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{}", change.branch),
+        ],
+    )
+    .is_ok();
+    if has_local {
+        if !ui.dry_run {
+            println!("{} exists locally already; left as it is.", change.branch);
+        }
+    } else {
+        ui.step(&format!(
+            "Make a local {} tracking it, to check out when building",
+            change.branch
+        ));
+        ui.run_required(
+            &argv(&[
+                "git",
+                "branch",
+                "--track",
+                &change.branch,
+                &format!("{remote}/{}", change.branch),
+            ]),
+            repo,
+        )?;
+        if !ui.dry_run {
+            println!(
+                "Made the local branch {0}: `git checkout {0}` to work on it.",
+                change.branch
+            );
+        }
+    }
     Ok(())
 }
 
