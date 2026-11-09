@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### ebranch: check-update asks fedrq in batches
+
+`ebranch check-update f46-build-side-158330`, the libical 4 side tag
+with 39 builds and 365 binary packages, spent over 11 minutes in its
+installability check alone and several more on the reverse
+dependencies. It started one fedrq process per binary package and per
+required capability, a few thousand in all, each paying Python's
+startup and the loading of the release's repository metadata, four at
+a time.
+
+The provides, requires, capability and reverse-dependency queries now
+go to fedrq in batches of 250 names, and the answers are matched back
+to each package or capability. The same run now takes 5m36s in all,
+with the same findings. A capability a batch cannot match back is
+still asked on its own, so fedrq's own resolution has the last word:
+a file requirement is met by a package declaring the path
+(`Provides: /usr/sbin/sendmail`, as postfix does for packages that
+still require it) or shipping it under the path the `/usr` and
+`/usr/sbin` merges give it (`/usr/bin/nologin` for `/sbin/nologin`).
+A requirement is now met only by a binary package, no longer by a
+source package of the same name. Refs #81.
+
+sandogasa-fedrq gains `pkgs_requires_info`, `pkgs_provides_info` and
+`file_providers_info`, batched forms of the one-name queries, a
+`files` field on `PkgInfo`, and `merged_paths`.
+
 ### ebranch: check-update shows its progress without -v
 
 `ebranch check-update f46-build-side-158330`, 39 builds, ran for a long

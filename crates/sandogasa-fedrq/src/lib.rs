@@ -78,6 +78,31 @@ pub struct PkgInfo {
     /// Release, when the query asked for it; `None` otherwise.
     #[serde(default)]
     pub release: Option<String>,
+    /// The files the package ships, when the query asked for them (see
+    /// [`Fedrq::file_providers_info`]); empty otherwise.
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+/// Every path a file may be shipped under for a requirement on `path`:
+/// the path itself, then where the merges put it. `/bin`, `/sbin`,
+/// `/lib` and `/lib64` are symlinks into `/usr`, and since Fedora 42
+/// `/usr/sbin` is a symlink to `/usr/bin`, so a requirement on
+/// `/sbin/nologin` is met by a package shipping `/usr/bin/nologin`.
+pub fn merged_paths(path: &str) -> Vec<String> {
+    let mut out = vec![path.to_string()];
+    let under_usr = ["/bin/", "/sbin/", "/lib/", "/lib64/"]
+        .iter()
+        .find(|top| path.starts_with(**top))
+        .map(|_| format!("/usr{path}"));
+    if let Some(u) = &under_usr {
+        out.push(u.clone());
+    }
+    let usr = under_usr.as_deref().unwrap_or(path);
+    if let Some(rest) = usr.strip_prefix("/usr/sbin/") {
+        out.push(format!("/usr/bin/{rest}"));
+    }
+    out
 }
 
 /// The capability name of a dependency string: `foo >= 1.2` → `foo`,
@@ -305,6 +330,7 @@ impl PkgInfo {
             repoid: repoid.into(),
             version: None,
             release: None,
+            files: Vec::new(),
         }
     }
 
@@ -878,6 +904,52 @@ impl Fedrq {
         )
     }
 
+    /// Batched: the named binary packages with their Requires — one
+    /// fedrq invocation for the whole batch, what [`Self::pkg_requires`]
+    /// asks one name at a time. `--notsrc` for the same reason.
+    pub fn pkgs_requires_info(&self, names: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if names.is_empty() {
+            return Ok(vec![]);
+        }
+        let raw = Self::run_raw(&mut self.pkgs_requires_info_command(names))?;
+        serde_json::from_str(&raw).map_err(|e| Error::Parse(e.to_string()))
+    }
+
+    fn pkgs_requires_info_command(&self, names: &[String]) -> Command {
+        self.json_command(&["pkgs", "--notsrc", "-F", "json:name,requires"], names)
+    }
+
+    /// Batched: the named binary packages with their Provides, what
+    /// [`Self::pkg_provides`] asks one name at a time.
+    pub fn pkgs_provides_info(&self, names: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if names.is_empty() {
+            return Ok(vec![]);
+        }
+        let raw = Self::run_raw(&mut self.pkgs_provides_info_command(names))?;
+        serde_json::from_str(&raw).map_err(|e| Error::Parse(e.to_string()))
+    }
+
+    fn pkgs_provides_info_command(&self, names: &[String]) -> Command {
+        self.json_command(&["pkgs", "--notsrc", "-F", "json:name,provides"], names)
+    }
+
+    /// Batched: the binary packages providing the given file paths,
+    /// with the files they ship and the paths they declare, so a caller
+    /// can tell which path each provider matched. A path is met either
+    /// way: `postfix` declares `/usr/sbin/sendmail` but ships
+    /// `/usr/bin/sendmail`, and a path through a merged directory
+    /// (`/sbin/nologin`) is shipped under its real one
+    /// (`/usr/bin/nologin`): see [`merged_paths`].
+    pub fn file_providers_info(&self, paths: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if paths.is_empty() {
+            return Ok(vec![]);
+        }
+        self.query_json(
+            &["pkgs", "-P", "-S", "-F", "json:name,files,provides"],
+            paths,
+        )
+    }
+
     /// Check whether a source package exists.
     ///
     /// Equivalent to `fedrq pkgs --src <name>`.
@@ -1004,9 +1076,12 @@ mod tests {
             branch: Some("al10.2".to_string()),
             repo: Some("@epel".to_string()),
         };
+        let batch = ["libheif".to_string()];
         for args in [
             argv(&f.pkg_requires_command("libheif")),
             argv(&f.pkg_provides_command("libheif")),
+            argv(&f.pkgs_requires_info_command(&batch)),
+            argv(&f.pkgs_provides_info_command(&batch)),
         ] {
             assert!(args.contains(&"--notsrc".to_string()), "{args:?}");
             // And the operand still arrives after the separator, so a
@@ -1017,6 +1092,34 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_path_is_also_read_where_the_merges_put_it() {
+        assert_eq!(merged_paths("/bin/sh"), ["/bin/sh", "/usr/bin/sh"]);
+        assert_eq!(
+            merged_paths("/sbin/nologin"),
+            ["/sbin/nologin", "/usr/sbin/nologin", "/usr/bin/nologin"]
+        );
+        assert_eq!(
+            merged_paths("/usr/sbin/sendmail"),
+            ["/usr/sbin/sendmail", "/usr/bin/sendmail"]
+        );
+        assert_eq!(
+            merged_paths("/lib64/libc.so.6"),
+            ["/lib64/libc.so.6", "/usr/lib64/libc.so.6"]
+        );
+        assert_eq!(merged_paths("/etc/passwd"), ["/etc/passwd"]);
+        assert_eq!(merged_paths("/library/x"), ["/library/x"]);
+    }
+
+    #[test]
+    fn a_package_s_files_are_read_only_when_asked_for() {
+        let p: Vec<PkgInfo> =
+            serde_json::from_str(r#"[{"name": "bash", "files": ["/usr/bin/sh"]}, {"name": "x"}]"#)
+                .unwrap();
+        assert_eq!(p[0].files, ["/usr/bin/sh"]);
+        assert!(p[1].files.is_empty());
+    }
 
     #[test]
     fn an_epel_branch_is_queried_as_its_base_with_epel_over_it() {

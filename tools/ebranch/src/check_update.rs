@@ -526,6 +526,88 @@ pub(crate) trait RepoQuery: Sync {
     /// RPM's comparison here would be a second implementation to keep
     /// right.
     fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String>;
+
+    // Batched forms of the queries above, for the phases that ask
+    // about hundreds of packages or thousands of capabilities. Each
+    // answers what the one-at-a-time query would, an error counting as
+    // an empty answer as there; the defaults ask one at a time, and
+    // fedrq's view answers a whole batch in one invocation.
+
+    /// Each named binary package's Requires.
+    fn pkgs_requires(&self, names: &[String]) -> Vec<(String, Vec<String>)> {
+        names
+            .iter()
+            .map(|n| {
+                (
+                    n.clone(),
+                    filter_none(self.pkg_requires(n).unwrap_or_default()),
+                )
+            })
+            .collect()
+    }
+
+    /// Everything the named binary packages provide.
+    fn pkgs_provides(&self, names: &[String]) -> Vec<String> {
+        names
+            .iter()
+            .flat_map(|n| filter_none(self.pkg_provides(n).unwrap_or_default()))
+            .collect()
+    }
+
+    /// Everything the subpackages of these sources provide.
+    fn subpkgs_provides_all(&self, srpms: &[String]) -> Vec<String> {
+        srpms
+            .iter()
+            .flat_map(|s| filter_none(self.subpkgs_provides(s).unwrap_or_default()))
+            .collect()
+    }
+
+    /// Which of `caps` (bare capability names, or file paths) some
+    /// package in the view provides.
+    fn resolvable(&self, caps: &[String]) -> BTreeSet<String> {
+        caps.iter()
+            .filter(|c| !filter_none(self.provides_of_provider(c).unwrap_or_default()).is_empty())
+            .cloned()
+            .collect()
+    }
+
+    /// For each source: its subpackages' Requires, and its own
+    /// BuildRequires.
+    fn sources_requires(&self, srpms: &[String]) -> Vec<(String, Vec<String>, Vec<String>)> {
+        srpms
+            .iter()
+            .map(|s| {
+                (
+                    s.clone(),
+                    filter_none(self.subpkgs_requires(s).unwrap_or_default()),
+                    filter_none(self.src_requires(s).unwrap_or_default()),
+                )
+            })
+            .collect()
+    }
+}
+
+/// How many names one batched fedrq query carries: enough that a large
+/// update takes a handful of invocations, few enough that the command
+/// line stays far below the kernel's limit.
+const QUERY_CHUNK: usize = 250;
+
+/// Run `per_chunk` over `items` a chunk at a time, in parallel, with a
+/// counter that ticks once per chunk.
+fn chunked<T: Send>(
+    items: &[String],
+    label: &str,
+    verbose: bool,
+    per_chunk: impl Fn(&[String]) -> Vec<T> + Sync + Send,
+) -> Vec<T> {
+    let progress = Progress::stderr(label, items.len().div_ceil(QUERY_CHUNK), verbose);
+    items
+        .par_chunks(QUERY_CHUNK)
+        .flat_map_iter(|chunk| {
+            progress.tick(&chunk[0]);
+            per_chunk(chunk)
+        })
+        .collect()
 }
 
 /// Where a check gets its repository views.
@@ -597,6 +679,142 @@ impl RepoQuery for sandogasa_fedrq::Fedrq {
     fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String> {
         sandogasa_fedrq::Fedrq::resolve_to_source(self, dep).map_err(|e| e.to_string())
     }
+
+    // A batch that fails is asked again one at a time, so one bad
+    // operand costs that batch's speed, not its answers.
+
+    fn pkgs_requires(&self, names: &[String]) -> Vec<(String, Vec<String>)> {
+        match self.pkgs_requires_info(names) {
+            Ok(infos) => {
+                let mut by_name: BTreeMap<String, Vec<String>> =
+                    names.iter().map(|n| (n.clone(), Vec::new())).collect();
+                for i in infos {
+                    by_name.entry(i.name).or_default().extend(i.requires);
+                }
+                by_name.into_iter().collect()
+            }
+            Err(_) => names
+                .iter()
+                .map(|n| {
+                    (
+                        n.clone(),
+                        filter_none(self.pkg_requires(n).unwrap_or_default()),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn pkgs_provides(&self, names: &[String]) -> Vec<String> {
+        match self.pkgs_provides_info(names) {
+            Ok(infos) => infos.into_iter().flat_map(|i| i.provides).collect(),
+            Err(_) => names
+                .iter()
+                .flat_map(|n| filter_none(self.pkg_provides(n).unwrap_or_default()))
+                .collect(),
+        }
+    }
+
+    fn subpkgs_provides_all(&self, srpms: &[String]) -> Vec<String> {
+        match self.subpkgs_provides_info(srpms) {
+            Ok(infos) => infos.into_iter().flat_map(|i| i.provides).collect(),
+            Err(_) => srpms
+                .iter()
+                .flat_map(|s| filter_none(self.subpkgs_provides(s).unwrap_or_default()))
+                .collect(),
+        }
+    }
+
+    fn resolvable(&self, caps: &[String]) -> BTreeSet<String> {
+        let one_at_a_time = |caps: &[String]| -> BTreeSet<String> {
+            caps.iter()
+                .filter(|c| {
+                    !filter_none(self.provides_of_provider(c).unwrap_or_default()).is_empty()
+                })
+                .cloned()
+                .collect()
+        };
+        let (paths, names): (Vec<String>, Vec<String>) =
+            caps.iter().cloned().partition(|c| c.starts_with('/'));
+        let mut out = match self.providers_vr_info(&names) {
+            Ok(providers) => resolved_by(&names, &providers),
+            Err(_) => one_at_a_time(&names),
+        };
+        out.extend(match self.file_providers_info(&paths) {
+            Ok(providers) => paths_shipped(&paths, &providers),
+            Err(_) => one_at_a_time(&paths),
+        });
+        // What the batch could not match back is asked again on its
+        // own, so fedrq's own resolution has the last word: the
+        // matching above is a fast path, and a way of providing a
+        // capability it does not know must not read as a missing one.
+        // Few are left over, as most capabilities resolve.
+        let left: Vec<String> = caps.iter().filter(|c| !out.contains(*c)).cloned().collect();
+        out.extend(one_at_a_time(&left));
+        out
+    }
+
+    fn sources_requires(&self, srpms: &[String]) -> Vec<(String, Vec<String>, Vec<String>)> {
+        let (Ok(binaries), Ok(sources)) = (self.subpkgs_info(srpms), self.srcs_info(srpms)) else {
+            return srpms
+                .iter()
+                .map(|s| {
+                    (
+                        s.clone(),
+                        filter_none(self.subpkgs_requires(s).unwrap_or_default()),
+                        filter_none(self.src_requires(s).unwrap_or_default()),
+                    )
+                })
+                .collect();
+        };
+        let mut by_source: BTreeMap<&str, (Vec<String>, Vec<String>)> = srpms
+            .iter()
+            .map(|s| (s.as_str(), Default::default()))
+            .collect();
+        for b in &binaries {
+            if let Some(entry) = b.source_name.as_deref().and_then(|s| by_source.get_mut(s)) {
+                entry.0.extend(b.requires.iter().cloned());
+            }
+        }
+        for s in &sources {
+            if let Some(entry) = by_source.get_mut(s.name.as_str()) {
+                entry.1.extend(s.requires.iter().cloned());
+            }
+        }
+        by_source
+            .into_iter()
+            .map(|(s, (bin, src))| (s.to_string(), bin, src))
+            .collect()
+    }
+}
+
+/// Which of `caps` (bare capability names) one of `providers` provides,
+/// by name: the providers a batched `-P` query returned for all of
+/// them together, so each has to be matched back to its capability.
+fn resolved_by(caps: &[String], providers: &[sandogasa_fedrq::PkgInfo]) -> BTreeSet<String> {
+    caps.iter()
+        .filter(|c| providers.iter().any(|p| p.satisfies(c)))
+        .cloned()
+        .collect()
+}
+
+/// Which of `paths` one of `providers` declares, or ships under any
+/// path the merges give it (`/sbin/nologin` is shipped as
+/// `/usr/bin/nologin`).
+fn paths_shipped(paths: &[String], providers: &[sandogasa_fedrq::PkgInfo]) -> BTreeSet<String> {
+    let met: BTreeSet<&str> = providers
+        .iter()
+        .flat_map(|p| p.files.iter().chain(&p.provides).map(String::as_str))
+        .collect();
+    paths
+        .iter()
+        .filter(|p| {
+            sandogasa_fedrq::merged_paths(p)
+                .iter()
+                .any(|m| met.contains(m.as_str()))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Building a local repository of an update's builds, which downloads
@@ -1303,8 +1521,12 @@ fn check_update_body(
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let changed =
-            compute_changed_provides_via_subpkgs(&updated_packages, stable.as_ref(), new_fq);
+        let changed = compute_changed_provides_via_subpkgs(
+            &updated_packages,
+            stable.as_ref(),
+            new_fq,
+            opts.verbose,
+        );
         return run_provides_analysis(
             input,
             &branch,
@@ -2871,15 +3093,22 @@ fn compute_changed_provides_via_subpkgs(
     updated_packages: &[String],
     stable_fedrq: &(dyn RepoQuery + Send + Sync),
     new_fedrq: &(dyn RepoQuery + Send + Sync),
+    verbose: bool,
 ) -> Vec<ChangedProvide> {
-    let old_provides: BTreeSet<String> = updated_packages
-        .par_iter()
-        .flat_map(|srpm| filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default()))
-        .collect();
+    let old_provides: BTreeSet<String> = chunked(
+        updated_packages,
+        "reading current provides",
+        verbose,
+        |chunk| stable_fedrq.subpkgs_provides_all(chunk),
+    )
+    .into_iter()
+    .collect();
 
-    let new_provides: BTreeSet<String> = updated_packages
-        .par_iter()
-        .flat_map(|srpm| filter_none(new_fedrq.subpkgs_provides(srpm).unwrap_or_default()))
+    let new_provides: BTreeSet<String> =
+        chunked(updated_packages, "reading new provides", verbose, |chunk| {
+            new_fedrq.subpkgs_provides_all(chunk)
+        })
+        .into_iter()
         .collect();
 
     compare_provides(&old_provides, &new_provides)
@@ -2899,15 +3128,14 @@ fn compute_changed_provides_via_koji(
     verbose: bool,
 ) -> Vec<ChangedProvide> {
     // Get old provides from stable repo (source-based query works here).
-    let progress = Progress::stderr("reading current provides", updated_packages.len(), verbose);
-    let old_provides: BTreeSet<String> = updated_packages
-        .par_iter()
-        .flat_map(|srpm| {
-            progress.tick(srpm);
-            filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default())
-        })
-        .collect();
-    drop(progress);
+    let old_provides: BTreeSet<String> = chunked(
+        updated_packages,
+        "reading current provides",
+        verbose,
+        |chunk| stable_fedrq.subpkgs_provides_all(chunk),
+    )
+    .into_iter()
+    .collect();
 
     // Get new provides: binary RPM names via koji, then query
     // each one's provides from the side tag repo.
@@ -2940,15 +3168,12 @@ fn compute_changed_provides_via_koji(
 
     drop(progress);
 
-    let progress = Progress::stderr("reading new provides", binary_names.len(), verbose);
-    let new_provides: BTreeSet<String> = binary_names
-        .par_iter()
-        .flat_map(|name| {
-            progress.tick(name);
-            filter_none(side_tag_fedrq.pkg_provides(name).unwrap_or_default())
+    let new_provides: BTreeSet<String> =
+        chunked(&binary_names, "reading new provides", verbose, |chunk| {
+            side_tag_fedrq.pkgs_provides(chunk)
         })
+        .into_iter()
         .collect();
-    drop(progress);
 
     compare_provides(&old_provides, &new_provides)
 }
@@ -3030,13 +3255,41 @@ fn check_update_installability(
         new_provides.contains(cap) || resolves_in_stable(cap)
     };
 
-    let progress = Progress::stderr("checking requires", binary_names.len(), verbose);
-    binary_names
-        .par_iter()
-        .flat_map_iter(|name| {
-            progress.tick(name);
-            let requires = new_fedrq.pkg_requires(name).unwrap_or_default();
-            let src = bin_to_src.get(name.as_str()).copied().unwrap_or(name);
+    let requires: Vec<(String, Vec<String>)> =
+        chunked(binary_names, "reading requires", verbose, |chunk| {
+            new_fedrq.pkgs_requires(chunk)
+        });
+
+    // Ask about every capability the requirements name at once, rather
+    // than one fedrq invocation each: a large update requires a few
+    // thousand. Anything the evaluation reaches that is not in this
+    // set is still asked on its own, below.
+    let wanted: Vec<String> = requires
+        .iter()
+        .flat_map(|(_, reqs)| reqs.iter())
+        .filter(|dep| !sandogasa_depfilter::is_rpm_internal_dep(dep.trim()))
+        .flat_map(|dep| extract_capability_names(dep))
+        .filter(|cap| !cap.is_empty() && !new_provides.contains(cap.as_str()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let found: BTreeSet<String> = chunked(&wanted, "resolving requires", verbose, |chunk| {
+        stable_fedrq.resolvable(chunk).into_iter().collect()
+    })
+    .into_iter()
+    .collect();
+    {
+        let mut memo = cap_satisfied.lock().unwrap();
+        for cap in wanted {
+            let hit = found.contains(&cap);
+            memo.insert(cap, hit);
+        }
+    }
+
+    requires
+        .into_par_iter()
+        .flat_map_iter(|(name, requires)| {
+            let src = bin_to_src.get(name.as_str()).copied().unwrap_or(&name);
             requires
                 .into_iter()
                 .filter_map(|dep| {
@@ -3103,15 +3356,10 @@ fn run_provides_analysis(
     if opts.verbose {
         eprintln!("[check-update] collecting provides from updated packages");
     }
-    let progress = Progress::stderr("collecting provides", binary_names.len(), opts.verbose);
-    let new_provides_full: Vec<String> = binary_names
-        .par_iter()
-        .flat_map_iter(|name| {
-            progress.tick(name);
-            new_fedrq.pkg_provides(name).unwrap_or_default()
-        })
-        .collect();
-    drop(progress);
+    let new_provides_full: Vec<String> =
+        chunked(binary_names, "collecting provides", opts.verbose, |chunk| {
+            new_fedrq.pkgs_provides(chunk)
+        });
     let mut new_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for provide in &new_provides_full {
         new_by_name
@@ -3183,28 +3431,34 @@ fn run_provides_analysis(
         .map(|c| provide_name(&c.old).to_string())
         .collect();
 
+    // Install-time Requires of the binaries (FTI when broken) *and*
+    // the source package's BuildRequires (FTBFS when broken): a version
+    // bump can FTBFS a reverse dep without touching its installed
+    // binaries — e.g. a versioned BuildRequires like
+    // `(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)`
+    // when ctor moves to 1.x. Read for all of them in batches.
+    let rev_requires = chunked(
+        &rev_deps,
+        "reading reverse dependencies",
+        opts.verbose,
+        |chunk| stable_fedrq.sources_requires(chunk),
+    );
+
     let progress = Progress::stderr(
         "checking reverse dependencies",
-        rev_deps.len(),
+        rev_requires.len(),
         opts.verbose,
     );
-    let results: Vec<(String, RevDepResult)> = rev_deps
-        .par_iter()
-        .map(|pkg| {
-            progress.tick(pkg);
-            // Install-time Requires of the binaries (FTI when broken)
-            // *and* the source package's BuildRequires (FTBFS when
-            // broken): a version bump can FTBFS a reverse dep without
-            // touching its installed binaries — e.g. a versioned
-            // BuildRequires like `(crate(ctor/default) >= 0.6.0 with
-            // crate(ctor/default) < 0.7.0~)` when ctor moves to 1.x.
-            let mut deps: Vec<(BreakKind, String)> =
-                filter_none(stable_fedrq.subpkgs_requires(pkg).unwrap_or_default())
-                    .into_iter()
-                    .map(|dep| (BreakKind::Fti, dep))
-                    .collect();
+    let results: Vec<(String, RevDepResult)> = rev_requires
+        .into_par_iter()
+        .map(|(pkg, binary_requires, build_requires)| {
+            progress.tick(&pkg);
+            let mut deps: Vec<(BreakKind, String)> = binary_requires
+                .into_iter()
+                .map(|dep| (BreakKind::Fti, dep))
+                .collect();
             deps.extend(
-                filter_none(stable_fedrq.src_requires(pkg).unwrap_or_default())
+                build_requires
                     .into_iter()
                     .map(|dep| (BreakKind::Ftbfs, dep)),
             );
@@ -3243,7 +3497,7 @@ fn run_provides_analysis(
 
             let status = if issues.is_empty() { "ok" } else { "broken" };
             (
-                pkg.clone(),
+                pkg,
                 RevDepResult {
                     status: status.to_string(),
                     issues,
@@ -3450,6 +3704,79 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A package as a batched fedrq query returns it.
+    fn pkg(v: serde_json::Value) -> sandogasa_fedrq::PkgInfo {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn a_batched_answer_is_matched_back_to_each_capability() {
+        // One `-P` query for three capabilities returns the providers
+        // of all of them together; each capability resolves only when
+        // one of them provides it.
+        let providers = [
+            pkg(serde_json::json!({"name": "libical",
+                "provides": ["libical.so.3()(64bit)", "libical = 3.0.20-11.fc46"]})),
+            pkg(serde_json::json!({"name": "xapian-core-libs",
+                "provides": ["libxapian.so.30()(64bit)"]})),
+        ];
+        let caps: Vec<String> = [
+            "libical.so.3()(64bit)",
+            "libxapian.so.30()(64bit)",
+            "nonexistent-cap",
+            "libical",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            resolved_by(&caps, &providers)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [
+                "libical",
+                "libical.so.3()(64bit)",
+                "libxapian.so.30()(64bit)"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_require_is_found_under_its_merged_usr_path() {
+        // As f46 answers: util-linux ships /usr/bin/nologin and
+        // declares /sbin/nologin, postfix ships /usr/bin/sendmail and
+        // declares /usr/sbin/sendmail.
+        let providers = [
+            pkg(serde_json::json!({"name": "bash", "files": ["/usr/bin/bash", "/usr/bin/sh"]})),
+            pkg(serde_json::json!({"name": "util-linux", "files": ["/usr/bin/nologin"]})),
+            pkg(
+                serde_json::json!({"name": "postfix", "files": ["/usr/bin/sendmail"],
+                "provides": ["/usr/sbin/sendmail"]}),
+            ),
+        ];
+        let paths: Vec<String> = [
+            "/bin/sh",
+            "/sbin/nologin",
+            "/usr/sbin/sendmail",
+            "/usr/bin/missing",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            paths_shipped(&paths, &providers)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["/bin/sh", "/sbin/nologin", "/usr/sbin/sendmail"]
+        );
+    }
+
+    #[test]
+    fn chunks_cover_every_item_once() {
+        let items: Vec<String> = (0..QUERY_CHUNK * 2 + 7).map(|i| i.to_string()).collect();
+        let mut seen = chunked(&items, "test", true, |chunk| chunk.to_vec());
+        seen.sort_by_key(|s| s.parse::<usize>().unwrap());
+        assert_eq!(seen, items);
+    }
 
     #[test]
     fn koji_download_argv_fetches_the_host_arch_and_noarch() {
