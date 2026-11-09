@@ -47,12 +47,14 @@ pub struct FileIssueArgs {
     /// (with the https:// scheme).
     pub mr_url: String,
 
-    /// Affected (currently-tagged) NVR. If omitted, left blank in
-    /// the issue body; can be filled in later.
+    /// The stock build the update fixes (default: stock's current
+    /// build; `status --refresh` fills it in later otherwise)
     #[arg(long, help_heading = "Issue")]
     pub affected: Option<String>,
 
-    /// Expected fix NVR once the MR lands and is built.
+    /// The stock build expected to carry the fix (default: the SIG's
+    /// build without its ~proposed; `status --refresh` fills it in
+    /// later otherwise)
     #[arg(long = "expected-fix", help_heading = "Issue")]
     pub expected_fix: Option<String>,
 
@@ -213,6 +215,37 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
             .filter_map(|(_, s)| s.as_ref()?.priority.as_deref()),
     );
     let interactive = !args.dry_run && std::io::stdin().is_terminal();
+    // The builds, from the evidence when not named (#101): stock's build
+    // expected to carry the fix, named by the SIG's in -release or
+    // -testing, and stock's current build, the affected one while the
+    // fix is not in stock.
+    let sig_build = crate::builds::sig_build(
+        crate::status::fetch_proposed_updates_nvrs(&release, args.verbose)
+            .get(package)
+            .map(String::as_str),
+        crate::status::fetch_proposed_updates_testing_nvrs(&release, args.verbose)
+            .get(package)
+            .map(String::as_str),
+    );
+    let expected_fix = settle_build(
+        "--expected-fix",
+        "the SIG's build",
+        args.expected_fix.as_deref(),
+        sig_build.as_deref().and_then(crate::builds::expected_fix),
+        interactive,
+    );
+    let stock = crate::status::fetch_stream_nvrs(&release, &[package.to_string()], args.verbose);
+    let affected = settle_build(
+        "--affected",
+        "stock's build",
+        args.affected.as_deref(),
+        crate::builds::affected(
+            stock.get(package).map(String::as_str),
+            sig_build.as_deref(),
+            false,
+        ),
+        interactive,
+    );
     let issue_type = resolve_type(args.issue_type, &cves, interactive);
 
     let body = format_body(&BodyFields {
@@ -222,17 +255,12 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         mr_state: Some(&mr.state),
         jira: &jira,
         cve_lines: &cve_lines,
-        affected: args.affected.as_deref(),
-        expected_fix: args.expected_fix.as_deref(),
+        affected: affected.as_deref(),
+        expected_fix: expected_fix.as_deref(),
         note: args.note.as_deref(),
     });
 
-    let title = format_title(
-        package,
-        args.affected.as_deref(),
-        args.expected_fix.as_deref(),
-        &mr.title,
-    );
+    let title = format_title(package, &mr.title);
 
     let mut labels = build_labels(&release, issue_type);
     if let Some(p) = &priority {
@@ -529,6 +557,39 @@ fn resolve_type(
     }
 }
 
+/// A build line's value: the flag's when given, else `derived` (what
+/// the evidence says, `source` naming it). A flag that disagrees with
+/// the evidence is confirmed at a terminal (`interactive`), defaulting to
+/// the evidence; without one it is kept and the disagreement reported.
+fn settle_build(
+    flag: &str,
+    source: &str,
+    explicit: Option<&str>,
+    derived: Option<String>,
+    interactive: bool,
+) -> Option<String> {
+    match (explicit, derived) {
+        (None, derived) => {
+            if let Some(d) = &derived {
+                eprintln!("{flag} {d}, from {source}");
+            }
+            derived
+        }
+        (Some(e), Some(d)) if e != d => {
+            let question = format!("{flag} is {e}, but {source} is {d}. Use {d}?");
+            if interactive && sandogasa_cli::confirm(&question, true).unwrap_or(false) {
+                Some(d)
+            } else {
+                if !interactive {
+                    eprintln!("note: keeping {flag} {e}, though {source} is {d}");
+                }
+                Some(e.to_string())
+            }
+        }
+        (Some(e), _) => Some(e.to_string()),
+    }
+}
+
 /// Whether to assign the new issue to the person filing it: yes with
 /// `--assign`, else asked at a terminal (defaulting to yes), else no.
 fn wants_assignment(assign: bool, interactive: bool) -> bool {
@@ -537,16 +598,12 @@ fn wants_assignment(assign: bool, interactive: bool) -> bool {
             && sandogasa_cli::confirm("Assign the tracking issue to you?", true).unwrap_or(false))
 }
 
-fn format_title(
-    package: &str,
-    affected: Option<&str>,
-    expected_fix: Option<&str>,
-    mr_title: &str,
-) -> String {
-    match (affected, expected_fix) {
-        (Some(a), Some(e)) => format!("{package}: {a} → {e}"),
-        _ => format!("{package}: {mr_title}"),
-    }
+/// The issue's title: the package and what the update does, from the
+/// merge request's title. The builds are in the body; a title of
+/// versions (`rsync-3.5.0-1.el10 → rsync-3.5.0-2.el10`) would not say why
+/// there is an update at all.
+fn format_title(package: &str, mr_title: &str) -> String {
+    format!("{package}: {mr_title}")
 }
 
 fn format_body(f: &BodyFields<'_>) -> String {
@@ -665,26 +722,13 @@ mod tests {
     }
 
     #[test]
-    fn format_title_with_nvrs() {
+    fn the_title_says_what_the_update_does_whatever_the_builds() {
         assert_eq!(
-            format_title("xz", Some("xz-5.4-1"), Some("xz-5.6-1"), "whatever"),
-            "xz: xz-5.4-1 → xz-5.6-1"
-        );
-    }
-
-    #[test]
-    fn format_title_without_nvrs_uses_mr_title() {
-        assert_eq!(
-            format_title("xz", None, None, "Fix CVE-2026-0001"),
-            "xz: Fix CVE-2026-0001"
-        );
-    }
-
-    #[test]
-    fn format_title_missing_one_nvr_uses_mr_title() {
-        assert_eq!(
-            format_title("xz", Some("xz-5.4-1"), None, "MR subject"),
-            "xz: MR subject"
+            format_title(
+                "rsync",
+                "Fix denial of service via crafted checksums (CVE-2026-119741)"
+            ),
+            "rsync: Fix denial of service via crafted checksums (CVE-2026-119741)"
         );
     }
 
@@ -1059,6 +1103,8 @@ mod tests {
                 ),
             ],
         );
+        // Stock's build, for the affected line: no network in a test.
+        install_fake_bin(dir.path(), "fedrq", &[("pkgs", "")]);
         let existing_path = std::env::var("PATH").unwrap_or_default();
         let new_path = format!("{}:{existing_path}", dir.path().display());
         let _guard = EnvGuard::new(&[
@@ -1191,6 +1237,32 @@ mod tests {
         assert!(
             body.contains(&format!("— New\n{line}\n- **Release**: c10s\n")),
             "{body}"
+        );
+    }
+
+    #[test]
+    fn a_build_comes_from_the_evidence_unless_a_flag_names_it() {
+        let d = || Some("rsync-3.5.0-2.el10".to_string());
+        assert_eq!(
+            settle_build("--expected-fix", "the SIG's build", None, d(), false).as_deref(),
+            Some("rsync-3.5.0-2.el10")
+        );
+        assert_eq!(settle_build("--affected", "stock", None, None, false), None);
+        // Without a terminal, a flag that disagrees is kept.
+        assert_eq!(
+            settle_build(
+                "--expected-fix",
+                "s",
+                Some("rsync-3.5.0-3~proposed.el10"),
+                d(),
+                false
+            )
+            .as_deref(),
+            Some("rsync-3.5.0-3~proposed.el10")
+        );
+        assert_eq!(
+            settle_build("--affected", "s", Some("x"), None, false).as_deref(),
+            Some("x")
         );
     }
 }

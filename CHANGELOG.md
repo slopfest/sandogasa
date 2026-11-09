@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: tracking issues name their affected and expected builds from the evidence
+
+rsync's two tracking issues said `_(unknown)_` for both the affected
+build and the expected fix. `file-issue` had been run without
+`--affected` and `--expected-fix`, and the SIG builds did not exist yet.
+Once they did, nothing filled the lines in, although `status` reads
+both values for its own report.
+
+`file-issue` now takes them from the evidence when they aren't given.
+The expected fix is the stock build the SIG's newest build in
+`-release` (else `-testing`) names: the SIG's build is stock's next
+release with `~proposed` added, so `rsync-3.5.0-2~proposed.el10` names
+`rsync-3.5.0-2.el10`. The affected build is stock's current one, unless
+stock is past the SIG's build already. A flag that disagrees is
+confirmed at a terminal, defaulting to the evidence. `status --refresh`
+fills an unknown line on an open issue the same way, the affected build
+only while stock lacks the change, and never changes a line that has a
+value, except an expected fix naming a `~proposed` build, which is the
+SIG's own build and never stock's.
+
+The title is now always the package and the merge request's title.
+It used to become `<affected> → <expected>` when both builds were
+given, which says which versions are involved but not why there is an
+update. With the builds now usually known, that would have been nearly
+every new issue. Resolves #101.
+
 ### cpu-sig-tracker: dump-inventory adds the packages in -testing too
 
 `dump-inventory` left out rsync, whose two Proposed Updates were in

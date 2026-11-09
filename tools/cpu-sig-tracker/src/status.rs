@@ -392,6 +392,20 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     let new_cve_lines = (crate::triage::parse_cve_lines(body).is_empty()
                         && !cves.is_empty())
                     .then(|| crate::triage::rated_cve_lines(&cves, args.verbose));
+                    // The builds, for a body that names them unknown (#101):
+                    // stock's build expected to carry the fix, named by the
+                    // SIG's, and stock's current build while stock lacks
+                    // the change.
+                    let sig_build = crate::builds::sig_build(
+                        pu_nvr.as_deref(),
+                        testing_nvrs.get(package).map(String::as_str),
+                    );
+                    let expected_build = sig_build.as_deref().and_then(crate::builds::expected_fix);
+                    let affected_build = crate::builds::affected(
+                        stream_nvr.as_deref(),
+                        sig_build.as_deref(),
+                        landed.as_ref().is_some_and(|l| l.by.is_some()),
+                    );
                     maybe_refresh_labels(
                         &project,
                         &issue,
@@ -413,6 +427,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         mr_state: mr_state.as_deref(),
                         jira: &jira,
                         new_cve_lines: new_cve_lines.as_deref(),
+                        builds: (affected_build.as_deref(), expected_build.as_deref()),
                     });
                     if changed {
                         eprintln!("refreshed {}: rewrote body", issue.web_url);
@@ -932,6 +947,8 @@ struct RefreshCtx<'a> {
     jira: &'a [JiraState],
     /// CVE lines to add, for a body that has none.
     new_cve_lines: Option<&'a [String]>,
+    /// The affected and expected builds, for lines that say unknown.
+    builds: (Option<&'a str>, Option<&'a str>),
 }
 
 /// The labels an issue filed before #98 lacks: `security` when the
@@ -1006,6 +1023,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
         mr_state: ctx.mr_state,
         jira: ctx.jira,
         new_cve_lines: ctx.new_cve_lines,
+        builds: ctx.builds,
     });
     // GitLab strips trailing whitespace/newlines from stored
     // descriptions, so compare trimmed values — otherwise the
@@ -1047,6 +1065,8 @@ struct RefreshedBodyArgs<'a> {
     mr_state: Option<&'a str>,
     jira: &'a [JiraState],
     new_cve_lines: Option<&'a [String]>,
+    /// What fills unknown build lines (#101).
+    builds: (Option<&'a str>, Option<&'a str>),
 }
 
 /// Build a standardized body, preserving the original prose
@@ -1064,8 +1084,10 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
     // Lines that record something the live systems do not say — the
     // affected and expected builds the SIG named, the stock fix a
     // person established — survive the rewrite unchanged.
-    let kept: String = a
-        .original_body
+    // Unknown build lines filled from the evidence (#101); lines with a
+    // value are the SIG's word and stay.
+    let filled = crate::builds::fill(a.original_body, a.builds.0, a.builds.1);
+    let kept: String = filled
         .lines()
         .filter(|l| {
             let t = l.trim_start();
@@ -1927,6 +1949,7 @@ mod tests {
                 verdict: None,
             }],
             new_cve_lines: None,
+            builds: (None, None),
         });
         assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
         assert!(out.contains(
@@ -1982,6 +2005,7 @@ mod tests {
             mr_state: Some("opened"),
             jira: &jira,
             new_cve_lines: None,
+            builds: (None, None),
         });
         assert!(out.contains("[RHEL-303720]("), "{out}");
         assert!(out.contains("[RHEL-303900]("), "{out}");
@@ -2106,6 +2130,7 @@ mod tests {
             mr_state: None,
             jira: &[],
             new_cve_lines: None,
+            builds: (None, None),
         });
         assert!(out.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
         // MR state suffix omitted when unknown.
@@ -2553,6 +2578,7 @@ name = "PackageKit"
             mr_state: Some("opened"),
             jira: &jira,
             new_cve_lines: new,
+            builds: (None, None),
         };
         let lines: &'static [String] = Box::leak(vec![line.clone()].into_boxed_slice());
         let out = refreshed_body(args(original, Some(lines)));
@@ -2601,5 +2627,38 @@ name = "PackageKit"
             (vec![], vec![])
         );
         assert_eq!(label_changes(&labels(&[]), false, None), (vec![], vec![]));
+    }
+
+    #[test]
+    fn refresh_fills_unknown_build_lines_from_the_evidence() {
+        let jira = [JiraState {
+            key: "RHEL-303721".into(),
+            status: Some("New".into()),
+            resolution: None,
+            resolved: false,
+            verdict: None,
+        }];
+        let original = "- **MR**: [t](https://example/-/merge_requests/90) — opened\n\
+                        - **JIRA**: [RHEL-303721](https://x/browse/RHEL-303721) — New\n\
+                        - **Release**: c10s\n\
+                        - **Affected build**: _(unknown)_\n\
+                        - **Expected fix**: _(unknown)_\n";
+        let out = refreshed_body(RefreshedBodyArgs {
+            original_body: original,
+            release: "c10s",
+            mr_url: "https://example/-/merge_requests/90",
+            mr_title: "t",
+            mr_state: Some("opened"),
+            jira: &jira,
+            new_cve_lines: None,
+            builds: (Some("rsync-3.5.0-1.el10"), Some("rsync-3.5.0-2.el10")),
+        });
+        assert!(
+            out.ends_with(
+                "- **Affected build**: rsync-3.5.0-1.el10\n\
+                 - **Expected fix**: rsync-3.5.0-2.el10\n"
+            ),
+            "{out}"
+        );
     }
 }

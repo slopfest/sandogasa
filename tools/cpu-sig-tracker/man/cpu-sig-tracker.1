@@ -60,10 +60,10 @@ Full Merge Request URL to track, e.g. `gitlab.com/redhat/centos\-stream/rpms/xz/
 .SH ISSUE
 .TP
 \fB\-\-affected\fR \fI<AFFECTED>\fR
-Affected (currently\-tagged) NVR. If omitted, left blank in the issue body; can be filled in later
+The stock build the update fixes (default: stock\*(Aqs current build; `status \-\-refresh` fills it in later otherwise)
 .TP
 \fB\-\-expected\-fix\fR \fI<EXPECTED_FIX>\fR
-Expected fix NVR once the MR lands and is built
+The stock build expected to carry the fix (default: the SIG\*(Aqs build without its ~proposed; `status \-\-refresh` fills it in later otherwise)
 .TP
 \fB\-\-jira\fR \fI<KEY>\fR
 The RHEL issue(s) the MR resolves, overriding those read from its Resolves: lines (repeatable, or comma\-separated)

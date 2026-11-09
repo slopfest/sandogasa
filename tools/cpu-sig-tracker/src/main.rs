@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod builds;
 mod config;
 mod configure;
 mod dump_inventory;

@@ -111,6 +111,18 @@ stamps `start_date` from the Koji build's creation time.
 The issue body follows a canonical format that `status` parses back
 (MR, JIRA, CVE, Release, Affected build, Expected fix).
 
+Without `--affected` and `--expected-fix`, the builds come from what
+CBS and stock carry: the expected fix is the stock build the SIG's newest build in
+`-release` (else `-testing`) names, and the affected build is stock's
+current one, unless stock is already past the SIG's. A flag that disagrees with
+that is confirmed at a terminal, defaulting to what CBS and stock say.
+When neither is known yet, the line says `_(unknown)_`, and
+`status --refresh` fills it in once it is. The expected fix is stock's
+build, not the SIG's: the SIG's build is stock's next release with
+`~proposed` added (`rsync-3.5.0-2~proposed.el10` for
+`rsync-3.5.0-2.el10`). The title is the package and the merge request's
+title, saying what the update does.
+
 How urgent the update is goes on the issue too. Each CVE the merge
 request or its RHEL issues name gets a `- **CVE**:` line with its
 severity (Red Hat's rating first, then NVD's and GitHub's), linking
@@ -481,8 +493,13 @@ JIRA + Koji (Done / Won't do / In progress / To do), and sets
 `due_date` that disagrees: the day the issue's `- **Stock fix**:` line
 records, else the day the evidence shows the change in stock, else
 when Jira settled it.
-On an open issue it also fills in what `file-issue` records about
-urgency when the issue was filed without it: `- **CVE**:` lines for the
+On an open issue it fills an `_(unknown)_` affected build or expected
+fix from the same evidence `file-issue` uses (the affected build only
+while stock lacks the change, since it names the vulnerable build), and
+never changes one that has a value, except an expected fix naming a
+`~proposed` build: that is the SIG's own, never stock's, and is
+replaced. It also fills in what `file-issue`
+records about urgency when the issue was filed without it: `- **CVE**:` lines for the
 CVEs its merge request or RHEL issues name, the `security` label when
 it has no type label, and the `priority::` label for its RHEL issues'
 priority, replacing one that no longer matches.
