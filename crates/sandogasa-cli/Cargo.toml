@@ -9,6 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+anstream = { workspace = true, optional = true }
+anstyle = { workspace = true, optional = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 clap_mangen = { workspace = true, optional = true }
@@ -35,6 +37,11 @@ default = ["tls"]
 # with `default-features = false` and sheds ring with it — which is what
 # lets dbranch build for musl without a C toolchain.
 tls = ["dep:rustls"]
+
+# Narrated, copy-pasteable command execution for `--explain` and
+# `--dry-run` (the `explain` module), from dbranch. Off by default so
+# tools without such steps don't pull in anstream.
+explain = ["dep:anstream", "dep:anstyle"]
 
 # HTTP plumbing shared by the API-client crates (the `http` module):
 # preconfigured reqwest builders and uniform status/JSON handling.

@@ -1973,6 +1973,8 @@ version = "0.27.1"
 name = "sandogasa-cli"
 version = "0.27.1"
 dependencies = [
+ "anstream",
+ "anstyle",
  "chrono",
  "clap",
  "clap_mangen",

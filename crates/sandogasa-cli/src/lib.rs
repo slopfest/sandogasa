@@ -32,6 +32,8 @@ macro_rules! banner {
 }
 
 pub mod defaults;
+#[cfg(feature = "explain")]
+pub mod explain;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg(feature = "man")]

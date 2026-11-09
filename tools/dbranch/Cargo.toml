@@ -20,7 +20,7 @@ clap = { workspace = true }
 # No `tls` feature: dbranch shells out to the Debian tools and makes
 # no HTTP requests. Shedding ring's C and assembly with it is what
 # lets the release build target musl with no C toolchain.
-sandogasa-cli = { workspace = true }
+sandogasa-cli = { workspace = true, features = ["explain"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = { workspace = true }

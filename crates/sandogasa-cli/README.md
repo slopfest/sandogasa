@@ -37,6 +37,15 @@ column, cut to 79 characters so it never wraps. It is drawn only when
 stderr is a terminal and the run is not verbose, `eprintln` prints a
 line without running into it, and dropping it clears the line.
 
+The optional `explain` feature adds an `explain` module for a tool
+whose steps are commands a person could run by hand: `Ui { explain,
+dry_run, quiet }` narrates each step (`step`), shows its command
+exactly as it would be typed (`show_command`), and runs it
+(`run_required`, `run_capture`, …), pausing for Enter first under
+`--explain` and running nothing under `--dry-run`. Colour goes through
+`anstream`, which drops it for a pipe or with `NO_COLOR`. It came from
+dbranch, whose `--explain` the workspace rule names as the model.
+
 `ConfigArgs` holds the arguments every tool's `config` command takes
 (`Config(sandogasa_cli::ConfigArgs)`), so the flags and their help read
 the same everywhere. Today that is `--all`, which asks for every
