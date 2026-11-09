@@ -676,6 +676,17 @@ Both are printed as soon as they are known and are blocking findings
 like breakage: a `-1` for `--give-karma`, a stop for `--submit` until
 the reviewer keeps, explains or removes them.
 
+For an update from a side tag, each reverse dependency that would
+break is also labelled with when it reached the target, measured
+against the side tag's creation in Koji: **new** (the package was
+first listed in any tag after then, as a package added to Fedora since
+was), **rebuilt** (its newest build in the target finished after
+then), or **already there**. The new and rebuilt ones join the
+not-newest builds in one blocking note, "the target moved while the
+side tag was open": each is something to rebuild in the side tag
+before it merges. A breakage that was already there may be a known
+exception, such as a package that already fails to build.
+
 A side tag's or a COPR's repository metadata is refetched on every run
 (both change as builds land, and are small); after an offered `koji
 regen-repo`, only the side tag's cached metadata is dropped; and when

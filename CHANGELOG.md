@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### ebranch: check-update says which breaking reverse dependencies arrived while the side tag was open
+
+`ebranch check-update f46-build-side-158330` reported two reverse
+dependencies that would fail to install with libical 4, and nothing
+told them apart. ical was a package added to Fedora on 2026-11-05,
+three days after the side tag was created, so no rebuild plan made
+before then could have listed it; kdepimlibs already failed to build
+before the side tag existed and had been set aside on purpose.
+
+Each breaking reverse dependency of an update from a side tag is now
+labelled, from Koji's history, as new (first listed in any tag after
+the side tag was created), rebuilt (its newest build in the target
+finished after then) or already there. The new and rebuilt ones join
+the builds the target has since outranked (#78) in one blocking note,
+"the target moved while the side tag was open", as both are things to
+rebuild in the side tag before it merges. `--json` gains each reverse
+dependency's `arrival` and the report's `side_tag_opened`. Resolves
+#83.
+
+sandogasa-kojihub's `HubClient::latest_builds` now returns a
+`LatestBuild` with the build's completion time, and it gains
+`tag_created` and `packages_first_listed`.
+
 ### ebranch: check-update asks Koji and Bodhi once for all the builds
 
 After the fedrq queries were batched, `ebranch check-update

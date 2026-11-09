@@ -257,6 +257,49 @@ pub struct RevDepResult {
     /// Broken Requires, if any.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<BrokenRequires>,
+    /// For a broken one, when it reached the target relative to the
+    /// side tag (#83); `None` without a side tag, or when Koji could
+    /// not say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrival: Option<ArrivalNote>,
+}
+
+/// When a package reached the target, relative to the side tag's
+/// creation: what tells a reverse dependency the side tag has to catch
+/// up with from one it can leave as it is (#83).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Arrival {
+    /// The package entered the distribution after the side tag was
+    /// created, so no plan made before then could list it.
+    NewPackage,
+    /// An existing package whose newest build in the target finished
+    /// after the side tag was created.
+    Rebuilt,
+    /// Neither: it was there, as it is, when the side tag was opened.
+    PreExisting,
+}
+
+/// A reverse dependency's [`Arrival`], with the day and the build that
+/// show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ArrivalNote {
+    pub arrival: Arrival,
+    /// The day it arrived (`YYYY-MM-DD`): first listed, or rebuilt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on: Option<String>,
+    /// The target's build, for one rebuilt since.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nvr: Option<String>,
+}
+
+/// What Koji says of a package's history in a target: when it was first
+/// added to any tag's package list, and its newest build in the target
+/// with when that build finished (unix times).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PackageHistory {
+    pub first_listed: Option<f64>,
+    pub latest: Option<(String, Option<f64>)>,
 }
 
 /// Full result of the check-update command.
@@ -301,6 +344,11 @@ pub struct CheckUpdateReport {
     /// Builds already in another Bodhi update.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub in_other_update: Vec<InOtherUpdate>,
+    /// The day the side tag was created (`YYYY-MM-DD`), when the update
+    /// comes from one and Koji says: what the reverse dependencies'
+    /// [`Arrival`]s are measured against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side_tag_opened: Option<String>,
     /// Why the full Provides analysis was skipped, when it was
     /// (`full_analysis == false`). Drives a precise note instead of a
     /// generic "no side tag" message.
@@ -995,6 +1043,17 @@ pub(crate) trait KojiQuery: Sync {
     ) -> Vec<Result<Option<String>, String>> {
         packages.iter().map(|p| self.latest_in(tag, p)).collect()
     }
+
+    /// When `tag` was created, as a unix time. Defaults to unknown,
+    /// which leaves reverse dependencies unlabelled.
+    fn tag_created(&self, _tag: &str) -> Option<f64> {
+        None
+    }
+
+    /// Each of `packages`' [`PackageHistory`] in `target`, in order.
+    fn histories(&self, _target: &str, packages: &[String]) -> Vec<PackageHistory> {
+        vec![PackageHistory::default(); packages.len()]
+    }
 }
 
 /// How many calls one Koji `multiCall` carries.
@@ -1066,7 +1125,7 @@ impl KojiQuery for KojiCli {
                         .iter()
                         .zip(results)
                         .map(|(p, r)| match r {
-                            Ok(nvr) => Ok(nvr),
+                            Ok(build) => Ok(build.map(|b| b.nvr)),
                             Err(_) => self.latest_in(tag, p),
                         })
                         .collect::<Vec<_>>(),
@@ -1075,9 +1134,40 @@ impl KojiQuery for KojiCli {
             )
             .collect()
     }
+
+    // Asked only about broken reverse dependencies, a handful, and only
+    // through the hub: without it the labels are simply left off.
+
+    fn tag_created(&self, tag: &str) -> Option<f64> {
+        let hub = self.hub()?;
+        sandogasa_kojihub::retry(2, || hub.tag_created(tag))
+            .ok()
+            .flatten()
+    }
+
+    fn histories(&self, target: &str, packages: &[String]) -> Vec<PackageHistory> {
+        self.histories_on_hub(target, packages)
+            .unwrap_or_else(|| vec![PackageHistory::default(); packages.len()])
+    }
 }
 
 impl KojiCli {
+    /// [`KojiQuery::histories`] from the hub, a chunk of packages per
+    /// pair of `multiCall`s; `None` when the hub cannot be asked.
+    fn histories_on_hub(&self, target: &str, packages: &[String]) -> Option<Vec<PackageHistory>> {
+        let hub = self.hub()?;
+        let mut out = Vec::new();
+        for chunk in packages.chunks(MULTICALL_CHUNK) {
+            let firsts = sandogasa_kojihub::retry(2, || hub.packages_first_listed(chunk)).ok()?;
+            let latest = sandogasa_kojihub::retry(2, || hub.latest_builds(target, chunk)).ok()?;
+            out.extend(firsts.into_iter().zip(latest).map(|(f, l)| PackageHistory {
+                first_listed: f.ok().flatten(),
+                latest: l.ok().flatten().map(|b| (b.nvr, b.completion_ts)),
+            }));
+        }
+        Some(out)
+    }
+
     /// The hub the profile names, as the `koji` CLI's own configuration
     /// gives it (`koji` when no profile is set, as for the CLI).
     fn hub(&self) -> Option<sandogasa_kojihub::HubClient> {
@@ -1154,6 +1244,9 @@ pub(crate) fn check_update_with(
 ) -> Result<CheckUpdateReport, String> {
     let mut guards = TargetGuards::default();
     let mut report = check_update_body(input, opts, services, &mut guards)?;
+    if let (Some(side_tag), Some(target)) = (&guards.side_tag, &guards.target_tag) {
+        label_arrivals(&mut report, side_tag, target, services.koji, opts.verbose);
+    }
     report.not_newest = guards.not_newest;
     report.in_other_update = guards.in_other_update;
     Ok(report)
@@ -1165,6 +1258,84 @@ pub(crate) fn check_update_with(
 pub(crate) struct TargetGuards {
     pub not_newest: Vec<NotNewest>,
     pub in_other_update: Vec<InOtherUpdate>,
+    /// The target's Koji tag, when Bodhi named one.
+    pub target_tag: Option<String>,
+    /// The side tag the update comes from, when it does.
+    pub side_tag: Option<String>,
+}
+
+/// A unix time as the day it falls on, in UTC.
+fn day_of(ts: f64) -> Option<String> {
+    chrono::DateTime::from_timestamp(ts as i64, 0).map(|t| t.format("%Y-%m-%d").to_string())
+}
+
+/// When a reverse dependency reached the target, relative to a side tag
+/// created at `opened` (#83). A package first listed anywhere after
+/// then is new: the first listing across every tag, not the target's,
+/// so a release branched while the side tag was open does not make
+/// every package look new. Otherwise one whose newest build in the
+/// target finished after then was rebuilt. `None` when Koji said
+/// nothing of it.
+pub fn arrival(opened: f64, h: &PackageHistory) -> Option<ArrivalNote> {
+    if h.first_listed.is_none() && h.latest.is_none() {
+        return None;
+    }
+    if let Some(first) = h.first_listed.filter(|f| *f > opened) {
+        return Some(ArrivalNote {
+            arrival: Arrival::NewPackage,
+            on: day_of(first),
+            nvr: None,
+        });
+    }
+    if let Some((nvr, Some(done))) = &h.latest
+        && *done > opened
+    {
+        return Some(ArrivalNote {
+            arrival: Arrival::Rebuilt,
+            on: day_of(*done),
+            nvr: Some(nvr.clone()),
+        });
+    }
+    Some(ArrivalNote {
+        arrival: Arrival::PreExisting,
+        on: None,
+        nvr: None,
+    })
+}
+
+/// Label each broken reverse dependency with its [`Arrival`] relative
+/// to `side_tag`, from Koji's history of the target `target_tag`.
+fn label_arrivals(
+    report: &mut CheckUpdateReport,
+    side_tag: &str,
+    target_tag: &str,
+    koji: &dyn KojiQuery,
+    verbose: bool,
+) {
+    let broken: Vec<String> = report
+        .reverse_deps
+        .iter()
+        .filter(|(_, r)| r.status != "ok")
+        .map(|(pkg, _)| pkg.clone())
+        .collect();
+    if broken.is_empty() {
+        return;
+    }
+    let Some(opened) = koji.tag_created(side_tag) else {
+        return;
+    };
+    if verbose {
+        eprintln!(
+            "[check-update] asking koji when {} broken reverse dependencies reached {target_tag}",
+            broken.len()
+        );
+    }
+    report.side_tag_opened = day_of(opened);
+    for (pkg, history) in broken.iter().zip(koji.histories(target_tag, &broken)) {
+        if let Some(r) = report.reverse_deps.get_mut(pkg) {
+            r.arrival = arrival(opened, &history);
+        }
+    }
 }
 
 /// Whether the update's build `ours` would fail to be the newest
@@ -1202,6 +1373,7 @@ pub(crate) fn target_guards(
     let mut out = TargetGuards::default();
     match services.bodhi.candidate_tag(dist_branch) {
         Some(tag) => {
+            out.target_tag = Some(tag.clone());
             if verbose {
                 eprintln!("[check-update] comparing each build with the newest in {tag}");
             }
@@ -1424,6 +1596,7 @@ fn check_update_body(
         services,
         opts.verbose,
     );
+    guards.side_tag = side_tag.clone();
 
     // EPEL on its own can't resolve base-OS dependencies: a plain
     // epelN branch is checked against its base distro plus @epel.
@@ -1493,6 +1666,7 @@ fn check_update_body(
             stale_side_tag: vec![],
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         });
@@ -1835,6 +2009,7 @@ fn check_update_body(
                 RevDepResult {
                     status: "unknown".to_string(),
                     issues: vec![],
+                    arrival: None,
                 },
             )
         })
@@ -1854,6 +2029,7 @@ fn check_update_body(
         stale_side_tag: vec![],
         not_newest: vec![],
         in_other_update: vec![],
+        side_tag_opened: None,
         skip_reason: Some(skip_reason),
         reverse_deps,
     })
@@ -2016,6 +2192,67 @@ pub fn print_report(report: &CheckUpdateReport, detailed: bool) {
 /// to stdout, reusable as a Bodhi comment body. With `detailed` off,
 /// the report shows counts plus the actionable problems only (so a
 /// 330-package update stays readable); with it on, every list is shown.
+/// The blocking note on what changed in the target while the side tag
+/// was open: builds of the update the target has since outranked
+/// (#78), and reverse dependencies that would break and are new or
+/// rebuilt since (#83), which the side tag has to catch up with. One
+/// note, as both are the same event; without a side tag's date, the
+/// not-newest builds alone, as they were before.
+fn target_moved(report: &CheckUpdateReport) -> String {
+    use std::fmt::Write;
+    let mut o = String::new();
+    let moved: Vec<(&String, &ArrivalNote)> = report
+        .reverse_deps
+        .iter()
+        .filter(|(_, r)| r.status != "ok")
+        .filter_map(|(pkg, r)| Some((pkg, r.arrival.as_ref()?)))
+        .filter(|(_, a)| a.arrival != Arrival::PreExisting)
+        .collect();
+    if report.not_newest.is_empty() && moved.is_empty() {
+        return o;
+    }
+    match &report.side_tag_opened {
+        Some(opened) => {
+            let _ = writeln!(
+                o,
+                "> **Blocking:** the target moved while the side tag was open (since \
+                 {opened}); rebuild these in the side tag:"
+            );
+        }
+        None => {
+            let _ = writeln!(
+                o,
+                "> **Blocking:** {} build(s) are not newer than the target's: pushed, \
+                 they would not be the newest, and the target's builds would stay on top.",
+                report.not_newest.len()
+            );
+        }
+    }
+    for n in &report.not_newest {
+        let _ = writeln!(
+            o,
+            "> - `{}` is not newer than `{}` in {}",
+            n.nvr, n.target_nvr, n.tag
+        );
+    }
+    for (pkg, a) in moved {
+        let on = a.on.as_deref().unwrap_or("since");
+        let _ = match a.arrival {
+            Arrival::NewPackage => writeln!(
+                o,
+                "> - **{pkg}** is a new package (first listed {on}) and would break"
+            ),
+            _ => writeln!(
+                o,
+                "> - **{pkg}** was rebuilt in the target (`{}`, {on}) and would break",
+                a.nvr.as_deref().unwrap_or("?")
+            ),
+        };
+    }
+    o.push('\n');
+    o
+}
+
 pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
@@ -2031,22 +2268,7 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
 
     o.push_str(&package_summary(report, detailed));
 
-    if !report.not_newest.is_empty() {
-        let _ = writeln!(
-            o,
-            "> **Blocking:** {} build(s) are not newer than the target's: pushed, \
-             they would not be the newest, and the target's builds would stay on top.",
-            report.not_newest.len()
-        );
-        for n in &report.not_newest {
-            let _ = writeln!(
-                o,
-                "> - `{}` is not newer than `{}` in {}",
-                n.nvr, n.target_nvr, n.tag
-            );
-        }
-        o.push('\n');
-    }
+    o.push_str(&target_moved(report));
     if !report.in_other_update.is_empty() {
         let _ = writeln!(
             o,
@@ -2229,7 +2451,20 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
             broken.len()
         );
         for (pkg, result) in &broken {
-            let _ = writeln!(o, "- **{pkg}**");
+            match result.arrival.as_ref().map(|a| a.arrival) {
+                Some(Arrival::NewPackage) => {
+                    let _ = writeln!(o, "- **{pkg}** (new since the side tag opened)");
+                }
+                Some(Arrival::Rebuilt) => {
+                    let _ = writeln!(o, "- **{pkg}** (rebuilt since the side tag opened)");
+                }
+                Some(Arrival::PreExisting) => {
+                    let _ = writeln!(o, "- **{pkg}** (already there when the side tag opened)");
+                }
+                None => {
+                    let _ = writeln!(o, "- **{pkg}**");
+                }
+            }
             for issue in &result.issues {
                 let _ = writeln!(
                     o,
@@ -3497,6 +3732,7 @@ fn run_provides_analysis(
             stale_side_tag,
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         });
@@ -3606,6 +3842,7 @@ fn run_provides_analysis(
                 RevDepResult {
                     status: status.to_string(),
                     issues,
+                    arrival: None,
                 },
             )
         })
@@ -3627,6 +3864,7 @@ fn run_provides_analysis(
         stale_side_tag,
         not_newest: vec![],
         in_other_update: vec![],
+        side_tag_opened: None,
         skip_reason: None,
         reverse_deps,
     })
@@ -4039,6 +4277,7 @@ mod tests {
             stale_side_tag: vec![],
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: Some(skip),
             reverse_deps: BTreeMap::new(),
         }
@@ -4108,6 +4347,7 @@ mod tests {
                 changed_provide: provide.to_string(),
                 kind: BreakKind::Fti,
             }],
+            arrival: None,
         }
     }
 
@@ -4129,6 +4369,7 @@ mod tests {
             stale_side_tag: vec![],
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: None,
             reverse_deps: reverse_deps
                 .into_iter()
@@ -4289,6 +4530,7 @@ mod tests {
             stale_side_tag: vec![],
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         };
@@ -4322,6 +4564,7 @@ mod tests {
             stale_side_tag: vec![],
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         };
@@ -4576,6 +4819,151 @@ mod tests {
                 "[FTBFS] `(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)`"
             ),
             "{out}"
+        );
+    }
+
+    /// 2026-11-02 08:40 UTC, when f46-build-side-158330 was created.
+    const OPENED: f64 = 1_793_608_815.5;
+
+    #[test]
+    fn a_reverse_dependency_is_new_rebuilt_or_already_there() {
+        // ical: first listed in f46 on 2026-11-05.
+        let ical = PackageHistory {
+            first_listed: Some(1_793_896_312.3),
+            latest: Some(("ical-4.0.2-1.fc46".into(), Some(1_793_898_192.7))),
+        };
+        assert_eq!(
+            arrival(OPENED, &ical),
+            Some(ArrivalNote {
+                arrival: Arrival::NewPackage,
+                on: Some("2026-11-05".into()),
+                nvr: None,
+            })
+        );
+        // Listed since 2007, rebuilt in the target on 2026-11-06.
+        let rebuilt = PackageHistory {
+            first_listed: Some(1_185_276_321.6),
+            latest: Some(("asterisk-24.0.0-3.fc46".into(), Some(1_793_959_200.5))),
+        };
+        assert_eq!(
+            arrival(OPENED, &rebuilt),
+            Some(ArrivalNote {
+                arrival: Arrival::Rebuilt,
+                on: Some("2026-11-06".into()),
+                nvr: Some("asterisk-24.0.0-3.fc46".into()),
+            })
+        );
+        // kdepimlibs: listed since 2007, last built in August.
+        let kdepimlibs = PackageHistory {
+            first_listed: Some(1_185_276_321.6),
+            latest: Some(("kdepimlibs-4.14.10-49.fc43".into(), Some(1_786_000_000.0))),
+        };
+        assert_eq!(
+            arrival(OPENED, &kdepimlibs).unwrap().arrival,
+            Arrival::PreExisting
+        );
+        // Nothing known: no label.
+        assert_eq!(arrival(OPENED, &PackageHistory::default()), None);
+    }
+
+    /// A Koji that knows when the side tag opened and each package's
+    /// history.
+    struct HistoryKoji(BTreeMap<String, PackageHistory>);
+
+    impl KojiQuery for HistoryKoji {
+        fn list_tagged(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn external_repos(&self, _: &str) -> Option<Vec<String>> {
+            None
+        }
+        fn build_rpms(&self, _: &str) -> Vec<String> {
+            vec![]
+        }
+        fn tag_created(&self, tag: &str) -> Option<f64> {
+            (tag == "f46-build-side-158330").then_some(OPENED)
+        }
+        fn histories(&self, _target: &str, packages: &[String]) -> Vec<PackageHistory> {
+            packages
+                .iter()
+                .map(|p| self.0.get(p).cloned().unwrap_or_default())
+                .collect()
+        }
+    }
+
+    #[test]
+    fn breaking_reverse_dependencies_say_when_they_arrived() {
+        let koji = HistoryKoji(BTreeMap::from([
+            (
+                "ical".to_string(),
+                PackageHistory {
+                    first_listed: Some(1_793_896_312.3),
+                    latest: None,
+                },
+            ),
+            (
+                "kdepimlibs".to_string(),
+                PackageHistory {
+                    first_listed: Some(1_185_276_321.6),
+                    latest: Some(("kdepimlibs-4.14.10-49.fc43".into(), Some(1_786_000_000.0))),
+                },
+            ),
+        ]));
+        let mut report = report_with(
+            vec![],
+            vec![
+                ("ical", broken("libical.so.3()(64bit)")),
+                ("kdepimlibs", broken("libical.so.3()(64bit)")),
+            ],
+        );
+        report.not_newest = vec![NotNewest {
+            nvr: "asterisk-24.0.0-1.fc46.1".into(),
+            target_nvr: "asterisk-24.0.0-3.fc46".into(),
+            tag: "f46-updates-candidate".into(),
+        }];
+        label_arrivals(
+            &mut report,
+            "f46-build-side-158330",
+            "f46-updates-candidate",
+            &koji,
+            false,
+        );
+        assert_eq!(report.side_tag_opened.as_deref(), Some("2026-11-02"));
+        let out = render_report(&report, false);
+        // One blocking note for everything the target did meanwhile.
+        assert!(
+            out.contains(
+                "> **Blocking:** the target moved while the side tag was open (since \
+                 2026-11-02); rebuild these in the side tag:\n\
+                 > - `asterisk-24.0.0-1.fc46.1` is not newer than `asterisk-24.0.0-3.fc46` \
+                 in f46-updates-candidate\n\
+                 > - **ical** is a new package (first listed 2026-11-05) and would break\n"
+            ),
+            "{out}"
+        );
+        // kdepimlibs was there already: listed, labelled, not in the note.
+        assert!(!out.contains("> - **kdepimlibs**"), "{out}");
+        assert!(
+            out.contains("- **kdepimlibs** (already there when the side tag opened)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("- **ical** (new since the side tag opened)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn without_a_side_tag_date_the_not_newest_note_reads_as_before() {
+        let mut report = report_with(vec![], vec![]);
+        report.not_newest = vec![NotNewest {
+            nvr: "a-1-1".into(),
+            target_nvr: "a-1-2".into(),
+            tag: "t".into(),
+        }];
+        assert!(
+            render_report(&report, false)
+                .contains("> **Blocking:** 1 build(s) are not newer than the target's")
         );
     }
 
@@ -5413,6 +5801,7 @@ mod tests {
             }],
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: None,
             reverse_deps: BTreeMap::from([("kpat".to_string(), result)]),
         }

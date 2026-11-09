@@ -1225,6 +1225,7 @@ mod tests {
             RevDepResult {
                 status: "ok".to_string(),
                 issues: vec![],
+                arrival: None,
             },
         );
         if broken {
@@ -1233,6 +1234,7 @@ mod tests {
                 RevDepResult {
                     status: "broken".to_string(),
                     issues: vec![],
+                    arrival: None,
                 },
             );
         }
@@ -1266,6 +1268,7 @@ mod tests {
             },
             not_newest: vec![],
             in_other_update: vec![],
+            side_tag_opened: None,
             skip_reason: None,
             reverse_deps,
         }

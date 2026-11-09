@@ -162,12 +162,12 @@ impl HubClient {
     /// The newest build of each of `packages` in `tag`, following
     /// inheritance as `koji list-tagged --latest --inherit` does, asked
     /// in one `multiCall` of `getLatestBuilds`. One result per package,
-    /// in order: its NVR, or `None` when the tag has no build of it.
+    /// in order: its build, or `None` when the tag has no build of it.
     pub fn latest_builds(
         &self,
         tag: &str,
         packages: &[String],
-    ) -> Result<Vec<Result<Option<String>, Error>>, Error> {
+    ) -> Result<Vec<Result<Option<LatestBuild>, Error>>, Error> {
         let calls: Vec<(&str, Vec<Value>)> = packages
             .iter()
             .map(|p| {
@@ -187,13 +187,64 @@ impl HubClient {
             .into_iter()
             .map(|r| {
                 r.map(|v| {
-                    v.as_array()
-                        .and_then(|builds| builds.first())
-                        .and_then(|b| b.get("nvr"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
+                    let b = v.as_array()?.first()?;
+                    Some(LatestBuild {
+                        nvr: b.get("nvr")?.as_str()?.to_string(),
+                        completion_ts: b
+                            .get("completion_time")
+                            .and_then(Value::as_str)
+                            .and_then(koji_time),
+                    })
                 })
             })
+            .collect())
+    }
+
+    /// When `tag` was created, as a unix time: the first entry of its
+    /// configuration history. `None` when the hub has none for it.
+    pub fn tag_created(&self, tag: &str) -> Result<Option<f64>, Error> {
+        let answer = self.client.call(
+            "queryHistory",
+            &[kwargs(&[
+                (
+                    "tables",
+                    Value::Array(vec![Value::String("tag_config".into())]),
+                ),
+                ("tag", Value::String(tag.to_string())),
+            ])],
+        )?;
+        Ok(earliest(&answer, "tag_config"))
+    }
+
+    /// When each of `packages` was first added to any tag's package
+    /// list, as a unix time, asked in one `multiCall` of
+    /// `queryHistory`: the day a package entered the distribution, which
+    /// for one added to an existing release is long after the release's
+    /// other packages. One result per package, in order.
+    pub fn packages_first_listed(
+        &self,
+        packages: &[String],
+    ) -> Result<Vec<Result<Option<f64>, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = packages
+            .iter()
+            .map(|p| {
+                (
+                    "queryHistory",
+                    vec![kwargs(&[
+                        (
+                            "tables",
+                            Value::Array(vec![Value::String("tag_packages".into())]),
+                        ),
+                        ("package", Value::String(p.clone())),
+                    ])],
+                )
+            })
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| r.map(|v| earliest(&v, "tag_packages")))
             .collect())
     }
 
@@ -509,6 +560,47 @@ fn task_from_value(v: &Value) -> Result<HubTask, Error> {
     })
 }
 
+/// A tag's newest build of a package.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LatestBuild {
+    pub nvr: String,
+    /// When the build finished, as a unix time, if the hub said.
+    pub completion_ts: Option<f64>,
+}
+
+/// Keyword arguments, as Koji's hub takes them over XML-RPC: a struct
+/// marked `__starstar`, passed as the last parameter.
+fn kwargs(pairs: &[(&str, Value)]) -> Value {
+    let mut map: std::collections::HashMap<String, Value> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
+    map.insert("__starstar".to_string(), Value::Boolean(true));
+    Value::Struct(map)
+}
+
+/// The earliest `create_ts` among a `queryHistory` answer's entries
+/// for `table`.
+fn earliest(answer: &Value, table: &str) -> Option<f64> {
+    answer
+        .get(table)?
+        .as_array()?
+        .iter()
+        .filter_map(|e| match e.get("create_ts") {
+            Some(Value::Double(d)) => Some(*d),
+            Some(Value::Int(i)) => Some(*i as f64),
+            _ => None,
+        })
+        .min_by(f64::total_cmp)
+}
+
+/// A time as the hub writes it (`2026-11-05 17:03:12.698295+00:00`), as
+/// a unix time.
+fn koji_time(s: &str) -> Option<f64> {
+    let t = chrono::DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%:z").ok()?;
+    Some(t.timestamp() as f64 + f64::from(t.timestamp_subsec_micros()) / 1e6)
+}
+
 /// The binary RPMs in a `listBuildRPMs` answer, as NVRAs.
 fn rpm_nvras(answer: &Value) -> Vec<String> {
     answer
@@ -631,6 +723,8 @@ mod tests {
         let body = response(
             "<value><array><data><value><array><data><value><struct>\
              <member><name>nvr</name><value><string>asterisk-24.0.0-3.fc46</string></value></member>\
+             <member><name>completion_time</name>\
+             <value><string>2026-11-06 10:00:00.500000+00:00</string></value></member>\
              </struct></value></data></array></value></data></array></value>\
              <value><array><data><value><array><data></data></array></value></data></array></value>",
         );
@@ -647,12 +741,54 @@ mod tests {
             .latest_builds("f46-updates-candidate", &["asterisk".into(), "ical".into()])
             .unwrap();
         assert_eq!(
-            got[0].as_ref().unwrap().as_deref(),
-            Some("asterisk-24.0.0-3.fc46")
+            got[0].as_ref().unwrap(),
+            &Some(LatestBuild {
+                nvr: "asterisk-24.0.0-3.fc46".into(),
+                // 2026-11-06 10:00:00.5 UTC.
+                completion_ts: Some(1_793_959_200.5),
+            })
         );
         assert_eq!(got[1].as_ref().unwrap(), &None);
         // Nothing asked, nothing sent.
         assert!(hub.latest_builds("t", &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn history_is_asked_with_keyword_arguments_and_read_for_its_earliest_entry() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = block_on(MockServer::start());
+        let entry = |ts: &str| {
+            format!(
+                "<value><struct><member><name>create_ts</name>\
+                 <value><double>{ts}</double></value></member></struct></value>"
+            )
+        };
+        let body = format!(
+            "<?xml version='1.0'?><methodResponse><params><param>\
+             <value><struct><member><name>tag_config</name>\
+             <value><array><data>{}{}</data></array></value>\
+             </member></struct></value></param></params></methodResponse>",
+            entry("1793700000.0"),
+            entry("1793608815.5"),
+        );
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains(
+                    "<methodName>queryHistory</methodName>",
+                ))
+                .and(body_string_contains("__starstar"))
+                .and(body_string_contains("f46-build-side-158330"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        assert_eq!(
+            hub.tag_created("f46-build-side-158330").unwrap(),
+            Some(1_793_608_815.5)
+        );
     }
 
     #[test]

@@ -31,8 +31,13 @@ credentials and no `koji` CLI required (contrast with
   - `builds_rpm_nvras(nvrs)` — each build's binary RPMs as NVRAs,
     through one `multiCall` of `listBuildRPMs`.
   - `latest_builds(tag, packages)` — each package's newest build in a
-    tag, following inheritance, through one `multiCall` of
-    `getLatestBuilds`.
+    tag (NVR and completion time), following inheritance, through one
+    `multiCall` of `getLatestBuilds`.
+  - `tag_created(tag)` — when a tag was created, from its
+    configuration history (`queryHistory`).
+  - `packages_first_listed(packages)` — when each package was first
+    added to any tag's package list, through one `multiCall` of
+    `queryHistory`: the day it entered the distribution.
 - `config::hub_url(profile)` — the hub a `koji` CLI profile names,
   read from the CLI's own configuration (`/etc/koji.conf.d/*.conf`,
   `/etc/koji.conf`, `~/.koji/config.d/*.conf`, `~/.koji/config`, the

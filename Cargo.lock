@@ -2185,6 +2185,7 @@ dependencies = [
 name = "sandogasa-kojihub"
 version = "0.27.1"
 dependencies = [
+ "chrono",
  "dirs",
  "quick-xml",
  "reqwest",
