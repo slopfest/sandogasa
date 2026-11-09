@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### cbspkg: sig-repo skips a push already done, and names the tracking issue when there is one
+
+Running `cbspkg sig-repo` a second time for rsync's merge request, to
+apply the new mirror filter, fetched the merge request's commits again
+and pushed them, for git to answer "Everything up-to-date". It then
+suggested filing a tracking issue that already existed.
+
+`sig-repo` now asks the SIG's repo whether the branch is at the merge
+request's head already (`git ls-remote`, against the head GitLab
+reports), and skips the fetch and push when it is. It still makes the
+local tracking branch if that is missing. Its closing line names the
+open tracking issue for the merge request, as `Tracked in <url>`, and
+suggests `cpu-sig-tracker file-issue` only when there is none. Refs #77.
+
 ### cbspkg and cpu-sig-tracker: remotes by role, a SIG-named remote, a mirror of Stream's release branches, sig-repo for Hyperscale
 
 Taking rsync through the Proposed Updates flow showed four rough edges:

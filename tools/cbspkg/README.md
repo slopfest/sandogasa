@@ -199,6 +199,13 @@ current directory, or `-C`):
    `git checkout <branch>` is then the branch `add-pkg` and the other
    cbspkg commands work from.
 
+Run again for the same merge request, `sig-repo` asks the SIG's repo
+(`git ls-remote`) whether the branch is at the merge request's head
+already, and skips the fetch and push when it is, pushing only when the
+merge request has moved on. It ends by naming the SIG's tracking issue
+for the merge request, or, when there is none yet, the
+`cpu-sig-tracker file-issue` that files one.
+
 `--explain` narrates each step, with the git commands as they would be
 typed, pausing before each; `--dry-run` shows the steps without doing
 anything. The GitLab steps are API requests, described in words with

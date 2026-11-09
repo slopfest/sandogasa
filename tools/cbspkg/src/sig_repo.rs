@@ -73,6 +73,8 @@ pub struct Change {
     pub iid: u64,
     /// The SIG's branch for it: `c10s-proposed-RHEL-303721`.
     pub branch: String,
+    /// The merge request's head commit, when GitLab says.
+    pub head: Option<String>,
 }
 
 /// How far a pull mirror's update has got, from its `update_status`.
@@ -103,6 +105,35 @@ pub fn first_resolved(description: &str) -> Option<String> {
         })?;
         Some(key.to_string())
     })
+}
+
+/// Whether `git ls-remote` output for one branch names `head`.
+pub fn at_head(ls_remote: &str, head: &str) -> bool {
+    ls_remote
+        .split_whitespace()
+        .next()
+        .is_some_and(|sha| !head.is_empty() && sha.eq_ignore_ascii_case(head))
+}
+
+/// The open tracking issue (cpu-sig-tracker's) that names the merge
+/// request at `mr_url`, among `issues`.
+pub fn tracking_issue<'a>(
+    issues: &'a [sandogasa_gitlab::Issue],
+    mr_url: &str,
+) -> Option<&'a sandogasa_gitlab::Issue> {
+    // The URL, ending where its number does: `…/merge_requests/9` is not
+    // `…/merge_requests/90`.
+    let names = |d: &str| {
+        d.match_indices(mr_url).any(|(at, _)| {
+            !d[at + mr_url.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+        })
+    };
+    issues
+        .iter()
+        .find(|i| i.description.as_deref().is_some_and(names))
 }
 
 /// What a pull mirror's `update_status` says: done once `finished`,
@@ -200,6 +231,7 @@ fn change_of(base: &str, mr_url: &str) -> Result<(String, Change), Box<dyn std::
             mr_url: mr.web_url,
             iid,
             branch: sandogasa_cbs::proposed_branch(&mr.target_branch, &key),
+            head: mr.sha,
         },
     ))
 }
@@ -394,6 +426,32 @@ fn push_change(
     let remote = ensure_sig_remote(ui, repo, base, Sig::ProposedUpdates, path)?;
     let stream = format!("{base}/{}.git", sandogasa_cbs::stream_project(package));
     let mr_ref = format!("refs/merge-requests/{}/head", change.iid);
+    // Already there, from an earlier run: nothing to fetch or push. The
+    // check reads the SIG's branch, changing nothing.
+    let branch_ref = format!("refs/heads/{}", change.branch);
+    ui.step(&format!(
+        "Check whether {path}'s {} is at the merge request's head already",
+        change.branch
+    ));
+    ui.show_command(&argv(&["git", "ls-remote", &remote, &branch_ref]));
+    let on_sig = git(repo, &["ls-remote", &remote, &branch_ref]).ok();
+    if change
+        .head
+        .as_deref()
+        .is_some_and(|h| at_head(on_sig.as_deref().unwrap_or(""), h))
+    {
+        println!(
+            "{} in {path} is at the merge request's head already.",
+            change.branch
+        );
+        // The remote-tracking branch the local one tracks, if this
+        // checkout has never fetched it.
+        let tracking = format!("refs/remotes/{remote}/{}", change.branch);
+        if git(repo, &["rev-parse", "--verify", "--quiet", &tracking]).is_err() {
+            ui.run_required(&argv(&["git", "fetch", &remote, &change.branch]), repo)?;
+        }
+        return track_locally(ui, repo, &remote, &change.branch);
+    }
     ui.step(&format!(
         "Fetch the merge request's commits from CentOS Stream ({mr_ref})"
     ));
@@ -420,44 +478,50 @@ fn push_change(
     if !ui.dry_run {
         println!("Pushed the merge request to {path} as {}.", change.branch);
     }
-    // A local branch tracking it, for the cbspkg commands that work from
-    // the checked-out branch (add-pkg, build); the checkout stays where
-    // it is.
+    track_locally(ui, repo, &remote, &change.branch)
+}
+
+/// A local `branch` tracking `remote`'s, for the cbspkg commands that
+/// work from the checked-out branch (add-pkg, build), unless there is
+/// one; the checkout stays where it is.
+fn track_locally(
+    ui: &Ui,
+    repo: &Path,
+    remote: &str,
+    branch: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let has_local = git(
         repo,
         &[
             "rev-parse",
             "--verify",
             "--quiet",
-            &format!("refs/heads/{}", change.branch),
+            &format!("refs/heads/{branch}"),
         ],
     )
     .is_ok();
     if has_local {
         if !ui.dry_run {
-            println!("{} exists locally already; left as it is.", change.branch);
+            println!("{branch} exists locally already; left as it is.");
         }
-    } else {
-        ui.step(&format!(
-            "Make a local {} tracking it, to check out when building",
-            change.branch
-        ));
-        ui.run_required(
-            &argv(&[
-                "git",
-                "branch",
-                "--track",
-                &change.branch,
-                &format!("{remote}/{}", change.branch),
-            ]),
-            repo,
-        )?;
-        if !ui.dry_run {
-            println!(
-                "Made the local branch {0}: `git checkout {0}` to work on it.",
-                change.branch
-            );
-        }
+        return Ok(());
+    }
+    ui.step(&format!(
+        "Make a local {branch} tracking it, to check out when building"
+    ));
+    ui.run_required(
+        &[
+            "git",
+            "branch",
+            "--track",
+            branch,
+            &format!("{remote}/{branch}"),
+        ]
+        .map(String::from),
+        repo,
+    )?;
+    if !ui.dry_run {
+        println!("Made the local branch {branch}: `git checkout {branch}` to work on it.");
     }
     Ok(())
 }
@@ -498,10 +562,17 @@ pub fn run_with(
     }
     if let Some(change) = change {
         push_change(&ui, &repo, base, &path, &package, &change)?;
-        println!(
-            "\nNext, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
-            change.mr_url
-        );
+        // The tracking issue next, unless the SIG has one for it.
+        let issues = Client::new(base, &path, token.as_deref().unwrap_or(""))?
+            .list_issues("cpu-sig-tracker", Some("opened"))
+            .unwrap_or_default();
+        match tracking_issue(&issues, &change.mr_url) {
+            Some(i) => println!("\nTracked in {}.", i.web_url),
+            None => println!(
+                "\nNext, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
+                change.mr_url
+            ),
+        }
     }
     Ok(())
 }
@@ -738,5 +809,42 @@ mod tests {
         )
         .unwrap();
         narrowed.assert();
+    }
+
+    #[test]
+    fn a_branch_at_the_merge_requests_head_is_not_pushed_again() {
+        let head = "e4441b13be38e220451c8186abca5b27c44cd651";
+        assert!(at_head(
+            &format!("{head}\trefs/heads/c10s-proposed-RHEL-303721\n"),
+            head
+        ));
+        assert!(!at_head("3afcfa97\trefs/heads/x\n", head));
+        // No such branch yet: ls-remote prints nothing.
+        assert!(!at_head("", head));
+    }
+
+    #[test]
+    fn the_tracking_issue_is_the_one_naming_the_merge_request() {
+        let issues: Vec<sandogasa_gitlab::Issue> = serde_json::from_value(serde_json::json!([
+            {"iid": 2, "title": "t", "state": "opened", "web_url": "https://g/i/2",
+             "description": "- **MR**: [x](https://gitlab.com/redhat/centos-stream/rpms/rsync/-/merge_requests/91) — opened"},
+            {"iid": 1, "title": "t", "state": "opened", "web_url": "https://g/i/1",
+             "description": "- **MR**: [x](https://gitlab.com/redhat/centos-stream/rpms/rsync/-/merge_requests/90) — opened"},
+        ]))
+        .unwrap();
+        let found = tracking_issue(
+            &issues,
+            "https://gitlab.com/redhat/centos-stream/rpms/rsync/-/merge_requests/90",
+        );
+        assert_eq!(found.map(|i| i.iid), Some(1));
+        assert!(tracking_issue(&issues, "https://gitlab.com/x/-/merge_requests/9").is_none());
+        // MR 9 of the same project is neither 90 nor 91.
+        assert!(
+            tracking_issue(
+                &issues,
+                "https://gitlab.com/redhat/centos-stream/rpms/rsync/-/merge_requests/9"
+            )
+            .is_none()
+        );
     }
 }
