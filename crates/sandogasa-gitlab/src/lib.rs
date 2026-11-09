@@ -187,6 +187,10 @@ pub struct PullMirror {
     /// Whether mirror updates start pipelines.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mirror_trigger_builds: Option<bool>,
+    /// Only branches whose names match are mirrored. GitLab refuses it
+    /// together with `only_mirror_protected_branches` (400 since 19.5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_branch_regex: Option<String>,
 }
 
 impl PullMirror {
@@ -200,6 +204,17 @@ impl PullMirror {
             mirror_overwrites_diverged_branches: Some(false),
             only_mirror_protected_branches: Some(false),
             mirror_trigger_builds: Some(false),
+            mirror_branch_regex: None,
+        }
+    }
+
+    /// As [`alongside`](Self::alongside), but mirroring only the
+    /// branches whose names match `regex` (RE2, as GitLab reads it).
+    pub fn branches_matching(url: &str, regex: &str) -> Self {
+        Self {
+            only_mirror_protected_branches: None,
+            mirror_branch_regex: Some(regex.to_string()),
+            ..Self::alongside(url)
         }
     }
 }
@@ -220,6 +235,8 @@ pub struct PullMirrorState {
     pub last_error: Option<String>,
     #[serde(default)]
     pub last_successful_update_at: Option<String>,
+    #[serde(default)]
+    pub mirror_branch_regex: Option<String>,
 }
 
 /// A group, as `GET /groups/:id` returns it.
@@ -3078,6 +3095,20 @@ mod tests {
         assert_eq!(state.update_status.as_deref(), Some("finished"));
         set.assert();
         started.assert();
+
+        // Only some branches: the regex, and no protected-branches flag,
+        // which GitLab refuses alongside it.
+        let body = serde_json::to_value(PullMirror::branches_matching(
+            "https://gitlab.com/redhat/centos-stream/rpms/rsync.git",
+            "^c[0-9]+s$",
+        ))
+        .unwrap();
+        assert_eq!(body["mirror_branch_regex"], "^c[0-9]+s$");
+        assert!(
+            body.get("only_mirror_protected_branches").is_none(),
+            "{body}"
+        );
+        assert_eq!(body["mirror_overwrites_diverged_branches"], false);
 
         // A group that does not exist is named, not a bare 404.
         server

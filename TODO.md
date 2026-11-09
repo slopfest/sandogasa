@@ -182,29 +182,6 @@ rsync's CVE-2026-119741 fix went through the whole flow on 2026-11-09:
 `upload-sources`, `build` and `promote`, then `file-issue`. What that
 run left open, for before the next release:
 
-- **Remotes are found by role, not by name.** A checkout has three
-  remotes that matter: CentOS Stream (`redhat/centos-stream/rpms/<pkg>`),
-  the SIG's mirror (`CentOS/<SIG group>/rpms/<pkg>`) and the personal
-  fork (`<user>/centos_rpms_<pkg>`). `sig-repo` and `mr` already find
-  the SIG's and the fork by URL, but `mr` insists that `origin` is
-  Stream, so a Hyperscale checkout cloned from the SIG repo (`origin`
-  the SIG, Stream added as another remote) is refused. Find each role
-  by URL in sandogasa-cbs, shared by `mr`, `sig-repo` and the cbspkg
-  commands, and take the package from whichever remote is found.
-- **Name a remote the tool adds after the SIG.** `sig-repo` adds the
-  SIG's repo as `sig` when no remote points at it. `proposed_updates`
-  or `hyperscale` is clearer, and lets one checkout carry both SIGs. An
-  existing remote stays usable whatever it is called, as it is found
-  by URL.
-- **Which branches the mirror carries.** The pull mirror takes every
-  Stream branch, so rsync's SIG repo also has `RHEL-169141` and an
-  automated-update branch. `mirror_branch_regex` could restrict it to
-  `c\d+s`. Decide whether that is worth it.
-- **`sig-repo` for Hyperscale.** Its branches (`c10s-hs`, …) already
-  live in the SIG repo, and there is no Stream merge request to fetch,
-  so the merge-request half of `sig-repo` does not apply. Design what
-  `sig-repo <pkg> --sig hyperscale` should do after creating the
-  mirror, around the remote roles above.
 - **Check the CBS login once per run.** `cbspkg build` checks it before
   uploading sources and again before building, an extra `moshimoshi`
   each time.

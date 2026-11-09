@@ -19,11 +19,11 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use sandogasa_cbs::remotes::{Remotes, Role, project_path, role_of};
 use sandogasa_cli::explain::Ui;
 use sandogasa_gitlab::NewMergeRequest;
 
 /// The GitLab group CentOS Stream's packages live in.
-const STREAM_GROUP: &str = "redhat/centos-stream/";
 
 #[derive(clap::Args)]
 pub struct MrArgs {
@@ -71,29 +71,14 @@ pub struct BranchCommit {
     pub body: String,
 }
 
-/// The project path a git remote URL points at, `.git` dropped:
-/// `git+ssh://git@gitlab.com/redhat/centos-stream/rpms/rsync.git`,
-/// `git@gitlab.com:redhat/centos-stream/rpms/rsync.git` and
-/// `https://gitlab.com/redhat/centos-stream/rpms/rsync` all give
-/// `redhat/centos-stream/rpms/rsync`.
-pub fn project_path(url: &str) -> Option<String> {
-    let rest = match url.split_once("://") {
-        Some((_, rest)) => rest.split_once('/')?.1,
-        // scp-like: user@host:path
-        None => url.split_once(':')?.1,
-    };
-    let path = rest.trim_end_matches('/').trim_end_matches(".git");
-    (!path.is_empty()).then(|| path.to_string())
-}
-
 /// The remote among `remotes` (`(name, url)`) that points at a fork of
 /// `package` in someone's own namespace, as `centpkg fork` names it
 /// (`<user>/centos_rpms_<package>`), with the fork's project path.
 pub fn fork_remote(remotes: &[(String, String)], package: &str) -> Option<(String, String)> {
-    let suffix = format!("/centos_rpms_{package}");
     remotes.iter().find_map(|(name, url)| {
         let path = project_path(url)?;
-        (path.ends_with(&suffix) && !path.starts_with(STREAM_GROUP)).then(|| (name.clone(), path))
+        let (role, of) = role_of(&path)?;
+        (role == Role::Fork && of == package).then(|| (name.clone(), path))
     })
 }
 
@@ -445,18 +430,28 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
         !git(&repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty(),
     )?;
 
-    // Where it goes: the CentOS Stream project the checkout's origin is.
-    let origin = git(&repo, &["remote", "get-url", "origin"])?;
-    let upstream_path = project_path(&origin)
-        .filter(|p| p.starts_with(STREAM_GROUP))
-        .ok_or_else(|| {
-            format!("origin is {origin}, not a CentOS Stream project ({STREAM_GROUP}…)")
-        })?;
-    let package = upstream_path
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .to_string();
+    // Where it goes: the CentOS Stream project one of the remotes points
+    // at, whatever it is called; `origin` can be a SIG's repo (#102).
+    let found = Remotes::parse(&git(&repo, &["remote", "-v"])?);
+    let stream = found.find(Role::Stream).cloned().ok_or_else(|| {
+        let add = found.package().map_or_else(
+            || {
+                "git remote add stream https://gitlab.com/redhat/centos-stream/rpms/<package>.git"
+                    .to_string()
+            },
+            |p| {
+                format!(
+                    "git remote add stream https://gitlab.com/redhat/centos-stream/rpms/{p}.git"
+                )
+            },
+        );
+        format!(
+            "no remote points at the package's CentOS Stream repo \
+             (redhat/centos-stream/rpms/…), where the merge request goes; add one:\n  {add}"
+        )
+    })?;
+    let upstream_path = stream.path.clone();
+    let package = stream.package.clone();
     let tracking = git(
         &repo,
         &[
@@ -479,12 +474,12 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
         &[
             "log",
             "--format=%s%x00%b%x1e",
-            &format!("origin/{target}..{branch}"),
+            &format!("{}/{target}..{branch}", stream.name),
         ],
     )?;
     let commits = parse_log(&log);
     if commits.is_empty() {
-        return Err(format!("{branch} has nothing beyond origin/{target}").into());
+        return Err(format!("{branch} has nothing beyond {}/{target}", stream.name).into());
     }
     let tickets = ticket_lines(&commits);
     if tickets.is_empty() {

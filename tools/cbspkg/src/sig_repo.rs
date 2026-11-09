@@ -21,8 +21,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use sandogasa_cbs::Sig;
+use sandogasa_cbs::remotes::{Remotes, Role};
 use sandogasa_cli::explain::Ui;
 use sandogasa_gitlab::{Client, GroupClient, PullMirror};
+
+/// The branches a SIG's mirror takes from CentOS Stream's repo: Stream's
+/// release branches, not its topic or automation branches.
+pub const MIRRORED_BRANCHES: &str = "^c[0-9]+s$";
 
 #[derive(clap::Args)]
 pub struct SigRepoArgs {
@@ -111,27 +116,6 @@ pub fn mirror_update(status: Option<&str>) -> MirrorUpdate {
     }
 }
 
-/// A git remote URL's project path: `CentOS/proposed_updates/rpms/rsync`
-/// for `git+ssh://git@gitlab.com/CentOS/proposed_updates/rpms/rsync.git`
-/// or `git@gitlab.com:CentOS/…`.
-pub fn project_path(url: &str) -> Option<String> {
-    let rest = match url.split_once("://") {
-        Some((_, rest)) => rest.split_once('/')?.1,
-        None => url.split_once(':')?.1,
-    };
-    let path = rest.trim_end_matches('/').trim_end_matches(".git");
-    (!path.is_empty()).then(|| path.to_string())
-}
-
-/// The remote among `remotes` (`(name, url)`) for the project at `path`.
-pub fn remote_for(remotes: &[(String, String)], path: &str) -> Option<String> {
-    remotes.iter().find_map(|(name, url)| {
-        project_path(url)
-            .is_some_and(|p| p.eq_ignore_ascii_case(path))
-            .then(|| name.clone())
-    })
-}
-
 pub fn run(args: &SigRepoArgs) -> ExitCode {
     match run_with(
         args,
@@ -163,16 +147,39 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The checkout's remotes, `(name, fetch URL)`.
-fn remotes(repo: &Path) -> Result<Vec<(String, String)>, String> {
-    Ok(git(repo, &["remote", "-v"])?
+/// The checkout's remotes, by the part each plays, and every remote's
+/// name.
+fn remotes(repo: &Path) -> Result<(Remotes, Vec<String>), String> {
+    let remotes = Remotes::parse(&git(repo, &["remote", "-v"])?);
+    let names = git(repo, &["remote"])?
         .lines()
-        .filter(|l| l.ends_with("(fetch)"))
-        .filter_map(|l| {
-            let mut parts = l.split_whitespace();
-            Some((parts.next()?.to_string(), parts.next()?.to_string()))
-        })
-        .collect())
+        .map(str::to_string)
+        .collect();
+    Ok((remotes, names))
+}
+
+/// The remote for `sig`'s repo, adding it, named after the SIG, when no
+/// remote points at it.
+fn ensure_sig_remote(
+    ui: &Ui,
+    repo: &Path,
+    base: &str,
+    sig: Sig,
+    path: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let (remotes, names) = remotes(repo)?;
+    if let Some(r) = remotes.find(Role::Sig(sig)) {
+        return Ok(r.name.clone());
+    }
+    let name = Remotes::name_to_add(Role::Sig(sig), &names)?;
+    let host = base.split_once("://").map_or(base, |(_, h)| h);
+    ui.step(&format!("Add the SIG's repo as the remote `{name}`"));
+    let url = format!("git+ssh://git@{host}/{path}.git");
+    ui.run_required(
+        &["git", "remote", "add", name, &url].map(String::from),
+        repo,
+    )?;
+    Ok(name.to_string())
 }
 
 /// The change a CentOS Stream merge request carries, read from GitLab.
@@ -230,8 +237,10 @@ fn wait_for_mirror(client: &Client, path: &str) -> Result<(), String> {
     ))
 }
 
-/// Make sure the SIG's repo for `package` exists, creating it as a
-/// pull mirror of the Stream repo when it does not.
+/// Make sure the SIG's repo for `package` exists: a pull mirror of the
+/// Stream repo's `c<N>s` branches when Stream has the package, an empty
+/// project otherwise (a Hyperscale package tracking Fedora, or a new
+/// one). An existing mirror without that branch filter is offered it.
 fn ensure_repo(
     ui: &Ui,
     args: &SigRepoArgs,
@@ -242,7 +251,8 @@ fn ensure_repo(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let group = sig.gitlab_group();
     let path = format!("{group}/{package}");
-    let stream = format!("{base}/{}.git", sandogasa_cbs::stream_project(package));
+    let stream_path = sandogasa_cbs::stream_project(package);
+    let stream = format!("{base}/{stream_path}.git");
     ui.step(&format!(
         "Look for the SIG's repo {path}, through GitLab's API"
     ));
@@ -251,44 +261,123 @@ fn ensure_repo(
         .is_some()
     {
         println!("{path} exists.");
-        return Ok(());
+        return check_mirror(ui, args, base, token, &path, &stream);
     }
+    // A Proposed Update is always of a Stream package; a Hyperscale one
+    // need not be.
+    let mirrored = sig == Sig::ProposedUpdates
+        || Client::new(base, &stream_path, token.unwrap_or(""))?
+            .project()?
+            .is_some();
     ui.step(&format!(
-        "Create {path}, public, through GitLab's API (New project → Import project → \
-         Repository by URL on the web)"
+        "Create {path}, public, through GitLab's API (New project{} on the web)",
+        if mirrored {
+            " → Import project → Repository by URL"
+        } else {
+            " → Create blank project"
+        }
     ));
-    ui.step(&format!(
-        "Make it a pull mirror of {stream}: every branch, never overwriting a branch the SIG \
-         adds, starting no pipelines (Settings → Repository → Mirroring repositories)"
-    ));
-    ui.step("Wait for GitLab's first mirror update");
+    if mirrored {
+        ui.step(&format!(
+            "Make it a pull mirror of {stream}'s {MIRRORED_BRANCHES} branches, never \
+             overwriting a branch the SIG adds, starting no pipelines (Settings → Repository \
+             → Mirroring repositories, \"Mirror branches matching\")"
+        ));
+        ui.step("Wait for GitLab's first mirror update");
+    }
     if args.dry_run {
         return Ok(());
     }
     let token = token.ok_or(
         "creating the SIG's repo needs a GitLab token: set GITLAB_TOKEN, or run `cbspkg config`",
     )?;
-    if !args.yes {
-        if !std::io::stdin().is_terminal() {
-            return Err(format!(
-                "{path} does not exist; creating it needs a terminal to confirm at, or --yes"
-            )
-            .into());
-        }
-        if !sandogasa_cli::confirm(
-            &format!("Create {path} as a pull mirror of {stream}?"),
-            true,
-        )? {
-            return Err(format!("{path} not created").into());
-        }
+    let what = if mirrored {
+        format!("Create {path} as a pull mirror of {stream}?")
+    } else {
+        format!("Create {path}, empty, as CentOS Stream has no {package}?")
+    };
+    if !confirmed(args, &what, &format!("{path} does not exist; creating it"))? {
+        return Err(format!("{path} not created").into());
     }
     let project = GroupClient::new(base, group, token)?.create_project(package, "public")?;
     println!("Created {}", project.web_url);
-    let client = Client::new(base, &path, token)?;
-    client.set_pull_mirror(&PullMirror::alongside(&stream))?;
-    client.start_pull_mirror()?;
-    wait_for_mirror(&client, &path)?;
-    println!("{path} mirrors {stream}.");
+    if mirrored {
+        let client = Client::new(base, &path, token)?;
+        client.set_pull_mirror(&PullMirror::branches_matching(&stream, MIRRORED_BRANCHES))?;
+        client.start_pull_mirror()?;
+        wait_for_mirror(&client, &path)?;
+        println!("{path} mirrors {stream}'s {MIRRORED_BRANCHES} branches.");
+    }
+    Ok(())
+}
+
+/// Whether to go ahead: yes with `--yes`, else asked at a terminal,
+/// else an error saying `doing` needs one.
+fn confirmed(args: &SigRepoArgs, question: &str, doing: &str) -> Result<bool, String> {
+    if args.yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(format!("{doing} needs a terminal to confirm at, or --yes"));
+    }
+    sandogasa_cli::confirm(question, true).map_err(|e| e.to_string())
+}
+
+/// For an existing repo: whether its pull mirror takes only the
+/// branches it should, offering to set the filter when not. Reading a
+/// mirror's settings needs the Maintainer role, so without a token, or
+/// without the role, this says so and moves on.
+fn check_mirror(
+    ui: &Ui,
+    args: &SigRepoArgs,
+    base: &str,
+    token: Option<&str>,
+    path: &str,
+    stream: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(token) = token else {
+        return Ok(());
+    };
+    ui.step(&format!(
+        "Check that {path} mirrors only {MIRRORED_BRANCHES} branches, through GitLab's API"
+    ));
+    let client = Client::new(base, path, token)?;
+    let state = match client.pull_mirror() {
+        Ok(Some(s)) if s.enabled == Some(true) => s,
+        // No mirror, or not one we may read: not ours to change.
+        Ok(_) | Err(_) => return Ok(()),
+    };
+    if state.mirror_branch_regex.as_deref() == Some(MIRRORED_BRANCHES) {
+        return Ok(());
+    }
+    let url = state.url.clone().unwrap_or_else(|| stream.to_string());
+    println!(
+        "{path} mirrors {}, not only its {MIRRORED_BRANCHES} branches.",
+        state
+            .mirror_branch_regex
+            .as_deref()
+            .map_or("every branch".to_string(), |r| format!(
+                "branches matching {r}"
+            ))
+    );
+    ui.step(&format!(
+        "Mirror only {MIRRORED_BRANCHES} branches (Settings → Repository → Mirroring \
+         repositories, \"Mirror branches matching\")"
+    ));
+    if args.dry_run
+        || !confirmed(
+            args,
+            &format!("Mirror only {MIRRORED_BRANCHES} branches of {url}?"),
+            "changing the mirror",
+        )?
+    {
+        return Ok(());
+    }
+    client.set_pull_mirror(&PullMirror::branches_matching(&url, MIRRORED_BRANCHES))?;
+    println!(
+        "{path} now mirrors only {MIRRORED_BRANCHES} branches. Branches it already copied stay; \
+         delete those you do not want by hand."
+    );
     Ok(())
 }
 
@@ -302,24 +391,7 @@ fn push_change(
     change: &Change,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let argv = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-    let host = base.split_once("://").map_or(base, |(_, h)| h);
-    let remote = match remote_for(&remotes(repo)?, path) {
-        Some(name) => name,
-        None => {
-            let names = remotes(repo)?;
-            if names.iter().any(|(n, _)| n == "sig") {
-                return Err(format!(
-                    "the checkout's `sig` remote points somewhere other than {path}; \
-                     rename or remove it first"
-                )
-                .into());
-            }
-            ui.step("Add the SIG's repo as the remote `sig`");
-            let url = format!("git+ssh://git@{host}/{path}.git");
-            ui.run_required(&argv(&["git", "remote", "add", "sig", &url]), repo)?;
-            "sig".to_string()
-        }
-    };
+    let remote = ensure_sig_remote(ui, repo, base, Sig::ProposedUpdates, path)?;
     let stream = format!("{base}/{}.git", sandogasa_cbs::stream_project(package));
     let mr_ref = format!("refs/merge-requests/{}/head", change.iid);
     ui.step(&format!(
@@ -416,9 +488,15 @@ pub fn run_with(
         (Sig::from(sig), args.target.clone(), None)
     };
     ensure_repo(&ui, args, base, token.as_deref(), sig, &package)?;
+    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    let path = format!("{}/{package}", sig.gitlab_group());
+    // In a checkout of the package, the SIG's repo is a remote of it, by
+    // its part (#102); outside one there is nothing to add it to.
+    let in_checkout = remotes(&repo).is_ok_and(|(r, _)| r.package() == Some(package.as_str()));
+    if change.is_none() && in_checkout {
+        ensure_sig_remote(&ui, &repo, base, sig, &path)?;
+    }
     if let Some(change) = change {
-        let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
-        let path = format!("{}/{package}", sig.gitlab_group());
         push_change(&ui, &repo, base, &path, &package, &change)?;
         println!(
             "\nNext, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
@@ -452,25 +530,6 @@ mod tests {
         for running in [None, Some("none"), Some("scheduled"), Some("started")] {
             assert_eq!(mirror_update(running), MirrorUpdate::Running, "{running:?}");
         }
-    }
-
-    #[test]
-    fn the_sigs_remote_is_found_by_its_project() {
-        let remotes = vec![
-            (
-                "origin".to_string(),
-                "git+ssh://git@gitlab.com/redhat/centos-stream/rpms/rsync.git".to_string(),
-            ),
-            (
-                "upd".to_string(),
-                "git@gitlab.com:centos/proposed_updates/rpms/rsync.git".to_string(),
-            ),
-        ];
-        assert_eq!(
-            remote_for(&remotes, "CentOS/proposed_updates/rpms/rsync").as_deref(),
-            Some("upd")
-        );
-        assert_eq!(remote_for(&remotes, "CentOS/Hyperscale/rpms/rsync"), None);
     }
 
     fn args(target: &str, sig: Option<SigName>) -> SigRepoArgs {
@@ -562,6 +621,13 @@ mod tests {
             .mock("GET", "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fnew")
             .with_status(404)
             .create();
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Fnew",
+            )
+            .with_status(404)
+            .create();
         let mut dry = args("new", Some(SigName::Hyperscale));
         dry.dry_run = true;
         run_with(&dry, &server.url(), None).unwrap();
@@ -588,5 +654,89 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("GITLAB_TOKEN"), "{err}");
+    }
+
+    /// wprof's case: a Hyperscale package CentOS Stream does not have.
+    /// Its repo is created empty, with no mirror to set up.
+    #[test]
+    fn a_hyperscale_package_stream_lacks_gets_an_empty_repo() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fwprof")
+            .with_status(404)
+            .create();
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Fwprof",
+            )
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", "/api/v4/groups/CentOS%2FHyperscale%2Frpms")
+            .with_status(200)
+            .with_body(r#"{"id": 5, "full_path": "CentOS/Hyperscale/rpms"}"#)
+            .create();
+        let created = server
+            .mock("POST", "/api/v4/projects")
+            .with_status(201)
+            .with_body(
+                r#"{"id": 11, "path_with_namespace": "CentOS/Hyperscale/rpms/wprof",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h"}"#,
+            )
+            .create();
+        let mirror = server
+            .mock("PUT", mockito::Matcher::Regex("mirror/pull".into()))
+            .expect(0)
+            .create();
+        run_with(
+            &args("wprof", Some(SigName::Hyperscale)),
+            &server.url(),
+            Some("t".into()),
+        )
+        .unwrap();
+        created.assert();
+        mirror.assert();
+    }
+
+    /// rsync's mirror, set up to copy every branch: offered, and with
+    /// --yes given, the c<N>s filter.
+    #[test]
+    fn an_existing_mirror_of_every_branch_is_narrowed() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h"}"#,
+            )
+            .create();
+        let mirror = format!("{path}/mirror/pull");
+        server
+            .mock("GET", mirror.as_str())
+            .with_status(200)
+            .with_body(
+                r#"{"enabled": true, "url": "https://gitlab.com/redhat/centos-stream/rpms/rsync.git",
+                    "update_status": "finished", "mirror_branch_regex": null}"#,
+            )
+            .create();
+        let narrowed = server
+            .mock("PUT", mirror.as_str())
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "mirror_branch_regex": MIRRORED_BRANCHES,
+                "url": "https://gitlab.com/redhat/centos-stream/rpms/rsync.git",
+            })))
+            .with_status(200)
+            .with_body("{}")
+            .create();
+        run_with(
+            &args("rsync", Some(SigName::ProposedUpdates)),
+            &server.url(),
+            Some("t".into()),
+        )
+        .unwrap();
+        narrowed.assert();
     }
 }

@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### cbspkg and cpu-sig-tracker: remotes by role, a SIG-named remote, a mirror of Stream's release branches, sig-repo for Hyperscale
+
+Taking rsync through the Proposed Updates flow showed four rough edges:
+
+- **`origin` had to be Stream.** `cpu-sig-tracker mr` read `origin` and
+  refused a checkout where it was anything but CentOS Stream's repo,
+  such as a Hyperscale checkout cloned from the SIG's repo.
+- **The added remote said nothing.** `cbspkg sig-repo` added the SIG's
+  repo as `sig`.
+- **The mirror took every branch.** It copied all of Stream's branches,
+  `RHEL-169141` and an automated-update branch included.
+- **`sig-repo` only knew Proposed Updates.** It had nothing to offer a
+  Hyperscale package Stream does not have.
+
+Now:
+
+- **Remotes are known by the project they point at.** sandogasa-cbs's
+  new `remotes` module tells CentOS Stream, a SIG and a personal fork
+  apart whatever the remotes are called. `mr`, `sig-repo`, `add-pkg`
+  and `build` use it, so `origin` can be any of them.
+- **An added remote is named after its SIG:** `proposed_updates` or
+  `hyperscale`. An existing remote is used whatever its name.
+- **A new mirror takes only `^c[0-9]+s$` branches.** For an existing
+  repo, `sig-repo` checks the mirror and offers to set that filter.
+  Branches already copied stay until deleted by hand.
+- **`sig-repo <pkg> --sig hyperscale`** mirrors Stream when Stream has
+  the package, and otherwise creates an empty repo (a package tracking
+  Fedora, or a new one). Either way it pushes no branch. In a checkout
+  of the package, it adds the SIG's repo as a remote.
+
+sandogasa-gitlab's `PullMirror` gains `branches_matching` and the
+`mirror_branch_regex` field it sends without
+`only_mirror_protected_branches`, which GitLab refuses alongside it.
+Resolves #102.
+
 ### cpu-sig-tracker: tracking issues name their affected and expected builds from the evidence
 
 rsync's two tracking issues said `_(unknown)_` for both the affected

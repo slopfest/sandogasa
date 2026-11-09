@@ -21,6 +21,7 @@
 pub mod login;
 pub mod lookaside;
 pub mod packages;
+pub mod remotes;
 
 /// The koji profile CBS is reached through, and the `cbs` command
 /// that wraps it.

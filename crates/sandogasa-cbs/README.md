@@ -52,6 +52,16 @@ Hyperscale's Facebook branches also build for the RHEL release
 (`hyperscale9-packages-facebook-el9`), for systems that deploy RHEL
 snapshots; `Collection::rhel_variant` names that collection.
 
+## Remotes
+
+`remotes::Remotes::parse` reads `git remote -v` and knows each remote by
+the project it points at, not its name: CentOS Stream's repo
+(`redhat/centos-stream/rpms/<pkg>`), a SIG's (`Role::Sig`), or a
+personal fork (`<user>/centos_rpms_<pkg>`). `find(role)` gives the
+remote playing a part, `package()` the package they are for, and
+`name_for(role)` the name to add one under: the SIG's name
+(`proposed_updates`, `hyperscale`) for a SIG's repo.
+
 ## Mock configs
 
 `Collection::mock_config` names the mock config whose buildroot

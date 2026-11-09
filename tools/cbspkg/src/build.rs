@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use sandogasa_cbs::packages::latest;
+use sandogasa_cbs::remotes::Role;
 use sandogasa_cbs::{Collection, Sig, Stage};
 use sandogasa_cli::explain::Ui;
 
@@ -123,20 +124,15 @@ pub fn locate(checkout: &Checkout, repo: &Path) -> Result<Located, Box<dyn std::
         .find(|s| s.name() == checkout.collections[0].sig)
         .ok_or("the branch's SIG has no known GitLab group")?;
     let sig_path = format!("{}/{package}", sig.gitlab_group());
-    let (remote, url) = checkout
-        .remotes
-        .iter()
-        .find(|(_, u)| {
-            crate::sig_repo::project_path(u).is_some_and(|p| p.eq_ignore_ascii_case(&sig_path))
-        })
-        .cloned()
-        .ok_or_else(|| {
-            format!(
-                "no remote points at the SIG's repo {sig_path}, which CBS builds from: \
-                 `cbspkg sig-repo` sets it up, or add it with `git remote add sig \
-                 git+ssh://git@gitlab.com/{sig_path}.git`"
-            )
-        })?;
+    let found = checkout.remotes.find(Role::Sig(sig)).ok_or_else(|| {
+        format!(
+            "no remote points at the SIG's repo {sig_path}, which CBS builds from: \
+             `cbspkg sig-repo` sets it up, or add it with `git remote add {} \
+             git+ssh://git@gitlab.com/{sig_path}.git`",
+            sandogasa_cbs::remotes::name_for(Role::Sig(sig))
+        )
+    })?;
+    let (remote, url) = (found.name.clone(), found.url.clone());
     let commit = git(
         repo,
         &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],

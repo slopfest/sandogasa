@@ -247,7 +247,10 @@ cpu-sig-tracker mr [BRANCH] [-C DIR] [--target cNs] [--title TEXT] \
 ```
 
 Opens the CentOS Stream merge request for a Proposed Update's branch,
-from the package's dist-git checkout (the current directory, or `-C`):
+from the package's dist-git checkout (the current directory, or `-C`).
+The checkout's CentOS Stream remote is the one pointing at
+`redhat/centos-stream/rpms/<package>`, whatever it is called, so the
+checkout may have been cloned from a SIG's repo:
 
 1. If no remote points at a fork of the package in your own namespace
    (`<user>/centos_rpms_<package>`), `centpkg fork` makes one and adds

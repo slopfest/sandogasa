@@ -162,26 +162,39 @@ cbspkg sig-repo <package> --sig hyperscale|proposed-updates [--dry-run] [--yes]
 
 Makes sure the SIG has its repo for a package. When it is missing, the
 repo is created in the SIG's group (`CentOS/proposed_updates/rpms`,
-`CentOS/Hyperscale/rpms`), public, and made a pull mirror of
-`redhat/centos-stream/rpms/<package>`: every branch is mirrored, a
-branch the SIG adds is never overwritten, and mirror updates start no
-pipelines. `sig-repo` waits for GitLab's first mirror update before it
-goes on. Creating the repo is confirmed at a terminal; `--yes` skips
-the question.
+`CentOS/Hyperscale/rpms`), public. When CentOS Stream has the package
+(always, for a Proposed Update), the repo is made a pull mirror of
+`redhat/centos-stream/rpms/<package>`'s release branches (those
+matching `^c[0-9]+s$`, not its topic or automation branches): a branch
+the SIG adds is never overwritten, and mirror updates start no
+pipelines, and `sig-repo` waits for GitLab's first mirror update. A
+Hyperscale package Stream does not have, one tracking Fedora or a new
+one, gets an empty repo, with no branch pushed to it. When the repo
+exists already, `sig-repo` checks that its mirror takes only the
+release branches, and offers to set that when it takes more (branches
+it copied already are left for you to delete). Creating or changing
+the repo is confirmed at a terminal; `--yes` skips the question.
+
+A checkout's remotes are known by the project they point at, not by
+name: CentOS Stream's repo, a SIG's, or a personal fork
+(`<user>/centos_rpms_<package>`), so `origin` can be any of them. A
+remote `sig-repo` adds is named after the SIG (`proposed_updates`,
+`hyperscale`); in a checkout of the package, it adds the SIG's repo
+when no remote points at it.
 
 Given a CentOS Stream merge request, a Proposed Update, it then
 carries the change to the SIG's repo, from the dist-git checkout (the
 current directory, or `-C`):
 
-1. The SIG's repo is added as the remote `sig`, unless a remote already
-   points at it.
+1. The SIG's repo is added as the remote `proposed_updates`, unless a
+   remote already points at it.
 2. `git fetch <stream repo> refs/merge-requests/<iid>/head` fetches the
    merge request's commits.
-3. `git push --no-verify sig FETCH_HEAD:refs/heads/<branch>` pushes
+3. `git push --no-verify <remote> FETCH_HEAD:refs/heads/<branch>` pushes
    them as `<release>-proposed-<RHEL key>`, named after the merge
    request's target branch and the first RHEL issue it resolves,
    without running the checkout's pre-push hook (see DEVELOPMENT.md).
-4. `git branch --track <branch> sig/<branch>` makes a local branch
+4. `git branch --track <branch> <remote>/<branch>` makes a local branch
    tracking it, unless one exists, without switching to it:
    `git checkout <branch>` is then the branch `add-pkg` and the other
    cbspkg commands work from.

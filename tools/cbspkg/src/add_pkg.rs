@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use sandogasa_cbs::packages::{add_pkg_argv, listed, stage_tags, whoami};
+use sandogasa_cbs::remotes::Remotes;
 use sandogasa_cbs::{Collection, Sig};
 use sandogasa_cli::explain::Ui;
 
@@ -54,40 +55,7 @@ pub struct Checkout {
     pub branch: String,
     pub collections: Vec<Collection>,
     pub package: String,
-    pub remotes: Vec<(String, String)>,
-}
-
-/// The package a remote URL's project is: `rsync` for Stream's or a
-/// SIG's repo of it.
-pub fn package_of_remote(url: &str) -> Option<String> {
-    let path = crate::sig_repo::project_path(url)?;
-    let (group, package) = path.rsplit_once('/')?;
-    let known = group.eq_ignore_ascii_case("redhat/centos-stream/rpms")
-        || Sig::ALL
-            .iter()
-            .any(|s| group.eq_ignore_ascii_case(s.gitlab_group()));
-    (known && !package.is_empty()).then(|| package.to_string())
-}
-
-/// The SIGs whose repos the checkout's remotes (their URLs) point at.
-pub fn sigs_of_remotes<'a>(urls: impl IntoIterator<Item = &'a str>) -> Vec<Sig> {
-    let mut sigs: Vec<Sig> = Vec::new();
-    for url in urls {
-        let Some(path) = crate::sig_repo::project_path(url) else {
-            continue;
-        };
-        let Some((group, _)) = path.rsplit_once('/') else {
-            continue;
-        };
-        if let Some(sig) = Sig::ALL
-            .into_iter()
-            .find(|s| group.eq_ignore_ascii_case(s.gitlab_group()))
-            && !sigs.contains(&sig)
-        {
-            sigs.push(sig);
-        }
-    }
-    sigs
+    pub remotes: Remotes,
 }
 
 /// The CentOS Stream major a branch starts from: 10 for `c10s` or
@@ -167,28 +135,16 @@ pub fn resolve(
         Some(b) => b.to_string(),
         None => git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
     };
-    let remotes: Vec<(String, String)> = git(repo, &["remote", "-v"])
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| l.ends_with("(fetch)"))
-        .filter_map(|l| {
-            let mut parts = l.split_whitespace();
-            Some((parts.next()?.to_string(), parts.next()?.to_string()))
-        })
-        .collect();
-    let sigs = sigs_of_remotes(remotes.iter().map(|(_, u)| u.as_str()));
-    let collections = collections_for(&branch, &sigs)?;
+    let remotes = Remotes::parse(&git(repo, &["remote", "-v"]).unwrap_or_default());
+    let collections = collections_for(&branch, &remotes.sigs())?;
     let package = match package {
         Some(p) => p.to_string(),
-        None => remotes
-            .iter()
-            .find_map(|(_, u)| package_of_remote(u))
-            .ok_or_else(|| {
-                format!(
-                    "no remote of {} is a CentOS Stream or SIG repo: name the package",
-                    repo.display()
-                )
-            })?,
+        None => remotes.package().map(str::to_string).ok_or_else(|| {
+            format!(
+                "no remote of {} is a CentOS Stream or SIG repo: name the package",
+                repo.display()
+            )
+        })?,
     };
     Ok(Checkout {
         branch,
@@ -296,21 +252,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_package_is_read_from_a_stream_or_sig_remote() {
-        for url in [
-            "git+ssh://git@gitlab.com/redhat/centos-stream/rpms/rsync.git",
-            "git@gitlab.com:CentOS/proposed_updates/rpms/rsync.git",
-            "https://gitlab.com/CentOS/Hyperscale/rpms/rsync",
-        ] {
-            assert_eq!(package_of_remote(url).as_deref(), Some("rsync"), "{url}");
-        }
-        assert_eq!(
-            package_of_remote("git+ssh://git@gitlab.com/michel-slm/centos_rpms_rsync.git"),
-            None
-        );
-    }
-
-    #[test]
     fn a_branch_names_its_collections() {
         let prefixes = |b: &str| {
             collections_for(b, &[])
@@ -341,11 +282,12 @@ mod tests {
     /// repo as a remote: no SIG branch needed.
     #[test]
     fn a_stream_branch_is_proposed_updates_when_only_its_repo_is_a_remote() {
-        let sigs = sigs_of_remotes([
-            "git+ssh://git@gitlab.com/redhat/centos-stream/rpms/rsync.git",
-            "git+ssh://git@gitlab.com/michel-slm/centos_rpms_rsync.git",
-            "git+ssh://git@gitlab.com/CentOS/proposed_updates/rpms/rsync.git",
-        ]);
+        let sigs = Remotes::parse(
+            "origin\tgit+ssh://git@gitlab.com/redhat/centos-stream/rpms/rsync.git (fetch)\n\
+             michel-slm\tgit+ssh://git@gitlab.com/michel-slm/centos_rpms_rsync.git (fetch)\n\
+             sig\tgit+ssh://git@gitlab.com/CentOS/proposed_updates/rpms/rsync.git (fetch)\n",
+        )
+        .sigs();
         assert_eq!(sigs, [Sig::ProposedUpdates]);
         for branch in ["c9s", "c9s-CVE-2026-119741"] {
             let c = collections_for(branch, &sigs).unwrap();
@@ -356,7 +298,9 @@ mod tests {
             );
         }
         // Hyperscale's repository is not in a Stream branch's name.
-        let hs = sigs_of_remotes(["git@gitlab.com:CentOS/Hyperscale/rpms/rsync.git"]);
+        let hs =
+            Remotes::parse("origin\tgit@gitlab.com:CentOS/Hyperscale/rpms/rsync.git (fetch)\n")
+                .sigs();
         assert!(collections_for("c9s", &hs).is_err());
         // Nor is a SIG settled by no SIG remote, or by both.
         assert!(collections_for("c9s", &[]).is_err());
