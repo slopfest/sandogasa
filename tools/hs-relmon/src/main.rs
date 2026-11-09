@@ -1456,10 +1456,17 @@ const GITLAB_BASE: &str = "https://gitlab.com";
 /// Ask for the GitLab token when there is none (with `all`, offering
 /// the saved one as the default), check it, and save it.
 fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let saved = config::load()
+    // The saved token: the keyring's, else the file's (#79).
+    let file = config::load()
         .ok()
-        .and_then(|c| c.gitlab.map(|g| g.access_token))
-        .unwrap_or_default();
+        .and_then(|c| c.gitlab.map(|g| g.access_token));
+    let saved = sandogasa_config::secret::resolve(
+        config::keyring(),
+        None,
+        &config::gitlab_secret(),
+        file.as_deref(),
+    )
+    .unwrap_or_default();
     let existing = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
@@ -1486,14 +1493,27 @@ fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
         return Err("no token provided".into());
     }
 
+    // Into the keyring when there is one, out of the file then.
+    let token = sandogasa_config::secret::keep_for_file(
+        config::keyring(),
+        "GitLab token",
+        &config::gitlab_secret(),
+        token,
+    );
+    let in_keyring = token.is_empty();
     let cfg = config::Config {
-        gitlab: Some(config::GitlabConfig {
+        gitlab: (!in_keyring).then_some(config::GitlabConfig {
             access_token: token,
         }),
     };
     let path = config::config_path()?;
     config::save(&cfg)?;
-    eprintln!("Saved to {}", path.display());
+    // save() never removes a key, so the moved token is taken out here.
+    if in_keyring && config::remove("gitlab", "access_token")? {
+        eprintln!("Nothing else to keep in {}; removed it.", path.display());
+    } else {
+        eprintln!("Saved to {}", path.display());
+    }
 
     Ok(())
 }

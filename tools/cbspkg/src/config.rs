@@ -37,8 +37,9 @@ pub fn save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Take `key` out of `table` in the config file: for a secret now in
-/// the keyring, which `save` would otherwise leave there.
-pub fn remove(table: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// the keyring, which `save` would otherwise leave there. Whether the
+/// file, left with nothing in it, was removed.
+pub fn remove(table: &str, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
     config_file().remove(table, key)
 }
 

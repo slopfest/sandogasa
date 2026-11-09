@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use sandogasa_config::secret::{SecretRef, SecretStore};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -9,6 +10,8 @@ pub struct Config {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitlabConfig {
+    /// Empty when the token is in the keyring (#79).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub access_token: String,
 }
 
@@ -26,6 +29,34 @@ pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
 
 pub fn save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     config_file().save(config)
+}
+
+/// Take `key` out of `table` in the config file: for a secret now in
+/// the keyring, which `save` would otherwise leave there. Whether the
+/// file, left with nothing in it, was removed.
+pub fn remove(table: &str, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    config_file().remove(table, key)
+}
+
+/// The keyring: `secret-tool`, or in this crate's tests one in memory,
+/// so `cargo test` never reads or writes the user's.
+pub fn keyring() -> &'static dyn SecretStore {
+    #[cfg(test)]
+    {
+        static MEMORY: std::sync::OnceLock<sandogasa_config::secret::MemoryStore> =
+            std::sync::OnceLock::new();
+        MEMORY.get_or_init(Default::default)
+    }
+    #[cfg(not(test))]
+    {
+        &sandogasa_config::secret::SecretTool
+    }
+}
+
+/// The GitLab token's keyring entry: gitlab.com's, which every
+/// sandogasa tool talking to gitlab.com reads.
+pub fn gitlab_secret() -> SecretRef {
+    SecretRef::for_url("https://gitlab.com", "sandogasa: GitLab token")
 }
 
 #[cfg(test)]

@@ -218,13 +218,15 @@ impl ConfigFile {
     }
 
     /// Remove `key` from `table` in the user file, and the table too when
-    /// that leaves it empty; nothing when the file or key is not there.
+    /// that leaves it empty, and the file when nothing is left in it;
+    /// nothing when the file or key is not there. Returns whether the file
+    /// was removed, for the caller to say so.
     /// [`save`](Self::save) never removes a key (it lays the struct over
     /// the file), so a secret moved to the keyring is taken out of the
     /// file this way.
-    pub fn remove(&self, table: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn remove(&self, table: &str, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
         if !self.path.exists() {
-            return Ok(());
+            return Ok(false);
         }
         self.edit(|doc| {
             let emptied = match doc.get_mut(table).and_then(|t| t.as_table_like_mut()) {
@@ -237,7 +239,14 @@ impl ConfigFile {
             if emptied {
                 doc.remove(table);
             }
-        })
+        })?;
+        // Nothing left at all, not even a comment: no file, rather than
+        // an empty one.
+        if std::fs::read_to_string(&self.path)?.trim().is_empty() {
+            std::fs::remove_file(&self.path)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Change part of the **user** config file in place, keeping its
@@ -898,6 +907,31 @@ mod tests {
         );
         assert!(!text.contains("access_token"), "{text}");
         assert!(text.contains("email = \"me@example.com\""), "{text}");
+        // The last secret gone, the file goes too.
+        let only = dir.path().join("only.toml");
+        std::fs::write(&only, "[gitlab]\naccess_token = \"glpat-old\"\n").unwrap();
+        assert!(
+            ConfigFile::from_path(only.clone())
+                .remove("gitlab", "access_token")
+                .unwrap()
+        );
+        assert!(!only.exists(), "an empty config file is removed");
+        // Other settings left: kept.
+        let more = dir.path().join("more.toml");
+        std::fs::write(
+            &more,
+            "[defaults]\nexplain = true\n\n[gitlab]\naccess_token = \"x\"\n",
+        )
+        .unwrap();
+        assert!(
+            !ConfigFile::from_path(more.clone())
+                .remove("gitlab", "access_token")
+                .unwrap()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&more).unwrap().trim(),
+            "[defaults]\nexplain = true"
+        );
         // No file: nothing to do, and none is made.
         let none = ConfigFile::from_path(dir.path().join("absent.toml"));
         none.remove("gitlab", "access_token").unwrap();

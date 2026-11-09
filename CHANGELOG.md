@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### hs-relmon: its GitLab token is in the keyring, shared with the other tools
+
+hs-relmon still kept its GitLab token in plain text in
+`~/.config/hs-relmon/config.toml`, the same token cpu-sig-tracker and
+cbspkg now read from the desktop keyring. It reads the shared gitlab.com
+entry too, after `GITLAB_TOKEN` and before the file, and `hs-relmon
+config` moves a token from the file into the keyring. Its config file
+then held nothing and was left behind empty; `ConfigFile::remove` now
+deletes a file left with nothing in it. Refs #79.
+
 ### cbspkg: sig-repo skips a push already done, and names the tracking issue when there is one
 
 Running `cbspkg sig-repo` a second time for rsync's merge request, to

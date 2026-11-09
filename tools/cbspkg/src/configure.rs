@@ -73,9 +73,17 @@ fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
     })?;
     // save() lays the struct over the file and never removes a key, so
     // a token now in the keyring is taken out of the file here.
-    if in_keyring {
-        config::remove("gitlab", "access_token")?;
-    }
-    eprintln!("Saved to {}", config::config_path().display());
+    let removed = in_keyring && config::remove("gitlab", "access_token")?;
+    report_saved(removed, &config::config_path());
     Ok(())
+}
+
+/// Where the settings went: the file, or nowhere, when it was left with
+/// nothing in it and removed.
+fn report_saved(removed: bool, path: &std::path::Path) {
+    if removed {
+        eprintln!("Nothing else to keep in {}; removed it.", path.display());
+    } else {
+        eprintln!("Saved to {}", path.display());
+    }
 }

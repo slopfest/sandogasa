@@ -10,18 +10,19 @@ pub use sandogasa_gitlab::{
     parse_project_url, project_path_from_issue_url, validate_token,
 };
 
-/// Load the GitLab token from `GITLAB_TOKEN` env var or config file.
+/// The GitLab token: `GITLAB_TOKEN`, else the keyring's (shared with the
+/// other sandogasa tools, #79), else the config file's.
 pub fn load_token() -> Result<String, Box<dyn std::error::Error>> {
-    let token = std::env::var("GITLAB_TOKEN").ok().or_else(|| {
-        crate::config::load()
-            .ok()
-            .and_then(|c| c.gitlab.map(|g| g.access_token))
-    });
-    token.ok_or_else(|| {
-        "GitLab token not found; set GITLAB_TOKEN \
-        or run 'hs-relmon config'"
-            .into()
-    })
+    let file = crate::config::load()
+        .ok()
+        .and_then(|c| c.gitlab.map(|g| g.access_token));
+    sandogasa_config::secret::resolve(
+        crate::config::keyring(),
+        Some("GITLAB_TOKEN"),
+        &crate::config::gitlab_secret(),
+        file.as_deref(),
+    )
+    .ok_or_else(|| "GitLab token not found; set GITLAB_TOKEN or run 'hs-relmon config'".into())
 }
 
 /// Project-level client for a project URL, with the token loaded

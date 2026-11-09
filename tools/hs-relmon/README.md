@@ -327,17 +327,20 @@ then moves the default branch to the release that still has builds.
 
 ### Configuration
 
-Set up GitLab authentication (token stored in
-`~/.config/hs-relmon/config.toml`):
+Set up GitLab authentication:
 
 ```
 $ hs-relmon config
-Paste a GitLab personal access token with 'api' scope:
-Validating token... valid.
-Saved to /home/user/.config/hs-relmon/config.toml.
 ```
 
-The `GITLAB_TOKEN` environment variable overrides the config file token.
+`config` asks for a GitLab personal access token with `api` scope,
+checks it, and keeps it in the desktop keyring (through `secret-tool`)
+as the gitlab.com entry every sandogasa tool reads (`secret-tool lookup
+application sandogasa service gitlab.com`), so a token another tool
+stored there is used as it is. Without a keyring to use it goes to
+`~/.config/hs-relmon/config.toml`; a token found there is moved to the
+keyring the next time `config` runs. The `GITLAB_TOKEN` environment
+variable overrides both.
 
 ### Detecting duplicate binaries
 

@@ -71,13 +71,19 @@ fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
     config::save(&cfg)?;
     // save() lays the struct over the file and never removes a key, so
     // a token now in the keyring is taken out of the file here.
+    let mut removed = false;
     if in_keyring.0 {
-        config::remove("gitlab", "access_token")?;
+        removed |= config::remove("gitlab", "access_token")?;
     }
     if in_keyring.1 {
-        config::remove("jira", "access_token")?;
+        removed |= config::remove("jira", "access_token")?;
     }
-    eprintln!("Saved to {}", config::config_path().display());
+    let path = config::config_path();
+    if removed {
+        eprintln!("Nothing else to keep in {}; removed it.", path.display());
+    } else {
+        eprintln!("Saved to {}", path.display());
+    }
     Ok(())
 }
 
