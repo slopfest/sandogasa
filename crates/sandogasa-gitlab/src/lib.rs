@@ -88,6 +88,51 @@ pub struct ProjectUpdate {
     pub merge_method: Option<String>,
 }
 
+/// A project: where it is and how to clone it.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct Project {
+    pub id: u64,
+    pub path_with_namespace: String,
+    pub web_url: String,
+    pub ssh_url_to_repo: String,
+    pub http_url_to_repo: String,
+}
+
+/// A merge request to open, from the project the client is bound to
+/// into another.
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
+pub struct NewMergeRequest {
+    pub source_branch: String,
+    pub target_branch: String,
+    pub target_project_id: u64,
+    pub title: String,
+    pub description: String,
+    /// Let the target's maintainers push to the source branch, so a
+    /// reviewer can fix up a merge request rather than ask for it.
+    pub allow_collaboration: bool,
+}
+
+impl NewMergeRequest {
+    pub fn new(
+        source_branch: &str,
+        target_project_id: u64,
+        target_branch: &str,
+        title: &str,
+        description: &str,
+    ) -> Self {
+        Self {
+            source_branch: source_branch.to_string(),
+            target_branch: target_branch.to_string(),
+            target_project_id,
+            title: title.to_string(),
+            description: description.to_string(),
+            allow_collaboration: true,
+        }
+    }
+}
+
 /// A branch as the repository branches endpoint lists it.
 #[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
@@ -455,6 +500,47 @@ impl Client {
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
+    /// The project, or `None` when GitLab has none at the path (or
+    /// none this client can see).
+    pub fn project(&self) -> Result<Option<Project>, Box<dyn std::error::Error>> {
+        let url = self.project_url();
+        let resp = self.http.get(&url).send()?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(blocking_json_ok(resp, &format!("GitLab GET {url}"))?))
+    }
+
+    /// The project's open merge requests into `target_branch`, those
+    /// mentioning `search` in their title or description when given.
+    pub fn open_merge_requests(
+        &self,
+        target_branch: &str,
+        search: Option<&str>,
+    ) -> Result<Vec<MergeRequest>, Box<dyn std::error::Error>> {
+        let url = format!("{}/merge_requests", self.project_url());
+        let mut query = vec![
+            ("state", "opened"),
+            ("target_branch", target_branch),
+            ("per_page", "100"),
+        ];
+        if let Some(s) = search {
+            query.push(("search", s));
+        }
+        let resp = self.http.get(&url).query(&query).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+    }
+
+    /// Open a merge request from this project (a fork) into another.
+    pub fn create_merge_request(
+        &self,
+        mr: &NewMergeRequest,
+    ) -> Result<MergeRequest, Box<dyn std::error::Error>> {
+        let url = format!("{}/merge_requests", self.project_url());
+        let resp = self.http.post(&url).json(mr).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab POST {url}"))?)
+    }
+
     /// Fetch the project's status flags (archival, Issues feature).
     /// The issue-feature fields only populate for authenticated
     /// requests; this client always sends a token.
@@ -730,8 +816,12 @@ impl Client {
     }
 
     fn issues_url(&self) -> String {
+        format!("{}/issues", self.project_url())
+    }
+
+    fn project_url(&self) -> String {
         let encoded = self.project_path.replace('/', "%2F");
-        format!("{}/api/v4/projects/{}/issues", self.base_url, encoded)
+        format!("{}/api/v4/projects/{}", self.base_url, encoded)
     }
 
     fn graphql_url(&self) -> String {
@@ -1525,6 +1615,92 @@ pub fn project_releases(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PROJECT: &str = r#"{"id": 42, "path_with_namespace": "michel/centos_rpms_rsync",
+        "web_url": "https://gitlab.example.com/michel/centos_rpms_rsync",
+        "ssh_url_to_repo": "git@gitlab.example.com:michel/centos_rpms_rsync.git",
+        "http_url_to_repo": "https://gitlab.example.com/michel/centos_rpms_rsync.git"}"#;
+
+    #[test]
+    fn a_project_is_read_or_none_when_missing() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v4/projects/michel%2Fcentos_rpms_rsync")
+            .with_status(404)
+            .with_body(r#"{"message": "404 Project Not Found"}"#)
+            .create();
+        let client = Client::new(&server.url(), "michel/centos_rpms_rsync", "t").unwrap();
+        assert!(client.project().unwrap().is_none());
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync",
+            )
+            .with_status(200)
+            .with_body(PROJECT)
+            .create();
+        let upstream = Client::new(&server.url(), "redhat/centos-stream/rpms/rsync", "").unwrap();
+        let p = upstream.project().unwrap().unwrap();
+        assert_eq!(p.id, 42);
+        assert_eq!(
+            p.ssh_url_to_repo,
+            "git@gitlab.example.com:michel/centos_rpms_rsync.git"
+        );
+    }
+
+    #[test]
+    fn a_merge_request_is_opened_from_the_fork_and_open_ones_are_searched() {
+        let mut server = mockito::Server::new();
+        let create = server
+            .mock("POST", "/api/v4/projects/michel%2Fcentos_rpms_rsync/merge_requests")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "source_branch": "c9s-CVE-2026-119741",
+                "target_branch": "c9s",
+                "target_project_id": 7,
+                "allow_collaboration": true,
+            })))
+            .with_status(201)
+            .with_body(
+                r#"{"iid": 90, "title": "t", "state": "opened",
+                    "web_url": "https://gitlab.example.com/redhat/centos-stream/rpms/rsync/-/merge_requests/90",
+                    "source_branch": "c9s-CVE-2026-119741", "target_branch": "c9s"}"#,
+            )
+            .create();
+        let fork = Client::new(&server.url(), "michel/centos_rpms_rsync", "t").unwrap();
+        let mr = fork
+            .create_merge_request(&NewMergeRequest::new(
+                "c9s-CVE-2026-119741",
+                7,
+                "c9s",
+                "t",
+                "d",
+            ))
+            .unwrap();
+        assert_eq!(mr.iid, 90);
+        create.assert();
+
+        let search = server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
+            )
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("state".into(), "opened".into()),
+                mockito::Matcher::UrlEncoded("target_branch".into(), "c9s".into()),
+                mockito::Matcher::UrlEncoded("search".into(), "CVE-2026-119741".into()),
+            ]))
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let upstream = Client::new(&server.url(), "redhat/centos-stream/rpms/rsync", "").unwrap();
+        assert!(
+            upstream
+                .open_merge_requests("c9s", Some("CVE-2026-119741"))
+                .unwrap()
+                .is_empty()
+        );
+        search.assert();
+    }
 
     #[test]
     fn group_issues_where_passes_filters_and_reads_labels() {

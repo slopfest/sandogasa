@@ -198,6 +198,34 @@ Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS cpu-sig-tracker mr
+\fBcpu\-sig\-tracker mr\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-target\fR] [\fB\-\-title\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIBRANCH\fR]
+.PP
+Open the CentOS Stream merge request for a Proposed Update\*(Aqs branch: fork with centpkg, push, and open it from the commits
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-target\fR \fI<BRANCH>\fR
+CentOS Stream branch to merge into (default: the one the branch tracks, else its cNs\- prefix)
+.TP
+\fB\-\-title\fR \fI<TEXT>\fR
+Merge request title (default: the subject of the branch\*(Aqs one commit; needed when it has several)
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Open the merge request without asking
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIBRANCH\fR]
+The branch to propose (default: the one checked out)
 .SS cpu-sig-tracker ping
 \fBcpu\-sig\-tracker ping\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-\-package\fR] [\fB\-\-release\fR] [\fB\-\-days\fR] [\fB\-\-reping\-days\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP

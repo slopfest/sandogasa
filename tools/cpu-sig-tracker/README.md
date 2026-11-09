@@ -31,7 +31,9 @@ cargo install cpu-sig-tracker
 Requires the [`koji`](https://pagure.io/koji) CLI with a `cbs` profile
 configured (CentOS Build System), and
 [`fedrq`](https://github.com/gotmax23/fedrq) for CentOS Stream repo
-queries. Both are looked up on `$PATH`.
+queries. Both are looked up on `$PATH`. `mr` also needs `git`, and `centpkg`
+(`sudo dnf install centpkg`) to make the fork the first time, with an
+API token in `~/.config/rpkg/centpkg.conf`.
 
 ## Configuration
 
@@ -194,6 +196,39 @@ Hand-filed issues are offered the label at the prompt, or labelled
 outright with `--adopt`, after which every command tracks them; an
 unattended run only reports them. Otherwise read-only; file new
 tracking issues explicitly via `file-issue`.
+
+### `mr`
+
+```sh
+cpu-sig-tracker mr [BRANCH] [-C DIR] [--target cNs] [--title TEXT] \
+    [--explain] [--dry-run] [--yes]
+```
+
+Opens the CentOS Stream merge request for a Proposed Update's branch,
+from the package's dist-git checkout (the current directory, or `-C`):
+
+1. If no remote points at a fork of the package in your own namespace
+   (`<user>/centos_rpms_<package>`), `centpkg fork` makes one and adds
+   it as a remote named after your GitLab user.
+2. `git push -u <remote> <branch>`.
+3. The merge request is opened into the CentOS Stream branch the
+   branch is for: the one it tracks (`origin/c9s`), else its `cNs-`
+   prefix, or `--target`.
+
+The merge request is written in CentOS Stream's template from the
+branch's commits beyond the target: their messages, trailers dropped,
+as the summary of changes, and every `Resolves:`, `Related:` and
+`Reverts:` line in them as its tickets. A branch with no `Resolves:`
+line is refused, as CentOS Stream requires a Jira issue: find or file
+it with `jira` first. The title is the subject of the branch's one
+commit; a branch with several needs `--title`. Open merge requests
+into the same branch about the same CVE (or the first Jira issue) are
+listed first, so a duplicate is seen, but they do not stop it.
+
+The merge request is shown in full and opened after a confirmation
+(`--yes` skips it). `--explain` narrates each step with the command it
+runs, pausing before each; `--dry-run` shows the steps and the merge
+request without running anything.
 
 ### `ping`
 
@@ -435,6 +470,10 @@ cpu-sig-tracker dump-inventory --release c9s,c10s -o cpu-sig.toml --prune
 # name, one per branch; file it once it reads right.
 cpu-sig-tracker jira xz --branch c10s --cve CVE-2024-3094
 cpu-sig-tracker jira xz --branch c10s --cve CVE-2024-3094 --file
+
+# Push the fix branch to your fork and open the MR (it names the issue).
+cd ~/src/centos/rpms/xz
+cpu-sig-tracker mr c10s-CVE-2024-3094
 
 # File a tracking issue for a new MR.
 cpu-sig-tracker file-issue https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42 \

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: open a Proposed Update's CentOS Stream merge request
+
+With the RHEL Jira issues for the rsync update filed (RHEL-303720 and
+RHEL-303721), the merge requests still had to be opened by hand: fork
+the CentOS Stream project, add the fork as a remote, push, and fill in
+CentOS Stream's merge request template with the change and the
+`Resolves:` lines.
+
+`cpu-sig-tracker mr [BRANCH]`, run in the package's dist-git checkout,
+does those steps: `centpkg fork` when no remote points at your fork
+yet, `git push -u`, and the merge request into the CentOS Stream branch
+the branch is for, written in the template from the branch's commits
+and their ticket lines. Open merge requests about the same CVE are
+listed first. It is shown in full and opened after a confirmation;
+`--explain` narrates each step with its command, and `--dry-run` runs
+nothing.
+
+sandogasa-gitlab gains `Client::project`, `Client::open_merge_requests`
+and `Client::create_merge_request` (with `Project` and
+`NewMergeRequest`). sandogasa-cli gains an `explain` feature: dbranch's
+narrated command execution, moved there so other tools offer the same
+`--explain`, with dbranch using it unchanged.
+
 ### ebranch: rebuild-plan marks packages that arrived after the side tag was created
 
 The libical 4 rebuild plan, made on 2026-11-04, could not list ical:

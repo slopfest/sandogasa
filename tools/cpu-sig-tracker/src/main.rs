@@ -12,6 +12,7 @@ mod gitlab;
 mod jira;
 mod jira_issue;
 mod list_issues;
+mod mr;
 mod ping;
 mod retire;
 mod status;
@@ -26,6 +27,7 @@ use dump_inventory::DumpInventoryArgs;
 use file_issue::FileIssueArgs;
 use jira_issue::JiraArgs;
 use list_issues::ListIssuesArgs;
+use mr::MrArgs;
 use ping::PingArgs;
 use retire::RetireArgs;
 use status::StatusArgs;
@@ -67,6 +69,10 @@ enum Command {
     /// the MR each names; with an inventory, the packages missing one
     ListIssues(ListIssuesArgs),
 
+    /// Open the CentOS Stream merge request for a Proposed Update's
+    /// branch: fork with centpkg, push, and open it from the commits
+    Mr(MrArgs),
+
     /// Nudge upstream merge requests that have gone quiet, and
     /// show the last response on those that have not.
     Ping(PingArgs),
@@ -102,6 +108,7 @@ fn main() -> ExitCode {
         Command::FileIssue(args) => file_issue::run(&args),
         Command::Jira(args) => jira_issue::run(&args),
         Command::ListIssues(args) => list_issues::run(&args),
+        Command::Mr(args) => mr::run(&args),
         Command::Ping(args) => ping::run(&args),
         Command::Retire(args) => retire::run(&args),
         Command::Status(args) => status::run(&args),
