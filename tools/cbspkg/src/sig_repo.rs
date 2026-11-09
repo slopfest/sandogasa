@@ -421,7 +421,7 @@ pub fn run_with(
         let path = format!("{}/{package}", sig.gitlab_group());
         push_change(&ui, &repo, base, &path, &package, &change)?;
         println!(
-            "Next, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
+            "\nNext, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
             change.mr_url
         );
     }

@@ -43,3 +43,16 @@ which `review` can share. A released build still in `-testing` is
 promoted again to finish the job, rather than reported as having
 nowhere to go.
 
+## Sources come from `centpkg sources`, not a download of our own
+
+`upload-sources` could fetch a missing file straight from CentOS
+Stream's lookaside (`sources.stream.centos.org/sources/rpms/<pkg>/
+<file>/sha512/<sum>/<file>`) into a temporary directory, with no
+checkout to switch. It does not: cbspkg is meant to be a teaching tool,
+as dbranch is, so each step is one a person would run themselves, and
+`--explain` shows it as that command. `centpkg sources` is how a
+packager fetches sources, so it is what runs, on the branch it needs
+checked out: `upload-sources` checks the branch out for it and switches
+back, as cpu-sig-tracker's `mr` does around the pre-push hook. Keep it
+that way rather than replacing the command with an HTTP client.
+

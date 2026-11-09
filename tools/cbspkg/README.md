@@ -112,9 +112,13 @@ the lookaside is asked for each file first, so files already there are
 left alone and a second run does nothing.
 
 A file the checkout lacks, or has with another sum, is fetched with
-`centpkg sources`, from CentOS Stream's lookaside, which fetches the
-checked-out branch's: `upload-sources` asks for the branch to be checked
-out when it is not. Every file is checked against its sha512 before
+`centpkg sources`, from CentOS Stream's lookaside. That fetches the
+checked-out branch's files, so when the branch is not checked out,
+`upload-sources` checks it out for it (tracking the SIG remote's when
+there is no local branch) and switches back afterwards, whether or not
+the fetch worked; the fetched files are untracked, so they stay. A
+checkout with uncommitted changes is not switched: that stops it with
+what to do instead. Every file is checked against its sha512 before
 `centos-lookaside-upload-sig -f <file> -n <pkg>` uploads it. The
 upload is confirmed at a terminal, showing each command, and refused
 without one. `--explain` and `--dry-run` show each step's command.

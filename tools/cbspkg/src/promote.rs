@@ -197,7 +197,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         if !args.dry_run {
             match to {
                 Stage::Testing => {
-                    println!("{nvr} is in -testing. Once it has been tested: cbspkg promote")
+                    println!("\n{nvr} is in -testing. Once it has been tested: cbspkg promote")
                 }
                 _ => println!("{nvr} is released."),
             }

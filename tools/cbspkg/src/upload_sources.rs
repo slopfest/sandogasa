@@ -42,6 +42,13 @@ pub struct UploadSourcesArgs {
     pub repo: Option<PathBuf>,
 }
 
+/// The checkouts around `centpkg sources`: to the branch, and back.
+#[derive(Debug, PartialEq)]
+pub struct Switch {
+    pub there: Vec<String>,
+    pub back: Vec<String>,
+}
+
 /// The SIG lookaside: `CBSPKG_LOOKASIDE_BASE`, for testing against a
 /// local server, else git.centos.org.
 pub fn lookaside_base() -> String {
@@ -117,14 +124,62 @@ fn matches(repo: &Path, source: &Source) -> bool {
         .is_some_and(|sum| sum.eq_ignore_ascii_case(&source.sum))
 }
 
+/// How to get `branch` (at `head`'s `commit`) checked out for
+/// `centpkg sources`, which fetches the checked-out branch's files, and
+/// back, or `None` when HEAD is at `commit` already.
+/// `current` is `git rev-parse --abbrev-ref HEAD` (`HEAD` when
+/// detached); `has_local` whether `branch` exists locally, else it is
+/// checked out tracking `remote`'s. A checkout with uncommitted changes
+/// (`dirty`) is not switched: that is an error saying how to proceed.
+/// The same as cpu-sig-tracker's `mr` does for the pre-push hook.
+pub fn switch_for_sources(
+    current: &str,
+    head: &str,
+    commit: &str,
+    branch: &str,
+    has_local: bool,
+    remote: &str,
+    dirty: bool,
+) -> Result<Option<Switch>, String> {
+    if head == commit {
+        return Ok(None);
+    }
+    if dirty {
+        return Err(format!(
+            "fetching {branch}'s sources means checking it out (`centpkg sources` fetches the \
+             checked-out branch's), and the checkout has uncommitted changes: commit or stash \
+             them, or run `git checkout {branch}` yourself"
+        ));
+    }
+    let argv = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+    let there = if has_local {
+        argv(&["git", "checkout", "--quiet", branch])
+    } else {
+        argv(&[
+            "git",
+            "checkout",
+            "--quiet",
+            "--track",
+            &format!("{remote}/{branch}"),
+        ])
+    };
+    let back_to = if current == "HEAD" { head } else { current };
+    Ok(Some(Switch {
+        there,
+        back: argv(&["git", "checkout", "--quiet", back_to]),
+    }))
+}
+
 /// Upload whichever of the files the `sources` file at `commit` names
 /// the SIG lookaside lacks, fetching any the checkout lacks with
-/// `centpkg sources` first, after confirming at a terminal. `Ok(false)`
+/// `centpkg sources` first (on the branch, switching to it and back when
+/// it is not checked out), after confirming at a terminal. `Ok(false)`
 /// when the person declined.
 pub fn upload_missing(
     ui: &Ui,
     repo: &Path,
     checkout: &Checkout,
+    remote: &str,
     commit: &str,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let package = &checkout.package;
@@ -165,20 +220,43 @@ pub fn upload_missing(
 
     // The files themselves, from CentOS Stream's lookaside when the
     // checkout lacks them. `centpkg sources` fetches what the checked-out
-    // branch's `sources` names, so that has to be this commit's.
+    // branch's `sources` names, so the branch is checked out for it and
+    // the checkout put back after; the files it fetches are untracked,
+    // so they stay for the upload.
     if missing.iter().any(|s| !matches(repo, s)) {
-        let head = git(repo, &["rev-parse", "HEAD"])?;
-        if head != commit {
-            return Err(format!(
-                "the checkout lacks some of {}'s sources, and `centpkg sources` fetches the \
-                 checked-out branch's: check out {} first",
-                checkout.branch, checkout.branch
-            )
-            .into());
-        }
         sandogasa_cli::require_tools(&[("centpkg", "sudo dnf install centpkg", Some("--help"))])?;
+        let branch = &checkout.branch;
+        let switch = switch_for_sources(
+            &git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
+            &git(repo, &["rev-parse", "HEAD"])?,
+            commit,
+            branch,
+            git(
+                repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{branch}"),
+                ],
+            )
+            .is_ok(),
+            remote,
+            !git(repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty(),
+        )?;
+        if let Some(Switch { there, .. }) = &switch {
+            ui.step(&format!(
+                "Check out {branch}: `centpkg sources` fetches the checked-out branch's files"
+            ));
+            ui.run_required(there, repo)?;
+        }
         ui.step("Fetch them from CentOS Stream's lookaside");
-        ui.run_required(&["centpkg", "sources"].map(String::from), repo)?;
+        let fetched = ui.run_required(&["centpkg", "sources"].map(String::from), repo);
+        if let Some(Switch { back, .. }) = &switch {
+            ui.step("Switch the checkout back");
+            ui.run_required(back, repo)?;
+        }
+        fetched?;
         if !ui.dry_run
             && let Some(bad) = missing.iter().find(|s| !matches(repo, s))
         {
@@ -240,7 +318,7 @@ fn run_inner(args: &UploadSourcesArgs) -> Result<(), Box<dyn std::error::Error>>
     sandogasa_cli::require_tools(&[("git", "sudo dnf install git-core", Some("--version"))])?;
     let checkout = resolve(&repo, args.branch.as_deref(), None)?;
     let located = crate::build::locate(&checkout, &repo)?;
-    upload_missing(&ui, &repo, &checkout, &located.commit)?;
+    upload_missing(&ui, &repo, &checkout, &located.remote, &located.commit)?;
     Ok(())
 }
 
@@ -284,5 +362,57 @@ mod tests {
         let has = |s: &Source| in_lookaside(&http, &url(&server.url(), "rsync", s)).unwrap();
         assert!(has(&sources[0]));
         assert!(!has(&sources[1]));
+    }
+
+    #[test]
+    fn the_branch_is_checked_out_for_centpkg_sources_and_the_checkout_put_back() {
+        let line = |a: &Vec<String>| a.join(" ");
+        // rsync's c10s build from a checkout on the c9s branch.
+        let Switch { there, back } = switch_for_sources(
+            "c9s-proposed-RHEL-303761",
+            "3afcfa97",
+            "e4441b13",
+            "c10s-CVE-2026-119741",
+            true,
+            "sig",
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(line(&there), "git checkout --quiet c10s-CVE-2026-119741");
+        assert_eq!(line(&back), "git checkout --quiet c9s-proposed-RHEL-303761");
+        // Only on the SIG's remote: checked out tracking it.
+        let Switch { there, .. } = switch_for_sources(
+            "c9s",
+            "3afcfa97",
+            "e4441b13",
+            "c10s-proposed-RHEL-303721",
+            false,
+            "sig",
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            line(&there),
+            "git checkout --quiet --track sig/c10s-proposed-RHEL-303721"
+        );
+        // A detached HEAD goes back to its commit.
+        let Switch { back, .. } =
+            switch_for_sources("HEAD", "3afcfa97", "e4441b13", "b", true, "sig", false)
+                .unwrap()
+                .unwrap();
+        assert_eq!(line(&back), "git checkout --quiet 3afcfa97");
+        // At the commit already: nothing to switch.
+        assert_eq!(
+            switch_for_sources("x", "e4441b13", "e4441b13", "b", true, "sig", true),
+            Ok(None)
+        );
+        let err =
+            switch_for_sources("x", "3afcfa97", "e4441b13", "b", true, "sig", true).unwrap_err();
+        assert!(
+            err.contains("uncommitted changes") && err.contains("git checkout b"),
+            "{err}"
+        );
     }
 }

@@ -217,7 +217,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // CBS fetches the sources from the SIG lookaside, scratch builds
     // too (#99).
-    if !crate::upload_sources::upload_missing(&ui, &repo, &checkout, &commit)? {
+    if !crate::upload_sources::upload_missing(&ui, &repo, &checkout, &remote, &commit)? {
         return Ok(());
     }
     if !args.scratch
@@ -270,6 +270,8 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         ui.run_required(argv, &repo)?;
     }
     if !args.scratch && !args.dry_run {
+        // Set apart from the build's own output, which ends just above.
+        println!();
         for collection in &checkout.collections {
             if let Some(nvr) = latest(&collection.tag(Stage::Candidate), package) {
                 println!(

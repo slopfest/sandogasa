@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### cbspkg: upload-sources checks out the branch for centpkg sources, and switches back
+
+`cbspkg build --branch c10s-CVE-2026-119741`, run from a checkout of the
+c9s branch, stopped with "check out c10s-CVE-2026-119741 first".
+`centpkg sources` fetches the files of the checked-out branch only, so
+the rsync 3.5.0 tarball could not be fetched for the c10s upload.
+
+`upload-sources`, and `build` through it, now does what a person would:
+it checks the branch out (tracking the SIG remote's branch when there is
+no local one), runs `centpkg sources`, and switches back to where it
+was, whether or not the fetch worked. The fetched files are untracked,
+so they stay for the upload. Each git command is a step under
+`--explain` and `--dry-run`. A checkout with uncommitted changes is not
+switched, and the error says what to do instead. This follows what
+cpu-sig-tracker's `mr` does around the pre-push hook. The sources still
+come from `centpkg sources` rather than a download of cbspkg's own,
+since every step should be one a packager can run by hand; DEVELOPMENT.md
+records why. Refs #99.
+
 ### cbspkg: promote moves a build to -testing, then -release, untagging it from -testing
 
 Promoting a SIG build by hand meant `cbs tag-build <tag> <nvr>`, with
