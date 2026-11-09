@@ -175,73 +175,64 @@ Worth contrasting with Fedora in the report: rpmlint reads `%description`
 straight from the spec, so the equivalent problem is caught before
 anything is built.
 
-## cpu-sig-tracker: automate the Proposed Updates paperwork (2026-09-09)
+## cpu-sig-tracker and cbspkg: what the Proposed Updates flow still needs (2026-11-09)
 
-When a Hyperscale change is worth upstreaming, the SIG builds it as a
-CentOS Proposed Update and sends a merge request upstream, with a JIRA
-issue and the rest of the paperwork; when upstream will get there on
-its own, it goes straight into Hyperscale and skips all of that. The
-paperwork half could be automated: from a Hyperscale build (or a
-retire-candidate that is *ahead* of stock), file the JIRA issue, open
-the merge request against the CentOS Stream package, and track the
-Proposed Update's progress until stock carries it — at which point the
-`hs-relmon retire` flow above applies. Scope and the JIRA fields to
-fill are the user's to define before anything is built.
+rsync's CVE-2026-119741 fix went through the whole flow on 2026-11-09:
+`cpu-sig-tracker jira` and `mr`, then `cbspkg sig-repo`, `add-pkg`,
+`upload-sources`, `build` and `promote`, then `file-issue`. What that
+run left open, for before the next release:
 
-What has to exist first:
-
-- **Jira writes.** Done (2026-11-08): `sandogasa-jira` searches,
-  reads project versions and create metadata, and files issues, and
-  `cpu-sig-tracker jira` finds or files the RHEL issue an MR needs,
-  one per branch. Still open: transitions, to follow an issue's
-  progress.
-- **Repo setup, shared by Hyperscale and CPU.** SIG repos are
-  created by *mirroring* the `redhat/centos-stream/rpms/<pkg>` project
-  into the SIG namespace, not by forking — so a push to the SIG repo
-  makes GitLab suggest a merge request against the SIG repo, which is
-  what SIG work wants. Upstreaming a Proposed Update additionally
-  needs a *fork* of the upstream project in the user's own namespace:
-  only a fork carries the relationship that makes the new-MR page
-  GitLab links to on push default to targeting
-  `redhat/centos-stream/rpms/<pkg>`. One `new-repo`-style command
-  (home to be decided — hs-relmon knows the GitLab project settings
-  already, from `check-repos`) should create the mirror in a given
-  namespace and, on request, the personal fork, then print the clone
-  commands. Check whether pull mirroring is available to the group
-  via the API (`POST /projects` with `import_url` + `mirror`; it is
-  a paid-tier feature on gitlab.com) or whether the mirror has to be
-  set up by hand, in which case the command prints that step.
-- **Checkout layout: one clone, three remotes.** `origin` is the SIG
-  mirror (SIG branches track it), `upstream` is
-  `redhat/centos-stream/rpms/<pkg>` (fetch only), `fork` is the
-  personal fork. Upstreaming is then a cherry-pick from the SIG branch
-  onto `upstream/cNs` in the same tree, and `git push -u fork <topic>`
-  makes GitLab print the right new-MR URL because the URL comes from
-  the remote pushed to. Two clones would need the patch carried
-  across by hand and offer nothing in return. The setup command should
-  emit exactly these remote-add lines, and the upstreaming step the
-  `checkout -b … upstream/cNs` / `cherry-pick` / `push -u fork`
-  sequence.
-- **Build and tag on CBS, run by a human only** (2026-11-09). Step 5
-  of the Proposed Updates flow pushes the fix branch to the SIG repo
-  as `cNs-proposed-<topic>` and builds it on CBS against
-  `proposed_updates<N>s-packages-main-el<N>s`; moving the build from
-  candidate to testing to release is by hand too. Home: a
-  `cpu-sig-tracker build` subcommand (and `promote` for the tags),
-  since that tool already knows the SIG's tags and tracking issues and
-  sits beside the fork setup (#77) and the `jira` step. Michel's
-  constraint: **it is run by Michel, not by an LLM session**, which
-  must not trigger builds on his behalf. So:
-  - before submitting, it shows the exact branch, commit, NVR and CBS
-    target and asks for confirmation at a terminal;
-  - there is no flag that skips the confirmation, and without a TTY it
-    refuses rather than proceeds (unlike `--yes` elsewhere);
-  - its README, `--help` and any skill or CLAUDE.md text mentioning it
-    say agents must not run it and should hand the command to Michel;
-  - it offers dbranch's `--explain` (the steps are `git push` and
-    `cbs build`/`cbs tag-build`, which a person can run by hand); only
-    `--dry-run`, with or without `--explain`, is fine for an agent to
-    run, since it changes nothing.
+- **Remotes are found by role, not by name.** A checkout has three
+  remotes that matter: CentOS Stream (`redhat/centos-stream/rpms/<pkg>`),
+  the SIG's mirror (`CentOS/<SIG group>/rpms/<pkg>`) and the personal
+  fork (`<user>/centos_rpms_<pkg>`). `sig-repo` and `mr` already find
+  the SIG's and the fork by URL, but `mr` insists that `origin` is
+  Stream, so a Hyperscale checkout cloned from the SIG repo (`origin`
+  the SIG, Stream added as another remote) is refused. Find each role
+  by URL in sandogasa-cbs, shared by `mr`, `sig-repo` and the cbspkg
+  commands, and take the package from whichever remote is found.
+- **Name a remote the tool adds after the SIG.** `sig-repo` adds the
+  SIG's repo as `sig` when no remote points at it. `proposed_updates`
+  or `hyperscale` is clearer, and lets one checkout carry both SIGs. An
+  existing remote stays usable whatever it is called, as it is found
+  by URL.
+- **Which branches the mirror carries.** The pull mirror takes every
+  Stream branch, so rsync's SIG repo also has `RHEL-169141` and an
+  automated-update branch. `mirror_branch_regex` could restrict it to
+  `c\d+s`. Decide whether that is worth it.
+- **`sig-repo` for Hyperscale.** Its branches (`c10s-hs`, …) already
+  live in the SIG repo, and there is no Stream merge request to fetch,
+  so the merge-request half of `sig-repo` does not apply. Design what
+  `sig-repo <pkg> --sig hyperscale` should do after creating the
+  mirror, around the remote roles above.
+- **Check the CBS login once per run.** `cbspkg build` checks it before
+  uploading sources and again before building, an extra `moshimoshi`
+  each time.
+- **Say that agents must not run the CBS writes.** `add-pkg`, `build`,
+  `promote` and `upload-sources` are confirmed at a terminal with no
+  way past it, but cbspkg's README and `--help` do not yet say that an
+  agent must hand those commands to a person (only `--dry-run`, with or
+  without `--explain`, is for an agent to run), as this entry asked of
+  the build command from the start.
+- **Released builds left in `-testing`.** Promoting to `-release` now
+  untags from `-testing`, but eight builds released by hand before that
+  are still in both: c10s blktrace, cmake, mesa, openssl and pciutils;
+  c9s blktrace, openssl and tpm2-tools. `cbspkg promote --branch
+  cNs-proposed-x <nvr>` does just the untag for each (blktrace waits on
+  its open question, see its tracking issues).
+- **hs-relmon `review` onto `promote_argvs`.** `review` tags and
+  untags with its own calls; move it to
+  `sandogasa_cbs::packages::promote_argvs` so the two cannot drift.
+- **Secrets in the keyring (#79).** Tokens sit in plain-text config
+  files; a session that read one printed a GitLab token. Prioritise
+  #79 for the release.
+- **Jira transitions.** `sandogasa-jira` files and reads issues but
+  cannot transition them, to follow an issue's progress.
+- **Starting from a Hyperscale change.** The flow starts from a
+  dist-git branch carrying the fix. Turning a Hyperscale change that
+  is worth upstreaming into one (a cherry-pick from the SIG branch onto
+  Stream's `cNs`, in the same checkout, pushed to the fork) is still by
+  hand; it belongs with the remote roles above.
 
 ## koji-lag
 
