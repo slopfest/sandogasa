@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### cbspkg: promote moves a build to -testing, then -release, untagging it from -testing
+
+Promoting a SIG build by hand meant `cbs tag-build <tag> <nvr>`, with
+the tag spelled out and the NVR looked up. A release also needed a
+second command, `cbs untag-build` from `-testing`, which tended to be
+forgotten: eight released Proposed Updates builds (blktrace, cmake,
+mesa, openssl, pciutils and tpm2-tools) were still in `-testing`.
+
+`cbspkg promote` finds the build (the NVR given, or the package's
+newest in the branch's collections) and the tags it is in, and moves
+it to the next stage, or to the one `--to` names. Promoting to
+`-release` also untags the build from `-testing`, for both SIGs, as
+hs-relmon's `review` already did. A build released earlier but still
+in `-testing` gets just the untag. Like every CBS write, it is
+confirmed at a terminal, with each command shown. `cbspkg build` now
+names `cbspkg promote` as the next step. sandogasa-cbs gains the
+pieces for this (`Stage::next`, `packages::furthest_stage`,
+`promote_argvs`, `tags_of`, `latest`), so `review` can share them.
+Refs #77.
+
 ### cbspkg: upload-sources puts a branch's sources in the SIG lookaside, and build checks for them
 
 rsync's first Proposed Updates build in CBS (task 6077804) failed before

@@ -51,6 +51,86 @@ pub fn listed_in(output: &str, success: bool, package: &str) -> Option<bool> {
     output.contains("(no matching packages)").then_some(false)
 }
 
+/// The furthest stage of `collection` that `tags` (a build's) include.
+pub fn furthest_stage(collection: &Collection, tags: &[String]) -> Option<Stage> {
+    [Stage::Release, Stage::Testing, Stage::Candidate]
+        .into_iter()
+        .find(|s| tags.iter().any(|t| *t == collection.tag(*s)))
+}
+
+/// The commands that promote `nvr` in `collection` to `to`: tag it
+/// there unless `tags` (its tags) include it already, and, for a
+/// release, untag it from `-testing` when `tags` include that, so a
+/// released build does not stay in testing as well. Untagging was forgotten often enough by hand that it is part
+/// of the step, for every SIG.
+pub fn promote_argvs(
+    collection: &Collection,
+    nvr: &str,
+    to: Stage,
+    tags: &[String],
+) -> Vec<Vec<String>> {
+    let cbs = |args: &[&str]| -> Vec<String> {
+        std::iter::once("cbs")
+            .chain(args.iter().copied())
+            .map(String::from)
+            .collect()
+    };
+    let target = collection.tag(to);
+    let mut argvs = Vec::new();
+    // A build released before untagging was part of the step is in
+    // -release already: only the untag is left.
+    if !tags.contains(&target) {
+        argvs.push(cbs(&["tag-build", &target, nvr]));
+    }
+    let testing = collection.tag(Stage::Testing);
+    if to == Stage::Release && tags.contains(&testing) {
+        argvs.push(cbs(&["untag-build", &testing, nvr]));
+    }
+    argvs
+}
+
+/// The tags `nvr` is in.
+pub fn tags_of(nvr: &str) -> Result<Vec<String>, String> {
+    let out = Command::new("koji")
+        .args(["--profile", PROFILE, "list-tags", "--build", nvr])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run koji: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "koji list-tags --build {nvr}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// The newest build of `package` in `tag`, if it has one.
+pub fn latest(tag: &str, package: &str) -> Option<String> {
+    let out = Command::new("koji")
+        .args([
+            "--profile",
+            PROFILE,
+            "list-tagged",
+            "--latest",
+            "--quiet",
+            tag,
+            package,
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+}
+
 /// The CBS user the login belongs to, as koji's `moshimoshi` greets it.
 pub fn whoami() -> Result<String, String> {
     let out = Command::new("koji")
@@ -99,6 +179,56 @@ pub fn listed(tag: &str, package: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_build_is_promoted_a_stage_at_a_time_and_released_out_of_testing() {
+        let c = crate::Sig::ProposedUpdates
+            .collection_for_branch("c10s-proposed-RHEL-1")
+            .unwrap();
+        let tags = |ss: &[Stage]| ss.iter().map(|s| c.tag(*s)).collect::<Vec<_>>();
+        let nvr = "blktrace-1.3.0-13~proposed.el10";
+        let lines = |to, t: &[String]| {
+            promote_argvs(&c, nvr, to, t)
+                .iter()
+                .map(|a| a.join(" "))
+                .collect::<Vec<_>>()
+        };
+
+        let candidate = tags(&[Stage::Candidate]);
+        assert_eq!(furthest_stage(&c, &candidate), Some(Stage::Candidate));
+        assert_eq!(Stage::Candidate.next(), Some(Stage::Testing));
+        assert_eq!(
+            lines(Stage::Testing, &candidate),
+            [format!(
+                "cbs tag-build proposed_updates10s-packages-main-testing {nvr}"
+            )]
+        );
+
+        let testing = tags(&[Stage::Candidate, Stage::Testing]);
+        assert_eq!(furthest_stage(&c, &testing), Some(Stage::Testing));
+        assert_eq!(
+            lines(Stage::Release, &testing),
+            [
+                format!("cbs tag-build proposed_updates10s-packages-main-release {nvr}"),
+                format!("cbs untag-build proposed_updates10s-packages-main-testing {nvr}"),
+            ]
+        );
+        // Straight from -candidate: nothing to untag.
+        assert_eq!(lines(Stage::Release, &candidate).len(), 1);
+
+        let released = tags(&[Stage::Candidate, Stage::Testing, Stage::Release]);
+        assert_eq!(furthest_stage(&c, &released), Some(Stage::Release));
+        // Released but left in testing, as blktrace's was: only the
+        // untag remains.
+        assert_eq!(
+            lines(Stage::Release, &released),
+            [format!(
+                "cbs untag-build proposed_updates10s-packages-main-testing {nvr}"
+            )]
+        );
+        assert_eq!(Stage::Release.next(), None);
+        assert_eq!(furthest_stage(&c, &["other-tag".to_string()]), None);
+    }
 
     #[test]
     fn the_cbs_user_is_read_from_the_greeting() {

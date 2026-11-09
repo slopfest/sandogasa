@@ -75,6 +75,41 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS cbspkg promote
+\fBcbspkg promote\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-to\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINVR\fR]
+.PP
+Move a build to its collection\*(Aqs next stage (\-testing, then \-release, untagging it from \-testing)
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch whose collections to promote in (default: the one checked out)
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-to\fR \fI<TO>\fR
+The stage to promote to (default: the one after where the build is)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+testing
+.IP \(bu 2
+release
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fINVR\fR]
+The build to promote (default: the package\*(Aqs newest in each of the branch\*(Aqs collections)
 .SS cbspkg sig-repo
 \fBcbspkg sig\-repo\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-sig\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL|PACKAGE\fR>
 .PP

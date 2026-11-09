@@ -36,8 +36,9 @@ pub enum Sig {
     ProposedUpdates,
 }
 
-/// A stage a build moves through, each a tag of the collection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A stage a build moves through, each a tag of the collection, in
+/// order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
     /// Where the build target puts a new build.
     Candidate,
@@ -65,6 +66,15 @@ pub struct Collection {
 }
 
 impl Stage {
+    /// The stage a build is promoted to from this one, if any.
+    pub fn next(self) -> Option<Stage> {
+        match self {
+            Stage::Candidate => Some(Stage::Testing),
+            Stage::Testing => Some(Stage::Release),
+            Stage::Release => None,
+        }
+    }
+
     /// The tag suffix: `candidate`, `testing`, `release`.
     pub fn as_str(self) -> &'static str {
         match self {

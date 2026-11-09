@@ -8,11 +8,13 @@ mod add_pkg;
 mod build;
 mod config;
 mod configure;
+mod promote;
 mod sig_repo;
 mod upload_sources;
 
 use add_pkg::AddPkgArgs;
 use build::BuildArgs;
+use promote::PromoteArgs;
 use sig_repo::SigRepoArgs;
 use upload_sources::UploadSourcesArgs;
 
@@ -45,6 +47,10 @@ enum Command {
     /// Set up the GitLab token.
     Config(sandogasa_cli::ConfigArgs),
 
+    /// Move a build to its collection's next stage (-testing, then
+    /// -release, untagging it from -testing)
+    Promote(PromoteArgs),
+
     /// Make sure the SIG has its repo for a package, a pull mirror of
     /// CentOS Stream's, and push a merge request's change to it
     SigRepo(SigRepoArgs),
@@ -61,6 +67,7 @@ fn main() -> ExitCode {
         Command::AddPkg(args) => add_pkg::run(&args),
         Command::Build(args) => build::run(&args),
         Command::Config(args) => configure::run(&args),
+        Command::Promote(args) => promote::run(&args),
         Command::SigRepo(args) => sig_repo::run(&args),
         Command::UploadSources(args) => upload_sources::run(&args),
     }

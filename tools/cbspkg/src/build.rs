@@ -14,9 +14,10 @@
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{Command, ExitCode};
 
-use sandogasa_cbs::{Collection, PROFILE, Sig, Stage};
+use sandogasa_cbs::packages::latest;
+use sandogasa_cbs::{Collection, Sig, Stage};
 use sandogasa_cli::explain::Ui;
 
 use crate::add_pkg::{Checkout, list_missing, resolve};
@@ -110,27 +111,6 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// The newest build of `package` in `tag`, as koji lists it.
-fn latest_in(tag: &str, package: &str) -> Option<String> {
-    let out = Command::new("koji")
-        .args([
-            "--profile",
-            PROFILE,
-            "list-tagged",
-            "--latest",
-            "--quiet",
-            tag,
-            package,
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .map(str::to_string)
 }
 
 /// Find the SIG's remote and the branch's commit: the branch itself or,
@@ -291,9 +271,9 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     if !args.scratch && !args.dry_run {
         for collection in &checkout.collections {
-            if let Some(nvr) = latest_in(&collection.tag(Stage::Candidate), package) {
+            if let Some(nvr) = latest(&collection.tag(Stage::Candidate), package) {
                 println!(
-                    "Next, to offer it for testing: cbs tag-build {} {nvr}",
+                    "Next, to offer {nvr} for testing: cbspkg promote (cbs tag-build {} {nvr})",
                     collection.tag(Stage::Testing)
                 );
             }

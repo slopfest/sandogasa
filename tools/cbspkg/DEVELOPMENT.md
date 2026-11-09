@@ -28,3 +28,18 @@ the `--explain` narration.
 Revisit this if the hook starts checking something that matters for
 the SIG's repo, or if rpkg's pre-push check is fixed to read `sources`
 from the pushed commit (in which case `--no-verify` can simply go).
+
+## Promoting to `-release` untags from `-testing`
+
+A build released by hand tended to stay in `-testing` as well: the
+`cbs untag-build` was a second command, easy to forget, and nothing
+checked for it. When `promote` was written, eight released Proposed
+Updates builds (blktrace, cmake, mesa, openssl, pciutils and
+tpm2-tools, across c9s and c10s) were still in `-testing`. hs-relmon's `review` already untagged on promotion, and
+`prune-tags` treats a released build left in testing as redundant, so
+both SIGs now follow the same rule: promoting to `-release` is the tag
+and the untag together, built by `sandogasa_cbs::packages::promote_argvs`,
+which `review` can share. A released build still in `-testing` is
+promoted again to finish the job, rather than reported as having
+nowhere to go.
+

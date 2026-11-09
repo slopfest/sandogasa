@@ -85,8 +85,8 @@ does, after asking; scratch builds need them too.
 
 The build is confirmed at a terminal and refused without one, after the
 CBS login is checked; the confirmation shows the exact `cbs build`
-command. Once it is done, `build` prints the `cbs tag-build` that
-offers it for testing. `--explain` and
+command. Once it is done, `build` names the `cbspkg promote` (and the
+`cbs tag-build` it comes to) that offers it for testing. `--explain` and
 `--dry-run` show each command.
 
 ### `config`
@@ -118,6 +118,28 @@ out when it is not. Every file is checked against its sha512 before
 `centos-lookaside-upload-sig -f <file> -n <pkg>` uploads it. The
 upload is confirmed at a terminal, showing each command, and refused
 without one. `--explain` and `--dry-run` show each step's command.
+
+### `promote`
+
+```sh
+cbspkg promote [NVR] [-C DIR] [--branch BRANCH] [--to testing|release] \
+    [--explain] [--dry-run]
+```
+
+Moves a build to its collection's next stage: from `-candidate` to
+`-testing`, from `-testing` to `-release`. The build is the NVR given,
+or the package's newest in `-candidate` for each collection the branch
+(checked out, or `--branch`) builds into; `--to` names the stage when it
+is not the next one, such as `--to release` straight from `-candidate`.
+
+Promoting to `-release` also untags the build from `-testing`, so a
+released build is not left in testing as well. A build released before
+that, and still in `-testing`, is promoted again to finish the untag.
+
+Each `cbs tag-build` and `cbs untag-build` is shown in the confirmation,
+which is asked at a terminal after the CBS login is checked, and
+refused without one. `--explain` and `--dry-run` show each step's
+command.
 
 ### `sig-repo`
 
