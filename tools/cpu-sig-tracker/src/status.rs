@@ -377,6 +377,32 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         );
                     }
                 } else if let (Some(project), true) = (project, mr_url.is_some()) {
+                    // How urgent it is (#98), for an issue filed before
+                    // file-issue recorded it: the CVEs the change fixes,
+                    // rated only when the body has no CVE lines yet.
+                    let summaries: Vec<&str> = infos
+                        .iter()
+                        .filter_map(|(_, i)| i.as_ref().map(|i| i.summary.as_str()))
+                        .collect();
+                    let cves = crate::triage::cves_in(
+                        [mr_title.as_deref().unwrap_or(""), body]
+                            .into_iter()
+                            .chain(summaries.iter().copied()),
+                    );
+                    let new_cve_lines = (crate::triage::parse_cve_lines(body).is_empty()
+                        && !cves.is_empty())
+                    .then(|| crate::triage::rated_cve_lines(&cves, args.verbose));
+                    maybe_refresh_labels(
+                        &project,
+                        &issue,
+                        !cves.is_empty(),
+                        crate::triage::priority_label(
+                            infos
+                                .iter()
+                                .filter_map(|(_, i)| i.as_ref()?.priority.as_deref()),
+                        )
+                        .as_deref(),
+                    );
                     let changed = maybe_refresh_issue(RefreshCtx {
                         project_path: &project,
                         iid: issue.iid,
@@ -386,6 +412,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         mr_title: mr_title.as_deref(),
                         mr_state: mr_state.as_deref(),
                         jira: &jira,
+                        new_cve_lines: new_cve_lines.as_deref(),
                     });
                     if changed {
                         eprintln!("refreshed {}: rewrote body", issue.web_url);
@@ -903,6 +930,65 @@ struct RefreshCtx<'a> {
     mr_title: Option<&'a str>,
     mr_state: Option<&'a str>,
     jira: &'a [JiraState],
+    /// CVE lines to add, for a body that has none.
+    new_cve_lines: Option<&'a [String]>,
+}
+
+/// The labels an issue filed before #98 lacks: `security` when the
+/// change fixes a CVE and the issue has no type label, and the priority
+/// label for the RHEL issues' priority, replacing a stale one.
+fn label_changes(
+    labels: &[String],
+    fixes_cve: bool,
+    priority: Option<&str>,
+) -> (Vec<String>, Vec<String>) {
+    let (mut add, remove) = match priority {
+        Some(p) => crate::triage::priority_change(labels, p),
+        None => (Vec::new(), Vec::new()),
+    };
+    let typed = ["security", "bugfix", "enhancement", "arch-enablement"]
+        .iter()
+        .any(|t| labels.iter().any(|l| l == t));
+    if fixes_cve && !typed {
+        add.push("security".to_string());
+    }
+    (add, remove)
+}
+
+/// Apply [`label_changes`] to the tracking issue.
+fn maybe_refresh_labels(
+    project_path: &str,
+    issue: &gitlab::Issue,
+    fixes_cve: bool,
+    priority: Option<&str>,
+) {
+    let (add, remove) = label_changes(&issue.labels, fixes_cve, priority);
+    if add.is_empty() && remove.is_empty() {
+        return;
+    }
+    let client = match gitlab::client(&gitlab_base(), project_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warning: --refresh: could not build client for {project_path}: {e}");
+            return;
+        }
+    };
+    let update = gitlab::IssueUpdate {
+        add_labels: (!add.is_empty()).then(|| add.join(",")),
+        remove_labels: (!remove.is_empty()).then(|| remove.join(",")),
+        ..Default::default()
+    };
+    match client.edit_issue(issue.iid, &update) {
+        Ok(_) => {
+            let mut what: Vec<String> = add.iter().map(|l| format!("+{l}")).collect();
+            what.extend(remove.iter().map(|l| format!("-{l}")));
+            eprintln!("refreshed {}: labels {}", issue.web_url, what.join(" "));
+        }
+        Err(e) => eprintln!(
+            "warning: --refresh: failed to relabel {}: {e}",
+            issue.web_url
+        ),
+    }
 }
 
 /// Rewrite the tracking issue body to the standardized format
@@ -919,6 +1005,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
         mr_title: title,
         mr_state: ctx.mr_state,
         jira: ctx.jira,
+        new_cve_lines: ctx.new_cve_lines,
     });
     // GitLab strips trailing whitespace/newlines from stored
     // descriptions, so compare trimmed values — otherwise the
@@ -959,6 +1046,7 @@ struct RefreshedBodyArgs<'a> {
     mr_title: &'a str,
     mr_state: Option<&'a str>,
     jira: &'a [JiraState],
+    new_cve_lines: Option<&'a [String]>,
 }
 
 /// Build a standardized body, preserving the original prose
@@ -987,9 +1075,21 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
         })
         .map(|l| format!("{}\n", l.trim_end()))
         .collect();
+    // CVE lines (#98) sit under the JIRA ones, as file-issue writes
+    // them: the body's own, else the ones to add.
+    let cves: String = match a.new_cve_lines {
+        Some(lines) => lines.iter().map(|l| format!("{l}\n")).collect(),
+        None => a
+            .original_body
+            .lines()
+            .filter(|l| l.trim_start().starts_with(crate::triage::CVE_LINE))
+            .map(|l| format!("{}\n", l.trim_end()))
+            .collect(),
+    };
     let metadata = format!(
         "{mr_line}\n\
          {jira_line}\n\
+         {cves}\
          - **Release**: {}\n{kept}",
         a.release,
     );
@@ -1027,6 +1127,7 @@ fn is_metadata_line(line: &str) -> bool {
         "- **Affected build**:",
         "- **Expected fix**:",
         "- **Stock fix**:",
+        "- **CVE**:",
         "- **Status**:",
         "* Stream MR:",
         "* Affected",
@@ -1098,6 +1199,9 @@ fn unsettled_suggestion(outcome: Outcome) -> Option<&'static str> {
 
 struct JiraInfo {
     status: String,
+    /// The priority Red Hat set (`Major`), for the issue's label (#98).
+    priority: Option<String>,
+    summary: String,
     resolution: Option<String>,
     resolved: bool,
     resolution_date: Option<chrono::NaiveDate>,
@@ -1116,6 +1220,8 @@ fn fetch_jira(key: &str, verbose: bool) -> Option<JiraInfo> {
     };
     Some(JiraInfo {
         status: issue.status().to_string(),
+        priority: issue.fields.priority.as_ref().map(|p| p.name.clone()),
+        summary: issue.fields.summary.clone(),
         resolution: issue.resolution().map(|s| s.to_string()),
         resolved: issue.is_resolved(),
         resolution_date: issue.resolution_date(),
@@ -1820,6 +1926,7 @@ mod tests {
                 resolved: true,
                 verdict: None,
             }],
+            new_cve_lines: None,
         });
         assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
         assert!(out.contains(
@@ -1874,6 +1981,7 @@ mod tests {
             mr_title: "t",
             mr_state: Some("opened"),
             jira: &jira,
+            new_cve_lines: None,
         });
         assert!(out.contains("[RHEL-303720]("), "{out}");
         assert!(out.contains("[RHEL-303900]("), "{out}");
@@ -1920,6 +2028,8 @@ mod tests {
     #[test]
     fn an_update_is_settled_by_its_issues_verdicts() {
         let info = |verdict: Verdict, day: u32| JiraInfo {
+            priority: None,
+            summary: String::new(),
             status: "Closed".into(),
             resolution: None,
             resolved: !matches!(verdict, Verdict::Open(_)),
@@ -1995,6 +2105,7 @@ mod tests {
             mr_title: "t",
             mr_state: None,
             jira: &[],
+            new_cve_lines: None,
         });
         assert!(out.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
         // MR state suffix omitted when unknown.
@@ -2418,5 +2529,77 @@ name = "PackageKit"
         let rows = build_rows(&args).expect("refresh build_rows");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].package, "xz");
+    }
+
+    #[test]
+    fn refresh_adds_cve_lines_under_jira_and_keeps_existing_ones() {
+        let jira = [JiraState {
+            key: "RHEL-303721".into(),
+            status: Some("New".into()),
+            resolution: None,
+            resolved: false,
+            verdict: None,
+        }];
+        let original = "- **MR**: [t](https://example/-/merge_requests/90) — opened\n\
+                        - **JIRA**: [RHEL-303721](https://x/browse/RHEL-303721) — New\n\
+                        - **Release**: c10s\n\
+                        - **Affected build**: _(unknown)_\n";
+        let line = crate::triage::cve_line("CVE-2026-119741", &[]);
+        let args = |body, new: Option<&'static [String]>| RefreshedBodyArgs {
+            original_body: body,
+            release: "c10s",
+            mr_url: "https://example/-/merge_requests/90",
+            mr_title: "t",
+            mr_state: Some("opened"),
+            jira: &jira,
+            new_cve_lines: new,
+        };
+        let lines: &'static [String] = Box::leak(vec![line.clone()].into_boxed_slice());
+        let out = refreshed_body(args(original, Some(lines)));
+        assert!(
+            out.contains(&format!("— New\n{line}\n- **Release**: c10s\n")),
+            "{out}"
+        );
+        assert!(out.contains("- **Affected build**: _(unknown)_"), "{out}");
+        // Refreshed again, the line is the body's own and stays put.
+        let again = refreshed_body(args(Box::leak(out.clone().into_boxed_str()), None));
+        assert_eq!(again, out);
+    }
+
+    #[test]
+    fn refresh_labels_a_cve_fix_security_and_corrects_its_priority() {
+        let labels = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            label_changes(
+                &labels(&["c10s", "cpu-sig-tracker"]),
+                true,
+                Some("priority::major")
+            ),
+            (
+                vec!["priority::major".to_string(), "security".to_string()],
+                vec![]
+            )
+        );
+        // A type someone set is left alone.
+        assert_eq!(
+            label_changes(
+                &labels(&["bugfix", "priority::minor"]),
+                true,
+                Some("priority::major")
+            ),
+            (
+                vec!["priority::major".to_string()],
+                vec!["priority::minor".to_string()]
+            )
+        );
+        assert_eq!(
+            label_changes(
+                &labels(&["security", "priority::major"]),
+                true,
+                Some("priority::major")
+            ),
+            (vec![], vec![])
+        );
+        assert_eq!(label_changes(&labels(&[]), false, None), (vec![], vec![]));
     }
 }

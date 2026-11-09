@@ -7,6 +7,7 @@
 //! gitlab.com. The issue body is a standardized markdown block
 //! that `status` and `sync-issues` can parse back later.
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use crate::gitlab;
@@ -19,7 +20,7 @@ const TRACKING_LABEL: &str = "cpu-sig-tracker";
 
 /// Issue-type labels already defined in the proposed_updates
 /// GitLab group. Passed through `--type`.
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum IssueType {
     Enhancement,
     Bugfix,
@@ -79,6 +80,11 @@ pub struct FileIssueArgs {
     /// enhancement, bugfix, arch-enablement, security.
     #[arg(long = "type", value_enum, help_heading = "Issue")]
     pub issue_type: Option<IssueType>,
+
+    /// Assign the issue to you (the GitLab token's user) without
+    /// asking; at a terminal you are asked otherwise
+    #[arg(long, help_heading = "Writing")]
+    pub assign: bool,
 
     /// Print the issue that would be filed and exit without
     /// making any GitLab API calls.
@@ -180,13 +186,34 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         eprintln!("warning: {help}\n");
     }
     let group = sandogasa_cbs::Sig::ProposedUpdates.gitlab_group();
-    let jira: Vec<(String, Option<String>, Option<String>)> = jira_keys
+    let seen: Vec<(String, Option<JiraSeen>)> = jira_keys
         .iter()
-        .map(|key| match fetch_jira_info(key, args.verbose) {
-            Some((s, r)) => (key.clone(), Some(s), r),
+        .map(|key| (key.clone(), fetch_jira_info(key, args.verbose)))
+        .collect();
+    let jira: Vec<(String, Option<String>, Option<String>)> = seen
+        .iter()
+        .map(|(key, s)| match s {
+            Some(s) => (key.clone(), Some(s.status.clone()), s.resolution.clone()),
             None => (key.clone(), None, None),
         })
         .collect();
+    // How urgent it is (#98): the CVEs the change fixes, rated, and the
+    // priority Red Hat gave its RHEL issues.
+    let cves = crate::triage::cves_in(
+        [mr.title.as_str(), mr.description.as_deref().unwrap_or("")]
+            .into_iter()
+            .chain(
+                seen.iter()
+                    .filter_map(|(_, s)| s.as_ref().map(|s| s.summary.as_str())),
+            ),
+    );
+    let cve_lines = crate::triage::rated_cve_lines(&cves, args.verbose);
+    let priority = crate::triage::priority_label(
+        seen.iter()
+            .filter_map(|(_, s)| s.as_ref()?.priority.as_deref()),
+    );
+    let interactive = !args.dry_run && std::io::stdin().is_terminal();
+    let issue_type = resolve_type(args.issue_type, &cves, interactive);
 
     let body = format_body(&BodyFields {
         release: &release,
@@ -194,6 +221,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         mr_title: &mr.title,
         mr_state: Some(&mr.state),
         jira: &jira,
+        cve_lines: &cve_lines,
         affected: args.affected.as_deref(),
         expected_fix: args.expected_fix.as_deref(),
         note: args.note.as_deref(),
@@ -206,13 +234,25 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         &mr.title,
     );
 
-    let labels = build_labels(&release, args.issue_type);
+    let mut labels = build_labels(&release, issue_type);
+    if let Some(p) = &priority {
+        labels.push(',');
+        labels.push_str(p);
+    }
 
     if args.dry_run {
         println!("Would file in {group}/{package}:");
         println!("---");
         println!("title: {title}");
         println!("labels: {labels}");
+        println!(
+            "assignee: {}",
+            if args.assign {
+                "you (--assign)"
+            } else {
+                "you, if you say so when filing"
+            }
+        );
         println!("---");
         println!("{body}");
         return Ok(());
@@ -223,8 +263,26 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         eprintln!("[cpu-sig-tracker] creating issue in {tracking_project}");
     }
     let tracking_client = gitlab::client(&crate::utils::gitlab_base(), &tracking_project)?;
+    // Asked before filing, so the answer is not lost to a failure after.
+    let assignee = if wants_assignment(args.assign, interactive) {
+        let me =
+            sandogasa_gitlab::current_user(&crate::utils::gitlab_base(), &gitlab::load_token()?)?;
+        Some(me)
+    } else {
+        None
+    };
     let issue = tracking_client.create_issue(&title, Some(&body), Some(&labels))?;
     eprintln!("Filed #{} {}", issue.iid, issue.web_url);
+    if let Some(me) = assignee {
+        let update = gitlab::IssueUpdate {
+            assignee_ids: Some(vec![me.id]),
+            ..Default::default()
+        };
+        match tracking_client.edit_issue(issue.iid, &update) {
+            Ok(_) => eprintln!("Assigned to {}", me.username),
+            Err(e) => eprintln!("warning: could not assign it to {}: {e}", me.username),
+        }
+    }
 
     // The issue represents tracking work against an MR that already
     // exists, so the "To do" default isn't accurate — transition to
@@ -317,6 +375,8 @@ struct BodyFields<'a> {
     mr_state: Option<&'a str>,
     /// `(key, status, resolution)` of each RHEL issue the MR resolves.
     jira: &'a [(String, Option<String>, Option<String>)],
+    /// One line per CVE the change fixes (`triage::cve_line`).
+    cve_lines: &'a [String],
     affected: Option<&'a str>,
     expected_fix: Option<&'a str>,
     note: Option<&'a str>,
@@ -410,12 +470,71 @@ pub(crate) fn scan_rhel_key(text: &str) -> Option<String> {
 /// Fetch the JIRA issue's status and resolution for inclusion
 /// in the rendered body. Returns `(status, resolution)` where
 /// resolution is None when the issue is still open.
-fn fetch_jira_info(key: &str, verbose: bool) -> Option<(String, Option<String>)> {
+/// What file-issue reads of a RHEL issue.
+struct JiraSeen {
+    status: String,
+    resolution: Option<String>,
+    priority: Option<String>,
+    summary: String,
+}
+
+fn fetch_jira_info(key: &str, verbose: bool) -> Option<JiraSeen> {
     let issue = jira::fetch_or_warn(key, verbose)?;
-    Some((
-        issue.status().to_string(),
-        issue.resolution().map(|s| s.to_string()),
-    ))
+    Some(JiraSeen {
+        status: issue.status().to_string(),
+        resolution: issue.resolution().map(|s| s.to_string()),
+        priority: issue.fields.priority.as_ref().map(|p| p.name.clone()),
+        summary: issue.fields.summary.clone(),
+    })
+}
+
+/// The type to file as. A merge request or RHEL issue naming a CVE is
+/// evidence of `security`: with no `--type` it is used, and an explicit
+/// type that disagrees is confirmed at a terminal (`interactive`),
+/// defaulting to the evidence; without one the explicit type is kept
+/// and the disagreement reported (#98).
+fn resolve_type(
+    explicit: Option<IssueType>,
+    cves: &[String],
+    interactive: bool,
+) -> Option<IssueType> {
+    if cves.is_empty() {
+        return explicit;
+    }
+    match explicit {
+        None => {
+            eprintln!("type: security, as the change fixes {}", cves.join(", "));
+            Some(IssueType::Security)
+        }
+        Some(IssueType::Security) => explicit,
+        Some(other) => {
+            let question = format!(
+                "The change fixes {}, but --type is {}. File it as security instead?",
+                cves.join(", "),
+                other.label()
+            );
+            if interactive && sandogasa_cli::confirm(&question, true).unwrap_or(false) {
+                Some(IssueType::Security)
+            } else {
+                if !interactive {
+                    eprintln!(
+                        "note: filing as {} as --type says, though the change fixes {}",
+                        other.label(),
+                        cves.join(", ")
+                    );
+                }
+                explicit
+            }
+        }
+    }
+}
+
+/// Whether to assign the new issue to the person filing it: yes with
+/// `--assign`, else asked at a terminal (defaulting to yes), else no.
+fn wants_assignment(assign: bool, interactive: bool) -> bool {
+    assign
+        || (interactive
+            && sandogasa_cli::confirm("Assign the tracking issue to you?", true).unwrap_or(false))
 }
 
 fn format_title(
@@ -441,9 +560,11 @@ fn format_body(f: &BodyFields<'_>) -> String {
         .collect();
     let jira_line = format_jira_lines(&issues);
 
+    let cves: String = f.cve_lines.iter().map(|l| format!("{l}\n")).collect();
     let metadata = format!(
         "{mr_line}\n\
          {jira_line}\n\
+         {cves}\
          - **Release**: {release}\n\
          - **Affected build**: {affected}\n\
          - **Expected fix**: {expected_fix}\n",
@@ -579,6 +700,7 @@ mod tests {
                 Some("In Progress".to_string()),
                 None,
             )],
+            cve_lines: &[],
             affected: Some("xz-5.4-1.el10"),
             expected_fix: Some("xz-5.6-1.el10"),
             note: None,
@@ -614,6 +736,7 @@ mod tests {
             mr_title: "t",
             mr_state: None,
             jira: &[],
+            cve_lines: &[],
             affected: None,
             expected_fix: None,
             note: None,
@@ -637,6 +760,7 @@ mod tests {
                 Some("Closed".to_string()),
                 Some("Done".to_string()),
             )],
+            cve_lines: &[],
             affected: None,
             expected_fix: None,
             note: None,
@@ -715,6 +839,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira: &[("RHEL-1".to_string(), None, None)],
+            cve_lines: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -734,6 +859,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira: &[],
+            cve_lines: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -749,6 +875,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira: &[],
+            cve_lines: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -764,6 +891,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             jira: &[],
+            cve_lines: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -822,17 +950,22 @@ mod tests {
                     "key": "RHEL-1234",
                     "fields": {
                         "summary": "s",
-                        "status": { "name": "In Progress" }
+                        "status": { "name": "In Progress" },
+                        "priority": { "name": "Major" }
                     }
                 })))
                 .mount(&server)
                 .await;
 
-            // create_issue POST on the tracking project.
+            // create_issue POST on the tracking project, with the
+            // priority Jira gave the RHEL issue as a label (#98).
             Mock::given(method("POST"))
                 .and(wiremock_path(
                     "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues",
                 ))
+                .and(wiremock::matchers::body_partial_json(json!({
+                    "labels": "cpu-sig-tracker,c10s,security,priority::major"
+                })))
                 .respond_with(ResponseTemplate::new(201).set_body_json(json!({
                     "iid": 7,
                     "title": "xz: Fix RHEL-1234 in xz",
@@ -840,6 +973,31 @@ mod tests {
                     "state": "opened",
                     "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/7",
                     "assignees": [],
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+
+            // --assign: the token's user, then the issue assigned to them.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/api/v4/user"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"id": 5, "username": "me"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(wiremock_path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz/issues/7",
+                ))
+                .and(wiremock::matchers::body_partial_json(json!({"assignee_ids": [5]})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 7,
+                    "title": "xz: Fix RHEL-1234 in xz",
+                    "description": null,
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz/-/issues/7",
+                    "assignees": [{"username": "me"}],
                 })))
                 .expect(1)
                 .mount(&server)
@@ -921,6 +1079,7 @@ mod tests {
             release: None,
             issue_type: Some(IssueType::Security),
             note: None,
+            assign: true,
             dry_run: false,
             verbose: false,
         };
@@ -980,6 +1139,7 @@ mod tests {
             release: None,
             issue_type: None,
             note: None,
+            assign: true,
             dry_run: false,
             verbose: false,
         };
@@ -994,5 +1154,43 @@ mod tests {
             "{err}"
         );
         runtime.block_on(server.verify());
+    }
+
+    #[test]
+    fn a_cve_makes_it_a_security_update_unless_a_type_was_given() {
+        let cves = vec!["CVE-2026-119741".to_string()];
+        assert_eq!(resolve_type(None, &cves, false), Some(IssueType::Security));
+        assert_eq!(resolve_type(None, &[], false), None);
+        // Without a terminal, an explicit type that disagrees is kept.
+        assert_eq!(
+            resolve_type(Some(IssueType::Bugfix), &cves, false),
+            Some(IssueType::Bugfix)
+        );
+        assert_eq!(
+            resolve_type(Some(IssueType::Security), &cves, false),
+            Some(IssueType::Security)
+        );
+        assert!(!wants_assignment(false, false));
+        assert!(wants_assignment(true, false));
+    }
+
+    #[test]
+    fn cve_lines_follow_the_jira_lines() {
+        let line = crate::triage::cve_line("CVE-2026-119741", &[]);
+        let body = format_body(&BodyFields {
+            release: "c10s",
+            mr_url: "https://example/mr",
+            mr_title: "t",
+            mr_state: Some("opened"),
+            jira: &[("RHEL-1".to_string(), Some("New".to_string()), None)],
+            cve_lines: std::slice::from_ref(&line),
+            affected: None,
+            expected_fix: None,
+            note: None,
+        });
+        assert!(
+            body.contains(&format!("— New\n{line}\n- **Release**: c10s\n")),
+            "{body}"
+        );
     }
 }

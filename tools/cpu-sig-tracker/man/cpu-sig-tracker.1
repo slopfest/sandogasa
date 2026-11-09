@@ -48,7 +48,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker file-issue
-\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-note\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR>
+\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-note\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-assign\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR>
 .PP
 File a tracking issue in the proposed_updates GitLab group for a given Merge Request URL
 .TP
@@ -91,6 +91,9 @@ arch\-enablement
 security
 .RE
 .SH WRITING
+.TP
+\fB\-\-assign\fR
+Assign the issue to you (the GitLab token\*(Aqs user) without asking; at a terminal you are asked otherwise
 .TP
 \fB\-\-dry\-run\fR
 Print the issue that would be filed and exit without making any GitLab API calls

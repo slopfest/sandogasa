@@ -889,6 +889,12 @@ struct CveFacts {
     ghsa: Option<String>,
 }
 
+/// Every severity rating of `cve`, Red Hat's first: what a tracking
+/// issue's CVE line gives (`triage`).
+pub(crate) async fn cve_ratings(cve: &str, verbose: bool) -> Vec<Rating> {
+    cve_facts(cve, verbose).await.ratings
+}
+
 /// Every severity rating of `cve`, NVD's description of it, and Red
 /// Hat's security data on it.
 async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {

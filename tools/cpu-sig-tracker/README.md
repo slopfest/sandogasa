@@ -88,7 +88,7 @@ reason, team, …) survive a re-build.
 cpu-sig-tracker file-issue <mr-url> \
     [--affected VER-REL] [--expected-fix VER-REL] \
     [--jira RHEL-N[,RHEL-N…]] [--release cNs] [--type security] \
-    [--note "context"] [--dry-run]
+    [--note "context"] [--assign] [--dry-run]
 ```
 
 Given a CentOS Stream MR URL, files a standardized tracking issue in
@@ -102,7 +102,19 @@ type labels, sets the GitLab work-item status to `In progress`, and
 stamps `start_date` from the Koji build's creation time.
 
 The issue body follows a canonical format that `status` parses back
-(MR, JIRA, Release, Affected build, Expected fix).
+(MR, JIRA, CVE, Release, Affected build, Expected fix).
+
+How urgent the update is goes on the issue too. Each CVE the merge
+request or its RHEL issues name gets a `- **CVE**:` line with its
+severity (Red Hat's rating first, then NVD's and GitHub's), linking
+Red Hat's page for it, which lists the advisories that fix it, and
+NVD's. A change fixing a CVE is filed as `security` unless `--type`
+says otherwise; at a terminal, a `--type` that disagrees is confirmed,
+defaulting to `security`. The RHEL issues' Jira priority becomes a
+`priority::` label (`priority::blocker`, `::critical`, `::major`,
+`::normal`, `::minor`; the most urgent of them). The issue is assigned
+to you (the GitLab token's user) with `--assign`; at a terminal you are
+asked, defaulting to yes; otherwise it is left unassigned.
 
 The project has to exist first: a pull mirror of the CentOS Stream
 repo, with the change's branch pushed to it as
@@ -462,6 +474,11 @@ JIRA + Koji (Done / Won't do / In progress / To do), and sets
 `due_date` that disagrees: the day the issue's `- **Stock fix**:` line
 records, else the day the evidence shows the change in stock, else
 when Jira settled it.
+On an open issue it also fills in what `file-issue` records about
+urgency when the issue was filed without it: `- **CVE**:` lines for the
+CVEs its merge request or RHEL issues name, the `security` label when
+it has no type label, and the `priority::` label for its RHEL issues'
+priority, replacing one that no longer matches.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
 

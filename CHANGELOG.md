@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: tracking issues record CVE severity and Jira priority, and offer to assign the filer
+
+rsync's two tracking issues were filed with no `security` label,
+although the update fixes a CVE, and with no assignee. They also gave
+no CVE severity, no link to the CVE's advisories, and no sign of the
+priority already set on the RHEL issue in Jira. PackageKit's issues
+have a type label and an assignee only because both were added by hand.
+
+`file-issue` now:
+- writes a `- **CVE**:` line for each CVE the merge request or its RHEL
+  issues name. The line gives the CVE's severity, Red Hat's rating
+  first, as `cpu-sig-tracker jira` rates it. It links Red Hat's page
+  for the CVE, which lists the advisories that fix it, and NVD's.
+- files a change fixing a CVE as `security` unless `--type` says
+  otherwise. At a terminal, a `--type` that disagrees is confirmed,
+  defaulting to `security`.
+- labels the issue `priority::<jira priority>`, using the most urgent
+  priority among its RHEL issues.
+- assigns the issue to the person filing it: with `--assign` without
+  asking, at a terminal after asking (default yes), and otherwise not
+  at all.
+
+`status --refresh` fills in the same CVE lines, `security` label and
+priority label on open issues filed before this, and keeps CVE lines
+in place when it rewrites a body. Resolves #98.
+
 ### New cbspkg tool, with sig-repo to set up a SIG's package repo
 
 The first Proposed Update taken through the tools end to end, rsync's

@@ -22,6 +22,7 @@ mod sync_updates;
 #[cfg(test)]
 mod test_support;
 mod timeline;
+mod triage;
 mod untag;
 mod utils;
 
