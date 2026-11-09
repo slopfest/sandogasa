@@ -471,6 +471,50 @@ override (`FORGEJO_TOKEN`, `GITLAB_TOKEN`, `GITHUB_TOKEN`,
 `FORGEJO_TOKEN_FORGE_FEDORAPROJECT_ORG`), so under systemd a
 `LoadCredential` drop-in works without any config file at all.
 
+## A flag name means the same thing in every tool
+
+Someone who has learned `--dry-run` in one tool should be able to rely
+on it in the next, so a recurring flag keeps one name and one meaning
+across the workspace. Where a flag pair recurs, define it once in
+`sandogasa-cli` and flatten it in, so the name, value name, help text
+and errors cannot drift: `ConfigArgs` (`config --all`) and
+`NotesArgs` (`--notes`/`--notes-file`) are shared that way, and
+`parse_with_defaults` adds `--no-defaults` to every tool. A flattened
+group cannot carry clap's `requires`, so a pairing such as ebranch's
+"notes need `--submit`" is checked after parsing.
+
+Before naming a new flag, check this table; add a row when a name
+starts to recur.
+
+| Flag | Meaning | Defined in |
+|---|---|---|
+| `--apply` | Make the changes reported; without it, report only | each tool |
+| `--claim` | Reassign the bugs closed to the person running the command | each tool, decided by `sandogasa_cli::claim` |
+| `-C`, `--repo DIR` | Run in this checkout, like `git -C` | cpu-sig-tracker, dbranch |
+| `--dry-run` | Show what would be done, change nothing | each tool |
+| `--explain` | Narrate each step and show its command, pausing before each | each tool, run through `sandogasa_cli::explain::Ui` |
+| `--json` | Pretty-printed machine-readable output instead of text | each tool |
+| `--no-defaults` | Ignore the config file's `[defaults]` table | `sandogasa_cli::parse_with_defaults` |
+| `--notes TEXT`, `--notes-file PATH` | Free text added to what the command files; one or the other | `sandogasa_cli::NotesArgs` |
+| `-q`, `--quiet` | Suppress tool output, showing it only when a step fails | dbranch |
+| `--refresh` | Ignore what the cache holds and fetch afresh | each tool |
+| `-v`, `--verbose` | Print progress to stderr, such as each request made | each tool |
+| `-y`, `--yes` | Do it without asking; never also files somewhere uneditable or reassigns bugs (see CLAUDE.md) | each tool |
+
+The rest of the convention:
+
+- A `-file` suffix reads the same value from a path: `--notes-file`
+  is `--notes` from a file.
+- A boolean that can be on by default has a `--no-<flag>` partner
+  (see "Booleans need a `--no-<flag>` partner" above).
+- Flags go under the shared headings `Selection`, `Writing` and
+  `Output` where they fit (CLAUDE.md, Code Style).
+
+Known exceptions, left alone until those tools are next reworked:
+poi-tracker's `-C` is `--directory`, and its `--repo` is a fedrq repo
+class, not a checkout; cpu-sig-tracker `status --refresh` rewrites the
+tracking issues rather than ignoring a cache.
+
 ## Flag defaults come from the config file — a common pattern
 
 Every tool supports a `[defaults]` table in its config (the same

@@ -429,23 +429,8 @@ failing update."
     #[arg(long, requires = "submit", help_heading = "Update")]
     no_close_bugs: bool,
 
-    /// Update notes/description (inline).
-    #[arg(
-        long,
-        requires = "submit",
-        conflicts_with = "notes_file",
-        help_heading = "Update"
-    )]
-    notes: Option<String>,
-
-    /// Read the update notes from a file.
-    #[arg(
-        long,
-        value_name = "PATH",
-        requires = "submit",
-        help_heading = "Update"
-    )]
-    notes_file: Option<std::path::PathBuf>,
+    #[command(flatten, next_help_heading = "Update")]
+    notes: sandogasa_cli::NotesArgs,
 
     /// Severity: low, medium, high, urgent.
     #[arg(
@@ -1810,10 +1795,16 @@ fn main() -> ExitCode {
             eprintln!("error: --type security requires --severity (low/medium/high/urgent)");
             return ExitCode::FAILURE;
         }
+        // The shared flags cannot carry clap's `requires`, so the
+        // pairing with --submit is checked here.
+        if a.notes.given() && !a.submit {
+            eprintln!("error: --notes and --notes-file are only used with --submit");
+            return ExitCode::FAILURE;
+        }
         // Notes are required for submission; resolve (and read the
         // file) up front so a typo'd path fails in seconds.
         let submit_notes = if a.submit {
-            match submit::resolve_notes(a.notes.as_deref(), a.notes_file.as_deref()) {
+            match submit::resolve_notes(&a.notes) {
                 Ok(n) => Some(n),
                 Err(e) => {
                     eprintln!("error: {e}");

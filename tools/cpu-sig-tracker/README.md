@@ -204,7 +204,7 @@ tracking issues explicitly via `file-issue`.
 
 ```sh
 cpu-sig-tracker mr [BRANCH] [-C DIR] [--target cNs] [--title TEXT] \
-    [--explain] [--dry-run] [--yes]
+    [--notes TEXT | --notes-file PATH] [--explain] [--dry-run] [--yes]
 ```
 
 Opens the CentOS Stream merge request for a Proposed Update's branch,
@@ -229,6 +229,11 @@ it with `jira` first. The title is the subject of the branch's one
 commit; a branch with several needs `--title`. Open merge requests
 into the same branch about the same CVE (or the first Jira issue) are
 listed first, so a duplicate is seen, but they do not stop it.
+
+`--notes` (or `--notes-file`, for longer text) adds paragraphs to the
+end of the summary of changes, before the tickets, for what does not
+belong in the commit messages and so in dist-git history: what the
+backport deliberately leaves out, or how it was tested.
 
 The merge request is shown in full and opened after a confirmation
 (`--yes` skips it). `--explain` narrates each step with the command it

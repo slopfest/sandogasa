@@ -30,32 +30,38 @@ pub struct MrArgs {
     /// The branch to propose (default: the one checked out)
     pub branch: Option<String>,
 
-    /// Show each step and its command without running anything
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Narrate each step and show its command, pausing before each
-    #[arg(long)]
-    pub explain: bool,
-
     /// The package's dist-git checkout (default: the current
     /// directory)
-    #[arg(short = 'C', long, value_name = "DIR")]
+    #[arg(short = 'C', long, value_name = "DIR", help_heading = "Selection")]
     pub repo: Option<PathBuf>,
+
+    // Added to the summary of changes after the commits' messages: what
+    // does not belong in dist-git history, such as what was left out
+    // and how the change was tested.
+    #[command(flatten, next_help_heading = "Merge request")]
+    pub notes: sandogasa_cli::NotesArgs,
 
     /// CentOS Stream branch to merge into (default: the one the
     /// branch tracks, else its cNs- prefix)
-    #[arg(long, value_name = "BRANCH")]
+    #[arg(long, value_name = "BRANCH", help_heading = "Merge request")]
     pub target: Option<String>,
 
     /// Merge request title (default: the subject of the branch's one
     /// commit; needed when it has several)
-    #[arg(long, value_name = "TEXT")]
+    #[arg(long, value_name = "TEXT", help_heading = "Merge request")]
     pub title: Option<String>,
 
+    /// Show each step and its command without running anything
+    #[arg(long, help_heading = "Writing")]
+    pub dry_run: bool,
+
     /// Open the merge request without asking
-    #[arg(short = 'y', long)]
+    #[arg(short = 'y', long, help_heading = "Writing")]
     pub yes: bool,
+
+    /// Narrate each step and show its command, pausing before each
+    #[arg(long, help_heading = "Output")]
+    pub explain: bool,
 }
 
 /// A commit on the branch: its subject and the rest of its message.
@@ -205,10 +211,11 @@ pub fn ticket_lines(commits: &[BranchCommit]) -> Vec<String> {
 }
 
 /// The merge request's description, in CentOS Stream's template: the
-/// commits' messages, trailers dropped, as the summary of changes, and
-/// the ticket lines after the template's instructions.
-pub fn description(commits: &[BranchCommit], tickets: &[String]) -> String {
-    let summary: Vec<String> = match commits {
+/// commits' messages, trailers dropped, as the summary of changes,
+/// followed by `notes` (`--notes`), and the ticket lines after the
+/// template's instructions.
+pub fn description(commits: &[BranchCommit], notes: Option<&str>, tickets: &[String]) -> String {
+    let mut summary: Vec<String> = match commits {
         [one] => vec![without_trailers(&one.body)],
         many => many
             .iter()
@@ -222,6 +229,9 @@ pub fn description(commits: &[BranchCommit], tickets: &[String]) -> String {
             })
             .collect(),
     };
+    if let Some(notes) = notes {
+        summary.push(notes.trim().to_string());
+    }
     format!(
         "# Merge Request Required Information\n\n\
          ## Summary of Changes\n\n{}\n\n\
@@ -312,6 +322,8 @@ fn remotes(repo: &Path) -> Result<Vec<(String, String)>, String> {
 
 fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
     let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    // Read first, so a mistyped path fails before anything is asked.
+    let notes = args.notes.read()?;
     let ui = Ui {
         explain: args.explain,
         dry_run: args.dry_run,
@@ -383,7 +395,7 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
     };
-    let body = description(&commits, &tickets);
+    let body = description(&commits, notes.as_deref(), &tickets);
 
     // Anything already proposed for the same thing, so a duplicate is
     // seen before ours is opened; it is not a reason to stop.
@@ -573,7 +585,7 @@ mod tests {
         let commits = vec![rsync_commit()];
         let tickets = ticket_lines(&commits);
         assert_eq!(tickets, ["Resolves: RHEL-303720"]);
-        let d = description(&commits, &tickets);
+        let d = description(&commits, None, &tickets);
         assert!(
             d.starts_with(
                 "# Merge Request Required Information\n\n## Summary of Changes\n\n\
@@ -589,6 +601,25 @@ mod tests {
     }
 
     #[test]
+    fn notes_end_the_summary_before_the_tickets() {
+        let commits = vec![rsync_commit()];
+        let tickets = ticket_lines(&commits);
+        let notes = "Testing: the upstream tests fail without the patch.\n\n\
+                     Not included: the --inplace overflow fix (9dc0ff63).\n";
+        let d = description(&commits, Some(notes), &tickets);
+        assert!(
+            d.contains(
+                "sum2 keeps its SUM_LENGTH size.\n\n\
+                 Testing: the upstream tests fail without the patch.\n\n\
+                 Not included: the --inplace overflow fix (9dc0ff63).\n\n\
+                 ## Approved Development Ticket(s)\n"
+            ),
+            "{d}"
+        );
+        assert!(d.ends_with("</details>\n\nResolves: RHEL-303720\n"), "{d}");
+    }
+
+    #[test]
     fn several_commits_are_listed_by_subject() {
         let commits = vec![
             rsync_commit(),
@@ -601,7 +632,7 @@ mod tests {
             ticket_lines(&commits),
             ["Resolves: RHEL-303720", "Related: RHEL-1"]
         );
-        let d = description(&commits, &ticket_lines(&commits));
+        let d = description(&commits, None, &ticket_lines(&commits));
         assert!(
             d.contains(
                 "- Fix denial of service via crafted checksums (CVE-2026-119741)\n\n  \

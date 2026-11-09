@@ -61,6 +61,48 @@ pub struct ConfigArgs {
     pub all: bool,
 }
 
+/// Free text a command adds to what it files (a Bodhi update's notes,
+/// a merge request's description), given inline or read from a file,
+/// so the two flags and their errors read the same in every tool.
+/// Flatten it into the command, under the heading that fits there:
+/// `#[command(flatten, next_help_heading = "Update")]`.
+#[derive(Debug, Clone, Default, clap::Args)]
+#[non_exhaustive]
+pub struct NotesArgs {
+    /// Notes to add, inline
+    #[arg(long, value_name = "TEXT", conflicts_with = "notes_file")]
+    pub notes: Option<String>,
+
+    /// Read the notes to add from a file
+    #[arg(long, value_name = "PATH")]
+    pub notes_file: Option<std::path::PathBuf>,
+}
+
+impl NotesArgs {
+    /// Whether either flag was given.
+    pub fn given(&self) -> bool {
+        self.notes.is_some() || self.notes_file.is_some()
+    }
+
+    /// The notes, read from the file when that is how they were given;
+    /// `None` when neither flag was. Call it before any slow work, so a
+    /// mistyped path fails in seconds. Notes that are only whitespace
+    /// are an error: an empty flag is a mistake, not a request for no
+    /// notes.
+    pub fn read(&self) -> Result<Option<String>, String> {
+        let notes = match (&self.notes, &self.notes_file) {
+            (Some(n), _) => n.clone(),
+            (None, Some(p)) => std::fs::read_to_string(p)
+                .map_err(|e| format!("cannot read --notes-file {}: {e}", p.display()))?,
+            (None, None) => return Ok(None),
+        };
+        if notes.trim().is_empty() {
+            return Err("the notes are empty".to_string());
+        }
+        Ok(Some(notes))
+    }
+}
+
 /// Standard process-wide initialization for sandogasa tools.
 ///
 /// Call this once as the first statement of `main()` in every
@@ -349,6 +391,41 @@ fn parse_list_answer(answer: &str, default_yes: bool) -> ListAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn notes(inline: Option<&str>, file: Option<&std::path::Path>) -> NotesArgs {
+        NotesArgs {
+            notes: inline.map(str::to_string),
+            notes_file: file.map(std::path::Path::to_path_buf),
+        }
+    }
+
+    #[test]
+    fn notes_are_given_inline_or_read_from_a_file() {
+        assert_eq!(notes(None, None).read().unwrap(), None);
+        assert!(!notes(None, None).given());
+        assert_eq!(
+            notes(Some("hi"), None).read().unwrap().as_deref(),
+            Some("hi")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "Long description.\n").unwrap();
+        let from_file = notes(None, Some(&p));
+        assert!(from_file.given());
+        assert_eq!(
+            from_file.read().unwrap().as_deref(),
+            Some("Long description.\n")
+        );
+        let err = notes(None, Some(&dir.path().join("missing.md")))
+            .read()
+            .unwrap_err();
+        assert!(
+            err.contains("--notes-file") && err.contains("missing.md"),
+            "{err}"
+        );
+        let err = notes(Some("  \n"), None).read().unwrap_err();
+        assert!(err.contains("empty"), "{err}");
+    }
 
     #[test]
     fn tool_exists_detects_present_and_absent() {

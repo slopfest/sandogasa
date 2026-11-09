@@ -13,8 +13,6 @@
 //! Authentication reuses the bodhi CLI's cached OIDC session, like
 //! the karma flow (see `karma::ensure_session`).
 
-use std::path::Path;
-
 use sandogasa_bodhi::models::{NewUpdateFromTag, UpdateSource};
 use sandogasa_bodhi::{BodhiClient, auth};
 
@@ -57,22 +55,10 @@ pub struct SubmitOptions {
 /// (for longer descriptions). Bodhi rejects empty notes, so require
 /// one of the two and a non-blank result — checked up front, before
 /// the analysis runs for minutes.
-pub fn resolve_notes(inline: Option<&str>, file: Option<&Path>) -> Result<String, String> {
-    let notes = match (inline, file) {
-        (Some(n), _) => n.to_string(),
-        (None, Some(p)) => std::fs::read_to_string(p)
-            .map_err(|e| format!("cannot read --notes-file {}: {e}", p.display()))?,
-        (None, None) => {
-            return Err(
-                "Bodhi requires update notes: pass --notes <text> or --notes-file <path>"
-                    .to_string(),
-            );
-        }
-    };
-    if notes.trim().is_empty() {
-        return Err("update notes are empty".to_string());
-    }
-    Ok(notes)
+pub fn resolve_notes(notes: &sandogasa_cli::NotesArgs) -> Result<String, String> {
+    notes.read()?.ok_or_else(|| {
+        "Bodhi requires update notes: pass --notes <text> or --notes-file <path>".to_string()
+    })
 }
 
 /// Why a bug does not belong on this update, if it does not.
@@ -688,29 +674,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_notes_inline_wins() {
-        assert_eq!(resolve_notes(Some("hi"), None).unwrap(), "hi");
-    }
-
-    #[test]
-    fn resolve_notes_reads_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("notes.md");
-        std::fs::write(&p, "Long description.\n").unwrap();
-        assert_eq!(
-            resolve_notes(None, Some(&p)).unwrap(),
-            "Long description.\n"
-        );
-        let err = resolve_notes(None, Some(&dir.path().join("missing.md"))).unwrap_err();
-        assert!(err.contains("missing.md"), "{err}");
-    }
-
-    #[test]
-    fn resolve_notes_requires_nonempty() {
-        let err = resolve_notes(None, None).unwrap_err();
+    fn update_notes_are_required() {
+        let err = resolve_notes(&sandogasa_cli::NotesArgs::default()).unwrap_err();
         assert!(err.contains("--notes"), "{err}");
-        let err = resolve_notes(Some("  \n"), None).unwrap_err();
-        assert!(err.contains("empty"), "{err}");
+        let mut given = sandogasa_cli::NotesArgs::default();
+        given.notes = Some("Long description.".into());
+        assert_eq!(resolve_notes(&given).unwrap(), "Long description.");
     }
 
     #[test]
