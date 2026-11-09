@@ -53,6 +53,36 @@ one; there is no option to skip the question.
 `--explain` shows each `cbs list-pkgs` and `cbs add-pkg` command and
 pauses before each; `--dry-run` shows them without changing anything.
 
+### `build`
+
+```sh
+cbspkg build [-C DIR] [--branch BRANCH] [--scratch] [--owner USER] \
+    [--explain] [--dry-run]
+```
+
+Builds the checked-out branch (or `--branch`, which may exist only on
+the SIG's remote) in CBS, working out what `cbs build` needs from it:
+the collection's build target, and the SIG repo's URL at the branch's
+full commit hash:
+
+```sh
+cbs build proposed_updates10s-packages-main-el10s \
+    'git+https://gitlab.com/CentOS/proposed_updates/rpms/rsync.git#e4441b13…'
+```
+
+CBS fetches the commit from the SIG's repo, so it has to be pushed
+there first: `build` fetches the SIG remote and stops with the
+`git push` to run when the commit is not on it. A real build needs the
+package listed in the collection's tags; when it is not, `build` lists
+it as `add-pkg` does, after asking. `--scratch` builds without keeping
+the result, which needs no listing. A Hyperscale Facebook branch is
+built for its RHEL collection too.
+
+The build is confirmed at a terminal and refused without one, after the
+CBS login is checked. Once it is done, `build` prints the
+`cbs tag-build` that offers it for testing. `--explain` and
+`--dry-run` show each command.
+
 ### `config`
 
 ```sh

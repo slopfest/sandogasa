@@ -40,6 +40,31 @@ Print help
 .TP
 [\fIPACKAGE\fR]
 The package (default: the one the checkout\*(Aqs remotes are for)
+.SS cbspkg build
+\fBcbspkg build\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-owner\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-scratch\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Build the checked\-out SIG branch in CBS: the target, the SIG repo\*(Aqs URL and the commit worked out from the branch
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch to build (default: the one checked out)
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.TP
+\fB\-\-owner\fR \fI<USER>\fR
+The owner to list a new package under (default: your CBS login)
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-scratch\fR
+Build without keeping the result (no tags, no listing needed)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS cbspkg config
 \fBcbspkg config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP

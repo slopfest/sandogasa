@@ -48,6 +48,15 @@ pub struct AddPkgArgs {
     pub repo: Option<PathBuf>,
 }
 
+/// What a checkout is about: its branch, the collections that branch
+/// builds into, the package, and its remotes `(name, URL)`.
+pub struct Checkout {
+    pub branch: String,
+    pub collections: Vec<Collection>,
+    pub package: String,
+    pub remotes: Vec<(String, String)>,
+}
+
 /// The package a remote URL's project is: `rsync` for Stream's or a
 /// SIG's repo of it.
 pub fn package_of_remote(url: &str) -> Option<String> {
@@ -147,49 +156,58 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The package the checkout's remotes are for.
-fn package_of_checkout(repo: &Path) -> Result<String, String> {
-    let remotes = git(repo, &["remote", "-v"])?;
-    remotes
+/// Work out [`Checkout`] for `repo`, with `branch` and `package`
+/// overriding what the checkout says.
+pub fn resolve(
+    repo: &Path,
+    branch: Option<&str>,
+    package: Option<&str>,
+) -> Result<Checkout, Box<dyn std::error::Error>> {
+    let branch = match branch {
+        Some(b) => b.to_string(),
+        None => git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
+    };
+    let remotes: Vec<(String, String)> = git(repo, &["remote", "-v"])
+        .unwrap_or_default()
         .lines()
-        .filter_map(|l| l.split_whitespace().nth(1))
-        .find_map(package_of_remote)
-        .ok_or_else(|| {
-            format!(
-                "no remote of {} is a CentOS Stream or SIG repo: name the package",
-                repo.display()
-            )
+        .filter(|l| l.ends_with("(fetch)"))
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace();
+            Some((parts.next()?.to_string(), parts.next()?.to_string()))
         })
+        .collect();
+    let sigs = sigs_of_remotes(remotes.iter().map(|(_, u)| u.as_str()));
+    let collections = collections_for(&branch, &sigs)?;
+    let package = match package {
+        Some(p) => p.to_string(),
+        None => remotes
+            .iter()
+            .find_map(|(_, u)| package_of_remote(u))
+            .ok_or_else(|| {
+                format!(
+                    "no remote of {} is a CentOS Stream or SIG repo: name the package",
+                    repo.display()
+                )
+            })?,
+    };
+    Ok(Checkout {
+        branch,
+        collections,
+        package,
+        remotes,
+    })
 }
 
-fn run_inner(args: &AddPkgArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let ui = Ui {
-        explain: args.explain,
-        dry_run: args.dry_run,
-        quiet: false,
-    };
-    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
-    let branch = match &args.branch {
-        Some(b) => b.clone(),
-        None => git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
-    };
-    let remote_urls = git(&repo, &["remote", "-v"]).unwrap_or_default();
-    let sigs = sigs_of_remotes(
-        remote_urls
-            .lines()
-            .filter_map(|l| l.split_whitespace().nth(1)),
-    );
-    let collections = collections_for(&branch, &sigs)?;
-    let package = match &args.package {
-        Some(p) => p.clone(),
-        None => package_of_checkout(&repo)?,
-    };
-    let mut tools = vec![("koji", "sudo dnf install koji", Some("--help"))];
-    if !args.dry_run {
-        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
-    }
-    sandogasa_cli::require_tools(&tools)?;
-
+/// List `package` in whichever of the collections' tags do not list it
+/// yet, owned by `owner` (default: the CBS login), after confirming at
+/// a terminal. `Ok(false)` when the person declined.
+pub fn list_missing(
+    ui: &Ui,
+    repo: &Path,
+    collections: &[Collection],
+    package: &str,
+    owner: Option<&str>,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let tags: Vec<String> = collections.iter().flat_map(stage_tags).collect();
     ui.step(&format!(
         "Check which of {}'s tags list {package} already",
@@ -202,28 +220,28 @@ fn run_inner(args: &AddPkgArgs) -> Result<(), Box<dyn std::error::Error>> {
     let mut missing: Vec<&String> = Vec::new();
     for tag in &tags {
         // `cbs` is koji with CBS's profile, as the writes are shown.
-        let argv: Vec<String> = ["cbs", "list-pkgs", "--tag", tag, "--package", &package]
+        let argv: Vec<String> = ["cbs", "list-pkgs", "--tag", tag, "--package", package]
             .map(String::from)
             .to_vec();
         ui.show_command(&argv);
-        if !listed(tag, &package)? {
+        if !listed(tag, package)? {
             missing.push(tag);
         }
     }
     if missing.is_empty() {
         println!("{package} is listed in every tag it builds through already.");
-        return Ok(());
+        return Ok(true);
     }
 
-    let owner = match &args.owner {
-        Some(o) => o.clone(),
-        None if args.dry_run => whoami().unwrap_or_else(|_| "<your CBS user>".to_string()),
+    let owner = match owner {
+        Some(o) => o.to_string(),
+        None if ui.dry_run => whoami().unwrap_or_else(|_| "<your CBS user>".to_string()),
         None => {
-            sandogasa_cbs::login::ensure_login("cbspkg", true, args.explain)?;
+            sandogasa_cbs::login::ensure_login("cbspkg", true, ui.explain)?;
             whoami()?
         }
     };
-    if !args.dry_run {
+    if !ui.dry_run {
         if !std::io::stdin().is_terminal() {
             return Err(
                 "listing a package in CBS is confirmed at a terminal; run it in one".into(),
@@ -237,16 +255,39 @@ fn run_inner(args: &AddPkgArgs) -> Result<(), Box<dyn std::error::Error>> {
         println!("{package} is not listed in:\n{list}");
         if !sandogasa_cli::confirm(&format!("List it there, owned by {owner}?"), true)? {
             println!("Nothing changed.");
-            return Ok(());
+            return Ok(false);
         }
     }
     for tag in missing {
         ui.step(&format!("List {package} in {tag}, owned by {owner}"));
-        ui.run_required(&add_pkg_argv(&owner, tag, &package), &repo)?;
-        if !args.dry_run {
+        ui.run_required(&add_pkg_argv(&owner, tag, package), repo)?;
+        if !ui.dry_run {
             println!("Listed {package} in {tag}.");
         }
     }
+    Ok(true)
+}
+
+fn run_inner(args: &AddPkgArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let ui = Ui {
+        explain: args.explain,
+        dry_run: args.dry_run,
+        quiet: false,
+    };
+    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    let checkout = resolve(&repo, args.branch.as_deref(), args.package.as_deref())?;
+    let mut tools = vec![("koji", "sudo dnf install koji", Some("--help"))];
+    if !args.dry_run {
+        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
+    }
+    sandogasa_cli::require_tools(&tools)?;
+    list_missing(
+        &ui,
+        &repo,
+        &checkout.collections,
+        &checkout.package,
+        args.owner.as_deref(),
+    )?;
     Ok(())
 }
 

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### cbspkg: build builds the checked-out SIG branch in CBS
+
+Building a SIG update in CBS by hand means typing `cbs build <target>
+git+https://gitlab.com/<SIG group>/<pkg>.git#<commit>`, with the
+target spelled after the collection and the full commit hash pasted in
+from `git rev-parse`. On top of that, the commit has to be pushed to
+the SIG's repo first, and a first build fails unless the package is
+listed in the collection's tags. Every rsync build for the Proposed
+Updates SIG needed that command typed out.
+
+`cbspkg build` works out the target and the SIG repo's URL from the
+branch (the checked-out one, or `--branch`, which may exist only on
+the SIG's remote) and takes the commit from it. It fetches the SIG
+remote and stops with the `git push` to run if the commit isn't there.
+When the package isn't listed yet, it lists it the way `add-pkg` does,
+after asking. Like every CBS write, the build is confirmed at a
+terminal. Afterwards `build` prints the `cbs tag-build` command that
+offers the result for testing. `--scratch` builds without keeping the
+result, and `--explain` and `--dry-run` show every command. Refs #77.
+
 ### cbspkg: add-pkg lists a package in its collection's CBS tags
 
 A package's first CBS build fails unless the package is already listed
