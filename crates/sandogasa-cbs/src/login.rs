@@ -125,8 +125,26 @@ fn kerberos_user() -> Option<String> {
 /// Make sure CBS accepts the login before anything is written to it. A
 /// failure is explained, and at a terminal (`interactive`) the fix is
 /// offered and the login tried again; otherwise the explanation is the
-/// error. `tool` names the caller in the `verbose` progress line.
+/// error. `tool` names the caller in the `verbose` progress line. Once
+/// accepted, the login is not checked again in the same process.
 pub fn ensure_login(tool: &str, interactive: bool, verbose: bool) -> Result<(), String> {
+    // Once per run: a command that writes to CBS in several steps (a
+    // build that uploads sources first) asks once, not once a step.
+    if LOGGED_IN.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(());
+    }
+    let result = check_login(tool, interactive, verbose);
+    if result.is_ok() {
+        LOGGED_IN.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    result
+}
+
+/// Whether [`ensure_login`] has seen the login accepted in this process.
+static LOGGED_IN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// [`ensure_login`]'s check itself.
+fn check_login(tool: &str, interactive: bool, verbose: bool) -> Result<(), String> {
     if verbose {
         eprintln!("[{tool}] checking the CBS login (koji --profile {PROFILE} moshimoshi)");
     }

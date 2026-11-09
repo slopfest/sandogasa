@@ -97,6 +97,28 @@ impl Collection {
         }
     }
 
+    /// The collection and stage a tag is: `hyperscale9s-packages-main-testing`
+    /// is Hyperscale's EL9 Stream main collection, in testing. `None` for
+    /// a tag that is not a known SIG's stage tag.
+    pub fn from_tag(tag: &str) -> Option<(Collection, Stage)> {
+        let (rest, stage) = [Stage::Candidate, Stage::Testing, Stage::Release]
+            .into_iter()
+            .find_map(|s| Some((tag.strip_suffix(&format!("-{}", s.as_str()))?, s)))?;
+        let sig = Sig::ALL.into_iter().find(|s| rest.starts_with(s.name()))?;
+        let (release, repository) = rest[sig.name().len()..].split_once("-packages-")?;
+        let (digits, stream) = match release.strip_suffix('s') {
+            Some(d) => (d, true),
+            None => (release, false),
+        };
+        let major = digits.parse().ok()?;
+        (!repository.is_empty() && !repository.contains('-')).then(|| {
+            (
+                Collection::new(sig.name(), major, stream, repository),
+                stage,
+            )
+        })
+    }
+
     /// `9s` or `9`.
     fn release(&self) -> String {
         format!("{}{}", self.major, if self.stream { "s" } else { "" })
@@ -298,6 +320,31 @@ mod tests {
         );
         let fb = Collection::new("hyperscale", 10, false, "facebook");
         assert_eq!(fb.target(), "hyperscale10-packages-facebook-el10");
+    }
+
+    #[test]
+    fn a_stage_tag_names_its_collection_and_stage() {
+        let (c, stage) = Collection::from_tag("hyperscale9s-packages-main-testing").unwrap();
+        assert_eq!(stage, Stage::Testing);
+        assert_eq!(c, Collection::new("hyperscale", 9, true, "main"));
+        let (c, stage) = Collection::from_tag("hyperscale9-packages-facebook-release").unwrap();
+        assert_eq!(
+            (c.stream, c.repository.as_str(), stage),
+            (false, "facebook", Stage::Release)
+        );
+        let (c, _) = Collection::from_tag("proposed_updates10s-packages-main-candidate").unwrap();
+        assert_eq!(
+            c.tag(Stage::Testing),
+            "proposed_updates10s-packages-main-testing"
+        );
+        for not_one in [
+            "hyperscale9s-packages-main-el9s-build",
+            "aie10s-packages-nvidia-testing",
+            "hyperscale9s-images-main-testing",
+            "hyperscaleX-packages-main-testing",
+        ] {
+            assert_eq!(Collection::from_tag(not_one), None, "{not_one}");
+        }
     }
 
     #[test]

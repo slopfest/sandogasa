@@ -14,6 +14,7 @@ repository.workspace = true
 clap = { workspace = true }
 reqwest = { workspace = true }
 rpassword = { workspace = true }
+sandogasa-cbs = { workspace = true }
 sandogasa-cli = { workspace = true }
 sandogasa-kojihub = { workspace = true }
 sandogasa-config = { workspace = true }

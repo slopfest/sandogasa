@@ -182,18 +182,12 @@ rsync's CVE-2026-119741 fix went through the whole flow on 2026-11-09:
 `upload-sources`, `build` and `promote`, then `file-issue`. What that
 run left open, for before the next release:
 
-- **Check the CBS login once per run.** `cbspkg build` checks it before
-  uploading sources and again before building, an extra `moshimoshi`
-  each time.
 - **Released builds left in `-testing`.** Promoting to `-release` now
   untags from `-testing`, but eight builds released by hand before that
   are still in both: c10s blktrace, cmake, mesa, openssl and pciutils;
   c9s blktrace, openssl and tpm2-tools. `cbspkg promote --branch
   cNs-proposed-x <nvr>` does just the untag for each (blktrace waits on
   its open question, see its tracking issues).
-- **hs-relmon `review` onto `promote_argvs`.** `review` tags and
-  untags with its own calls; move it to
-  `sandogasa_cbs::packages::promote_argvs` so the two cannot drift.
 - **Secrets in the keyring (#79).** Tokens sit in plain-text config
   files; a session that read one printed a GitLab token. Prioritise
   #79 for the release.

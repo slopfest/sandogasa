@@ -871,6 +871,7 @@ dependencies = [
  "reqwest",
  "rpassword",
  "sandogasa-build",
+ "sandogasa-cbs",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-gitlab",

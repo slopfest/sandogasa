@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### cbspkg checks the CBS login once per run; hs-relmon review promotes the way cbspkg does
+
+`cbspkg build` checked the CBS login twice in one run, with a round trip
+to the hub each time: once before uploading sources and again before
+building. sandogasa-cbs's login check now remembers an accepted login for
+the rest of the process, so every step after the first reuses it.
+
+hs-relmon's `review` promoted a build with its own tag and untag calls,
+which could drift from `cbspkg promote`. It now takes the steps from
+the same `sandogasa_cbs::packages::promote_argvs`, finding the
+collection from the build's `-testing` tag with the new
+`Collection::from_tag`. Refs #77.
+
 ### hs-relmon: its GitLab token is in the keyring, shared with the other tools
 
 hs-relmon still kept its GitLab token in plain text in

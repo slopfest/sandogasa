@@ -451,12 +451,33 @@ pub fn changelog_since(
 }
 
 fn apply_promote(item: &ReviewItem, profile: Option<&str>) -> Result<(), String> {
-    tag_build(&item.release_tag, &item.nvr, profile)
-        .map_err(|e| format!("tag-build {} {}: {e}", item.release_tag, item.nvr))?;
-    eprintln!("tagged {} into {}", item.nvr, item.release_tag);
-    untag_build(&item.testing_tag, &item.nvr, profile)
-        .map_err(|e| format!("untag-build {} {}: {e}", item.testing_tag, item.nvr))?;
-    eprintln!("untagged {} from {}", item.nvr, item.testing_tag);
+    // The same step as `cbspkg promote` (sandogasa-cbs), so the two
+    // cannot drift: tag into -release, untag from -testing.
+    let (collection, _) = sandogasa_cbs::Collection::from_tag(&item.testing_tag)
+        .ok_or_else(|| format!("{} is not a SIG's -testing tag", item.testing_tag))?;
+    let in_tags = [item.testing_tag.clone()];
+    for argv in sandogasa_cbs::packages::promote_argvs(
+        &collection,
+        &item.nvr,
+        sandogasa_cbs::Stage::Release,
+        &in_tags,
+    ) {
+        // `cbs <verb> <tag> <nvr>`, run as koji with the profile in use.
+        let (verb, tag) = (argv[1].as_str(), argv[2].as_str());
+        match verb {
+            "tag-build" => {
+                tag_build(tag, &item.nvr, profile)
+                    .map_err(|e| format!("tag-build {tag} {}: {e}", item.nvr))?;
+                eprintln!("tagged {} into {tag}", item.nvr);
+            }
+            "untag-build" => {
+                untag_build(tag, &item.nvr, profile)
+                    .map_err(|e| format!("untag-build {tag} {}: {e}", item.nvr))?;
+                eprintln!("untagged {} from {tag}", item.nvr);
+            }
+            other => return Err(format!("unexpected promote step: {other}")),
+        }
+    }
     Ok(())
 }
 
