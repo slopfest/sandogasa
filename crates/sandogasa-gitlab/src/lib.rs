@@ -166,6 +166,70 @@ impl NewMergeRequest {
     }
 }
 
+/// A pull mirror's settings, as `PUT /projects/:id/mirror/pull` takes
+/// them (GitLab 17.6 and later; Premium and Ultimate). Only the fields
+/// set are sent.
+#[derive(Debug, Clone, Default, Serialize)]
+#[non_exhaustive]
+pub struct PullMirror {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The repository mirrored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Whether a mirror update may overwrite a branch that has
+    /// diverged from the source's branch of the same name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_overwrites_diverged_branches: Option<bool>,
+    /// Whether only protected branches are mirrored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub only_mirror_protected_branches: Option<bool>,
+    /// Whether mirror updates start pipelines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror_trigger_builds: Option<bool>,
+}
+
+impl PullMirror {
+    /// Mirror every branch of `url`, never overwriting a branch that
+    /// has diverged from it, and starting no pipelines: a project
+    /// that carries its own branches beside the source's.
+    pub fn alongside(url: &str) -> Self {
+        Self {
+            enabled: Some(true),
+            url: Some(url.to_string()),
+            mirror_overwrites_diverged_branches: Some(false),
+            only_mirror_protected_branches: Some(false),
+            mirror_trigger_builds: Some(false),
+        }
+    }
+}
+
+/// A pull mirror's state, from `GET /projects/:id/mirror/pull`.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct PullMirrorState {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub url: Option<String>,
+    /// `none`, `scheduled`, `started`, `finished`, `failed` or
+    /// `canceled`.
+    #[serde(default)]
+    pub update_status: Option<String>,
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub last_successful_update_at: Option<String>,
+}
+
+/// A group, as `GET /groups/:id` returns it.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct Group {
+    pub id: u64,
+    pub full_path: String,
+}
+
 /// A branch as the repository branches endpoint lists it.
 #[derive(Debug, Clone, Deserialize)]
 #[non_exhaustive]
@@ -559,6 +623,34 @@ impl Client {
             return Ok(None);
         }
         Ok(Some(blocking_json_ok(resp, &format!("GitLab GET {url}"))?))
+    }
+
+    /// The project's pull mirror, if it has one configured; `None`
+    /// when GitLab answers 404 (no project, or no mirror).
+    pub fn pull_mirror(&self) -> Result<Option<PullMirrorState>, Box<dyn std::error::Error>> {
+        let url = format!("{}/mirror/pull", self.project_url());
+        let resp = self.http.get(&url).send()?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(blocking_json_ok(resp, &format!("GitLab GET {url}"))?))
+    }
+
+    /// Configure the project's pull mirror (`PUT /projects/:id/mirror/pull`).
+    pub fn set_pull_mirror(&self, mirror: &PullMirror) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("{}/mirror/pull", self.project_url());
+        let resp = self.http.put(&url).json(mirror).send()?;
+        blocking_ok(resp, &format!("GitLab PUT {url}"))?;
+        Ok(())
+    }
+
+    /// Start a pull mirror update now (`POST /projects/:id/mirror/pull`),
+    /// rather than at GitLab's next scheduled one.
+    pub fn start_pull_mirror(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("{}/mirror/pull", self.project_url());
+        let resp = self.http.post(&url).send()?;
+        blocking_ok(resp, &format!("GitLab POST {url}"))?;
+        Ok(())
     }
 
     /// The files merge request `iid` changes, with their diffs, read
@@ -1032,6 +1124,41 @@ impl GroupClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             group_path: group_path.to_string(),
         })
+    }
+
+    /// The group itself; `None` when GitLab answers 404.
+    pub fn group(&self) -> Result<Option<Group>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v4/groups/{}",
+            self.base_url,
+            self.group_path.replace('/', "%2F")
+        );
+        let resp = self.http.get(&url).send()?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(blocking_json_ok(resp, &format!("GitLab GET {url}"))?))
+    }
+
+    /// Create an empty project `path` in the group (`POST /projects`),
+    /// with `visibility` `public`, `internal` or `private`.
+    pub fn create_project(
+        &self,
+        path: &str,
+        visibility: &str,
+    ) -> Result<Project, Box<dyn std::error::Error>> {
+        let group = self
+            .group()?
+            .ok_or_else(|| format!("GitLab has no group {}", self.group_path))?;
+        let url = format!("{}/api/v4/projects", self.base_url);
+        let body = serde_json::json!({
+            "name": path,
+            "path": path,
+            "namespace_id": group.id,
+            "visibility": visibility,
+        });
+        let resp = self.http.post(&url).json(&body).send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab POST {url}"))?)
     }
 
     /// List all issues in the group matching a label,
@@ -2889,5 +3016,77 @@ mod tests {
             .unwrap();
         assert_eq!(mr.state, "closed");
         mock.assert();
+    }
+
+    #[test]
+    fn a_project_is_created_in_a_group_and_made_a_pull_mirror() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms")
+            .with_status(200)
+            .with_body(r#"{"id": 77, "full_path": "CentOS/proposed_updates/rpms"}"#)
+            .create();
+        let created = server
+            .mock("POST", "/api/v4/projects")
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "name": "rsync", "path": "rsync", "namespace_id": 77, "visibility": "public"
+            })))
+            .with_status(201)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/rsync",
+                    "ssh_url_to_repo": "git@gitlab.example:CentOS/proposed_updates/rpms/rsync.git",
+                    "http_url_to_repo": "https://gitlab.example/CentOS/proposed_updates/rpms/rsync.git"}"#,
+            )
+            .create();
+        let group = GroupClient::new(&server.url(), "CentOS/proposed_updates/rpms", "t").unwrap();
+        let project = group.create_project("rsync", "public").unwrap();
+        assert_eq!(project.id, 9);
+        created.assert();
+
+        let base = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync/mirror/pull";
+        let set = server
+            .mock("PUT", base)
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "enabled": true,
+                "url": "https://gitlab.com/redhat/centos-stream/rpms/rsync.git",
+                "mirror_overwrites_diverged_branches": false,
+                "only_mirror_protected_branches": false,
+                "mirror_trigger_builds": false,
+            })))
+            .with_status(200)
+            .with_body("{}")
+            .create();
+        let started = server.mock("POST", base).with_status(200).create();
+        server
+            .mock("GET", base)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 1, "enabled": true, "update_status": "finished",
+                "url": "https://gitlab.com/redhat/centos-stream/rpms/rsync.git",
+                "last_error": null, "last_successful_update_at": "2026-11-09T20:00:00Z"}"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "CentOS/proposed_updates/rpms/rsync", "t").unwrap();
+        client
+            .set_pull_mirror(&PullMirror::alongside(
+                "https://gitlab.com/redhat/centos-stream/rpms/rsync.git",
+            ))
+            .unwrap();
+        client.start_pull_mirror().unwrap();
+        let state = client.pull_mirror().unwrap().unwrap();
+        assert_eq!(state.update_status.as_deref(), Some("finished"));
+        set.assert();
+        started.assert();
+
+        // A group that does not exist is named, not a bare 404.
+        server
+            .mock("GET", "/api/v4/groups/CentOS%2Fnope")
+            .with_status(404)
+            .with_body(r#"{"message":"404 Group Not Found"}"#)
+            .create();
+        let missing = GroupClient::new(&server.url(), "CentOS/nope", "t").unwrap();
+        let err = missing.create_project("rsync", "public").unwrap_err();
+        assert!(err.to_string().contains("no group CentOS/nope"), "{err}");
     }
 }

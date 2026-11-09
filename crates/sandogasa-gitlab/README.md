@@ -9,6 +9,11 @@ management and work-item status tracking.
 - Add comments (notes) to issues
 - Query and set work-item status via GraphQL
 - Group-level issue listing with pagination
+- Create a project in a group (`GroupClient::create_project`) and make
+  it a pull mirror of another repository (`set_pull_mirror` with
+  `PullMirror::alongside`, `start_pull_mirror`, `pull_mirror` for its
+  `update_status`), through the `/projects/:id/mirror/pull` API of
+  GitLab 17.6 and later (Premium and Ultimate)
 - URL parsing utilities for GitLab project and issue URLs
 
 ## Usage
