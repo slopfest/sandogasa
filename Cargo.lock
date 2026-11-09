@@ -468,6 +468,7 @@ dependencies = [
  "sandogasa-forgejo",
  "sandogasa-inventory",
  "sandogasa-koji",
+ "sandogasa-kojihub",
  "sandogasa-review",
  "sandogasa-rpmvercmp",
  "semver",
@@ -2184,6 +2185,7 @@ dependencies = [
 name = "sandogasa-kojihub"
 version = "0.27.1"
 dependencies = [
+ "dirs",
  "quick-xml",
  "reqwest",
  "sandogasa-cli",

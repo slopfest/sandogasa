@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### ebranch: check-update asks Koji and Bodhi once for all the builds
+
+After the fedrq queries were batched, `ebranch check-update
+f46-build-side-158330` (39 builds) still spent minutes starting the
+`koji` CLI: one `koji buildinfo` per build, twice over (4.7s each was
+measured), and one `koji list-tagged --latest --inherit` per build for
+the newest-build check, then one Bodhi request per build.
+
+Each build's RPMs are now listed once, and the newest builds in the
+target read, in one XML-RPC `multiCall` to the hub the Koji profile
+names; Bodhi is asked about up to 40 builds in one request. The same
+run now takes 2m06s, down from 5m36s, with the same findings. A
+profile whose hub cannot be found, or a request that fails, falls back
+to the `koji` CLI, as does any one call the hub answers with a fault.
+Resolves #81.
+
+sandogasa-kojihub gains `Client::multicall`, `HubClient::builds_rpm_nvras`
+and `HubClient::latest_builds`, and a `config` module that reads a
+`koji` CLI profile's hub URL from the CLI's own configuration files.
+sandogasa-bodhi gains `BodhiClient::updates_for_builds`.
+
 ### ebranch: check-update asks fedrq in batches
 
 `ebranch check-update f46-build-side-158330`, the libical 4 side tag

@@ -867,6 +867,24 @@ pub(crate) trait BodhiQuery: Sync {
     fn updates_with_build(&self, _nvr: &str) -> Result<Vec<(String, String)>, String> {
         Ok(Vec::new())
     }
+
+    /// [`Self::updates_with_build`] for each of `nvrs`, as
+    /// `(nvr, alias, status)`; one query for all of them where the
+    /// implementation can.
+    fn updates_with_builds(
+        &self,
+        nvrs: &[String],
+    ) -> Result<Vec<(String, String, String)>, String> {
+        let mut out = Vec::new();
+        for nvr in nvrs {
+            out.extend(
+                self.updates_with_build(nvr)?
+                    .into_iter()
+                    .map(|(alias, status)| (nvr.clone(), alias, status)),
+            );
+        }
+        Ok(out)
+    }
 }
 
 /// The Bodhi a real run talks to.
@@ -902,6 +920,42 @@ impl BodhiQuery for BodhiApi {
             .map(|us| us.into_iter().map(|u| (u.alias, u.status)).collect())
             .map_err(|e| format!("Bodhi could not be asked about {nvr}: {e}"))
     }
+
+    fn updates_with_builds(
+        &self,
+        nvrs: &[String],
+    ) -> Result<Vec<(String, String, String)>, String> {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("failed to create async runtime: {e}"))?;
+        let client = sandogasa_bodhi::BodhiClient::new();
+        let mut out = Vec::new();
+        // A chunk at a time, to keep the query string a sane length.
+        for chunk in nvrs.chunks(40) {
+            let updates = rt
+                .block_on(client.updates_for_builds(chunk))
+                .map_err(|e| format!("Bodhi could not be asked about the builds: {e}"))?;
+            out.extend(updates_by_build(chunk, &updates));
+        }
+        Ok(out)
+    }
+}
+
+/// `(nvr, alias, status)` for each of `nvrs` an update in `updates`
+/// carries: the answer to one query about several builds, matched back
+/// by the builds each update lists.
+fn updates_by_build(
+    nvrs: &[String],
+    updates: &[sandogasa_bodhi::models::Update],
+) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for nvr in nvrs {
+        for u in updates {
+            if u.builds.iter().any(|b| &b.nvr == nvr) {
+                out.push((nvr.clone(), u.alias.clone(), u.status.clone()));
+            }
+        }
+    }
+    out
 }
 
 /// What a check asks Koji.
@@ -926,7 +980,25 @@ pub(crate) trait KojiQuery: Sync {
     fn latest_in(&self, _tag: &str, _package: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
+
+    /// [`Self::build_rpms`] for each of `nvrs`, in order; one Koji
+    /// round trip for all of them where the implementation can.
+    fn builds_rpms(&self, nvrs: &[String]) -> Vec<Vec<String>> {
+        nvrs.iter().map(|n| self.build_rpms(n)).collect()
+    }
+
+    /// [`Self::latest_in`] for each of `packages`, in order.
+    fn latest_in_each(
+        &self,
+        tag: &str,
+        packages: &[String],
+    ) -> Vec<Result<Option<String>, String>> {
+        packages.iter().map(|p| self.latest_in(tag, p)).collect()
+    }
 }
+
+/// How many calls one Koji `multiCall` carries.
+const MULTICALL_CHUNK: usize = 100;
 
 /// The Koji a real run talks to.
 pub(crate) struct KojiCli {
@@ -950,6 +1022,78 @@ impl KojiQuery for KojiCli {
         sandogasa_koji::latest_tagged(tag, package, self.profile.as_deref())
             .map(|b| b.map(|b| b.nvr))
     }
+
+    // The batched forms ask the hub directly, many calls to one
+    // `multiCall`, rather than starting the `koji` CLI once per build:
+    // each start costs a second or more before it asks anything. A
+    // profile whose hub cannot be found, or a request that fails, falls
+    // back to the CLI, as does any one call the hub answers with a fault.
+
+    fn builds_rpms(&self, nvrs: &[String]) -> Vec<Vec<String>> {
+        let Some(hub) = self.hub() else {
+            return nvrs.iter().map(|n| self.build_rpms(n)).collect();
+        };
+        nvrs.chunks(MULTICALL_CHUNK)
+            .flat_map(
+                |chunk| match sandogasa_kojihub::retry(2, || hub.builds_rpm_nvras(chunk)) {
+                    Ok(results) => chunk
+                        .iter()
+                        .zip(results)
+                        .map(|(nvr, r)| match r {
+                            Ok(nvras) => rpm_names(&nvras),
+                            Err(_) => self.build_rpms(nvr),
+                        })
+                        .collect::<Vec<_>>(),
+                    Err(_) => chunk.iter().map(|n| self.build_rpms(n)).collect(),
+                },
+            )
+            .collect()
+    }
+
+    fn latest_in_each(
+        &self,
+        tag: &str,
+        packages: &[String],
+    ) -> Vec<Result<Option<String>, String>> {
+        let Some(hub) = self.hub() else {
+            return packages.iter().map(|p| self.latest_in(tag, p)).collect();
+        };
+        packages
+            .chunks(MULTICALL_CHUNK)
+            .flat_map(
+                |chunk| match sandogasa_kojihub::retry(2, || hub.latest_builds(tag, chunk)) {
+                    Ok(results) => chunk
+                        .iter()
+                        .zip(results)
+                        .map(|(p, r)| match r {
+                            Ok(nvr) => Ok(nvr),
+                            Err(_) => self.latest_in(tag, p),
+                        })
+                        .collect::<Vec<_>>(),
+                    Err(_) => chunk.iter().map(|p| self.latest_in(tag, p)).collect(),
+                },
+            )
+            .collect()
+    }
+}
+
+impl KojiCli {
+    /// The hub the profile names, as the `koji` CLI's own configuration
+    /// gives it (`koji` when no profile is set, as for the CLI).
+    fn hub(&self) -> Option<sandogasa_kojihub::HubClient> {
+        sandogasa_kojihub::config::hub_url(self.profile.as_deref().unwrap_or("koji"))
+            .map(|url| sandogasa_kojihub::HubClient::new(&url))
+    }
+}
+
+/// The package names of binary RPMs given as NVRAs, as
+/// [`sandogasa_koji::build_rpms`] reads them.
+fn rpm_names(nvras: &[String]) -> Vec<String> {
+    nvras
+        .iter()
+        .filter_map(|nvra| sandogasa_koji::parse_nvr_name(&nvra[..nvra.rfind('.')?]))
+        .map(str::to_string)
+        .collect()
 }
 
 /// List NVRs in a Koji tag via `koji list-tagged --quiet`.
@@ -1061,17 +1205,14 @@ pub(crate) fn target_guards(
             if verbose {
                 eprintln!("[check-update] comparing each build with the newest in {tag}");
             }
-            let progress = Progress::stderr(
-                &format!("comparing with the newest in {tag}"),
-                nvrs.len(),
-                verbose,
-            );
-            for nvr in nvrs {
-                progress.tick(nvr);
-                let Some(name) = sandogasa_koji::parse_nvr_name(nvr) else {
-                    continue;
-                };
-                match services.koji.latest_in(&tag, name) {
+            let named: Vec<(&String, String)> = nvrs
+                .iter()
+                .filter_map(|nvr| Some((nvr, sandogasa_koji::parse_nvr_name(nvr)?.to_string())))
+                .collect();
+            let names: Vec<String> = named.iter().map(|(_, n)| n.clone()).collect();
+            let latest = services.koji.latest_in_each(&tag, &names);
+            for ((nvr, name), newest) in named.into_iter().zip(latest) {
+                match newest {
                     Ok(Some(target)) if is_not_newest(nvr, &target) => {
                         out.not_newest.push(NotNewest {
                             nvr: nvr.clone(),
@@ -1080,9 +1221,9 @@ pub(crate) fn target_guards(
                         })
                     }
                     Ok(_) => {}
-                    Err(e) => progress.eprintln(&format!(
-                        "warning: could not read {name}'s newest build in {tag}: {e}"
-                    )),
+                    Err(e) => {
+                        eprintln!("warning: could not read {name}'s newest build in {tag}: {e}")
+                    }
                 }
             }
         }
@@ -1095,22 +1236,14 @@ pub(crate) fn target_guards(
         if verbose {
             eprintln!("[check-update] asking Bodhi which updates the builds are in");
         }
-        let progress = Progress::stderr("looking the builds up in Bodhi", nvrs.len(), verbose);
-        for nvr in nvrs {
-            progress.tick(nvr);
-            match services.bodhi.updates_with_build(nvr) {
-                Ok(updates) => out.in_other_update.extend(
-                    updates
-                        .into_iter()
-                        .filter(|(alias, _)| Some(alias.as_str()) != own_alias)
-                        .map(|(alias, status)| InOtherUpdate {
-                            nvr: nvr.clone(),
-                            alias,
-                            status,
-                        }),
-                ),
-                Err(e) => progress.eprintln(&format!("warning: {e}")),
-            }
+        match services.bodhi.updates_with_builds(nvrs) {
+            Ok(found) => out.in_other_update.extend(
+                found
+                    .into_iter()
+                    .filter(|(_, alias, _)| Some(alias.as_str()) != own_alias)
+                    .map(|(nvr, alias, status)| InOtherUpdate { nvr, alias, status }),
+            ),
+            Err(e) => eprintln!("warning: {e}"),
         }
     }
     for n in &out.not_newest {
@@ -1550,17 +1683,7 @@ fn check_update_body(
             eprintln!("[check-update] comparing provides via koji + side tag");
         }
         // Binary RPM names from koji (for installability checking).
-        let progress = Progress::stderr("listing RPMs in koji", nvrs.len(), opts.verbose);
-        let koji_bins: Vec<String> = nvrs
-            .iter()
-            .flat_map(|nvr| {
-                progress.tick(nvr);
-                koji.build_rpms(nvr)
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        drop(progress);
+        let koji_bins = koji_binaries(koji, &nvrs, opts.verbose);
 
         // Detect side-tag repodata that lags koji (V-R mismatch) before
         // the expensive provides comparison, so a regen can fix the data
@@ -1590,11 +1713,10 @@ fn check_update_body(
         }
 
         let changed = compute_changed_provides_via_koji(
-            &nvrs,
+            &koji_bins,
             &updated_packages,
             stable.as_ref(),
             side_fq.as_ref(),
-            opts.koji_profile.as_deref(),
             opts.verbose,
         );
 
@@ -1642,23 +1764,12 @@ fn check_update_body(
                         dir.display()
                     );
                 }
-                let progress = Progress::stderr("listing RPMs in koji", nvrs.len(), opts.verbose);
-                let koji_bins: Vec<String> = nvrs
-                    .iter()
-                    .flat_map(|nvr| {
-                        progress.tick(nvr);
-                        koji.build_rpms(nvr)
-                    })
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                drop(progress);
+                let koji_bins = koji_binaries(koji, &nvrs, opts.verbose);
                 let changed = compute_changed_provides_via_koji(
-                    &nvrs,
+                    &koji_bins,
                     &updated_packages,
                     stable.as_ref(),
                     local_fq.as_ref(),
-                    opts.koji_profile.as_deref(),
                     opts.verbose,
                 );
                 return run_provides_analysis(
@@ -3079,6 +3190,30 @@ fn local_update_repo(
     Ok(dir)
 }
 
+/// The binary package names of the builds `nvrs`, from koji, each
+/// once: what the provides comparison reads the new provides of, and
+/// the installability check reads requires of.
+fn koji_binaries(koji: &dyn KojiQuery, nvrs: &[String], verbose: bool) -> Vec<String> {
+    if verbose {
+        eprintln!("[check-update] listing the builds' RPMs in koji");
+    }
+    let names: Vec<String> = koji
+        .builds_rpms(nvrs)
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if verbose {
+        eprintln!(
+            "[check-update] {} binary packages from koji: {}",
+            names.len(),
+            names.join(", "),
+        );
+    }
+    names
+}
+
 /// Compute changed provides using `subpkgs_provides` on both repos.
 ///
 /// Works for @testing and any repo where source RPM queries work.
@@ -3120,11 +3255,10 @@ fn compute_changed_provides_via_subpkgs(
 /// Side tags don't index source RPMs, so we get binary RPM names
 /// from koji and query their provides individually.
 fn compute_changed_provides_via_koji(
-    nvrs: &[String],
+    binary_names: &[String],
     updated_packages: &[String],
     stable_fedrq: &(dyn RepoQuery + Send + Sync),
     side_tag_fedrq: &(dyn RepoQuery + Send + Sync),
-    koji_profile: Option<&str>,
     verbose: bool,
 ) -> Vec<ChangedProvide> {
     // Get old provides from stable repo (source-based query works here).
@@ -3137,39 +3271,10 @@ fn compute_changed_provides_via_koji(
     .into_iter()
     .collect();
 
-    // Get new provides: binary RPM names via koji, then query
-    // each one's provides from the side tag repo.
-    let progress = Progress::stderr("listing RPMs in koji", nvrs.len(), verbose);
-    let binary_names: Vec<String> = nvrs
-        .iter()
-        .flat_map(|nvr| {
-            progress.tick(nvr);
-            sandogasa_koji::build_rpms(nvr, koji_profile).unwrap_or_else(|e| {
-                if verbose {
-                    eprintln!(
-                        "[check-update] warning: \
-                         koji buildinfo {nvr} failed: {e}"
-                    );
-                }
-                vec![]
-            })
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-
-    if verbose {
-        eprintln!(
-            "[check-update] {} binary packages from koji: {}",
-            binary_names.len(),
-            binary_names.join(", "),
-        );
-    }
-
-    drop(progress);
-
+    // New provides: the binary RPMs koji lists for the builds
+    // (`binary_names`), each one's provides read from the new repo.
     let new_provides: BTreeSet<String> =
-        chunked(&binary_names, "reading new provides", verbose, |chunk| {
+        chunked(binary_names, "reading new provides", verbose, |chunk| {
             side_tag_fedrq.pkgs_provides(chunk)
         })
         .into_iter()
@@ -3767,6 +3872,52 @@ mod tests {
                 .into_iter()
                 .collect::<Vec<_>>(),
             ["/bin/sh", "/sbin/nologin", "/usr/sbin/sendmail"]
+        );
+    }
+
+    #[test]
+    fn one_bodhi_answer_is_matched_back_to_each_build() {
+        let updates: Vec<sandogasa_bodhi::models::Update> =
+            serde_json::from_value(serde_json::json!([
+                {"alias": "FEDORA-2026-a", "status": "stable",
+                 "builds": [{"nvr": "asterisk-24.0.0-3.fc46"}, {"nvr": "other-1-1.fc46"}]},
+                {"alias": "FEDORA-2026-b", "status": "testing",
+                 "builds": [{"nvr": "bluez-5.88-1.fc46"}]},
+            ]))
+            .unwrap();
+        let nvrs = [
+            "asterisk-24.0.0-3.fc46",
+            "bluez-5.88-1.fc46",
+            "libical-4.0.7-1.fc46",
+        ]
+        .map(String::from);
+        assert_eq!(
+            updates_by_build(&nvrs, &updates),
+            [
+                (
+                    "asterisk-24.0.0-3.fc46".into(),
+                    "FEDORA-2026-a".into(),
+                    "stable".into()
+                ),
+                (
+                    "bluez-5.88-1.fc46".into(),
+                    "FEDORA-2026-b".into(),
+                    "testing".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn rpm_names_are_read_from_nvras() {
+        let nvras = [
+            "libical-glib-4.0.7-1.fc46.x86_64",
+            "python3-asahi_firmware-0.9.2-4.fc46.aarch64",
+        ]
+        .map(String::from);
+        assert_eq!(
+            rpm_names(&nvras),
+            ["libical-glib", "python3-asahi_firmware"]
         );
     }
 

@@ -232,6 +232,40 @@ impl Client {
         &self.hub_url
     }
 
+    /// Several calls in one request, through the hub's `multiCall`:
+    /// one round trip instead of one each. The outer `Err` is the
+    /// request failing; each inner result is one call's answer, or its
+    /// fault, in the order the calls were given.
+    pub fn multicall(
+        &self,
+        calls: &[(&str, Vec<Value>)],
+    ) -> Result<Vec<Result<Value, Error>>, Error> {
+        if calls.is_empty() {
+            return Ok(Vec::new());
+        }
+        let list = calls
+            .iter()
+            .map(|(method, params)| {
+                Value::Struct(HashMap::from([
+                    ("methodName".to_string(), Value::String(method.to_string())),
+                    ("params".to_string(), Value::Array(params.clone())),
+                ]))
+            })
+            .collect();
+        let answer = self.call("multiCall", &[Value::Array(list)])?;
+        let items = answer
+            .as_array()
+            .ok_or_else(|| Error::Parse("multiCall did not answer a list".into()))?;
+        if items.len() != calls.len() {
+            return Err(Error::Parse(format!(
+                "multiCall answered {} results for {} calls",
+                items.len(),
+                calls.len()
+            )));
+        }
+        Ok(items.iter().map(multicall_result).collect())
+    }
+
     pub fn call(&self, method: &str, params: &[Value]) -> Result<Value, Error> {
         let body = build_request(method, params);
         let resp = self
@@ -246,6 +280,25 @@ impl Client {
             .error_for_status()?
             .text()?;
         parse_response(&resp)
+    }
+}
+
+/// One entry of a `multiCall` answer: the result wrapped in a
+/// one-element list, or a fault struct.
+fn multicall_result(item: &Value) -> Result<Value, Error> {
+    if let Some(code) = item.get("faultCode").and_then(Value::as_int) {
+        let message = item
+            .get("faultString")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        return Err(Error::Fault { code, message });
+    }
+    match item.as_array() {
+        Some([result]) => Ok(result.clone()),
+        _ => Err(Error::Parse(
+            "multiCall entry is neither a result nor a fault".into(),
+        )),
     }
 }
 

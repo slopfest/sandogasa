@@ -139,6 +139,64 @@ impl HubClient {
         &self.hub_url
     }
 
+    /// The binary RPMs of each build in `nvrs`, as
+    /// `name-version-release.arch` (source RPMs left out), asked in one
+    /// `multiCall` of `listBuildRPMs`. One result per NVR, in order; a
+    /// build the hub does not know is a fault in its own slot.
+    pub fn builds_rpm_nvras(
+        &self,
+        nvrs: &[String],
+    ) -> Result<Vec<Result<Vec<String>, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = nvrs
+            .iter()
+            .map(|nvr| ("listBuildRPMs", vec![Value::String(nvr.clone())]))
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| r.map(|v| rpm_nvras(&v)))
+            .collect())
+    }
+
+    /// The newest build of each of `packages` in `tag`, following
+    /// inheritance as `koji list-tagged --latest --inherit` does, asked
+    /// in one `multiCall` of `getLatestBuilds`. One result per package,
+    /// in order: its NVR, or `None` when the tag has no build of it.
+    pub fn latest_builds(
+        &self,
+        tag: &str,
+        packages: &[String],
+    ) -> Result<Vec<Result<Option<String>, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = packages
+            .iter()
+            .map(|p| {
+                (
+                    "getLatestBuilds",
+                    vec![
+                        Value::String(tag.to_string()),
+                        Value::Nil,
+                        Value::String(p.clone()),
+                    ],
+                )
+            })
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| {
+                r.map(|v| {
+                    v.as_array()
+                        .and_then(|builds| builds.first())
+                        .and_then(|b| b.get("nvr"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+            })
+            .collect())
+    }
+
     /// One page of `listTasks(opts, queryOpts)`.
     pub fn list_tasks(
         &self,
@@ -451,6 +509,27 @@ fn task_from_value(v: &Value) -> Result<HubTask, Error> {
     })
 }
 
+/// The binary RPMs in a `listBuildRPMs` answer, as NVRAs.
+fn rpm_nvras(answer: &Value) -> Vec<String> {
+    answer
+        .as_array()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|rpm| {
+            let field = |k: &str| rpm.get(k).and_then(Value::as_str);
+            let arch = field("arch")?;
+            (arch != "src").then(|| {
+                Some(format!(
+                    "{}-{}-{}.{arch}",
+                    field("name")?,
+                    field("version")?,
+                    field("release")?
+                ))
+            })?
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,6 +575,84 @@ mod tests {
              <value><array><data>{inner}</data></array></value>\
              </param></params></methodResponse>"
         )
+    }
+
+    fn rpm_xml(name: &str, arch: &str) -> String {
+        format!(
+            "<value><struct>\
+             <member><name>name</name><value><string>{name}</string></value></member>\
+             <member><name>version</name><value><string>4.0.7</string></value></member>\
+             <member><name>release</name><value><string>1.fc46</string></value></member>\
+             <member><name>arch</name><value><string>{arch}</string></value></member>\
+             </struct></value>"
+        )
+    }
+
+    #[test]
+    fn builds_rpms_come_back_per_build_from_one_multicall() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = block_on(MockServer::start());
+        // Each result is wrapped in a one-element list; an unknown
+        // build answers a fault in its own slot.
+        let body = response(&format!(
+            "<value><array><data><value><array><data>{}{}</data></array></value></data></array></value>\
+             <value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>No such build</string></value></member>\
+             </struct></value>",
+            rpm_xml("libical", "src"),
+            rpm_xml("libical", "x86_64"),
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("<methodName>multiCall</methodName>"))
+                .and(body_string_contains("listBuildRPMs"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        let nvrs = ["libical-4.0.7-1.fc46", "nope-1-1"].map(String::from);
+        let got = hub.builds_rpm_nvras(&nvrs).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].as_ref().unwrap(), &["libical-4.0.7-1.fc46.x86_64"]);
+        assert!(matches!(got[1], Err(Error::Fault { code: 1000, .. })));
+    }
+
+    #[test]
+    fn latest_builds_reads_each_package_s_newest_nvr() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = block_on(MockServer::start());
+        let body = response(
+            "<value><array><data><value><array><data><value><struct>\
+             <member><name>nvr</name><value><string>asterisk-24.0.0-3.fc46</string></value></member>\
+             </struct></value></data></array></value></data></array></value>\
+             <value><array><data><value><array><data></data></array></value></data></array></value>",
+        );
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("getLatestBuilds"))
+                .and(body_string_contains("<nil/>"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        let got = hub
+            .latest_builds("f46-updates-candidate", &["asterisk".into(), "ical".into()])
+            .unwrap();
+        assert_eq!(
+            got[0].as_ref().unwrap().as_deref(),
+            Some("asterisk-24.0.0-3.fc46")
+        );
+        assert_eq!(got[1].as_ref().unwrap(), &None);
+        // Nothing asked, nothing sent.
+        assert!(hub.latest_builds("t", &[]).unwrap().is_empty());
     }
 
     #[test]

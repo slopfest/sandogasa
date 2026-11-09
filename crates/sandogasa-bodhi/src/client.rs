@@ -144,6 +144,39 @@ impl BodhiClient {
         Ok(all_updates)
     }
 
+    /// The updates any of `nvrs` is in, whatever their status, in one
+    /// query (paginated) rather than one per build: Bodhi takes the
+    /// `builds` parameter repeated. Each update lists its builds, which
+    /// is how a caller matches it back to the NVRs it asked about.
+    pub async fn updates_for_builds(&self, nvrs: &[String]) -> Result<Vec<Update>, reqwest::Error> {
+        let mut all_updates = Vec::new();
+        if nvrs.is_empty() {
+            return Ok(all_updates);
+        }
+        let mut page = 1;
+        loop {
+            let mut query: Vec<(&str, String)> =
+                nvrs.iter().map(|n| ("builds", n.clone())).collect();
+            query.push(("rows_per_page", "100".to_string()));
+            query.push(("page", page.to_string()));
+            let resp: UpdatesResponse = self
+                .client
+                .get(format!("{}/updates/", self.base_url))
+                .query(&query)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            all_updates.extend(resp.updates);
+            if page >= resp.pages {
+                break;
+            }
+            page += 1;
+        }
+        Ok(all_updates)
+    }
+
     /// Fetch active Fedora and EPEL releases from the Bodhi API.
     ///
     /// Returns releases with state "current", "pending", or "frozen",
@@ -520,6 +553,40 @@ mod tests {
             .await
             .unwrap();
         assert!(updates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn updates_for_builds_asks_about_all_of_them_at_once() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .and(wiremock::matchers::query_param(
+                "builds",
+                "asterisk-24.0.0-3.fc46",
+            ))
+            .and(wiremock::matchers::query_param(
+                "builds",
+                "bluez-5.88-1.fc46",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [{
+                    "alias": "FEDORA-2026-0123456789", "status": "stable",
+                    "builds": [{"nvr": "asterisk-24.0.0-3.fc46"}],
+                }, {
+                    "alias": "FEDORA-2026-1ebc714fec", "status": "stable",
+                    "builds": [{"nvr": "bluez-5.88-1.fc46"}],
+                }],
+                "page": 1, "pages": 1, "total": 2,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let nvrs = ["asterisk-24.0.0-3.fc46", "bluez-5.88-1.fc46"].map(String::from);
+        let updates = client.updates_for_builds(&nvrs).await.unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[1].builds[0].nvr, "bluez-5.88-1.fc46");
+        assert!(client.updates_for_builds(&[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]

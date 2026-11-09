@@ -7,11 +7,14 @@
 //! `Value` tree over blocking reqwest + quick-xml, extracted from
 //! koji-diff), and [`hub`] is a typed layer over the hub methods
 //! the sandogasa tools use (`listTasks`, `getTaskInfo`,
-//! `listHosts`, `listChannels`).
+//! `listHosts`, `listChannels`, `listBuildRPMs`, `getLatestBuilds`),
+//! several at once through `multiCall`. [`config`] finds the hub a
+//! `koji` CLI profile names.
 //!
 //! Anonymous calls work for all read methods used here — no Koji
 //! credentials or the `koji` CLI are required.
 
+pub mod config;
 pub mod hub;
 pub mod xmlrpc;
 

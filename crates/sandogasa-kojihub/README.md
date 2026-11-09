@@ -15,8 +15,10 @@ credentials and no `koji` CLI required (contrast with
 ## API
 
 - `xmlrpc::Client` — `call(method, params)` returning a `Value`
-  tree; retriable-vs-fault `Error` classification; `retry(n, f)`
-  with exponential backoff at the crate root.
+  tree, and `multicall(calls)`, several calls in one request through
+  the hub's `multiCall`, each answered with its result or its fault;
+  retriable-vs-fault `Error` classification; `retry(n, f)` with
+  exponential backoff at the crate root.
 - `hub::HubClient` — typed helpers:
   - `list_tasks(opts, query)` / `list_tasks_paged(opts, page_size,
     on_page)` — `listTasks` with method/completion-window filters
@@ -26,6 +28,16 @@ credentials and no `koji` CLI required (contrast with
     sleeps).
   - `get_task_info(task_id, decode_request)`.
   - `list_hosts()` / `list_channels()` — id → name pairs.
+  - `builds_rpm_nvras(nvrs)` — each build's binary RPMs as NVRAs,
+    through one `multiCall` of `listBuildRPMs`.
+  - `latest_builds(tag, packages)` — each package's newest build in a
+    tag, following inheritance, through one `multiCall` of
+    `getLatestBuilds`.
+- `config::hub_url(profile)` — the hub a `koji` CLI profile names,
+  read from the CLI's own configuration (`/etc/koji.conf.d/*.conf`,
+  `/etc/koji.conf`, `~/.koji/config.d/*.conf`, `~/.koji/config`, the
+  last to define it winning), for a tool that takes a
+  `--koji-profile` but calls the hub directly.
 - `hub::HubTask` — Option-tolerant task record: timestamps are the
   hub's UTC unix doubles (`create_ts`/`start_ts`/`completion_ts`;
   queue wait = start − create, build time = completion − start).

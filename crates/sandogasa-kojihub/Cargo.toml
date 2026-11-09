@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+dirs = { workspace = true }
 quick-xml = { workspace = true }
 reqwest = { workspace = true }
 # Registers the rustls provider directly; `tls` is not implied
