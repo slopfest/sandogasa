@@ -1137,7 +1137,7 @@ also shows which are done:
 $ ebranch rebuild-plan libical -s f46-build-side-158330
 # Rebuild plan for libical (rawhide)
 
-Side tag: `f46-build-side-158330`
+Side tag: `f46-build-side-158330` (created 2026-11-02)
 
 SONAMEs on rawhide: `libical-glib.so.3()(64bit)`, `libical.so.3()(64bit)`, ...
 
@@ -1189,6 +1189,20 @@ And the development packages requiring it: evolution-devel, folks-devel
 ...
 
 No rebuild in the side tag changed a SONAME of its own, so nothing further down a dependency chain needs rebuilding. Rerun this as rebuilds land.
+```
+
+With a side tag, the plan also marks the packages it lists that arrived
+on the branch after the side tag was created, from Koji's history: a
+package first listed after then (a package new to Fedora), or one whose
+newest build on the branch finished after then. They are named in a note
+at the top and marked where they are listed:
+
+```
+> Arrived on rawhide after the side tag was created, so a plan made then could not list them: ical (new since the side tag opened, 2026-11-05)
+
+## Still to rebuild (1)
+
+- ical (new since the side tag opened, 2026-11-05)
 ```
 
 A package needs a rebuild when one of its binary packages requires a

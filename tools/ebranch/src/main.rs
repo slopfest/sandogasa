@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use sandogasa_bodhi::models::UpdateSource;
 
+mod arrival;
 mod branch_request;
 mod check_crate;
 mod check_update;
@@ -761,8 +762,10 @@ rebuilt against the new one. This lists those packages: binary
 packages requiring one of the library's SONAMEs on the branch, and
 source packages building against its development files without
 linking it (listed apart, as they rarely need a rebuild). Given the
-side tag the rebuilds go into, it also says which are done, and which
-builds there do not use the library at all.
+side tag the rebuilds go into, it also says which are done, which
+builds there do not use the library at all, and which packages arrived
+on the branch after the side tag was created (new packages, or
+rebuilds), as a plan made then could not have listed them.
 
 Packages still to rebuild are checked for BuildRequires that already
 fail on the branch: those cannot be rebuilt, and the packages

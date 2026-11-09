@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use sandogasa_fedrq::PkgInfo;
 use serde::Serialize;
 
-use crate::check_update::{KojiCli, KojiQuery};
+use crate::arrival::{Arrival, ArrivalNote, arrival, day_of};
+use crate::check_update::{BodhiApi, BodhiQuery, KojiCli, KojiQuery};
 
 /// What to plan and how to print it.
 pub struct Options {
@@ -346,6 +347,14 @@ pub struct RebuildPlan {
     /// missing entries.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub incomplete: Vec<Gap>,
+    /// The day the side tag was created (`YYYY-MM-DD`), when Koji says.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side_tag_opened: Option<String>,
+    /// Packages the plan lists that arrived on the branch after the
+    /// side tag was created, as new packages or rebuilds: a plan made
+    /// when the side tag opened could not have listed them (#84).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub arrived: BTreeMap<String, ArrivalNote>,
 }
 
 /// What a [`Gap`] for a build the SONAME check could not see is
@@ -633,7 +642,67 @@ pub(crate) fn plan(
         local_builds: Vec::new(),
         local_libraries: None,
         incomplete: Vec::new(),
+        side_tag_opened: None,
+        arrived: BTreeMap::new(),
     })
+}
+
+/// Mark the packages the plan lists, still to rebuild or unbuildable,
+/// that arrived on `branch` after `side_tag` was created (#84), from
+/// Koji's history of the branch's target tag. Rebuilt packages are
+/// left alone: the side tag has them already. Nothing is marked when
+/// Bodhi names no target for the branch or Koji cannot say when the
+/// side tag was created.
+fn mark_arrivals(
+    plan: &mut RebuildPlan,
+    side_tag: &str,
+    koji: &dyn KojiQuery,
+    bodhi: &dyn BodhiQuery,
+    verbose: bool,
+) {
+    let mut packages: Vec<String> = plan.rounds.iter().flatten().cloned().collect();
+    packages.extend(plan.unbuildable.iter().map(|u| u.package.clone()));
+    if packages.is_empty() {
+        return;
+    }
+    let Some(target) = bodhi.candidate_tag(&plan.branch) else {
+        return;
+    };
+    let Some(opened) = koji.tag_created(side_tag) else {
+        return;
+    };
+    if verbose {
+        eprintln!(
+            "[rebuild-plan] asking koji which of {} packages reached {target} after {side_tag}",
+            packages.len()
+        );
+    }
+    plan.side_tag_opened = day_of(opened);
+    for (pkg, history) in packages.iter().zip(koji.histories(&target, &packages)) {
+        if let Some(a) = arrival(opened, &history)
+            && a.arrival != Arrival::PreExisting
+        {
+            plan.arrived.insert(pkg.clone(), a);
+        }
+    }
+}
+
+/// How the report marks a package that arrived after the side tag was
+/// created; empty for one that did not.
+fn arrival_label(plan: &RebuildPlan, pkg: &str) -> String {
+    match plan.arrived.get(pkg) {
+        Some(a) if a.arrival == Arrival::NewPackage => format!(
+            " (new since the side tag opened, {})",
+            a.on.as_deref().unwrap_or("?")
+        ),
+        Some(a) => format!(
+            " (rebuilt on {} since the side tag opened, `{}` on {})",
+            plan.branch,
+            a.nvr.as_deref().unwrap_or("?"),
+            a.on.as_deref().unwrap_or("?")
+        ),
+        None => String::new(),
+    }
 }
 
 /// Look up the pull requests by `authors` for every package the plan
@@ -1092,11 +1161,32 @@ pub fn render(plan: &RebuildPlan) -> String {
         plan.library, plan.branch
     );
     if let Some(tag) = &plan.side_tag {
-        let _ = writeln!(out, "Side tag: `{tag}`\n");
+        match &plan.side_tag_opened {
+            Some(opened) => {
+                let _ = writeln!(out, "Side tag: `{tag}` (created {opened})\n");
+            }
+            None => {
+                let _ = writeln!(out, "Side tag: `{tag}`\n");
+            }
+        }
     }
     let sonames: Vec<String> = plan.sonames.iter().map(|s| format!("`{s}`")).collect();
     let _ = writeln!(out, "SONAMEs on {}: {}\n", plan.branch, sonames.join(", "));
     render_incomplete(&mut out, plan);
+    if !plan.arrived.is_empty() {
+        let names: Vec<String> = plan
+            .arrived
+            .keys()
+            .map(|p| format!("{p}{}", arrival_label(plan, p)))
+            .collect();
+        let _ = writeln!(
+            out,
+            "> Arrived on {} after the side tag was created, so a plan made then could \
+             not list them: {}\n",
+            plan.branch,
+            names.join("; ")
+        );
+    }
 
     let heading = if plan.side_tag.is_some() {
         "Still to rebuild"
@@ -1132,7 +1222,13 @@ pub fn render(plan: &RebuildPlan) -> String {
         );
         for u in &plan.unbuildable {
             let deps: Vec<String> = u.unresolved.iter().map(|d| format!("`{d}`")).collect();
-            let _ = write!(out, "- {}: {}", u.package, deps.join(", "));
+            let _ = write!(
+                out,
+                "- {}{}: {}",
+                u.package,
+                arrival_label(plan, &u.package),
+                deps.join(", ")
+            );
             if !u.stranded.is_empty() {
                 let _ = write!(
                     out,
@@ -1674,7 +1770,7 @@ fn render_rounds(out: &mut String, plan: &RebuildPlan) {
                 "None of these needs another in its buildroot, so they can all be built at once:\n"
             );
             for p in only {
-                let _ = writeln!(out, "- {p}");
+                let _ = writeln!(out, "- {p}{}", arrival_label(plan, p));
             }
             out.push('\n');
         }
@@ -1682,12 +1778,13 @@ fn render_rounds(out: &mut String, plan: &RebuildPlan) {
             for (i, round) in rounds.iter().enumerate() {
                 let _ = writeln!(out, "### Round {} ({})\n", i + 1, round.len());
                 for p in round {
+                    let label = arrival_label(plan, p);
                     match plan.waits_for.get(p) {
                         Some(w) => {
-                            let _ = writeln!(out, "- {p} (after {})", w.join(", "));
+                            let _ = writeln!(out, "- {p}{label} (after {})", w.join(", "));
                         }
                         None => {
-                            let _ = writeln!(out, "- {p}");
+                            let _ = writeln!(out, "- {p}{label}");
                         }
                     }
                 }
@@ -1752,6 +1849,15 @@ pub fn run(opts: &Options) -> Result<(), String> {
         opts.verbose,
     )?;
     let mut plan = plan;
+    if let Some(st) = &side_tag {
+        mark_arrivals(
+            &mut plan,
+            &st.name,
+            &KojiCli { profile: None },
+            &BodhiApi,
+            opts.verbose,
+        );
+    }
     if let Some(tag) = &opts.side_tag {
         plan.not_compared.retain(|p| !stale_repo.contains(p));
         for pkg in &stale_repo {
@@ -3406,6 +3512,122 @@ mod tests {
         assert!(err.contains("no SONAME"), "{err}");
         let err = plan("missing", "rawhide", None, &q, false).unwrap_err();
         assert!(err.contains("no binary packages"), "{err}");
+    }
+
+    /// A Koji that knows when the libical side tag was created, and
+    /// that two of the plan's packages arrived since.
+    struct ArrivalKoji;
+
+    impl KojiQuery for ArrivalKoji {
+        fn list_tagged(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn external_repos(&self, _: &str) -> Option<Vec<String>> {
+            None
+        }
+        fn build_rpms(&self, _: &str) -> Vec<String> {
+            vec![]
+        }
+        fn tag_created(&self, tag: &str) -> Option<f64> {
+            // 2026-11-02 08:40 UTC.
+            (tag == "f46-build-side-158330").then_some(1_793_608_815.5)
+        }
+        fn histories(
+            &self,
+            target: &str,
+            packages: &[String],
+        ) -> Vec<crate::arrival::PackageHistory> {
+            assert_eq!(target, "f46-updates-candidate");
+            packages
+                .iter()
+                .map(|p| match p.as_str() {
+                    // First listed 2026-11-05.
+                    "osmo" => crate::arrival::PackageHistory {
+                        first_listed: Some(1_793_896_312.3),
+                        latest: None,
+                    },
+                    // Listed for years, rebuilt 2026-11-06.
+                    "kdepimlibs" => crate::arrival::PackageHistory {
+                        first_listed: Some(1_185_276_321.6),
+                        latest: Some(("kdepimlibs-4.14.10-50.fc46".into(), Some(1_793_959_200.5))),
+                    },
+                    _ => crate::arrival::PackageHistory {
+                        first_listed: Some(1_185_276_321.6),
+                        latest: Some(("x-1-1.fc46".into(), Some(1_786_000_000.0))),
+                    },
+                })
+                .collect()
+        }
+    }
+
+    struct RawhideBodhi;
+
+    impl BodhiQuery for RawhideBodhi {
+        fn update(&self, _: &str) -> Result<crate::check_update::BodhiUpdateInfo, String> {
+            Err("not asked".into())
+        }
+        fn candidate_tag(&self, branch: &str) -> Option<String> {
+            (branch == "rawhide").then(|| "f46-updates-candidate".to_string())
+        }
+    }
+
+    #[test]
+    fn packages_that_arrived_after_the_side_tag_are_marked() {
+        let mut plan = libical_plan();
+        assert!(
+            plan.rounds.iter().flatten().any(|p| p == "osmo"),
+            "{:?}",
+            plan.rounds
+        );
+        mark_arrivals(
+            &mut plan,
+            "f46-build-side-158330",
+            &ArrivalKoji,
+            &RawhideBodhi,
+            false,
+        );
+        assert_eq!(plan.side_tag_opened.as_deref(), Some("2026-11-02"));
+        assert_eq!(
+            plan.arrived.keys().collect::<Vec<_>>(),
+            ["kdepimlibs", "osmo"]
+        );
+        let out = render(&plan);
+        for want in [
+            "Side tag: `f46-build-side-158330` (created 2026-11-02)",
+            "> Arrived on rawhide after the side tag was created, so a plan made then could \
+             not list them: kdepimlibs (rebuilt on rawhide since the side tag opened, \
+             `kdepimlibs-4.14.10-50.fc46` on 2026-11-06); osmo (new since the side tag \
+             opened, 2026-11-05)",
+            "- osmo (new since the side tag opened, 2026-11-05)\n",
+            "- kdepimlibs (rebuilt on rawhide since the side tag opened, \
+             `kdepimlibs-4.14.10-50.fc46` on 2026-11-06): `pkgconfig(QJson)`",
+        ] {
+            assert!(out.contains(want), "missing {want:?} in\n{out}");
+        }
+        // Packages that were there already carry no mark.
+        assert!(!out.contains("GoldenCheetah ("), "{out}");
+    }
+
+    #[test]
+    fn without_a_target_or_a_creation_date_nothing_is_marked() {
+        let mut plan = libical_plan();
+        mark_arrivals(
+            &mut plan,
+            "some-other-tag",
+            &ArrivalKoji,
+            &RawhideBodhi,
+            false,
+        );
+        assert!(plan.arrived.is_empty() && plan.side_tag_opened.is_none());
+        plan.branch = "f99".into();
+        mark_arrivals(
+            &mut plan,
+            "f46-build-side-158330",
+            &ArrivalKoji,
+            &RawhideBodhi,
+            false,
+        );
+        assert!(plan.arrived.is_empty());
     }
 
     #[test]

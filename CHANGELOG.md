@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan marks packages that arrived after the side tag was created
+
+The libical 4 rebuild plan, made on 2026-11-04, could not list ical:
+it entered Fedora on 2026-11-05, three days after the side tag was
+created, and was found only when `check-update` reported it as a
+reverse dependency that would break. Rerun, the plan listed it among
+the others, with nothing to say it had not been there before.
+
+With a side tag, `rebuild-plan` now marks each package still to
+rebuild, or unbuildable, that arrived on the branch after the side tag
+was created: first listed in any tag after then, or with its newest
+build on the branch finished after then. A note at the top names them,
+and each is marked where it is listed. The side tag line gives the day
+it was created. `--json` gains `side_tag_opened` and `arrived`. The
+history lookups are the ones `check-update` uses for #83, now in a
+module the two share. Resolves #84.
+
 ### ebranch: check-update says which breaking reverse dependencies arrived while the side tag was open
 
 `ebranch check-update f46-build-side-158330` reported two reverse
