@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use rayon::prelude::*;
+use sandogasa_cli::progress::Progress;
 use sandogasa_review::Resolution;
 use serde::Serialize;
 
@@ -842,7 +843,13 @@ pub(crate) fn target_guards(
             if verbose {
                 eprintln!("[check-update] comparing each build with the newest in {tag}");
             }
+            let progress = Progress::stderr(
+                &format!("comparing with the newest in {tag}"),
+                nvrs.len(),
+                verbose,
+            );
             for nvr in nvrs {
+                progress.tick(nvr);
                 let Some(name) = sandogasa_koji::parse_nvr_name(nvr) else {
                     continue;
                 };
@@ -855,9 +862,9 @@ pub(crate) fn target_guards(
                         })
                     }
                     Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("warning: could not read {name}'s newest build in {tag}: {e}")
-                    }
+                    Err(e) => progress.eprintln(&format!(
+                        "warning: could not read {name}'s newest build in {tag}: {e}"
+                    )),
                 }
             }
         }
@@ -870,7 +877,9 @@ pub(crate) fn target_guards(
         if verbose {
             eprintln!("[check-update] asking Bodhi which updates the builds are in");
         }
+        let progress = Progress::stderr("looking the builds up in Bodhi", nvrs.len(), verbose);
         for nvr in nvrs {
+            progress.tick(nvr);
             match services.bodhi.updates_with_build(nvr) {
                 Ok(updates) => out.in_other_update.extend(
                     updates
@@ -882,7 +891,7 @@ pub(crate) fn target_guards(
                             status,
                         }),
                 ),
-                Err(e) => eprintln!("warning: {e}"),
+                Err(e) => progress.eprintln(&format!("warning: {e}")),
             }
         }
     }
@@ -1180,12 +1189,17 @@ fn check_update_body(
         eprintln!("[check-update] querying subpackage names");
     }
 
+    let progress = Progress::stderr("querying subpackages", updated_packages.len(), opts.verbose);
     let all_subpkg_names: Vec<String> = updated_packages
         .par_iter()
-        .flat_map(|srpm| filter_none(stable.subpkgs_names(srpm).unwrap_or_default()))
+        .flat_map(|srpm| {
+            progress.tick(srpm);
+            filter_none(stable.subpkgs_names(srpm).unwrap_or_default())
+        })
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
+    drop(progress);
 
     if opts.verbose {
         eprintln!(
@@ -1314,12 +1328,17 @@ fn check_update_body(
             eprintln!("[check-update] comparing provides via koji + side tag");
         }
         // Binary RPM names from koji (for installability checking).
+        let progress = Progress::stderr("listing RPMs in koji", nvrs.len(), opts.verbose);
         let koji_bins: Vec<String> = nvrs
             .iter()
-            .flat_map(|nvr| koji.build_rpms(nvr))
+            .flat_map(|nvr| {
+                progress.tick(nvr);
+                koji.build_rpms(nvr)
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        drop(progress);
 
         // Detect side-tag repodata that lags koji (V-R mismatch) before
         // the expensive provides comparison, so a regen can fix the data
@@ -1401,12 +1420,17 @@ fn check_update_body(
                         dir.display()
                     );
                 }
+                let progress = Progress::stderr("listing RPMs in koji", nvrs.len(), opts.verbose);
                 let koji_bins: Vec<String> = nvrs
                     .iter()
-                    .flat_map(|nvr| koji.build_rpms(nvr))
+                    .flat_map(|nvr| {
+                        progress.tick(nvr);
+                        koji.build_rpms(nvr)
+                    })
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect();
+                drop(progress);
                 let changed = compute_changed_provides_via_koji(
                     &nvrs,
                     &updated_packages,
@@ -2875,16 +2899,23 @@ fn compute_changed_provides_via_koji(
     verbose: bool,
 ) -> Vec<ChangedProvide> {
     // Get old provides from stable repo (source-based query works here).
+    let progress = Progress::stderr("reading current provides", updated_packages.len(), verbose);
     let old_provides: BTreeSet<String> = updated_packages
         .par_iter()
-        .flat_map(|srpm| filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default()))
+        .flat_map(|srpm| {
+            progress.tick(srpm);
+            filter_none(stable_fedrq.subpkgs_provides(srpm).unwrap_or_default())
+        })
         .collect();
+    drop(progress);
 
     // Get new provides: binary RPM names via koji, then query
     // each one's provides from the side tag repo.
+    let progress = Progress::stderr("listing RPMs in koji", nvrs.len(), verbose);
     let binary_names: Vec<String> = nvrs
         .iter()
         .flat_map(|nvr| {
+            progress.tick(nvr);
             sandogasa_koji::build_rpms(nvr, koji_profile).unwrap_or_else(|e| {
                 if verbose {
                     eprintln!(
@@ -2907,10 +2938,17 @@ fn compute_changed_provides_via_koji(
         );
     }
 
+    drop(progress);
+
+    let progress = Progress::stderr("reading new provides", binary_names.len(), verbose);
     let new_provides: BTreeSet<String> = binary_names
         .par_iter()
-        .flat_map(|name| filter_none(side_tag_fedrq.pkg_provides(name).unwrap_or_default()))
+        .flat_map(|name| {
+            progress.tick(name);
+            filter_none(side_tag_fedrq.pkg_provides(name).unwrap_or_default())
+        })
         .collect();
+    drop(progress);
 
     compare_provides(&old_provides, &new_provides)
 }
@@ -2992,9 +3030,11 @@ fn check_update_installability(
         new_provides.contains(cap) || resolves_in_stable(cap)
     };
 
+    let progress = Progress::stderr("checking requires", binary_names.len(), verbose);
     binary_names
         .par_iter()
         .flat_map_iter(|name| {
+            progress.tick(name);
             let requires = new_fedrq.pkg_requires(name).unwrap_or_default();
             let src = bin_to_src.get(name.as_str()).copied().unwrap_or(name);
             requires
@@ -3063,10 +3103,15 @@ fn run_provides_analysis(
     if opts.verbose {
         eprintln!("[check-update] collecting provides from updated packages");
     }
+    let progress = Progress::stderr("collecting provides", binary_names.len(), opts.verbose);
     let new_provides_full: Vec<String> = binary_names
         .par_iter()
-        .flat_map_iter(|name| new_fedrq.pkg_provides(name).unwrap_or_default())
+        .flat_map_iter(|name| {
+            progress.tick(name);
+            new_fedrq.pkg_provides(name).unwrap_or_default()
+        })
         .collect();
+    drop(progress);
     let mut new_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for provide in &new_provides_full {
         new_by_name
@@ -3138,9 +3183,15 @@ fn run_provides_analysis(
         .map(|c| provide_name(&c.old).to_string())
         .collect();
 
+    let progress = Progress::stderr(
+        "checking reverse dependencies",
+        rev_deps.len(),
+        opts.verbose,
+    );
     let results: Vec<(String, RevDepResult)> = rev_deps
         .par_iter()
         .map(|pkg| {
+            progress.tick(pkg);
             // Install-time Requires of the binaries (FTI when broken)
             // *and* the source package's BuildRequires (FTBFS when
             // broken): a version bump can FTBFS a reverse dep without

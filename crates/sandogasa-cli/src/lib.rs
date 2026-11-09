@@ -36,6 +36,7 @@ pub mod defaults;
 pub mod http;
 #[cfg(feature = "man")]
 pub mod man;
+pub mod progress;
 pub mod retry;
 pub mod style;
 

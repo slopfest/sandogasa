@@ -28,6 +28,15 @@ back (an entry never marked counts from its modification time), and
 under `dir` unused for longer than `max_age`, never less than a day,
 reporting what it removed and kept with their sizes.
 
+The `progress` module draws a one-line counter on stderr for a phase
+that works through a known number of items (`Progress::stderr(label,
+total, verbose)`, then `tick(item)` as each starts, from any thread):
+`reading new provides 23/39: evolution-data-server`, rewritten in
+place, the count padded to the total's width so the colon stays in one
+column, cut to 79 characters so it never wraps. It is drawn only when
+stderr is a terminal and the run is not verbose, `eprintln` prints a
+line without running into it, and dropping it clears the line.
+
 `ConfigArgs` holds the arguments every tool's `config` command takes
 (`Config(sandogasa_cli::ConfigArgs)`), so the flags and their help read
 the same everywhere. Today that is `--all`, which asks for every

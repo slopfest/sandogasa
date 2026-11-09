@@ -517,7 +517,9 @@ No packages depend on the changed Provides. No breakage expected.
 ```
 
 The output is Markdown, so it can be pasted directly into Bodhi
-comments.
+comments. While it works, a counter on stderr names the phase and the
+item it is on (`reading new provides 23/39: evolution-data-server`);
+`-v` replaces it with a line per step.
 
 Reverse dependencies are checked on two axes, with full rich-dep
 (boolean) semantics and RPM version comparison against the update's

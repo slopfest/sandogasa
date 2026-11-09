@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### ebranch: check-update shows its progress without -v
+
+`ebranch check-update f46-build-side-158330`, 39 builds, ran for a long
+time without printing anything, so it looked hung and was stopped and
+rerun with `-v` only to see that it was working. Its long phases now
+draw a counter on stderr, rewritten in place: the phase, the count and
+the item it is on (`reading new provides 23/39:
+evolution-data-server`). The count is padded to the width of the total
+so the colon does not move. It is drawn only at a terminal, and not
+with `-v`, which prints its own lines. Making the slow phase faster is
+#81's other half. Refs #81.
+
+sandogasa-cli gains the `progress` module this is drawn with.
+
 ### ebranch: check-update flags side-tag builds that would not be newest, and builds already in another update
 
 `ebranch check-update` would have passed the libical 4 side tag
