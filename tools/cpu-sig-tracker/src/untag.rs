@@ -331,7 +331,8 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            // JIRA lookup — resolved.
+            // JIRA lookup — fixed: resolved Done, with a fix version
+            // (a Done without one is not taken as a fix, #87).
             Mock::given(method("GET"))
                 .and(wiremock_path("/rest/api/2/issue/RHEL-9"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -339,7 +340,8 @@ mod tests {
                     "fields": {
                         "summary": "s",
                         "status": { "name": "Closed" },
-                        "resolution": { "name": "Done" }
+                        "resolution": { "name": "Done" },
+                        "fixVersions": [{ "name": "CentOS Stream 10" }]
                     }
                 })))
                 .mount(&server)

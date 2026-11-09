@@ -495,9 +495,12 @@ fn gather_facts(
             }
         }
     }
-    .or_else(|| match jira.resolution_name.as_deref() {
-        Some(r @ ("Done" | "Fixed" | "Resolved")) => Some(format!("RHEL issue resolved {r}")),
-        _ => None,
+    // Jira says the change landed only when it shows a fix: a fix
+    // version, not just a Done, which an issue closed for inactivity
+    // has too (#87).
+    .or_else(|| {
+        jira.fixed
+            .then(|| format!("RHEL issue fixed: {}", jira.check.detail()))
     });
     f
 }

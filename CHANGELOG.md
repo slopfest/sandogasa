@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: count a RHEL issue as fixed only when Jira shows a fix
+
+The blktrace Proposed Updates were retired on 2026-11-09 with their
+builds still tagged, on the strength of RHEL-123605 and RHEL-123606
+being closed `Done`. They had gone straight from New to Closed in
+January, with no fix version: closed for inactivity, nothing fixed.
+cpu-sig-tracker took any resolution as a fix. `untag` and `retire`
+passed their Jira check on it, `status` suggested untagging, and
+`retire` inferred the reason "landed" from a `Done` alone.
+
+Each RHEL issue now gets a verdict. It is fixed when its resolution
+means fixed and it has a fix version, or when it is `Done-Errata`,
+which names the erratum. It is unverified when it is closed `Done`
+with no fix version, and declined when it is `Won't Do`, `Not a Bug`,
+`Obsolete` and the like. A duplicate is judged by the issue it
+duplicates when that one is visible.
+
+Only fixed passes `untag` and `retire`, lets `retire` infer "landed"
+from Jira, or makes `status` suggest an untag, for a closed tracking
+issue too. `status` suggests `jira-declined` or `jira-unverified`
+otherwise, marks such an issue in its table, and adds each issue's
+`verdict` to `--json`. The GitLab work item reads Done only for a fix.
+Live, PackageKit's c10s update (RHEL-170526, `Not a Bug`) now reads
+`jira-declined` instead of an untag candidate. sandogasa-jira's
+`IssueFields` gains `fix_versions` and `issuelinks`, with
+`Issue::fix_versions` and `Issue::duplicate_of`. Fixes #87.
+
 ### cpu-sig-tracker: a tracking issue carries one Jira line per fix (breaking JSON)
 
 The rsync Proposed Update for c9s carries two fixes in one CentOS

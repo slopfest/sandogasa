@@ -11,4 +11,6 @@ mod client;
 pub mod models;
 
 pub use client::{JiraClient, cloud_id, gateway_url};
-pub use models::{CreatedIssue, FieldMeta, Issue, Myself, NewIssue, Version};
+pub use models::{
+    CreatedIssue, FieldMeta, Issue, IssueLink, LinkedIssue, Myself, NewIssue, Version,
+};

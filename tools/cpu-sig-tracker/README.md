@@ -379,9 +379,21 @@ Per-package report of every active tracking issue in the inventory's
 releases: JIRA keys + statuses (every issue the update resolves, one
 JIRA line each in the tracking issue), currently-tagged NVR, current Stream
 NVR, and a suggested next action (`in-progress`, `rebase`,
-`untag-candidate`, `retire-issue`, `not-yet-tagged`, `no-jira`, or
-`—` once closed with no build tagged). An update counts as resolved
-once every one of its RHEL issues is. `--json` emits a flat
+`untag-candidate`, `retire-issue`, `not-yet-tagged`, `jira-declined`,
+`jira-unverified`, `no-jira`, or `—` once closed with no build
+tagged).
+
+Each RHEL issue is judged by what its resolution says, not by having
+one: **fixed** is a resolution meaning fixed (`Done`, …) with a fix
+version, or `Done-Errata`, which names the erratum; **unverified** is
+closed `Done` with no fix version, as an issue closed for inactivity
+is; **declined** is `Won't Do`, `Not a Bug`, `Obsolete` and the like;
+a **duplicate** is judged by the issue it duplicates when that is
+visible. An update is an untag candidate only once every issue is
+fixed; one with an issue declined is `jira-declined` (decide whether
+to keep shipping it), one with an issue closed but unverified is
+`jira-unverified` (check stock for the change before believing it).
+The table marks an unverified, declined or duplicate issue's state. `--json` emits a flat
 serde-serialized array, each row's issues under `jira`.
 
 `--refresh` turns the read pass into a write pass: rewrites any body
@@ -460,7 +472,8 @@ cpu-sig-tracker untag <package|nvr> --release cNs [--yes] [--force]
 ```
 
 Removes a proposed_updates build from its CBS `-release` and
-`-testing` tags after verifying the linked JIRA issues are all resolved. Accepts
+`-testing` tags after verifying the linked JIRA issues are all fixed
+(a fix version, or `Done-Errata`; a `Done` alone does not do). Accepts
 either a package name (auto-discovers currently-tagged NVRs across
 both tags) or a specific NVR. Pair with `retire` to close the
 tracking issue after the build is gone.

@@ -158,6 +158,106 @@ pub struct JiraCheck {
     pub check: Check,
     pub resolution_name: Option<String>,
     pub resolution_date: Option<chrono::NaiveDate>,
+    /// Whether Jira shows a fix ([`Verdict::Fixed`]), the one thing
+    /// that says the change reached RHEL.
+    pub fixed: bool,
+}
+
+/// What a RHEL issue's resolution says about the change it asks for
+/// (#87). Only [`Verdict::Fixed`] means the fix shipped: an issue can
+/// be closed `Done` for inactivity, with nothing fixed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Verdict {
+    /// Still open, in this status.
+    Open(String),
+    /// A resolution meaning fixed, with the releases the fix is in.
+    Fixed {
+        resolution: String,
+        fix_versions: Vec<String>,
+    },
+    /// Closed with a resolution meaning fixed, but no fix version:
+    /// nothing says a fix was planned for any release, as for an issue
+    /// closed because nobody worked on it.
+    Unverified(String),
+    /// Closed without a fix: `Won't Do`, `Not a Bug`, `Obsolete`, ….
+    Declined(String),
+    /// Closed as a duplicate, of the issue named when it is visible; the
+    /// duplicated issue's verdict is what counts.
+    Duplicate(Option<String>),
+}
+
+/// The resolutions Red Hat's Jira uses for a fix.
+fn means_fixed(resolution: &str) -> bool {
+    matches!(
+        resolution,
+        "Done"
+            | "Done-Errata"
+            | "Errata"
+            | "Fixed"
+            | "Resolved"
+            | "Current Release"
+            | "Next Release"
+    )
+}
+
+/// An issue's [`Verdict`], from its status, resolution, fix versions
+/// and links.
+pub fn verdict_of(issue: &sandogasa_jira::Issue) -> Verdict {
+    match issue.resolution() {
+        None => Verdict::Open(issue.status().to_string()),
+        Some("Duplicate") => Verdict::Duplicate(issue.duplicate_of().map(str::to_string)),
+        Some(r) if means_fixed(r) => {
+            let fix_versions: Vec<String> = issue
+                .fix_versions()
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            // `Done-Errata` names the erratum that shipped the fix, so it
+            // stands on its own (RHEL-170528, PackageKit c9s, has no fix
+            // version); a plain `Done` needs one to be told apart from
+            // an issue closed for inactivity.
+            if fix_versions.is_empty() && r != "Done-Errata" {
+                Verdict::Unverified(r.to_string())
+            } else {
+                Verdict::Fixed {
+                    resolution: r.to_string(),
+                    fix_versions,
+                }
+            }
+        }
+        Some(r) => Verdict::Declined(r.to_string()),
+    }
+}
+
+/// How a check reports `key`'s verdict: passed only for a fix.
+pub fn verdict_check(key: &str, verdict: &Verdict) -> Check {
+    match verdict {
+        Verdict::Fixed {
+            resolution,
+            fix_versions,
+        } if fix_versions.is_empty() => Check::Pass(format!("{key} — {resolution}")),
+        Verdict::Fixed {
+            resolution,
+            fix_versions,
+        } => Check::Pass(format!(
+            "{key} — {resolution}, fixed in {}",
+            fix_versions.join(", ")
+        )),
+        Verdict::Open(status) => Check::Fail(format!("{key} is {status} (not resolved)")),
+        Verdict::Unverified(resolution) => Check::Fail(format!(
+            "{key} was closed {resolution} without a fix version: nothing says a fix \
+             shipped (closed for inactivity?); check stock for the change"
+        )),
+        Verdict::Declined(resolution) => {
+            Check::Fail(format!("{key} was closed {resolution}: not fixed in RHEL"))
+        }
+        Verdict::Duplicate(Some(of)) => {
+            Check::Skipped(format!("{key} duplicates {of}, which could not be read"))
+        }
+        Verdict::Duplicate(None) => Check::Skipped(format!(
+            "{key} is a duplicate of an issue this account cannot see"
+        )),
+    }
 }
 
 /// Whether every RHEL issue an update resolves is resolved (#86):
@@ -217,6 +317,7 @@ pub fn combine_checks(checks: Vec<JiraCheck>) -> JiraCheck {
         check,
         resolution_name,
         resolution_date,
+        fixed: checks.iter().all(|c| c.fixed),
     }
 }
 
@@ -229,31 +330,46 @@ pub fn check_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
             check: Check::Skipped(detail),
             resolution_name: None,
             resolution_date: None,
+            fixed: false,
         }
     }
     let Some(key) = jira_key else {
         return skipped("no JIRA key found in issue body".to_string());
     };
-    match fetch(key, verbose) {
-        Ok(Some(issue)) if issue.is_resolved() => {
-            let summary = match issue.resolution() {
-                Some(r) => format!("{} ({})", issue.status(), r),
-                None => issue.status().to_string(),
-            };
-            JiraCheck {
-                check: Check::Pass(format!("{key} — {summary}")),
-                resolution_name: issue.resolution().map(|s| s.to_string()),
-                resolution_date: issue.resolution_date(),
+    let issue = match fetch(key, verbose) {
+        Ok(Some(issue)) => issue,
+        Ok(None) => return skipped(format!("JIRA {key} not visible")),
+        Err(FetchError::Runtime(e)) => return skipped(format!("tokio runtime init failed: {e}")),
+        Err(FetchError::Lookup(e)) => return skipped(format!("JIRA {key} fetch failed: {e}")),
+    };
+    // A duplicate stands or falls with the issue it duplicates, one
+    // link deep, when that one is visible.
+    let (judged, verdict) = match verdict_of(&issue) {
+        Verdict::Duplicate(Some(of)) => match fetch(&of, verbose) {
+            Ok(Some(original)) => {
+                let v = verdict_of(&original);
+                let check = verdict_check(&of, &v);
+                let check = match check {
+                    Check::Pass(d) => Check::Pass(format!("{key} duplicates {d}")),
+                    Check::Fail(d) => Check::Fail(format!("{key} duplicates {d}")),
+                    Check::Skipped(d) => Check::Skipped(format!("{key} duplicates {d}")),
+                };
+                return JiraCheck {
+                    fixed: matches!(v, Verdict::Fixed { .. }),
+                    resolution_name: original.resolution().map(str::to_string),
+                    resolution_date: original.resolution_date(),
+                    check,
+                };
             }
-        }
-        Ok(Some(issue)) => JiraCheck {
-            check: Check::Fail(format!("{key} is {} (not resolved)", issue.status())),
-            resolution_name: None,
-            resolution_date: None,
+            _ => (&issue, Verdict::Duplicate(Some(of))),
         },
-        Ok(None) => skipped(format!("JIRA {key} not visible")),
-        Err(FetchError::Runtime(e)) => skipped(format!("tokio runtime init failed: {e}")),
-        Err(FetchError::Lookup(e)) => skipped(format!("JIRA {key} fetch failed: {e}")),
+        v => (&issue, v),
+    };
+    JiraCheck {
+        check: verdict_check(key, &verdict),
+        fixed: matches!(verdict, Verdict::Fixed { .. }),
+        resolution_name: judged.resolution().map(str::to_string),
+        resolution_date: judged.resolution_date(),
     }
 }
 
@@ -263,10 +379,84 @@ mod tests {
 
     fn checked(check: Check, resolution: Option<&str>, day: Option<u32>) -> JiraCheck {
         JiraCheck {
+            fixed: matches!(check, Check::Pass(_)),
             check,
             resolution_name: resolution.map(str::to_string),
             resolution_date: day.and_then(|d| chrono::NaiveDate::from_ymd_opt(2026, 12, d)),
         }
+    }
+
+    /// An issue as Jira answers for it.
+    fn issue(
+        resolution: Option<&str>,
+        fix_versions: &[&str],
+        links: serde_json::Value,
+    ) -> sandogasa_jira::Issue {
+        serde_json::from_value(serde_json::json!({
+            "key": "RHEL-1",
+            "fields": {
+                "summary": "s",
+                "status": {"name": if resolution.is_some() { "Closed" } else { "New" }},
+                "resolution": resolution.map(|r| serde_json::json!({"name": r})),
+                "fixVersions": fix_versions.iter().map(|v| serde_json::json!({"name": v})).collect::<Vec<_>>(),
+                "issuelinks": links,
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn only_a_resolution_with_a_fix_version_is_a_fix() {
+        let none = serde_json::json!([]);
+        // RHEL-186589: worked, Done in rhel-10.3.
+        assert_eq!(
+            verdict_of(&issue(Some("Done"), &["rhel-10.3"], none.clone())),
+            Verdict::Fixed {
+                resolution: "Done".into(),
+                fix_versions: vec!["rhel-10.3".into()],
+            }
+        );
+        // RHEL-123605/123606 (blktrace): New -> Closed Done, no version.
+        let blktrace = verdict_of(&issue(Some("Done"), &[], none.clone()));
+        assert_eq!(blktrace, Verdict::Unverified("Done".into()));
+        assert!(matches!(
+            verdict_check("RHEL-123606", &blktrace),
+            Check::Fail(d) if d.contains("without a fix version")
+        ));
+        // RHEL-170528 (PackageKit c9s): Done-Errata names the erratum.
+        assert_eq!(
+            verdict_of(&issue(Some("Done-Errata"), &[], none.clone())),
+            Verdict::Fixed {
+                resolution: "Done-Errata".into(),
+                fix_versions: vec![],
+            }
+        );
+        // RHEL-170526 (PackageKit c10s): Not a Bug.
+        assert_eq!(
+            verdict_of(&issue(Some("Not a Bug"), &[], none.clone())),
+            Verdict::Declined("Not a Bug".into())
+        );
+        // RHEL-83280 (freetype): a duplicate of a restricted issue.
+        assert_eq!(
+            verdict_of(&issue(Some("Duplicate"), &[], none.clone())),
+            Verdict::Duplicate(None)
+        );
+        assert_eq!(
+            verdict_of(&issue(
+                Some("Duplicate"),
+                &[],
+                serde_json::json!([{"type": {"name": "Duplicate"}, "outwardIssue": {"key": "RHEL-2"}}])
+            )),
+            Verdict::Duplicate(Some("RHEL-2".into()))
+        );
+        assert_eq!(
+            verdict_of(&issue(None, &[], none)),
+            Verdict::Open("New".into())
+        );
+        assert!(matches!(
+            verdict_check("RHEL-1", &Verdict::Duplicate(None)),
+            Check::Skipped(_)
+        ));
     }
 
     #[test]

@@ -23,6 +23,7 @@ use crate::gitlab;
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
+use crate::jira::Verdict;
 use crate::utils::{canonical_jira_suffix, format_jira_lines, format_mr_line, gitlab_base};
 const KOJI_PROFILE: &str = "cbs";
 
@@ -237,30 +238,36 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     status: info.as_ref().map(|i| i.status.clone()),
                     resolution: info.as_ref().and_then(|i| i.resolution.clone()),
                     resolved: info.as_ref().is_some_and(|i| i.resolved),
+                    verdict: info.as_ref().map(|i| verdict_word(&i.verdict)),
                 })
                 .collect();
-            // The update is resolved once every fix it carries is.
-            let (jira_resolved, jira_resolution, jira_resolution_date) =
-                combined_resolution(&infos);
+            // Settled once every issue is, fixed or declined; an issue
+            // closed with no sign of a fix settles nothing (#87).
+            let (outcome, jira_resolution, jira_resolution_date) = combined_outcome(&infos);
+            let jira_resolved = matches!(outcome, Outcome::Fixed | Outcome::Declined);
 
             let pu_nvr = pu_nvrs.get(package).cloned();
             let stream_nvr = stream_nvrs.get(package).cloned();
 
             let suggestion = if issue.state == "closed" {
-                // Closed issue with a lingering pu build still
-                // needs an untag; otherwise nothing to do.
-                if pu_nvr.is_some() {
-                    "untag-candidate"
-                } else {
-                    "—"
+                // Closed issue with a lingering pu build: an untag once
+                // RHEL has the fix, a question otherwise (the blktrace
+                // issues were closed on an inactivity "Done").
+                match (pu_nvr.is_some(), unsettled_suggestion(outcome)) {
+                    (false, _) => "—",
+                    (true, Some(s)) if !jira_keys.is_empty() => s,
+                    (true, _) => "untag-candidate",
                 }
             } else {
-                suggest_next_action(
-                    jira_keys.first().map(String::as_str),
-                    jira_resolved,
-                    pu_nvr.as_deref(),
-                    stream_nvr.as_deref(),
-                )
+                match unsettled_suggestion(outcome) {
+                    Some(s) if !jira_keys.is_empty() => s,
+                    _ => suggest_next_action(
+                        jira_keys.first().map(String::as_str),
+                        outcome == Outcome::Fixed,
+                        pu_nvr.as_deref(),
+                        stream_nvr.as_deref(),
+                    ),
+                }
             };
 
             // Body-vs-live drift detection. Format drift is
@@ -400,6 +407,10 @@ pub struct JiraState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution: Option<String>,
     pub resolved: bool,
+    /// What the resolution says (#87): `open`, `fixed`, `unverified`
+    /// (closed with no fix version), `declined` or `duplicate`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<&'static str>,
 }
 
 /// Fields resolved from a tracking issue body, possibly
@@ -979,25 +990,64 @@ fn is_metadata_line(line: &str) -> bool {
     PREFIXES.iter().any(|p| trimmed.starts_with(p))
 }
 
-/// Whether an update's RHEL issues are all resolved, and if so its
-/// resolution (a fix only when every one is: otherwise the first that
-/// is not, so the work item reads Won't do) and the day the last was
-/// resolved. Unresolved with no issues, or with one Jira did not show.
-fn combined_resolution(
+/// Where an update's RHEL issues leave it, taken together (#87).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    /// Some issue is open, or could not be read.
+    Open,
+    /// None is open, but some was closed without a fix version, or as a
+    /// duplicate of an issue that cannot be seen: closed, with nothing
+    /// to say a fix shipped.
+    Unverified,
+    /// Every issue is settled, and some was declined.
+    Declined,
+    /// Every issue was fixed.
+    Fixed,
+}
+
+/// The update's [`Outcome`], with the resolution its work item is
+/// judged by (`Done` for a fix, else the first declining one) and the
+/// day the last issue was resolved, both only once it is settled.
+fn combined_outcome(
     infos: &[(String, Option<JiraInfo>)],
-) -> (bool, Option<String>, Option<chrono::NaiveDate>) {
+) -> (Outcome, Option<String>, Option<chrono::NaiveDate>) {
     let all: Option<Vec<&JiraInfo>> = infos.iter().map(|(_, i)| i.as_ref()).collect();
-    let Some(all) = all.filter(|a| !a.is_empty() && a.iter().all(|i| i.resolved)) else {
-        return (false, None, None);
+    let Some(all) = all.filter(|a| !a.is_empty()) else {
+        return (Outcome::Open, None, None);
     };
-    let is_fix = |r: &str| matches!(r, "Done" | "Fixed" | "Resolved");
-    let resolution = all
-        .iter()
-        .filter_map(|i| i.resolution.clone())
-        .find(|r| !is_fix(r))
-        .or_else(|| all.iter().find_map(|i| i.resolution.clone()));
-    let date = all.iter().filter_map(|i| i.resolution_date).max();
-    (true, resolution, date)
+    let is = |f: fn(&Verdict) -> bool| all.iter().any(|i| f(&i.verdict));
+    let outcome = if is(|v| matches!(v, Verdict::Open(_))) {
+        Outcome::Open
+    } else if is(|v| matches!(v, Verdict::Unverified(_) | Verdict::Duplicate(_))) {
+        Outcome::Unverified
+    } else if is(|v| matches!(v, Verdict::Declined(_))) {
+        Outcome::Declined
+    } else {
+        Outcome::Fixed
+    };
+    let resolution = match outcome {
+        Outcome::Fixed => Some("Done".to_string()),
+        Outcome::Declined => all.iter().find_map(|i| match &i.verdict {
+            Verdict::Declined(r) => Some(r.clone()),
+            _ => None,
+        }),
+        _ => None,
+    };
+    let date = matches!(outcome, Outcome::Fixed | Outcome::Declined)
+        .then(|| all.iter().filter_map(|i| i.resolution_date).max())
+        .flatten();
+    (outcome, resolution, date)
+}
+
+/// The suggestion for an update whose issues are settled without a
+/// fix, or `None` when they are open or fixed and the usual
+/// [`suggest_next_action`] applies.
+fn unsettled_suggestion(outcome: Outcome) -> Option<&'static str> {
+    match outcome {
+        Outcome::Declined => Some("jira-declined"),
+        Outcome::Unverified => Some("jira-unverified"),
+        Outcome::Open | Outcome::Fixed => None,
+    }
 }
 
 struct JiraInfo {
@@ -1005,16 +1055,37 @@ struct JiraInfo {
     resolution: Option<String>,
     resolved: bool,
     resolution_date: Option<chrono::NaiveDate>,
+    verdict: Verdict,
 }
 
+/// One RHEL issue as Jira reports it, its verdict following a visible
+/// duplicate one link deep.
 fn fetch_jira(key: &str, verbose: bool) -> Option<JiraInfo> {
     let issue = crate::jira::fetch_or_warn(key, verbose)?;
+    let verdict = match crate::jira::verdict_of(&issue) {
+        Verdict::Duplicate(Some(of)) => crate::jira::fetch_or_warn(&of, verbose)
+            .map(|original| crate::jira::verdict_of(&original))
+            .unwrap_or(Verdict::Duplicate(Some(of))),
+        v => v,
+    };
     Some(JiraInfo {
         status: issue.status().to_string(),
         resolution: issue.resolution().map(|s| s.to_string()),
         resolved: issue.is_resolved(),
         resolution_date: issue.resolution_date(),
+        verdict,
     })
+}
+
+/// A verdict as one word, for the status table and `--json`.
+fn verdict_word(v: &Verdict) -> &'static str {
+    match v {
+        Verdict::Open(_) => "open",
+        Verdict::Fixed { .. } => "fixed",
+        Verdict::Unverified(_) => "unverified",
+        Verdict::Declined(_) => "declined",
+        Verdict::Duplicate(_) => "duplicate",
+    }
 }
 
 pub(crate) fn fetch_proposed_updates_nvrs(release: &str, verbose: bool) -> HashMap<String, String> {
@@ -1255,8 +1326,14 @@ fn format_jira_state(r: &Row) -> String {
         .jira
         .iter()
         .map(|j| {
-            canonical_jira_suffix(j.status.as_deref(), j.resolution.as_deref())
-                .unwrap_or_else(|| "unknown".to_string())
+            let state = canonical_jira_suffix(j.status.as_deref(), j.resolution.as_deref())
+                .unwrap_or_else(|| "unknown".to_string());
+            // A closed issue that is not a fix says so, as "Done"
+            // alone can mean closed for inactivity (#87).
+            match j.verdict {
+                Some(v @ ("unverified" | "declined" | "duplicate")) => format!("{state}, {v}"),
+                _ => state,
+            }
         })
         .collect();
     if states.is_empty() {
@@ -1681,6 +1758,7 @@ mod tests {
                 status: Some("Closed".into()),
                 resolution: Some("Done".into()),
                 resolved: true,
+                verdict: None,
             }],
         });
         assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
@@ -1719,12 +1797,14 @@ mod tests {
                 status: Some("New".into()),
                 resolution: None,
                 resolved: false,
+                verdict: None,
             },
             JiraState {
                 key: "RHEL-303900".into(),
                 status: Some("Closed".into()),
                 resolution: Some("Done".into()),
                 resolved: true,
+                verdict: None,
             },
         ];
         let out = refreshed_body(RefreshedBodyArgs {
@@ -1744,33 +1824,72 @@ mod tests {
     }
 
     #[test]
-    fn an_update_is_resolved_once_every_issue_is() {
-        let info = |resolved, resolution: Option<&str>, day: u32| JiraInfo {
+    fn an_update_is_settled_by_its_issues_verdicts() {
+        let info = |verdict: Verdict, day: u32| JiraInfo {
             status: "Closed".into(),
-            resolution: resolution.map(str::to_string),
-            resolved,
+            resolution: None,
+            resolved: !matches!(verdict, Verdict::Open(_)),
             resolution_date: chrono::NaiveDate::from_ymd_opt(2026, 12, day),
+            verdict,
         };
-        let both = [
-            ("RHEL-1".to_string(), Some(info(true, Some("Done"), 1))),
-            ("RHEL-2".to_string(), Some(info(true, Some("Done"), 9))),
-        ];
+        let fixed = |day| {
+            info(
+                Verdict::Fixed {
+                    resolution: "Done".into(),
+                    fix_versions: vec!["rhel-10.3".into()],
+                },
+                day,
+            )
+        };
+        let k = |s: &str| s.to_string();
         assert_eq!(
-            combined_resolution(&both),
+            combined_outcome(&[(k("RHEL-1"), Some(fixed(1))), (k("RHEL-2"), Some(fixed(9)))]),
             (
-                true,
+                Outcome::Fixed,
                 Some("Done".into()),
                 chrono::NaiveDate::from_ymd_opt(2026, 12, 9)
             )
         );
-        let one_open = [
-            ("RHEL-1".to_string(), Some(info(true, Some("Done"), 1))),
-            ("RHEL-2".to_string(), Some(info(false, None, 1))),
-        ];
-        assert_eq!(combined_resolution(&one_open), (false, None, None));
-        let unread = [("RHEL-1".to_string(), None)];
-        assert_eq!(combined_resolution(&unread), (false, None, None));
-        assert_eq!(combined_resolution(&[]), (false, None, None));
+        // blktrace: closed Done with no fix version settles nothing.
+        assert_eq!(
+            combined_outcome(&[(
+                k("RHEL-123606"),
+                Some(info(Verdict::Unverified("Done".into()), 1))
+            )]),
+            (Outcome::Unverified, None, None)
+        );
+        // PackageKit c10s: declined, and the work item reads so.
+        assert_eq!(
+            combined_outcome(&[(
+                k("RHEL-170526"),
+                Some(info(Verdict::Declined("Not a Bug".into()), 3))
+            )]),
+            (
+                Outcome::Declined,
+                Some("Not a Bug".into()),
+                chrono::NaiveDate::from_ymd_opt(2026, 12, 3)
+            )
+        );
+        // One open, or one unread, keeps the update open.
+        assert_eq!(
+            combined_outcome(&[
+                (k("RHEL-1"), Some(fixed(1))),
+                (k("RHEL-2"), Some(info(Verdict::Open("New".into()), 1)))
+            ])
+            .0,
+            Outcome::Open
+        );
+        assert_eq!(combined_outcome(&[(k("RHEL-1"), None)]).0, Outcome::Open);
+        assert_eq!(combined_outcome(&[]).0, Outcome::Open);
+        assert_eq!(
+            unsettled_suggestion(Outcome::Unverified),
+            Some("jira-unverified")
+        );
+        assert_eq!(
+            unsettled_suggestion(Outcome::Declined),
+            Some("jira-declined")
+        );
+        assert_eq!(unsettled_suggestion(Outcome::Fixed), None);
     }
 
     #[test]
@@ -1823,6 +1942,7 @@ mod tests {
                 status: Some("Closed".into()),
                 resolution: Some("Done".into()),
                 resolved: true,
+                verdict: None,
             }],
             jira_resolved: true,
             proposed_updates_nvr: None,
@@ -1845,6 +1965,7 @@ mod tests {
                 status: Some("In Progress".into()),
                 resolution: None,
                 resolved: false,
+                verdict: None,
             }],
             jira_resolved: false,
             proposed_updates_nvr: None,
@@ -1869,6 +1990,7 @@ mod tests {
                 status: Some("Closed".into()),
                 resolution: Some("Obsolete".into()),
                 resolved: true,
+                verdict: None,
             }],
             jira_resolved: true,
             proposed_updates_nvr: None,
