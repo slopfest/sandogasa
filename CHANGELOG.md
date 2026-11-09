@@ -48,10 +48,23 @@ affected version, which priority, and a description that cannot be
 fixed afterwards,
 since Red Hat's Jira accepts only comments once an issue exists.
 
-`cpu-sig-tracker jira <MR URL>` (or `<package> --branch cNs`) searches
-RHEL for an open issue on the package and branch, about the MR's CVE
-when it names one, and prints the `Resolves:` line the MR needs.
-Failing that it drafts the issue: type Bug, the package as component,
+`cpu-sig-tracker jira <package> --branch cNs [--cve CVE-…]`, run
+before the MR exists since the MR must name the issue (or given the
+URL of an MR already open), searches RHEL for open issues on the
+package, about the CVE when there is one, and prints the `Resolves:` line the MR needs for an issue on the
+branch's RHEL major, whether it names `CentOS Stream N` or a minor
+such as `rhel-9.6`, as Product Security's trackers do; issues for
+other releases are listed but not taken. Finding nothing does not
+prove nothing was filed: Product Security's CVE trackers are
+restricted (RHEL-83280's private duplicate,
+<https://redhat.atlassian.net/browse/RHEL-83109>, answers 404 to an
+anonymous request), so an empty result says whom the search ran as and
+what Red Hat's security data lists for the package in that RHEL major,
+`Affected` meaning a tracker probably exists and a filed issue may be
+linked to it as a duplicate.
+With none for the branch it drafts the issue: type Bug, a summary
+from the MR's title or, given only a package and a CVE, the CVE's
+title as Red Hat's bug for it reads, the package as component,
 one affected version, `CentOS Stream N` (RHEL's single-value policy
 keeps only the first, as Red Hat's bot did to two old blktrace issues,
 <https://redhat.atlassian.net/browse/RHEL-123605> and

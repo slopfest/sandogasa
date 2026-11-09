@@ -102,25 +102,45 @@ The issue body follows a canonical format that `status` parses back
 ### `jira`
 
 ```sh
-cpu-sig-tracker jira <mr-url>                       # find, or draft
-cpu-sig-tracker jira <package> --branch c9s --cve CVE-YYYY-N \
-    --summary "..." [--description "..." | --description-file PATH] \
+cpu-sig-tracker jira <package> --branch c9s [--cve CVE-YYYY-N] \
+    [--summary "..."] [--description "..." | --description-file PATH] \
     [--priority Major] [--type enhancement] [--file [--yes]] [--json]
+cpu-sig-tracker jira <mr-url> [...]          # an MR already open
 ```
 
 Finds the RHEL Jira issue a Proposed Update's merge request needs,
 or drafts one. CentOS Stream's merge request template asks for an
-approved ticket, and Red Hat wants one issue per branch, so each MR
-has its own. Given an MR URL, the package, branch and any CVE are read
-from it; given a package name, `--branch` says which.
+approved ticket, named in the MR's description as `Resolves: RHEL-N`,
+and Red Hat wants one issue per branch, so the issue comes first, one
+per branch, before the MR is opened: given a package name, `--branch`
+says which branch and `--cve` which CVE. For an MR already open
+without one, its URL can be given instead, and the package, branch,
+title and any CVE are read from it.
 
-It first searches RHEL for an open issue on that package and branch
-(`CentOS Stream N`, or `rhel-8.10` for c8s), about the CVE when there
-is one, and prints the `Resolves: RHEL-N` line for the MR when it
-finds one. Otherwise it drafts an issue:
+It first searches RHEL for open issues on that package, about the CVE
+when there is one, on any release. An issue naming a version of the
+branch's RHEL major (`CentOS Stream 9`, `rhel-9.6`, `rhel-9.6.z` for
+c9s) is the MR's: it prints the `Resolves: RHEL-N` line, and lists
+the issues for other releases after it.
+
+Finding none for the branch is reported with whom the search ran as
+(anonymously, or the configured account) and the issues open for
+other releases only. Red Hat Product Security's CVE trackers are
+restricted, invisible anonymously and to ordinary community accounts,
+so for a CVE it also says what Red Hat's security data lists for the
+package in that RHEL major: `Affected` (or `Fix deferred`, `Under
+investigation`) means a tracker probably exists, and filing may
+create a duplicate Red Hat will link, so name the CVE in the MR; a
+fix by an advisory means CentOS Stream may already have it. Then it
+drafts an issue:
 
 - type Bug, as Red Hat files enhancement requests too, with an
   `RFE: ` summary for `--type enhancement`;
+- a summary from `--summary`, else the MR's title, else the CVE's
+  title as Red Hat's bug for it reads (`rsync: Denial of Service via
+  crafted checksums during delta transfer (CVE-2026-119741)`), or
+  GitHub's advisory's when Red Hat has none. With none of these there
+  is no draft, only the search;
 - the package as the component;
 - one affected version, `CentOS Stream N` (`rhel-8.10` for c8s): RHEL
   keeps only the first affected version an issue lists, and sets the
@@ -400,9 +420,10 @@ tracking issue after the build is gone.
 # Refresh the inventory from CBS.
 cpu-sig-tracker dump-inventory --release c9s,c10s -o cpu-sig.toml --prune
 
-# Find or draft the RHEL Jira issue the MR needs; file it once it reads right.
-cpu-sig-tracker jira https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42
-cpu-sig-tracker jira https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42 --file
+# Before opening the MR: find or draft the RHEL Jira issue it will
+# name, one per branch; file it once it reads right.
+cpu-sig-tracker jira xz --branch c10s --cve CVE-2024-3094
+cpu-sig-tracker jira xz --branch c10s --cve CVE-2024-3094 --file
 
 # File a tracking issue for a new MR.
 cpu-sig-tracker file-issue https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42 \

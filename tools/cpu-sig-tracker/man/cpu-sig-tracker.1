@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-11-08 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-11-09 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates SIG package state across Koji, GitLab and JIRA
 .SH SYNOPSIS
@@ -107,7 +107,7 @@ Find the RHEL Jira issue a Proposed Update\*(Aqs MR needs, one per branch, or dr
 Print help
 .TP
 <\fITARGET\fR>
-A CentOS Stream merge request URL (the package, branch and any CVE are read from it), or a package name with \-\-branch
+A package name, with \-\-branch; or the URL of a CentOS Stream merge request already open (package, branch, CVE read from it)
 .SH SELECTION
 .TP
 \fB\-\-branch\fR \fI<BRANCH>\fR
@@ -141,7 +141,7 @@ Minor
 .RE
 .TP
 \fB\-\-summary\fR \fI<TEXT>\fR
-Issue summary (default: the MR\*(Aqs title)
+Issue summary (default: the MR\*(Aqs title, else the CVE\*(Aqs)
 .TP
 \fB\-\-type\fR \fI<TYPE>\fR
 Kind of update; an enhancement\*(Aqs summary starts "RFE: "

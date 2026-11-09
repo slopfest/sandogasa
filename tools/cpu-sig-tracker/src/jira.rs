@@ -15,14 +15,26 @@ use crate::utils::Check;
 /// Base URL comes from [`crate::utils::jira_base`] so tests can
 /// point it at a mock server.
 pub async fn client() -> Result<sandogasa_jira::JiraClient, String> {
-    let (email, token) = match std::env::var("JIRA_TOKEN") {
+    let (email, token) = credentials();
+    with_credentials(email, token).await
+}
+
+/// Whether [`client`] has credentials to log in with, so a search that
+/// finds nothing can say whom it searched as.
+pub fn logged_in() -> bool {
+    credentials().1.is_some()
+}
+
+/// The email and token [`client`] logs in with: the environment's,
+/// else the config's, else none.
+fn credentials() -> (Option<String>, Option<String>) {
+    match std::env::var("JIRA_TOKEN") {
         Ok(t) => (std::env::var("JIRA_EMAIL").ok(), Some(t)),
         Err(_) => match crate::config::load().ok().and_then(|c| c.jira) {
             Some(j) => (j.email, Some(j.access_token)),
             None => (None, None),
         },
-    };
-    with_credentials(email, token).await
+    }
 }
 
 /// A token with the account's email is an Atlassian Cloud API token:
