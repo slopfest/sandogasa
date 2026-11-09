@@ -329,12 +329,15 @@ question you answer: is the problem fixed in stock, and if not, why
 does the SIG stop carrying it?
 
 - **landed** — the problem is fixed in stock. Something has to say
-  so: the SIG's MR merged; a commit on stock's release branch names
-  the change (the tracking issue's RHEL key, the RHEL key in the MR's
-  branch name, a CVE id from either title, the MR's title); every RHEL
-  issue was fixed, with a fix version or as `Done-Errata` (a `Done`
-  alone, as for an issue closed for inactivity, does not count); or,
-  when none of those is on record, you
+  so: the SIG's MR merged; stock carries every patch the MR adds, in a
+  build at or past the SIG's (matched by upstream commit or by the
+  change, as `status` describes); for an MR adding no patches, a commit
+  on stock's release branch names the change (the tracking issue's RHEL
+  key, the RHEL key in the MR's branch name, a CVE id from either
+  title, the MR's title) or every RHEL issue was fixed, with a fix
+  version or as `Done-Errata` (a `Done` alone, as for an issue closed
+  for inactivity, does not count); or, when none of those is on record
+  (or stock lacks a patch and you know it landed another way), you
   confirm at the prompt that you verified it and name the stock build
   that carries the fix (`--stock-fix <nvr>` unattended). That build
   is recorded on the issue as a `- **Stock fix**:` line in your name,
@@ -389,9 +392,22 @@ Per-package report of every active tracking issue in the inventory's
 releases: JIRA keys + statuses (every issue the update resolves, one
 JIRA line each in the tracking issue), currently-tagged NVR, current Stream
 NVR, and a suggested next action (`in-progress`, `rebase`,
-`untag-candidate`, `retire-issue`, `not-yet-tagged`, `jira-declined`,
-`jira-unverified`, `no-jira`, or `—` once closed with no build
-tagged).
+`untag-candidate`, `retire-issue`, `not-yet-tagged`, `awaiting-stock`,
+`not-in-stock`, `jira-declined`, `jira-unverified`, `no-jira`, or `—`
+once closed with no build tagged).
+
+While the SIG still ships a build, whether the change is in stock is
+judged as `untag` and `retire` judge it, from stock's patches first:
+the `.patch` files the update's merge request adds are matched against
+stock's by the upstream commit they carry (the `From <sha>` line of
+`git format-patch` output, or a `PatchN:` URL's commit), or by the
+change itself when the ids differ, as a cherry-pick gets a new one.
+Every patch carried, in a stock build at or past the SIG's, is
+`untag-candidate` whatever Jira says; carried but not yet built past
+the SIG's is `awaiting-stock`; any missing is `not-in-stock`, whatever
+Jira or stock's commit messages say. The evidence is printed under the
+table and in `--json` (`landed`). An update adding no patches (a
+spec-only change) is judged by its RHEL issues and stock's history.
 
 Each RHEL issue is judged by what its resolution says, not by having
 one: **fixed** is a resolution meaning fixed (`Done`, …) with a fix
@@ -483,10 +499,12 @@ cpu-sig-tracker untag <package|nvr> --release cNs [--yes] [--force]
 
 Removes a proposed_updates build from its CBS `-release` and
 `-testing` tags once the change is in stock, on the same evidence
-`retire` takes as landed: the SIG's MR merged, a commit on stock's
-branch naming the change (its RHEL key, a CVE, the MR's title), or
-every RHEL issue fixed (a fix version, or `Done-Errata`; a `Done`
-alone does not do). The RHEL issues' state is shown either way. Accepts
+`retire` takes as landed: the SIG's MR merged; stock carrying every
+patch the MR adds, in a build at or past the SIG's (see `status`); or,
+for an MR adding no patches, a commit on stock's branch naming the
+change (its RHEL key, a CVE, the MR's title) or every RHEL issue fixed
+(a fix version, or `Done-Errata`; a `Done` alone does not do). A patch
+stock lacks keeps it from counting, whatever Jira says. The RHEL issues' state is shown either way. Accepts
 either a package name (auto-discovers currently-tagged NVRs across
 both tags) or a specific NVR. Pair with `retire` to close the
 tracking issue after the build is gone.

@@ -99,6 +99,34 @@ pub struct Project {
     pub http_url_to_repo: String,
 }
 
+/// One file a merge request changes, with its diff.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct MergeRequestDiff {
+    pub old_path: String,
+    pub new_path: String,
+    #[serde(default)]
+    pub new_file: bool,
+    #[serde(default)]
+    pub deleted_file: bool,
+    #[serde(default)]
+    pub renamed_file: bool,
+    /// The unified diff, from its first `@@` hunk.
+    #[serde(default)]
+    pub diff: String,
+}
+
+/// One entry of a repository tree.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct TreeEntry {
+    pub name: String,
+    pub path: String,
+    /// `blob` for a file, `tree` for a directory.
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
 /// A merge request to open, from the project the client is bound to
 /// into another.
 #[derive(Debug, Clone, Serialize)]
@@ -509,6 +537,75 @@ impl Client {
             return Ok(None);
         }
         Ok(Some(blocking_json_ok(resp, &format!("GitLab GET {url}"))?))
+    }
+
+    /// The files merge request `iid` changes, with their diffs, read
+    /// whatever its state: what a closed MR proposed is still there.
+    pub fn merge_request_diffs(
+        &self,
+        iid: u64,
+    ) -> Result<Vec<MergeRequestDiff>, Box<dyn std::error::Error>> {
+        let url = format!("{}/merge_requests/{iid}/diffs", self.project_url());
+        let mut out = Vec::new();
+        for page in 1.. {
+            let resp = self
+                .http
+                .get(&url)
+                .query(&[("per_page", "100"), ("page", &page.to_string())])
+                .send()?;
+            let batch: Vec<MergeRequestDiff> =
+                blocking_json_ok(resp, &format!("GitLab GET {url}"))?;
+            let done = batch.len() < 100;
+            out.extend(batch);
+            if done {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// The top-level files and directories of branch or tag `reference`.
+    pub fn tree(&self, reference: &str) -> Result<Vec<TreeEntry>, Box<dyn std::error::Error>> {
+        let url = format!("{}/repository/tree", self.project_url());
+        let mut out = Vec::new();
+        for page in 1.. {
+            let resp = self
+                .http
+                .get(&url)
+                .query(&[
+                    ("ref", reference),
+                    ("per_page", "100"),
+                    ("page", &page.to_string()),
+                ])
+                .send()?;
+            let batch: Vec<TreeEntry> = blocking_json_ok(resp, &format!("GitLab GET {url}"))?;
+            let done = batch.len() < 100;
+            out.extend(batch);
+            if done {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    /// File `path` at `reference`, or `None` when it is not there.
+    pub fn raw_file(
+        &self,
+        path: &str,
+        reference: &str,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/repository/files/{}/raw",
+            self.project_url(),
+            path.replace('/', "%2F")
+        );
+        let resp = self.http.get(&url).query(&[("ref", reference)]).send()?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(
+            blocking_ok(resp, &format!("GitLab GET {url}"))?.text()?,
+        ))
     }
 
     /// The project's open merge requests into `target_branch`, those
@@ -1620,6 +1717,58 @@ mod tests {
         "web_url": "https://gitlab.example.com/michel/centos_rpms_rsync",
         "ssh_url_to_repo": "git@gitlab.example.com:michel/centos_rpms_rsync.git",
         "http_url_to_repo": "https://gitlab.example.com/michel/centos_rpms_rsync.git"}"#;
+
+    #[test]
+    fn a_merge_request_s_diffs_a_tree_and_a_raw_file_are_read() {
+        let mut server = mockito::Server::new();
+        let base = "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2FPackageKit";
+        server
+            .mock("GET", format!("{base}/merge_requests/13/diffs").as_str())
+            .match_query(mockito::Matcher::UrlEncoded("page".into(), "1".into()))
+            .with_status(200)
+            .with_body(
+                r#"[{"old_path": "PK_x.patch", "new_path": "PK_x.patch", "new_file": true,
+                     "diff": "@@ -0,0 +1,2 @@\n+From ac49526d Mon Sep 17 00:00:00 2001\n+x\n"},
+                    {"old_path": "PackageKit.spec", "new_path": "PackageKit.spec",
+                     "diff": "@@ -1 +1 @@\n-a\n+b\n"}]"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{base}/repository/tree").as_str())
+            .match_query(mockito::Matcher::UrlEncoded("ref".into(), "c10s".into()))
+            .with_status(200)
+            .with_body(
+                r#"[{"name": "PackageKit.spec", "path": "PackageKit.spec", "type": "blob"}]"#,
+            )
+            .create();
+        server
+            .mock(
+                "GET",
+                format!("{base}/repository/files/PackageKit.spec/raw").as_str(),
+            )
+            .match_query(mockito::Matcher::UrlEncoded("ref".into(), "c10s".into()))
+            .with_status(200)
+            .with_body("Name: PackageKit\n")
+            .create();
+        server
+            .mock(
+                "GET",
+                format!("{base}/repository/files/missing.patch/raw").as_str(),
+            )
+            .match_query(mockito::Matcher::Any)
+            .with_status(404)
+            .create();
+        let c = Client::new(&server.url(), "redhat/centos-stream/rpms/PackageKit", "").unwrap();
+        let diffs = c.merge_request_diffs(13).unwrap();
+        assert_eq!(diffs.len(), 2);
+        assert!(diffs[0].new_file && diffs[0].diff.contains("ac49526d"));
+        assert_eq!(c.tree("c10s").unwrap()[0].kind, "blob");
+        assert_eq!(
+            c.raw_file("PackageKit.spec", "c10s").unwrap().as_deref(),
+            Some("Name: PackageKit\n")
+        );
+        assert_eq!(c.raw_file("missing.patch", "c10s").unwrap(), None);
+    }
 
     #[test]
     fn a_project_is_read_or_none_when_missing() {

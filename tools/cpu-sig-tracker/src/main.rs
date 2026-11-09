@@ -14,6 +14,7 @@ mod jira_issue;
 mod landed;
 mod list_issues;
 mod mr;
+mod patches;
 mod ping;
 mod retire;
 mod status;

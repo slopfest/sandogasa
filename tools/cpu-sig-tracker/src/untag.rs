@@ -79,7 +79,8 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
         &testing_nvrs,
     )?;
 
-    let landed_check = check_landed(&resolved.package, &args.release, args.verbose);
+    let sig_nvr = resolved.targets.first().map(|(_, nvr)| nvr.as_str());
+    let landed_check = check_landed(&resolved.package, &args.release, sig_nvr, args.verbose);
     report_check("landed in stock", &landed_check);
 
     if !matches!(landed_check, Check::Pass(_)) && !args.force {
@@ -181,7 +182,7 @@ fn resolve_target(
 /// [`precondition`] to `retire`'s check). The tracking issue names the
 /// MR and the RHEL issues; untag often runs after retire, so closed
 /// issues count.
-fn check_landed(package: &str, release: &str, verbose: bool) -> Check {
+fn check_landed(package: &str, release: &str, sig_nvr: Option<&str>, verbose: bool) -> Check {
     let group_client = match gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP) {
         Ok(c) => c,
         Err(e) => return Check::Skipped(format!("GitLab group client: {e}")),
@@ -205,17 +206,26 @@ fn check_landed(package: &str, release: &str, verbose: bool) -> Check {
     let body = issue.description.as_deref().unwrap_or("");
     let jira = crate::jira::check_all_resolved(&parse_jira_keys_from_body(body), verbose);
     report_check("JIRA", &jira.check);
+    let stock_nvr =
+        crate::status::fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package);
     precondition(&crate::landed::landed(
-        &issue, package, release, &jira, verbose,
+        &issue,
+        package,
+        release,
+        sig_nvr,
+        stock_nvr.as_deref(),
+        jira.fixed.then(|| jira.check.detail()),
+        verbose,
     ))
 }
 
 /// The untag precondition from what [`crate::landed::landed`] found:
 /// passed when something says the change is in stock.
 pub fn precondition(landed: &crate::landed::Landed) -> Check {
-    match &landed.by {
-        Some(why) => Check::Pass(why.clone()),
-        None => Check::Fail(
+    match (&landed.by, &landed.doubt) {
+        (Some(why), _) => Check::Pass(why.clone()),
+        (None, Some(doubt)) => Check::Fail(doubt.clone()),
+        (None, None) => Check::Fail(
             "nothing says the change is in stock: the MR is not merged, no stock commit \
              names it, and no RHEL issue shows a fix"
                 .to_string(),

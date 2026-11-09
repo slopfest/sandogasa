@@ -91,6 +91,9 @@ pub struct RetireFacts {
     /// so: `MR merged`, a stock commit naming the change, the RHEL
     /// issue resolved as Done, or the operator's own verification.
     pub landed_by: Option<String>,
+    /// Why it does not count as landed though something suggested it:
+    /// stock lacks a patch the update adds, or has not built it yet.
+    pub landed_doubt: Option<String>,
     /// The RHEL issue's resolution, when it is resolved.
     pub jira_resolution: Option<String>,
     /// Every RHEL issue the update resolves was declined (#88).
@@ -136,9 +139,12 @@ pub fn suggest_reason(f: &RetireFacts) -> Option<Reason> {
 /// such), abandoned nothing more.
 pub fn reason_check(reason: Reason, f: &RetireFacts) -> Check {
     match reason {
-        Reason::Landed => match &f.landed_by {
-            Some(why) => Check::Pass(why.clone()),
-            None => Check::Fail(
+        Reason::Landed => match (&f.landed_by, &f.landed_doubt) {
+            (Some(why), _) => Check::Pass(why.clone()),
+            (None, Some(doubt)) => Check::Fail(format!(
+                "{doubt}; verify it yourself at the prompt, or --force"
+            )),
+            (None, None) => Check::Fail(
                 "nothing says the fix is in stock: the MR is not merged and no stock commit \
                  names the change (its RHEL key, CVE or title); verify it yourself at the \
                  prompt, or --force"
@@ -347,9 +353,17 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     let preconditions_ok =
         matches!(&build_check, Check::Pass(_)) && matches!(&reason_check, Check::Pass(_));
     if !preconditions_ok && !args.force {
+        // Untagging is run by a person (it changes CBS), so the command
+        // is printed for them rather than run from here.
+        if !matches!(&build_check, Check::Pass(_)) {
+            eprintln!(
+                "\nThe build is still tagged. Untag it, then retire again:\n  {}",
+                untag_command(package, &release)
+            );
+        }
         return Err(
             "retire preconditions not met; re-run with --force to override or fix the \
-             underlying state (e.g. run `untag` first if the build is still tagged)"
+             underlying state"
                 .into(),
         );
     }
@@ -490,9 +504,19 @@ fn gather_facts(
     jira: &crate::jira::JiraCheck,
     verbose: bool,
 ) -> RetireFacts {
+    let release_nvr = fetch_proposed_updates_nvrs(release, verbose).remove(package);
+    let stream_nvr = fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package);
     // Whether it landed is the answer untag acts on too: one function
     // gives it to both (see crate::landed).
-    let landed = crate::landed::landed(issue, package, release, jira, verbose);
+    let landed = crate::landed::landed(
+        issue,
+        package,
+        release,
+        release_nvr.as_deref(),
+        stream_nvr.as_deref(),
+        jira.fixed.then(|| jira.check.detail()),
+        verbose,
+    );
     RetireFacts {
         jira_resolution: jira.resolution_name.clone(),
         jira_declined: jira.declined,
@@ -500,8 +524,9 @@ fn gather_facts(
         mr_url: landed.mr_url,
         mr_state: landed.mr_state,
         landed_by: landed.by,
-        release_nvr: fetch_proposed_updates_nvrs(release, verbose).remove(package),
-        stream_nvr: fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package),
+        landed_doubt: landed.doubt,
+        release_nvr,
+        stream_nvr,
         ..Default::default()
     }
 }
@@ -751,9 +776,17 @@ fn check_package_untagged(release: &str, package: &str, verbose: bool) -> Check 
         Err(e) => return Check::Skipped(format!("koji list-tagged {tag} failed: {e}")),
     };
     match nvrs.iter().find(|nvr| parse_nvr_name(nvr) == Some(package)) {
-        Some(nvr) => Check::Fail(format!("package still tagged as {nvr} — run `untag` first")),
+        Some(nvr) => Check::Fail(format!(
+            "package still tagged as {nvr}; untag it first: {}",
+            untag_command(package, release)
+        )),
         None => Check::Pass(format!("no {package} build tagged in {tag}")),
     }
+}
+
+/// The command that removes the update's build, for the person to run.
+fn untag_command(package: &str, release: &str) -> String {
+    format!("cpu-sig-tracker untag {package} --release {release}")
 }
 
 fn compose_audit_note(
@@ -898,6 +931,7 @@ mod tests {
             jira_resolution: None,
             jira_declined: false,
             jira_unanswered: false,
+            landed_doubt: None,
             recorded_fix: None,
         }
     }

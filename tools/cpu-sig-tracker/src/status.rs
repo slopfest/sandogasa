@@ -103,6 +103,25 @@ pub struct Row {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_nvr: Option<String>,
     pub suggestion: &'static str,
+    /// What says the change is in stock, or why it does not count, as
+    /// untag and retire judge it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub landed: Option<String>,
+}
+
+/// The suggestion stock's evidence makes, which outranks Jira's: an
+/// untag once the change is in stock, a wait while stock carries the
+/// patches without having built past the SIG, and `not-in-stock` when
+/// stock lacks one of them. `None` when there is nothing to go on.
+fn landed_suggestion(l: &crate::landed::Landed) -> Option<&'static str> {
+    match (&l.by, &l.doubt) {
+        (Some(_), _) => Some("untag-candidate"),
+        (None, Some(_)) if l.patches.as_ref().is_some_and(|c| c.all_carried()) => {
+            Some("awaiting-stock")
+        }
+        (None, Some(_)) => Some("not-in-stock"),
+        (None, None) => None,
+    }
 }
 
 pub fn run(args: &StatusArgs) -> ExitCode {
@@ -269,6 +288,25 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     ),
                 }
             };
+            // Whether the change is in stock, as untag and retire judge
+            // it (crate::landed): stock's patches outrank Jira either
+            // way (#89). Asked only while the SIG still ships a build.
+            let landed = pu_nvr.as_deref().map(|nvr| {
+                crate::landed::landed(
+                    &issue,
+                    package,
+                    release,
+                    Some(nvr),
+                    stream_nvr.as_deref(),
+                    (outcome == Outcome::Fixed).then_some("every RHEL issue is fixed"),
+                    args.verbose,
+                )
+            });
+            let suggestion = landed
+                .as_ref()
+                .and_then(landed_suggestion)
+                .unwrap_or(suggestion);
+            let landed_note = landed.and_then(|l| l.by.or(l.doubt));
 
             // Body-vs-live drift detection. Format drift is
             // free (pure body parse); JIRA drift compares the
@@ -390,6 +428,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                 proposed_updates_nvr: pu_nvr,
                 stream_nvr,
                 suggestion,
+                landed: landed_note,
             });
         }
     }
@@ -1227,7 +1266,7 @@ pub(crate) fn stream_newer_than_proposed(pu_nvr: Option<&str>, stream_nvr: Optio
 
 /// Extract the "version-release" portion of an NVR for display.
 /// Returns None when the NVR doesn't parse cleanly.
-fn vr_of_nvr(nvr: &str) -> Option<String> {
+pub(crate) fn vr_of_nvr(nvr: &str) -> Option<String> {
     let (_, v, r) = parse_nvr(nvr)?;
     Some(format!("{v}-{r}"))
 }
@@ -1301,6 +1340,20 @@ fn print_human(rows: &[Row]) {
             r.suggestion,
             r.issue_url,
         );
+    }
+    let notes: Vec<String> = rows
+        .iter()
+        .filter_map(|r| {
+            r.landed
+                .as_ref()
+                .map(|l| format!("{} {}: {l}", r.release, r.package))
+        })
+        .collect();
+    if !notes.is_empty() {
+        println!();
+        for n in notes {
+            println!("{n}");
+        }
     }
 }
 
@@ -1824,6 +1877,40 @@ mod tests {
     }
 
     #[test]
+    fn stock_s_evidence_outranks_jira_s() {
+        use crate::landed::Landed;
+        use crate::patches::Comparison;
+        let carried = Comparison {
+            matched: vec![("a".into(), "b".into(), "upstream ac49526d".into())],
+            missing: vec![],
+        };
+        let missing = Comparison {
+            matched: vec![],
+            missing: vec!["a".into()],
+        };
+        let l = |by: Option<&str>, doubt: Option<&str>, c: Option<Comparison>| Landed {
+            by: by.map(str::to_string),
+            doubt: doubt.map(str::to_string),
+            patches: c,
+            ..Default::default()
+        };
+        // PackageKit c10s: Jira declined, stock carries the patch.
+        assert_eq!(
+            landed_suggestion(&l(Some("stock carries it"), None, Some(carried.clone()))),
+            Some("untag-candidate")
+        );
+        assert_eq!(
+            landed_suggestion(&l(None, Some("not yet past"), Some(carried))),
+            Some("awaiting-stock")
+        );
+        assert_eq!(
+            landed_suggestion(&l(None, Some("stock does not carry a"), Some(missing))),
+            Some("not-in-stock")
+        );
+        assert_eq!(landed_suggestion(&l(None, None, None)), None);
+    }
+
+    #[test]
     fn an_update_is_settled_by_its_issues_verdicts() {
         let info = |verdict: Verdict, day: u32| JiraInfo {
             status: "Closed".into(),
@@ -1948,6 +2035,7 @@ mod tests {
             proposed_updates_nvr: None,
             stream_nvr: None,
             suggestion: "untag-candidate",
+            landed: None,
         };
         assert_eq!(format_jira_state(&r), "Closed (Done)");
     }
@@ -1971,6 +2059,7 @@ mod tests {
             proposed_updates_nvr: None,
             stream_nvr: None,
             suggestion: "in-progress",
+            landed: None,
         };
         assert_eq!(format_jira_state(&r), "In Progress");
     }
@@ -1996,6 +2085,7 @@ mod tests {
             proposed_updates_nvr: None,
             stream_nvr: None,
             suggestion: "—",
+            landed: None,
         };
         assert_eq!(format_jira_state(&r), "closed");
     }
@@ -2013,6 +2103,7 @@ mod tests {
             proposed_updates_nvr: None,
             stream_nvr: None,
             suggestion: "no-jira",
+            landed: None,
         };
         assert_eq!(format_jira_state(&r), "unknown");
     }

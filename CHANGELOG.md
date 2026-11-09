@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: decide whether an update landed by the patches stock carries
+
+Jira could not say whether a Proposed Update had landed, in either
+direction. PackageKit's fix for CVE-2026-41651 reached stock on
+2026-04-27 through Red Hat's own commits (c9s aa6248ef, c10s
+99e0f170), while the SIG's c10s RHEL issue read `Not a Bug` and
+`status` called the update `jira-declined`. blktrace's issues read
+`Done` while stock carried nothing.
+
+`untag`, `retire` and `status` now compare the `.patch` files the
+update's merge request adds with stock's: by the upstream commit each
+carries (`git format-patch`'s `From <sha>` line, or a `PatchN:` URL's
+commit), then by the change itself, as a cherry-pick gets a new id
+(the SIG's PackageKit patch is upstream 22656f21, stock's ac49526d,
+the same change under another name). Every patch carried, in a stock
+build at or past the SIG's, is landed whatever Jira says; any missing
+is not, whatever Jira or stock's commit messages say. `status`
+suggests `untag-candidate`, `awaiting-stock` or `not-in-stock` from it,
+and prints the evidence. An update adding no patches is judged as
+before. Live, both PackageKit updates now read `untag-candidate`,
+citing the matched patch. When the build is still tagged, `retire`
+prints the `untag` command to run. Resolves #89.
+
+sandogasa-gitlab gains `Client::merge_request_diffs`, `Client::tree` and
+`Client::raw_file`, with `MergeRequestDiff` and `TreeEntry`.
+
 ### cpu-sig-tracker: untag and retire take the same evidence that a change is in stock
 
 PackageKit's c10s Proposed Update could be retired but not untagged.
