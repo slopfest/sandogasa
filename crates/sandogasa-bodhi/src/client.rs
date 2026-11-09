@@ -115,6 +115,35 @@ impl BodhiClient {
         Ok(all_updates)
     }
 
+    /// The updates a build is in, whatever their status: Bodhi lets a
+    /// build belong to one update, and refuses a new update (from a
+    /// side tag, say) carrying a build another one already has.
+    pub async fn updates_for_build(&self, nvr: &str) -> Result<Vec<Update>, reqwest::Error> {
+        let mut all_updates = Vec::new();
+        let mut page = 1;
+        loop {
+            let resp: UpdatesResponse = self
+                .client
+                .get(format!("{}/updates/", self.base_url))
+                .query(&[
+                    ("builds", nvr),
+                    ("rows_per_page", "100"),
+                    ("page", &page.to_string()),
+                ])
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            all_updates.extend(resp.updates);
+            if page >= resp.pages {
+                break;
+            }
+            page += 1;
+        }
+        Ok(all_updates)
+    }
+
     /// Fetch active Fedora and EPEL releases from the Bodhi API.
     ///
     /// Returns releases with state "current", "pending", or "frozen",
@@ -491,6 +520,35 @@ mod tests {
             .await
             .unwrap();
         assert!(updates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn updates_for_build_asks_by_nvr() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .and(wiremock::matchers::query_param(
+                "builds",
+                "asterisk-24.0.0-3.fc46",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [{
+                    "alias": "FEDORA-2026-0123456789", "status": "stable",
+                    "builds": [{"nvr": "asterisk-24.0.0-3.fc46"}],
+                }],
+                "total": 1,
+                "page": 1, "pages": 1,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let updates = client
+            .updates_for_build("asterisk-24.0.0-3.fc46")
+            .await
+            .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].alias, "FEDORA-2026-0123456789");
     }
 
     #[tokio::test]

@@ -137,6 +137,24 @@ struct BugDecision {
 /// vouch for it, +1 when it came back clean. Returns the karma
 /// and the reason shown in the confirmation plan.
 pub fn derive_karma(report: &crate::check_update::CheckUpdateReport) -> (i32, String) {
+    if !report.not_newest.is_empty() {
+        let names: Vec<&str> = report.not_newest.iter().map(|n| n.nvr.as_str()).collect();
+        return (
+            -1,
+            format!("not newer than the target's build: {}", names.join(", ")),
+        );
+    }
+    if !report.in_other_update.is_empty() {
+        let names: Vec<&str> = report
+            .in_other_update
+            .iter()
+            .map(|u| u.nvr.as_str())
+            .collect();
+        return (
+            -1,
+            format!("already in another update: {}", names.join(", ")),
+        );
+    }
     let broken: Vec<&str> = report
         .reverse_deps
         .iter()
@@ -1246,6 +1264,8 @@ mod tests {
             } else {
                 vec![]
             },
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: None,
             reverse_deps,
         }

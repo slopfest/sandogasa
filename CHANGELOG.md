@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch: check-update flags side-tag builds that would not be newest, and builds already in another update
+
+`ebranch check-update` would have passed the libical 4 side tag
+although merging it would have left a libical-3-linked asterisk on top
+in rawhide: the side tag's `asterisk-24.0.0-1.fc46.1` sorts below the
+`asterisk-24.0.0-3.fc46` the maintainer built in plain f46 meanwhile.
+It recorded each package's old and new version only for its summary,
+and read the old one from repodata that can lag Koji by days. Nor did
+it notice a build already in another Bodhi update, which makes Bodhi
+refuse to create one from the side tag. Resolves #78.
+
+Before the analysis, each build is now compared with the target
+release's newest build in Koji (its candidate tag, inheriting stable),
+and each is looked up in Bodhi. A build at or below the target's, or
+in another update (the update's own aside), is printed at once and is
+a blocking finding: `-1` for `--give-karma`, a stop for `--submit`
+until the reviewer keeps, explains or removes it. sandogasa-bodhi gains
+`updates_for_build`.
+
 ### cpu-sig-tracker: write the Proposed Updates site's list of updates
 
 The Proposed Updates SIG site had no list of the updates it ships,

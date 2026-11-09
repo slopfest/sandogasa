@@ -223,6 +223,31 @@ pub struct StaleSideTag {
     pub actual_vr: Option<String>,
 }
 
+/// A build of the update that the target release already has at the
+/// same or a newer version: pushed, it would not be the newest, and the
+/// target's build would stay on top (#78).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NotNewest {
+    /// The update's build.
+    pub nvr: String,
+    /// The target's latest build of the same package.
+    pub target_nvr: String,
+    /// The Koji tag the target's build was found in.
+    pub tag: String,
+}
+
+/// A build of the update that already belongs to another Bodhi update:
+/// Bodhi lets a build be in one update, and refuses a new one carrying
+/// it (#78).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InOtherUpdate {
+    pub nvr: String,
+    /// The other update's alias.
+    pub alias: String,
+    /// The other update's status.
+    pub status: String,
+}
+
 /// Result of checking a single reverse dependency.
 #[derive(Clone, Debug, Serialize)]
 pub struct RevDepResult {
@@ -269,6 +294,12 @@ pub struct CheckUpdateReport {
     /// reverse-dep analysis is incomplete.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stale_side_tag: Vec<StaleSideTag>,
+    /// Builds the target already has at the same or a newer version.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_newest: Vec<NotNewest>,
+    /// Builds already in another Bodhi update.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub in_other_update: Vec<InOtherUpdate>,
     /// Why the full Provides analysis was skipped, when it was
     /// (`full_analysis == false`). Drives a precise note instead of a
     /// generic "no side tag" message.
@@ -322,6 +353,10 @@ pub enum Finding {
         provide: String,
         packages: Vec<String>,
     },
+    /// A build the target already has at the same or a newer version.
+    NotNewest(NotNewest),
+    /// A build already in another Bodhi update.
+    InOtherUpdate(InOtherUpdate),
 }
 
 impl Finding {
@@ -343,6 +378,13 @@ impl Finding {
                 packages.len(),
                 packages.join(", ")
             ),
+            Finding::NotNewest(n) => format!(
+                "`{}` is not newer than `{}` in {}",
+                n.nvr, n.target_nvr, n.tag
+            ),
+            Finding::InOtherUpdate(u) => {
+                format!("`{}` is already in {} ({})", u.nvr, u.alias, u.status)
+            }
         }
     }
 }
@@ -593,6 +635,19 @@ impl UpdateRepoBuilder for BodhiDownload {
 /// What a check asks Bodhi: the one update it was given.
 pub(crate) trait BodhiQuery: Sync {
     fn update(&self, alias: &str) -> Result<BodhiUpdateInfo, String>;
+
+    /// The Koji candidate tag of the release a dist-git branch builds
+    /// for (`f46-updates-candidate` for rawhide when F46 is rawhide):
+    /// it inherits the release's stable tag, so its latest build is the
+    /// release's newest, pending or pushed. Defaults to none.
+    fn candidate_tag(&self, _dist_branch: &str) -> Option<String> {
+        None
+    }
+
+    /// The updates a build is in, as (alias, status). Defaults to none.
+    fn updates_with_build(&self, _nvr: &str) -> Result<Vec<(String, String)>, String> {
+        Ok(Vec::new())
+    }
 }
 
 /// The Bodhi a real run talks to.
@@ -601,6 +656,32 @@ pub(crate) struct BodhiApi;
 impl BodhiQuery for BodhiApi {
     fn update(&self, alias: &str) -> Result<BodhiUpdateInfo, String> {
         fetch_bodhi_update(alias)
+    }
+
+    fn candidate_tag(&self, dist_branch: &str) -> Option<String> {
+        let rt = tokio::runtime::Runtime::new().ok()?;
+        let releases = rt
+            .block_on(sandogasa_bodhi::BodhiClient::new().active_releases())
+            .ok()?;
+        releases
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.id_prefix.as_str(),
+                    "FEDORA" | "FEDORA-EPEL" | "FEDORA-EPEL-NEXT"
+                )
+            })
+            .find(|r| r.branch == dist_branch || r.name.eq_ignore_ascii_case(dist_branch))
+            .map(|r| r.candidate_tag.clone())
+            .filter(|t| !t.is_empty())
+    }
+
+    fn updates_with_build(&self, nvr: &str) -> Result<Vec<(String, String)>, String> {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("failed to create async runtime: {e}"))?;
+        rt.block_on(sandogasa_bodhi::BodhiClient::new().updates_for_build(nvr))
+            .map(|us| us.into_iter().map(|u| (u.alias, u.status)).collect())
+            .map_err(|e| format!("Bodhi could not be asked about {nvr}: {e}"))
     }
 }
 
@@ -620,6 +701,12 @@ pub(crate) trait KojiQuery: Sync {
     /// The binary RPM names a build produced. An unreadable build is an
     /// empty list, as it was before this was asked through a trait.
     fn build_rpms(&self, nvr: &str) -> Vec<String>;
+
+    /// The latest build of `package` in `tag`, following inheritance.
+    /// Defaults to none, for a test that does not ask.
+    fn latest_in(&self, _tag: &str, _package: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
 }
 
 /// The Koji a real run talks to.
@@ -638,6 +725,11 @@ impl KojiQuery for KojiCli {
 
     fn build_rpms(&self, nvr: &str) -> Vec<String> {
         sandogasa_koji::build_rpms(nvr, self.profile.as_deref()).unwrap_or_default()
+    }
+
+    fn latest_in(&self, tag: &str, package: &str) -> Result<Option<String>, String> {
+        sandogasa_koji::latest_tagged(tag, package, self.profile.as_deref())
+            .map(|b| b.map(|b| b.nvr))
     }
 }
 
@@ -696,6 +788,126 @@ pub(crate) fn check_update_with(
     input: &str,
     opts: &CheckUpdateOptions,
     services: &Services<'_>,
+) -> Result<CheckUpdateReport, String> {
+    let mut guards = TargetGuards::default();
+    let mut report = check_update_body(input, opts, services, &mut guards)?;
+    report.not_newest = guards.not_newest;
+    report.in_other_update = guards.in_other_update;
+    Ok(report)
+}
+
+/// What the target release and Bodhi say about the update's builds
+/// before any analysis (#78); see [`target_guards`].
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct TargetGuards {
+    pub not_newest: Vec<NotNewest>,
+    pub in_other_update: Vec<InOtherUpdate>,
+}
+
+/// Whether the update's build `ours` would fail to be the newest
+/// against the target's latest build `target`: at the same or a lower
+/// version-release. The same NVR is the update itself, already tagged
+/// (an existing update in testing), not a rival.
+pub fn is_not_newest(ours: &str, target: &str) -> bool {
+    if ours == target {
+        return false;
+    }
+    let vr = |nvr: &str| sandogasa_koji::parse_nvr(nvr).map(|(_, v, r)| format!("{v}-{r}"));
+    match (vr(ours), vr(target)) {
+        (Some(a), Some(b)) => {
+            sandogasa_rpmvercmp::compare_evr(&a, &b) != std::cmp::Ordering::Greater
+        }
+        _ => false,
+    }
+}
+
+/// The two cheap checks run before the analysis (#78): each build
+/// against the target release's newest, through its Koji candidate tag
+/// (`dist_branch`'s), and each build against the updates Bodhi already
+/// has it in, the update `own_alias` names aside. A COPR's builds are
+/// in neither Koji nor Bodhi, so only the first applies to them. What
+/// cannot be asked is said and skipped: these checks add findings, they
+/// never hold up the rest.
+pub(crate) fn target_guards(
+    nvrs: &[String],
+    dist_branch: &str,
+    in_koji: bool,
+    own_alias: Option<&str>,
+    services: &Services<'_>,
+    verbose: bool,
+) -> TargetGuards {
+    let mut out = TargetGuards::default();
+    match services.bodhi.candidate_tag(dist_branch) {
+        Some(tag) => {
+            if verbose {
+                eprintln!("[check-update] comparing each build with the newest in {tag}");
+            }
+            for nvr in nvrs {
+                let Some(name) = sandogasa_koji::parse_nvr_name(nvr) else {
+                    continue;
+                };
+                match services.koji.latest_in(&tag, name) {
+                    Ok(Some(target)) if is_not_newest(nvr, &target) => {
+                        out.not_newest.push(NotNewest {
+                            nvr: nvr.clone(),
+                            target_nvr: target,
+                            tag: tag.clone(),
+                        })
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("warning: could not read {name}'s newest build in {tag}: {e}")
+                    }
+                }
+            }
+        }
+        None => eprintln!(
+            "[check-update] no Bodhi release for {dist_branch}: builds are not compared \
+             with the target's newest"
+        ),
+    }
+    if in_koji {
+        if verbose {
+            eprintln!("[check-update] asking Bodhi which updates the builds are in");
+        }
+        for nvr in nvrs {
+            match services.bodhi.updates_with_build(nvr) {
+                Ok(updates) => out.in_other_update.extend(
+                    updates
+                        .into_iter()
+                        .filter(|(alias, _)| Some(alias.as_str()) != own_alias)
+                        .map(|(alias, status)| InOtherUpdate {
+                            nvr: nvr.clone(),
+                            alias,
+                            status,
+                        }),
+                ),
+                Err(e) => eprintln!("warning: {e}"),
+            }
+        }
+    }
+    for n in &out.not_newest {
+        eprintln!(
+            "warning: {} is not newer than {} in {}: pushed, it would not be the newest",
+            n.nvr, n.target_nvr, n.tag
+        );
+    }
+    for u in &out.in_other_update {
+        eprintln!(
+            "warning: {} is already in {} ({}), and Bodhi refuses an update carrying it",
+            u.nvr, u.alias, u.status
+        );
+    }
+    out
+}
+
+/// The body of [`check_update_with`], which stores the target checks
+/// in `guards` for the caller to attach to whichever report it returns.
+fn check_update_body(
+    input: &str,
+    opts: &CheckUpdateOptions,
+    services: &Services<'_>,
+    guards: &mut TargetGuards,
 ) -> Result<CheckUpdateReport, String> {
     let koji = services.koji;
     // Phase 0: Determine the update source (side tag / COPR spec),
@@ -837,6 +1049,22 @@ pub(crate) fn check_update_with(
             }
         };
 
+    // Cheap, and decisive when they find something: a build the target
+    // already outranks, or one Bodhi has in another update (#78). Asked
+    // before the analysis, so they are known in seconds.
+    let dist_branch = bodhi_branch
+        .clone()
+        .or_else(|| opts.testing_branch.clone())
+        .unwrap_or_else(|| branch.clone());
+    *guards = target_guards(
+        &nvrs,
+        &dist_branch,
+        copr_spec.is_none(),
+        bodhi_alias.as_deref(),
+        services,
+        opts.verbose,
+    );
+
     // EPEL on its own can't resolve base-OS dependencies: a plain
     // epelN branch is checked against its base distro plus @epel.
     let mapped = apply_epel_defaults(
@@ -903,6 +1131,8 @@ pub(crate) fn check_update_with(
             changed_provides: vec![],
             installability_issues: vec![],
             stale_side_tag: vec![],
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         });
@@ -1265,6 +1495,8 @@ pub(crate) fn check_update_with(
         changed_provides: vec![],
         installability_issues: vec![],
         stale_side_tag: vec![],
+        not_newest: vec![],
+        in_other_update: vec![],
         skip_reason: Some(skip_reason),
         reverse_deps,
     })
@@ -1349,6 +1581,14 @@ pub fn blocking_findings(report: &CheckUpdateReport) -> Vec<Finding> {
         packages.dedup();
         findings.push(Finding::ReverseDepBreak { provide, packages });
     }
+    findings.extend(report.not_newest.iter().cloned().map(Finding::NotNewest));
+    findings.extend(
+        report
+            .in_other_update
+            .iter()
+            .cloned()
+            .map(Finding::InOtherUpdate),
+    );
     findings
 }
 
@@ -1389,6 +1629,8 @@ pub fn apply_resolutions(
                     }
                 }
             }
+            Finding::NotNewest(n) => report.not_newest.retain(|x| *x != n),
+            Finding::InOtherUpdate(u) => report.in_other_update.retain(|x| *x != u),
         }
     }
     (report, addressed)
@@ -1432,6 +1674,34 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
 
     o.push_str(&package_summary(report, detailed));
 
+    if !report.not_newest.is_empty() {
+        let _ = writeln!(
+            o,
+            "> **Blocking:** {} build(s) are not newer than the target's: pushed, \
+             they would not be the newest, and the target's builds would stay on top.",
+            report.not_newest.len()
+        );
+        for n in &report.not_newest {
+            let _ = writeln!(
+                o,
+                "> - `{}` is not newer than `{}` in {}",
+                n.nvr, n.target_nvr, n.tag
+            );
+        }
+        o.push('\n');
+    }
+    if !report.in_other_update.is_empty() {
+        let _ = writeln!(
+            o,
+            "> **Blocking:** {} build(s) are already in another Bodhi update, and Bodhi \
+             refuses an update carrying them.",
+            report.in_other_update.len()
+        );
+        for u in &report.in_other_update {
+            let _ = writeln!(o, "> - `{}` is in {} ({})", u.nvr, u.alias, u.status);
+        }
+        o.push('\n');
+    }
     if !report.stale_side_tag.is_empty() {
         let _ = writeln!(
             o,
@@ -2827,6 +3097,8 @@ fn run_provides_analysis(
             changed_provides: vec![],
             installability_issues,
             stale_side_tag,
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         });
@@ -2943,6 +3215,8 @@ fn run_provides_analysis(
         changed_provides,
         installability_issues,
         stale_side_tag,
+        not_newest: vec![],
+        in_other_update: vec![],
         skip_reason: None,
         reverse_deps,
     })
@@ -3234,6 +3508,8 @@ mod tests {
             changed_provides: vec![],
             installability_issues: vec![],
             stale_side_tag: vec![],
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: Some(skip),
             reverse_deps: BTreeMap::new(),
         }
@@ -3322,6 +3598,8 @@ mod tests {
             changed_provides: vec![],
             installability_issues: installability,
             stale_side_tag: vec![],
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: None,
             reverse_deps: reverse_deps
                 .into_iter()
@@ -3480,6 +3758,8 @@ mod tests {
             changed_provides: vec![],
             installability_issues: vec![],
             stale_side_tag: vec![],
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         };
@@ -3511,6 +3791,8 @@ mod tests {
             changed_provides: vec![],
             installability_issues: vec![],
             stale_side_tag: vec![],
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: None,
             reverse_deps: BTreeMap::new(),
         };
@@ -4600,6 +4882,8 @@ mod tests {
                 expected_nvr: "widget-1.0-1.el10".to_string(),
                 actual_vr: Some("0.9-1.el10".to_string()),
             }],
+            not_newest: vec![],
+            in_other_update: vec![],
             skip_reason: None,
             reverse_deps: BTreeMap::from([("kpat".to_string(), result)]),
         }
@@ -4722,6 +5006,204 @@ mod tests {
         fn build_rpms(&self, _nvr: &str) -> Vec<String> {
             Vec::new()
         }
+    }
+
+    /// A Koji answering each (tag, package)'s latest build from a
+    /// table, for the target checks (#78).
+    struct TargetKoji(BTreeMap<(String, String), String>);
+
+    impl KojiQuery for TargetKoji {
+        fn list_tagged(&self, tag: &str) -> Result<Vec<String>, String> {
+            Err(format!("koji: error: No such tag: {tag}"))
+        }
+        fn external_repos(&self, _tag: &str) -> Option<Vec<String>> {
+            None
+        }
+        fn build_rpms(&self, _nvr: &str) -> Vec<String> {
+            Vec::new()
+        }
+        fn latest_in(&self, tag: &str, package: &str) -> Result<Option<String>, String> {
+            Ok(self.0.get(&(tag.to_string(), package.to_string())).cloned())
+        }
+    }
+
+    /// A Bodhi with one release's candidate tag and the updates some
+    /// builds are in.
+    struct TargetBodhi {
+        tag: Option<String>,
+        updates: BTreeMap<String, Vec<(String, String)>>,
+    }
+
+    impl BodhiQuery for TargetBodhi {
+        fn update(&self, alias: &str) -> Result<BodhiUpdateInfo, String> {
+            Err(format!("no update {alias}"))
+        }
+        fn candidate_tag(&self, _dist_branch: &str) -> Option<String> {
+            self.tag.clone()
+        }
+        fn updates_with_build(&self, nvr: &str) -> Result<Vec<(String, String)>, String> {
+            Ok(self.updates.get(nvr).cloned().unwrap_or_default())
+        }
+    }
+
+    #[test]
+    fn a_build_not_newer_than_the_target_is_caught() {
+        // libical 4: the side tag's asterisk sorts below the one the
+        // maintainer built in plain f46 afterwards.
+        assert!(is_not_newest(
+            "asterisk-24.0.0-1.fc46.1",
+            "asterisk-24.0.0-3.fc46"
+        ));
+        // Another build at the same V-R would not be the newest either.
+        assert!(is_not_newest("foo-1.0-2.fc46", "foo-1.0-2.fc46.1"));
+        // The update's own build, already tagged, is not a rival.
+        assert!(!is_not_newest("foo-1.0-2.fc46", "foo-1.0-2.fc46"));
+        // Newer is fine.
+        assert!(!is_not_newest(
+            "asterisk-24.0.0-4.fc46",
+            "asterisk-24.0.0-3.fc46"
+        ));
+        // Version ordering that reads the other way: a caret snapshot
+        // sorts after its base but before any further segment, so
+        // bluez 5.87^snapshot is below 5.87+1.git; a tilde pre-release
+        // sorts before the release.
+        assert!(is_not_newest(
+            "bluez-5.87^20260101git1-1.fc46",
+            "bluez-5.87+1.git-1.fc46"
+        ));
+        assert!(!is_not_newest(
+            "bluez-5.87^20260101git1-1.fc46",
+            "bluez-5.87-1.fc46"
+        ));
+        assert!(is_not_newest("foo-2.0~rc1-1.fc46", "foo-2.0-1.fc46"));
+    }
+
+    #[test]
+    fn target_checks_find_stale_and_borrowed_builds() {
+        let tag = "f46-updates-candidate";
+        let koji = TargetKoji(BTreeMap::from([
+            (
+                (tag.to_string(), "asterisk".to_string()),
+                "asterisk-24.0.0-3.fc46".to_string(),
+            ),
+            (
+                (tag.to_string(), "libical".to_string()),
+                "libical-3.0.20-1.fc46".to_string(),
+            ),
+        ]));
+        let bodhi = TargetBodhi {
+            tag: Some(tag.to_string()),
+            updates: BTreeMap::from([
+                (
+                    "libical-4.0.5-1.fc46".to_string(),
+                    vec![("FEDORA-2026-own".to_string(), "pending".to_string())],
+                ),
+                (
+                    "bluez-5.87-2.fc46".to_string(),
+                    vec![("FEDORA-2026-other".to_string(), "testing".to_string())],
+                ),
+            ]),
+        };
+        let nvrs: Vec<String> = [
+            "asterisk-24.0.0-1.fc46.1",
+            "libical-4.0.5-1.fc46",
+            "bluez-5.87-2.fc46",
+        ]
+        .map(String::from)
+        .to_vec();
+        let g = target_guards(
+            &nvrs,
+            "rawhide",
+            true,
+            Some("FEDORA-2026-own"),
+            &services(&koji, &bodhi),
+            false,
+        );
+        assert_eq!(
+            g.not_newest,
+            [NotNewest {
+                nvr: "asterisk-24.0.0-1.fc46.1".to_string(),
+                target_nvr: "asterisk-24.0.0-3.fc46".to_string(),
+                tag: tag.to_string(),
+            }]
+        );
+        // The update's own alias is not "another" update.
+        assert_eq!(
+            g.in_other_update,
+            [InOtherUpdate {
+                nvr: "bluez-5.87-2.fc46".to_string(),
+                alias: "FEDORA-2026-other".to_string(),
+                status: "testing".to_string(),
+            }]
+        );
+
+        // A COPR's builds are in neither Bodhi nor its updates.
+        let copr = target_guards(
+            &nvrs,
+            "rawhide",
+            false,
+            None,
+            &services(&koji, &bodhi),
+            false,
+        );
+        assert!(copr.in_other_update.is_empty());
+        assert_eq!(copr.not_newest.len(), 1);
+
+        // No release to compare against: nothing claimed.
+        let none = TargetBodhi {
+            tag: None,
+            updates: BTreeMap::new(),
+        };
+        let g = target_guards(&nvrs, "rawhide", true, None, &services(&koji, &none), false);
+        assert_eq!(g, TargetGuards::default());
+    }
+
+    #[test]
+    fn stale_and_borrowed_builds_block_and_are_reported() {
+        let mut report = full_report();
+        report.not_newest = vec![NotNewest {
+            nvr: "asterisk-24.0.0-1.fc46.1".to_string(),
+            target_nvr: "asterisk-24.0.0-3.fc46".to_string(),
+            tag: "f46-updates-candidate".to_string(),
+        }];
+        report.in_other_update = vec![InOtherUpdate {
+            nvr: "bluez-5.87-2.fc46".to_string(),
+            alias: "FEDORA-2026-other".to_string(),
+            status: "testing".to_string(),
+        }];
+        let (karma, reason) = crate::karma::derive_karma(&report);
+        assert_eq!(karma, -1);
+        assert!(reason.contains("asterisk-24.0.0-1.fc46.1"), "{reason}");
+
+        let findings = blocking_findings(&report);
+        assert!(findings.iter().any(|f| matches!(f, Finding::NotNewest(_))));
+        assert!(
+            findings
+                .iter()
+                .any(|f| matches!(f, Finding::InOtherUpdate(_)))
+        );
+
+        let text = render_report(&report, false);
+        assert!(
+            text.contains(
+                "> - `asterisk-24.0.0-1.fc46.1` is not newer than `asterisk-24.0.0-3.fc46` \
+                 in f46-updates-candidate"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("> - `bluez-5.87-2.fc46` is in FEDORA-2026-other (testing)"),
+            "{text}"
+        );
+
+        // A reviewer who removes them clears them from the report.
+        let decisions: Vec<_> = findings
+            .into_iter()
+            .filter(|f| matches!(f, Finding::NotNewest(_) | Finding::InOtherUpdate(_)))
+            .map(|f| (f, Resolution::Removed))
+            .collect();
+        let (curated, _) = apply_resolutions(report, decisions);
+        assert!(curated.not_newest.is_empty() && curated.in_other_update.is_empty());
     }
 
     /// A Bodhi nothing asks: a side-tag check never reaches it, and a

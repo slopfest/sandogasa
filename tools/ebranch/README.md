@@ -647,6 +647,25 @@ For EPEL side tags, the testing branch is auto-detected from the
 side tag name (e.g. `epel9-build-side-*` uses `epel9`). Use
 `--testing-branch` to override if needed.
 
+Before the analysis, each build is checked against two things that
+would make the update wrong however clean its dependencies are:
+
+- **the target's newest build.** Each build is compared with the
+  release's newest build of the same package in Koji (its
+  `-updates-candidate` tag, which inherits the stable one, so pending
+  builds count). A build at or below it would not be the newest once
+  pushed, leaving the target's build on top: a side tag's
+  `asterisk-24.0.0-1.fc46.1` against `asterisk-24.0.0-3.fc46` built in
+  rawhide meanwhile, or a `5.87^snapshot` against `5.87+1.git`.
+- **another Bodhi update.** Bodhi lets a build belong to one update
+  and refuses a new one carrying a build another already has; an
+  existing update's own builds are not counted. COPR builds are in
+  neither, so only the first check applies to them.
+
+Both are printed as soon as they are known and are blocking findings
+like breakage: a `-1` for `--give-karma`, a stop for `--submit` until
+the reviewer keeps, explains or removes them.
+
 A side tag's or a COPR's repository metadata is refetched on every run
 (both change as builds land, and are small); after an offered `koji
 regen-repo`, only the side tag's cached metadata is dropped; and when
