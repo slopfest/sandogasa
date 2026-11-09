@@ -235,6 +235,19 @@ impl Sig {
     }
 }
 
+/// The GitLab project path of a package's CentOS Stream dist-git repo,
+/// which every SIG's repo for it mirrors.
+pub fn stream_project(package: &str) -> String {
+    format!("redhat/centos-stream/rpms/{package}")
+}
+
+/// The branch a Proposed Update is carried on in the SIG's repo:
+/// `c10s-proposed-RHEL-303721`, for the CentOS Stream branch `release`
+/// and the change's first RHEL issue.
+pub fn proposed_branch(release: &str, rhel_key: &str) -> String {
+    format!("{release}-proposed-{rhel_key}")
+}
+
 /// `c10s-hs` → `(10, "hs")`.
 fn stream_branch(branch: &str) -> Option<(u32, &str)> {
     let (release, suffix) = branch.strip_prefix('c')?.split_once("s-")?;
@@ -336,6 +349,20 @@ mod tests {
             let err = Sig::Hyperscale.collection_for_branch(unknown).unwrap_err();
             assert!(err.contains(unknown), "{err}");
         }
+    }
+
+    #[test]
+    fn a_proposed_branch_maps_back_to_its_collection() {
+        let branch = proposed_branch("c10s", "RHEL-303721");
+        assert_eq!(branch, "c10s-proposed-RHEL-303721");
+        assert_eq!(
+            Sig::ProposedUpdates
+                .collection_for_branch(&branch)
+                .unwrap()
+                .target(),
+            "proposed_updates10s-packages-main-el10s"
+        );
+        assert_eq!(stream_project("rsync"), "redhat/centos-stream/rpms/rsync");
     }
 
     #[test]

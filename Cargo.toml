@@ -30,6 +30,7 @@ members = [
     "crates/sandogasa-review",
     "crates/sandogasa-rpmvercmp",
     "crates/sandogasa-sourcehut",
+    "tools/cbspkg",
     "tools/cpu-sig-tracker",
     "tools/dbranch",
     "tools/ebranch",

@@ -1,0 +1,62 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH cbspkg 1 2026-11-09 "sandogasa 0.27.1" "Sandogasa Manual"
+.SH NAME
+cbspkg \- Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedora
+.SH SYNOPSIS
+\fBcbspkg\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedora
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS cbspkg config
+\fBcbspkg config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Set up the GitLab token
+.TP
+\fB\-\-all\fR
+Ask for every setting again, with the saved value as the default: Enter keeps it, a new value replaces it, and \- clears an optional one
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS cbspkg sig-repo
+\fBcbspkg sig\-repo\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-sig\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL|PACKAGE\fR>
+.PP
+Make sure the SIG has its repo for a package, a pull mirror of CentOS Stream\*(Aqs, and push a merge request\*(Aqs change to it
+.TP
+\fB\-\-dry\-run\fR
+Show each step without doing anything
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The dist\-git checkout to push from (default: the current directory)
+.TP
+\fB\-\-sig\fR \fI<SIG>\fR
+The SIG, for a package name (a merge request is always a Proposed Update)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+hyperscale
+.IP \(bu 2
+proposed\-updates
+.RE
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Create the repo without asking
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIMR_URL|PACKAGE\fR>
+A CentOS Stream merge request URL (a Proposed Update), or a package name

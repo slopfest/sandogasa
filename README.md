@@ -25,6 +25,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 
 ## Tools
 
+- **[cbspkg](tools/cbspkg/)** — packaging for CentOS SIGs that build in CBS, knowing each SIG's conventions (Proposed Updates, Hyperscale): sets up a SIG's package repo as a pull mirror of CentOS Stream's and carries a merge request's change to it
 - **[cpu-sig-tracker](tools/cpu-sig-tracker/)** — CentOS Proposed Updates SIG package-state tracker across Koji, GitLab, and JIRA
 - **[dbranch](tools/dbranch/)** — propagate a Debian package across its downstream branches in `rpmbuild`-style stages: rebuild Ubuntu PPA and Debian stable proposed-update (`debian/<codename>`) branches, and update the Debian branch to a new upstream (merge/import + changelog entry; optional pbuilder build, lintian, push + GitLab CI watch via `glab`, dput or Debusine upload, and tag); starts a package straight from upstream's git tags (`clone`, with the salsa project and a myrepos entry set up on request); doubles as a learning tool via `--explain`
 - **[ebranch](tools/ebranch/)** — cross-branch porting helper: build-order resolution, branch requests, update checking with Bodhi karma, rebuild planning after a SONAME bump, and tracking a multi-package effort on its way into the distro

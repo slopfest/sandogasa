@@ -106,8 +106,9 @@ The issue body follows a canonical format that `status` parses back
 
 The project has to exist first: a pull mirror of the CentOS Stream
 repo, with the change's branch pushed to it as
-`<release>-proposed-<RHEL key>`. When it is missing, `file-issue` stops
-before asking Jira anything and prints the steps that create it
+`<release>-proposed-<RHEL key>`. `cbspkg sig-repo <mr-url>` does both.
+When the repo is missing, `file-issue` stops before asking Jira
+anything and names that command, with the steps to do the same by hand
 (`--dry-run` prints them as a warning and still shows the issue), and
 `mr` names them as the next step after opening the merge request.
 

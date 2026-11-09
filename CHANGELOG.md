@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### New cbspkg tool, with sig-repo to set up a SIG's package repo
+
+The first Proposed Update taken through the tools end to end, rsync's
+CVE-2026-119741 fix, stopped after its CentOS Stream merge request was
+open: the SIG had no rsync repo to file the tracking issue in or to
+build from, and creating one was a manual job in GitLab's web UI
+followed by a hand-typed `git push`.
+
+`cbspkg` is a new tool for packaging in the CentOS SIGs that build in
+CBS, in the spirit of fedpkg and centpkg but knowing each SIG's
+conventions through sandogasa-cbs (#77). Its first command,
+`cbspkg sig-repo <mr-url>`, creates the SIG's repo when it is missing:
+public, in the SIG's group, and a pull mirror of the package's CentOS
+Stream repo that never overwrites the SIG's own branches. It waits for
+the first mirror update, then fetches the merge request's commits and
+pushes them as `<release>-proposed-<RHEL key>`. That push skips the
+checkout's pre-push hook (`--no-verify`): CentOS Stream's
+`centpkg pre-push-check` checks the spec against the working tree's
+`sources` file rather than the pushed commit's, which fails for
+commits that are not checked out, and these commits already passed it
+on their way to the merge request (tools/cbspkg/DEVELOPMENT.md). `cbspkg sig-repo
+<package> --sig hyperscale` creates a Hyperscale repo the same way.
+`--explain` and `--dry-run` narrate each step. `cbspkg config` saves
+the GitLab token.
+
+cpu-sig-tracker's `file-issue` and `mr` now lead their missing-repo
+hint with `cbspkg sig-repo <mr-url>`, keeping the steps to do it by
+hand underneath. sandogasa-gitlab gains `GroupClient::create_project`
+and the pull mirror API of GitLab 17.6 and later (`set_pull_mirror`,
+`start_pull_mirror`, `pull_mirror`); sandogasa-cbs gains
+`stream_project` and `proposed_branch`.
+
 ### cpu-sig-tracker: file-issue checks for the SIG's repo first, and says how to make it
 
 `cpu-sig-tracker file-issue` for rsync's CentOS Stream MR ended on a

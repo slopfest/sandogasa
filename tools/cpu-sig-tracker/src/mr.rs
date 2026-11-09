@@ -616,7 +616,13 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
                 .map(str::trim);
             println!(
                 "Next: {}\nthen the SIG's tracking issue: {file_issue}",
-                crate::file_issue::missing_sig_repo_help(&package, &target, Some(&branch), key)
+                crate::file_issue::missing_sig_repo_help(
+                    &mr.web_url,
+                    &package,
+                    &target,
+                    Some(&branch),
+                    key
+                )
             );
         }
         _ => println!("Next, the SIG's tracking issue: {file_issue}"),

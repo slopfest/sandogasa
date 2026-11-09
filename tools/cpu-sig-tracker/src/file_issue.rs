@@ -100,23 +100,27 @@ pub fn run(args: &FileIssueArgs) -> ExitCode {
     }
 }
 
-/// How to create the SIG's repo for `package` when it has none yet: a
-/// pull mirror of the CentOS Stream repo, with the proposed change's
+/// How to create the SIG's repo for `package` when it has none yet:
+/// `cbspkg sig-repo` for the merge request at `mr_url`, or by hand, a
+/// pull mirror of the CentOS Stream repo with the proposed change's
 /// branch pushed to it as `<release>-proposed-<RHEL key>`, from
 /// `source_branch` (the merge request's) when known.
 pub fn missing_sig_repo_help(
+    mr_url: &str,
     package: &str,
     release: &str,
     source_branch: Option<&str>,
     jira_key: Option<&str>,
 ) -> String {
     let group = sandogasa_cbs::Sig::ProposedUpdates.gitlab_group();
-    let topic = format!("{release}-proposed-{}", jira_key.unwrap_or("<RHEL key>"));
+    let stream = sandogasa_cbs::stream_project(package);
+    let topic = sandogasa_cbs::proposed_branch(release, jira_key.unwrap_or("<RHEL key>"));
     format!(
-        "the SIG has no repo for {package} yet ({group}/{package}). Create it as a pull \
-         mirror of the CentOS Stream repo:\n\
+        "the SIG has no repo for {package} yet ({group}/{package}). Create it with:\n\
+         \x20 cbspkg sig-repo {mr_url}\n\
+         or by hand, as a pull mirror of the CentOS Stream repo:\n\
          \x20 1. On GitLab: New project → Import project → Repository by URL, in {group}\n\
-         \x20    URL: https://gitlab.com/redhat/centos-stream/rpms/{package}.git\n\
+         \x20    URL: https://gitlab.com/{stream}.git\n\
          \x20    name {package}, public, with \"Mirror repository\" ticked; then in Settings →\n\
          \x20    Repository → Mirroring repositories, leave \"Overwrite diverged branches\" off\n\
          \x20 2. Push the change's branch to it, from the dist-git checkout:\n\
@@ -164,6 +168,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     // in. A dry run says so and still shows the issue.
     if !sig_repo_exists(package)? {
         let help = missing_sig_repo_help(
+            &mr.web_url,
             package,
             &release,
             Some(&mr.source_branch),
@@ -981,6 +986,7 @@ mod tests {
         let err = run_inner(&args).unwrap_err().to_string();
         assert!(
             err.contains("the SIG has no repo for rsync yet")
+                && err.contains("  cbspkg sig-repo https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/90\n")
                 && err.contains(
                     "rpms/rsync.git c10s-CVE-2026-119741:refs/heads/c10s-proposed-RHEL-303721"
                 )
