@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: mr checks out the branch it pushes
+
+The first real `cpu-sig-tracker mr` run, for rsync's
+c10s-CVE-2026-119741 branch, forked and waited for the fork, then had
+its push cancelled: "Source file 'rsync-3.5.0.tar.gz' was neither
+listed in the 'sources' file nor tracked in git". The checkout was on
+the c9s branch, whose `sources` lists rsync 3.2.7. CentOS Stream's
+dist-git clones run `centpkg pre-push-check` as a pre-push hook, and
+rpkg reads the spec from the pushed commit but `sources` from the
+working tree, so a branch pushed from a checkout of another one is
+checked against the wrong file.
+
+`mr` now checks out the branch for the push and switches back to the
+branch, or detached commit, it started on, whether or not the push
+succeeded. Both checkouts are steps under `--explain` and `--dry-run`.
+A checkout with uncommitted changes is refused before anything is
+forked or asked, with a message saying why.
+
 ### cpu-sig-tracker: mr opens the MR description with an AI-assistance disclosure
 
 The merge requests `cpu-sig-tracker mr` opened said nothing about AI

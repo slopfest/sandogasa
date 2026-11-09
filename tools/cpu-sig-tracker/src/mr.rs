@@ -354,6 +354,77 @@ fn remotes(repo: &Path) -> Result<Vec<(String, String)>, String> {
         .collect())
 }
 
+/// What the checkout has to be switched back to after pushing a branch
+/// it does not have checked out: the branch it was on, or the commit a
+/// detached HEAD pointed at. `None` when `branch` is already checked out.
+///
+/// CentOS Stream's dist-git clones run `centpkg pre-push-check` as a
+/// pre-push hook, which reads the spec from the pushed commit but the
+/// `sources` file from the working tree. Pushed from a checkout of
+/// another branch, it compares the spec with the wrong `sources` and
+/// cancels the push ("Source file 'rsync-3.5.0.tar.gz' was neither
+/// listed in the 'sources' file …"), so `mr` checks the branch out for
+/// the push. A checkout with uncommitted changes is not switched: that
+/// is refused before anything else runs.
+pub fn checkout_to_restore(
+    current: &str,
+    head: &str,
+    branch: &str,
+    dirty: bool,
+) -> Result<Option<String>, String> {
+    if current == branch {
+        return Ok(None);
+    }
+    let on = if current == "HEAD" {
+        format!("a detached HEAD ({head})")
+    } else {
+        current.to_string()
+    };
+    if dirty {
+        return Err(format!(
+            "the checkout is on {on} with uncommitted changes, and pushing {branch} needs it \
+             checked out: the pre-push hook (centpkg pre-push-check) reads the sources file \
+             from the working tree. Commit or stash the changes, or check out {branch} first"
+        ));
+    }
+    Ok(Some(if current == "HEAD" {
+        head.to_string()
+    } else {
+        current.to_string()
+    }))
+}
+
+/// Push `branch` to `remote` with it checked out, switching back to
+/// `restore` afterwards (see [`checkout_to_restore`]), whether or not
+/// the push succeeded.
+fn push_checked_out(
+    ui: &Ui,
+    repo: &Path,
+    remote: &str,
+    branch: &str,
+    restore: Option<&str>,
+) -> Result<(), String> {
+    let argv = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+    if restore.is_some() {
+        ui.step(&format!(
+            "Check out {branch} for the push: the pre-push hook (centpkg pre-push-check) \
+             checks the spec against the sources file in the working tree"
+        ));
+        ui.run_required(&argv(&["git", "checkout", "--quiet", branch]), repo)
+            .map_err(|e| e.to_string())?;
+    }
+    ui.step(&format!("Push {branch} to your fork"));
+    let pushed = ui
+        .run_required(&argv(&["git", "push", "-u", remote, branch]), repo)
+        .map_err(|e| e.to_string());
+    if let Some(back) = restore {
+        ui.step(&format!("Switch the checkout back to {back}"));
+        ui.run_required(&argv(&["git", "checkout", "--quiet", back]), repo)
+            .map_err(|e| format!("{e} (the checkout is still on {branch})"))?;
+    }
+    pushed.map(|_| ())
+}
+
 fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
     let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
     // Read first, so a mistyped path fails before anything is asked.
@@ -363,10 +434,16 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
         dry_run: args.dry_run,
         quiet: false,
     };
-    let branch = match &args.branch {
-        Some(b) => b.clone(),
-        None => git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
-    };
+    let current = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let branch = args.branch.clone().unwrap_or_else(|| current.clone());
+    // Before anything is forked or asked: whether the push has to
+    // switch the checkout, and whether it can.
+    let restore = checkout_to_restore(
+        &current,
+        &git(&repo, &["rev-parse", "HEAD"])?,
+        &branch,
+        !git(&repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty(),
+    )?;
 
     // Where it goes: the CentOS Stream project the checkout's origin is.
     let origin = git(&repo, &["remote", "get-url", "origin"])?;
@@ -514,17 +591,7 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    ui.step(&format!("Push {branch} to your fork"));
-    ui.run_required(
-        &[
-            "git".to_string(),
-            "push".to_string(),
-            "-u".to_string(),
-            remote.clone(),
-            branch.clone(),
-        ],
-        &repo,
-    )?;
+    push_checked_out(&ui, &repo, &remote, &branch, restore.as_deref())?;
 
     ui.step(&format!(
         "Open the merge request into {upstream_path}:{target}, through GitLab's API (the \
@@ -710,6 +777,100 @@ mod tests {
         assert_eq!(commits[0].subject, "first");
         assert_eq!(commits[0].body, "body one\n\nResolves: RHEL-1");
         assert_eq!(commits[1].subject, "second");
+    }
+
+    #[test]
+    fn a_branch_not_checked_out_is_checked_out_for_the_push() {
+        assert_eq!(
+            checkout_to_restore("c10s-x", "abc", "c10s-x", true),
+            Ok(None)
+        );
+        assert_eq!(
+            checkout_to_restore("c9s-x", "abc", "c10s-x", false),
+            Ok(Some("c9s-x".into()))
+        );
+        // A detached HEAD goes back to its commit.
+        assert_eq!(
+            checkout_to_restore("HEAD", "abc123", "c10s-x", false),
+            Ok(Some("abc123".into()))
+        );
+        let err = checkout_to_restore("c9s-x", "abc", "c10s-x", true).unwrap_err();
+        assert!(
+            err.contains("on c9s-x with uncommitted changes") && err.contains("check out c10s-x"),
+            "{err}"
+        );
+    }
+
+    /// The rsync c10s run: pushed from a checkout of the c9s branch,
+    /// the pre-push hook read c9s's `sources`. Here a hook records which
+    /// `sources` it saw, and the checkout must end up where it started.
+    #[test]
+    fn the_pre_push_hook_sees_the_pushed_branchs_working_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, remote) = (dir.path().join("repo"), dir.path().join("fork.git"));
+        let run = |cwd: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .args(["-c", "user.name=T", "-c", "user.email=t@example.org"])
+                .args([
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "init.defaultBranch=c9s-x",
+                ])
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        run(dir.path(), &["init", "--quiet", "--bare", "fork.git"]);
+        run(dir.path(), &["init", "--quiet", "repo"]);
+        std::fs::write(repo.join("sources"), "rsync-3.2.7\n").unwrap();
+        run(&repo, &["add", "sources"]);
+        run(&repo, &["commit", "--quiet", "-m", "c9s"]);
+        run(&repo, &["checkout", "--quiet", "-b", "c10s-x"]);
+        std::fs::write(repo.join("sources"), "rsync-3.5.0\n").unwrap();
+        run(&repo, &["commit", "--quiet", "-am", "c10s"]);
+        run(&repo, &["checkout", "--quiet", "c9s-x"]);
+        let hook = repo.join(".git/hooks/pre-push");
+        std::fs::write(&hook, "#!/bin/sh\ncat sources > ../hook-saw\n").unwrap();
+        let mut perms = std::fs::metadata(&hook).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        std::fs::set_permissions(&hook, perms).unwrap();
+
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        let restore = checkout_to_restore(
+            &run(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            &run(&repo, &["rev-parse", "HEAD"]),
+            "c10s-x",
+            false,
+        )
+        .unwrap();
+        push_checked_out(
+            &ui,
+            &repo,
+            remote.to_str().unwrap(),
+            "c10s-x",
+            restore.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("hook-saw")).unwrap(),
+            "rsync-3.5.0\n"
+        );
+        assert_eq!(run(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "c9s-x");
+        assert_eq!(
+            run(
+                dir.path(),
+                &["--git-dir=fork.git", "log", "--format=%s", "-1", "c10s-x"]
+            ),
+            "c10s"
+        );
     }
 
     #[test]

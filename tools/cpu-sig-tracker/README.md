@@ -215,7 +215,12 @@ from the package's dist-git checkout (the current directory, or `-C`):
    it as a remote named after your GitLab user. GitLab copies a new
    fork in the background, so `mr` waits (a few minutes at most) until
    the copy is done before pushing to it.
-2. `git push -u <remote> <branch>`.
+2. `git push -u <remote> <branch>`. CentOS Stream's pre-push hook
+   (`centpkg pre-push-check`) checks the spec against the `sources`
+   file in the working tree, so when another branch is checked out,
+   `mr` checks out `<branch>` for the push and switches back after. A
+   checkout with uncommitted changes is not switched: `mr` stops before
+   anything else and asks for them to be committed or stashed.
 3. The merge request is opened into the CentOS Stream branch the
    branch is for: the one it tracks (`origin/c9s`), else its `cNs-`
    prefix, or `--target`.
