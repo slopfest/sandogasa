@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: file-issue checks for the SIG's repo first, and says how to make it
+
+`cpu-sig-tracker file-issue` for rsync's CentOS Stream MR ended on a
+raw `HTTP 404 Not Found: {"message":"404 Project Not Found"}` from
+GitLab. The SIG had no rsync repo to file the tracking issue in, and
+`mr` had just suggested `file-issue` as the next step, skipping the one
+that creates the repo.
+
+`file-issue` now checks for the SIG's project before it asks Jira
+anything. If it is missing, `file-issue` stops with the steps that
+create it: a pull mirror of the Stream repo, then a push of the change's
+branch as `<release>-proposed-<RHEL key>`, with the exact `git push`
+command. `--dry-run` prints the same steps as a warning and still
+previews the issue. `mr`'s closing hint names those steps first when
+the repo is missing. Fixes #96.
+
 ### cpu-sig-tracker: mr checks out the branch it pushes
 
 The first real `cpu-sig-tracker mr` run, for rsync's

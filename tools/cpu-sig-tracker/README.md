@@ -104,6 +104,13 @@ stamps `start_date` from the Koji build's creation time.
 The issue body follows a canonical format that `status` parses back
 (MR, JIRA, Release, Affected build, Expected fix).
 
+The project has to exist first: a pull mirror of the CentOS Stream
+repo, with the change's branch pushed to it as
+`<release>-proposed-<RHEL key>`. When it is missing, `file-issue` stops
+before asking Jira anything and prints the steps that create it
+(`--dry-run` prints them as a warning and still shows the issue), and
+`mr` names them as the next step after opening the merge request.
+
 ### `jira`
 
 ```sh

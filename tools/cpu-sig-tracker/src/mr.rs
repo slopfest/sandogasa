@@ -607,10 +607,20 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
         &NewMergeRequest::new(&branch, target_project.id, &target, &title, &body),
     )?;
     println!("\nOpened {}", mr.web_url);
-    println!(
-        "Next, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
-        mr.web_url
-    );
+    let file_issue = format!("cpu-sig-tracker file-issue {}", mr.web_url);
+    match crate::file_issue::sig_repo_exists(&package) {
+        Ok(false) => {
+            let key = tickets
+                .iter()
+                .find_map(|t| t.strip_prefix("Resolves: "))
+                .map(str::trim);
+            println!(
+                "Next: {}\nthen the SIG's tracking issue: {file_issue}",
+                crate::file_issue::missing_sig_repo_help(&package, &target, Some(&branch), key)
+            );
+        }
+        _ => println!("Next, the SIG's tracking issue: {file_issue}"),
+    }
     Ok(())
 }
 

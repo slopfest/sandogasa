@@ -13,9 +13,6 @@ use crate::gitlab;
 use crate::jira;
 use crate::utils::{format_jira_lines, format_mr_line};
 
-/// GitLab group where tracking issues are filed.
-const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
-
 /// Label applied to tracking issues so `sync-issues` and
 /// `status` can identify them.
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
@@ -103,6 +100,44 @@ pub fn run(args: &FileIssueArgs) -> ExitCode {
     }
 }
 
+/// How to create the SIG's repo for `package` when it has none yet: a
+/// pull mirror of the CentOS Stream repo, with the proposed change's
+/// branch pushed to it as `<release>-proposed-<RHEL key>`, from
+/// `source_branch` (the merge request's) when known.
+pub fn missing_sig_repo_help(
+    package: &str,
+    release: &str,
+    source_branch: Option<&str>,
+    jira_key: Option<&str>,
+) -> String {
+    let group = sandogasa_cbs::Sig::ProposedUpdates.gitlab_group();
+    let topic = format!("{release}-proposed-{}", jira_key.unwrap_or("<RHEL key>"));
+    format!(
+        "the SIG has no repo for {package} yet ({group}/{package}). Create it as a pull \
+         mirror of the CentOS Stream repo:\n\
+         \x20 1. On GitLab: New project → Import project → Repository by URL, in {group}\n\
+         \x20    URL: https://gitlab.com/redhat/centos-stream/rpms/{package}.git\n\
+         \x20    name {package}, public, with \"Mirror repository\" ticked; then in Settings →\n\
+         \x20    Repository → Mirroring repositories, leave \"Overwrite diverged branches\" off\n\
+         \x20 2. Push the change's branch to it, from the dist-git checkout:\n\
+         \x20    git push git+ssh://git@gitlab.com/{group}/{package}.git \
+         {}:refs/heads/{topic}",
+        source_branch.unwrap_or("<branch>")
+    )
+}
+
+/// Whether the SIG has a repo for `package`, where its tracking issues
+/// are filed.
+pub fn sig_repo_exists(package: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    let path = format!(
+        "{}/{package}",
+        sandogasa_cbs::Sig::ProposedUpdates.gitlab_group()
+    );
+    Ok(gitlab::reader(&crate::utils::gitlab_base(), &path)?
+        .project()?
+        .is_some())
+}
+
 pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
     let (_parsed_base, mr_project, iid) = gitlab::parse_mr_url(&args.mr_url)?;
     if args.verbose {
@@ -125,6 +160,21 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     } else {
         args.jira.clone()
     };
+    // Before Jira is asked anything: whether there is a repo to file
+    // in. A dry run says so and still shows the issue.
+    if !sig_repo_exists(package)? {
+        let help = missing_sig_repo_help(
+            package,
+            &release,
+            Some(&mr.source_branch),
+            jira_keys.first().map(String::as_str),
+        );
+        if !args.dry_run {
+            return Err(format!("{help}\nthen run this again.").into());
+        }
+        eprintln!("warning: {help}\n");
+    }
+    let group = sandogasa_cbs::Sig::ProposedUpdates.gitlab_group();
     let jira: Vec<(String, Option<String>, Option<String>)> = jira_keys
         .iter()
         .map(|key| match fetch_jira_info(key, args.verbose) {
@@ -154,7 +204,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     let labels = build_labels(&release, args.issue_type);
 
     if args.dry_run {
-        println!("Would file in {PROPOSED_UPDATES_GROUP}/{package}:");
+        println!("Would file in {group}/{package}:");
         println!("---");
         println!("title: {title}");
         println!("labels: {labels}");
@@ -163,7 +213,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         return Ok(());
     }
 
-    let tracking_project = format!("{PROPOSED_UPDATES_GROUP}/{package}");
+    let tracking_project = format!("{group}/{package}");
     if args.verbose {
         eprintln!("[cpu-sig-tracker] creating issue in {tracking_project}");
     }
@@ -731,6 +781,18 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let server = runtime.block_on(MockServer::start());
         runtime.block_on(async {
+            // The SIG's repo the issue is filed in exists.
+            Mock::given(method("GET"))
+                .and(wiremock_path("/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fxz"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": 7,
+                    "path_with_namespace": "CentOS/proposed_updates/rpms/xz",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/xz",
+                    "ssh_url_to_repo": "git@gitlab.example:CentOS/proposed_updates/rpms/xz.git",
+                    "http_url_to_repo": "https://gitlab.example/CentOS/proposed_updates/rpms/xz.git",
+                })))
+                .mount(&server)
+                .await;
             // MR fetch from the source project.
             Mock::given(method("GET"))
                 .and(wiremock_path(
@@ -858,5 +920,73 @@ mod tests {
             verbose: false,
         };
         run_inner(&args).expect("file-issue succeeds");
+    }
+
+    /// rsync's first run: no SIG repo yet, so nothing is asked of Jira
+    /// or posted, and the error says how to make one.
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_sig_repo_stops_file_issue_before_jira_with_how_to_make_it() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(wiremock_path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests/90",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 90,
+                    "title": "Fix denial of service via crafted checksums (CVE-2026-119741)",
+                    "description": "Resolves: RHEL-303721",
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/90",
+                    "source_branch": "c10s-CVE-2026-119741",
+                    "target_branch": "c10s",
+                })))
+                .mount(&server)
+                .await;
+            // Anything else (the SIG's project, Jira, the issue POST)
+            // must not be reached, bar the project lookup's 404.
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(wiremock_path("/rest/api/2/issue/RHEL-303721"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+        });
+        let dir = tempdir().unwrap();
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+        ]);
+        let args = FileIssueArgs {
+            mr_url: "https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/90"
+                .to_string(),
+            affected: None,
+            expected_fix: None,
+            jira: vec![],
+            release: None,
+            issue_type: None,
+            note: None,
+            dry_run: false,
+            verbose: false,
+        };
+        let err = run_inner(&args).unwrap_err().to_string();
+        assert!(
+            err.contains("the SIG has no repo for rsync yet")
+                && err.contains(
+                    "rpms/rsync.git c10s-CVE-2026-119741:refs/heads/c10s-proposed-RHEL-303721"
+                )
+                && err.ends_with("then run this again."),
+            "{err}"
+        );
+        runtime.block_on(server.verify());
     }
 }
