@@ -48,36 +48,39 @@ affected version, which priority, and a description that cannot be
 fixed afterwards,
 since Red Hat's Jira accepts only comments once an issue exists.
 
-`cpu-sig-tracker jira <package> --branch cNs [--cve CVE-…]`, run
+`cpu-sig-tracker jira <package> --branch cNs [--cve CVE-…,…]`, run
 before the MR exists since the MR must name the issue (or given the
 URL of an MR already open), searches RHEL for open issues on the
-package, about the CVE when there is one, and prints the `Resolves:` line the MR needs for an issue on the
-branch's RHEL major, whether it names `CentOS Stream N` or a minor
-such as `rhel-9.6`, as Product Security's trackers do; issues for
-other releases are listed but not taken. Finding nothing does not
-prove nothing was filed: Product Security's CVE trackers are
-restricted (RHEL-83280's private duplicate,
-<https://redhat.atlassian.net/browse/RHEL-83109>, answers 404 to an
-anonymous request), so an empty result says whom the search ran as and
-what Red Hat's security data lists for the package in that RHEL major,
-`Affected` meaning a tracker probably exists and a filed issue may be
-linked to it as a duplicate.
-With none for the branch it drafts the issue: type Bug, a summary
-from the MR's title or, given only a package and a CVE, the CVE's
-title as Red Hat's bug for it reads, the package as component,
-one affected version, `CentOS Stream N` (RHEL's single-value policy
-keeps only the first, as Red Hat's bot did to two old blktrace issues,
+package, once per CVE (a rebase often fixes several, and Product
+Security files one tracker per CVE and release), and prints a
+`Resolves:` line for each issue on the branch's RHEL major, whether it
+names `CentOS Stream N` or a minor such as `rhel-9.6`, as Product
+Security's trackers do; issues for other releases are listed but not
+taken. Finding nothing does not prove nothing was filed: Product
+Security's CVE trackers are restricted (RHEL-83280's private
+duplicate, <https://redhat.atlassian.net/browse/RHEL-83109>, answers
+404 to an anonymous request), so an empty result says whom the search
+ran as and what Red Hat's security data lists for the package in that
+RHEL major, `Affected` meaning a tracker probably exists and a filed
+issue may be linked to it as a duplicate.
+
+For the CVEs no issue covers on the branch it drafts one issue: type
+Bug; a summary from `--summary` or the MR's title, or, for a single
+CVE, the CVE's title as Red Hat's bug for it reads (several CVEs need
+a summary a person wrote); the package as component; one affected
+version, `CentOS Stream N` (RHEL's single-value policy keeps only the
+first, as Red Hat's bot did to two old blktrace issues,
 <https://redhat.atlassian.net/browse/RHEL-123605> and
 <https://redhat.atlassian.net/browse/RHEL-123606>, and Red Hat sets the
-RHEL versions itself), a priority from the CVE's severity (Red
-Hat's rating first, then NVD's, then GitHub's; critical → Critical,
-high → Major, medium → Normal, low → Minor), and a description with
-every source's rating, NVD's text and the MR. The draft is shown
-exactly as it would be filed, checked against RHEL's required fields
-when Jira credentials are configured, and filed only with `--file`
-and a confirmation (or `--file --yes`). A `--priority` that disagrees
-with the severity is confirmed. Reading a public MR no longer needs a
-GitLab token.
+RHEL versions itself); a priority from the most severe CVE's severity
+(Red Hat's rating first, then NVD's, then GitHub's; critical →
+Critical, high → Major, medium → Normal, low → Minor); and a
+description with every source's rating, NVD's text and link for each
+CVE, then the MR. The draft is shown exactly as it would be filed,
+checked against RHEL's required fields when Jira credentials are
+configured, and filed only with `--file` and a confirmation (or
+`--file --yes`). A `--priority` that disagrees with the severity is
+confirmed. Reading a public MR no longer needs a GitLab token.
 
 The Proposed Updates site's address in the README is now
 `https://sigs.centos.org/proposed_updates/`, with an underscore,

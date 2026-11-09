@@ -6,15 +6,16 @@
 //! CentOS Stream's merge request template asks for an approved Jira
 //! ticket, named in the description, and Red Hat wants one issue per
 //! branch, so the issue comes before the MR: the usual target is a
-//! package and branch, and an MR URL serves one already open. This finds the open RHEL issues for the package (and CVE, when
-//! there is one), sorts out those for the branch's RHEL major, and,
-//! when there are none, says what that can mean (Product Security's
-//! trackers are restricted, so Red Hat's security data is asked whether
-//! one is likely) and drafts one: the affected version Red Hat expects
-//! for the branch, a priority from the CVE's severity, and a
-//! description. Red Hat's Jira cannot be edited once an
-//! issue is filed, only commented on, so the draft is shown exactly as
-//! it would be filed, and filing needs `--file` and a confirmation.
+//! package and branch, and an MR URL serves one already open. This
+//! finds the open RHEL issues for the package, per CVE when there are
+//! any, sorts out those for the branch's RHEL major, and, for the CVEs
+//! with none, says what that can mean (Product Security's trackers are
+//! restricted, so Red Hat's security data is asked whether one is
+//! likely) and drafts one issue covering them: the affected version Red
+//! Hat expects for the branch, a priority from the most severe CVE, and
+//! a description. Red Hat's Jira cannot be edited once an issue is
+//! filed, only commented on, so the draft is shown exactly as it would
+//! be filed, and filing needs `--file` and a confirmation.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -39,9 +40,15 @@ pub struct JiraArgs {
     #[arg(long, value_name = "BRANCH", help_heading = "Selection")]
     pub branch: Option<String>,
 
-    /// CVE the update fixes (default: one named in the MR)
-    #[arg(long, value_name = "CVE-ID", help_heading = "Issue")]
-    pub cve: Option<String>,
+    /// CVEs the update fixes, repeated or comma-separated (default:
+    /// those the MR fixes)
+    #[arg(
+        long,
+        value_name = "CVE-ID",
+        value_delimiter = ',',
+        help_heading = "Issue"
+    )]
+    pub cve: Vec<String>,
 
     /// Text for the description, before the CVE details and links
     #[arg(long, value_name = "TEXT", help_heading = "Issue")]
@@ -212,16 +219,17 @@ pub fn rhel_state(json: &str, package: &str, major: u32) -> Option<RhelState> {
         .map(|s| RhelState::Listed(s.to_string()))
 }
 
-/// What an empty search can and cannot mean. Product Security's CVE
-/// trackers are restricted, hidden from anonymous searches and from
+/// What finding no issue for a CVE can and cannot mean, one note per
+/// CVE in `states` (each with where Red Hat puts the package in RHEL
+/// `major`), after a note on searching anonymously. Product Security's
+/// CVE trackers are restricted, hidden from anonymous searches and from
 /// ordinary community accounts alike, so finding nothing does not mean
 /// nothing was filed; Red Hat's security data says whether a tracker is
 /// likely.
 pub fn empty_search_notes(
     package: &str,
-    cve: Option<&str>,
+    states: &[(&str, Option<&RhelState>)],
     major: u32,
-    state: Option<&RhelState>,
     logged_in: bool,
 ) -> Vec<String> {
     let mut notes = Vec::new();
@@ -232,68 +240,98 @@ pub fn empty_search_notes(
                 .to_string(),
         );
     }
-    let Some(cve) = cve else {
-        return notes;
-    };
-    notes.push(match state {
-        Some(s @ RhelState::Listed(word)) if s.pending() => format!(
-            "Red Hat lists RHEL {major} as {word} by {cve}, so Product Security has \
-             probably filed a tracker, restricted and so unlikely to show here. Filing \
-             may duplicate it, which Red Hat will link; name {cve} in the merge request \
-             so the two can be matched"
-        ),
-        Some(RhelState::Listed(word)) => {
-            format!("Red Hat lists RHEL {major} as {word} for {cve}")
-        }
-        Some(RhelState::Fixed(advisory)) => format!(
-            "Red Hat fixed {cve} in RHEL {major} with {advisory}: check whether \
-             CentOS Stream already has the fix"
-        ),
-        None => format!("Red Hat's security data says nothing of {package} in RHEL {major}"),
-    });
+    for (cve, state) in states {
+        notes.push(match state {
+            Some(s @ RhelState::Listed(word)) if s.pending() => format!(
+                "Red Hat lists RHEL {major} as {word} by {cve}, so Product Security has \
+                 probably filed a tracker, restricted and so unlikely to show here. \
+                 Filing may duplicate it, which Red Hat will link; name {cve} in the \
+                 merge request so the two can be matched"
+            ),
+            Some(RhelState::Listed(word)) => {
+                format!("Red Hat lists RHEL {major} as {word} for {cve}")
+            }
+            Some(RhelState::Fixed(advisory)) => format!(
+                "Red Hat fixed {cve} in RHEL {major} with {advisory}: check whether \
+                 CentOS Stream already has the fix"
+            ),
+            None => format!(
+                "Red Hat's security data says nothing of {package} in RHEL {major} \
+                 for {cve}"
+            ),
+        });
+    }
     notes
 }
 
-/// The first CVE id in `text`, upper-cased.
-pub fn extract_cve(text: &str) -> Option<String> {
-    crate::sync_updates::cve_ids(text).into_iter().next()
+/// Every CVE id in `texts`, upper-cased, each once, in order.
+pub fn extract_cves(texts: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for id in texts.iter().flat_map(|t| crate::sync_updates::cve_ids(t)) {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
 }
 
-/// The issue's description: the submitter's own text first, then the
-/// CVE's severity by every source that rated it, its description and
-/// NVD link, then the merge request.
-pub fn compose_description(
-    text: Option<&str>,
-    cve: Option<&str>,
-    ratings: &[Rating],
-    cve_description: Option<&str>,
-    mr_url: Option<&str>,
-) -> String {
+/// One CVE's part of an issue's description.
+pub struct CveBlock<'a> {
+    pub cve: &'a str,
+    /// Every source's rating, the one to trust first.
+    pub ratings: &'a [Rating],
+    /// NVD's description.
+    pub description: Option<&'a str>,
+}
+
+/// The issue's description: the submitter's own text first, then for
+/// each CVE its severity by every source that rated it, its description
+/// and NVD link, then the merge request.
+pub fn compose_description(text: Option<&str>, cves: &[CveBlock], mr_url: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(t) = text.map(str::trim).filter(|t| !t.is_empty()) {
         parts.push(t.to_string());
     }
-    if let Some(cve) = cve {
+    let several = cves.len() > 1;
+    for c in cves {
         let mut block = Vec::new();
-        if let Some((first, rest)) = ratings.split_first() {
+        if several {
+            block.push(format!("{}:", c.cve));
+        }
+        if let Some((first, rest)) = c.ratings.split_first() {
             block.push(format!("Severity: {} ({first})", first.level.as_str()));
             if !rest.is_empty() {
                 let others: Vec<String> = rest.iter().map(Rating::to_string).collect();
                 block.push(format!("Also rated: {}", others.join("; ")));
             }
         }
-        if let Some(d) = cve_description {
+        if let Some(d) = c.description {
             block.push(String::new());
             block.push(d.trim().to_string());
         }
         block.push(String::new());
-        block.push(format!("https://nvd.nist.gov/vuln/detail/{cve}"));
+        block.push(format!("https://nvd.nist.gov/vuln/detail/{}", c.cve));
         parts.push(block.join("\n"));
     }
     if let Some(url) = mr_url {
         parts.push(format!("Merge request: {url}"));
     }
     parts.join("\n\n")
+}
+
+/// The CVE whose most trusted rating is the most severe, with that
+/// rating: what a draft covering several CVEs takes its priority from.
+/// On a tie, the first.
+pub fn strongest<'a>(cves: &[(&'a str, &'a [Rating])]) -> Option<(&'a str, &'a Rating)> {
+    let mut best: Option<(&str, &Rating)> = None;
+    for (cve, ratings) in cves {
+        if let Some(r) = ratings.first()
+            && best.is_none_or(|(_, b)| r.level > b.level)
+        {
+            best = Some((cve, r));
+        }
+    }
+    best
 }
 
 /// The draft exactly as it would be filed, field by field.
@@ -330,17 +368,28 @@ pub fn run(args: &JiraArgs) -> ExitCode {
     }
 }
 
-/// Where the update is: the package, the branch, the CVE, and the MR
+/// Where the update is: the package, the branch, the CVEs, and the MR
 /// when one was given.
 struct Target {
     package: String,
     branch: String,
-    cve: Option<String>,
+    cves: Vec<String>,
     mr_url: Option<String>,
     mr_title: Option<String>,
 }
 
+/// What the search found for one CVE, or for the package when the
+/// update names none.
+struct Lookup {
+    cve: Option<String>,
+    /// Open issues for the branch's RHEL major.
+    here: Vec<Issue>,
+    /// Open issues for other releases only.
+    elsewhere: Vec<Issue>,
+}
+
 fn resolve_target(args: &JiraArgs) -> Result<Target, Box<dyn std::error::Error>> {
+    let given: Vec<&str> = args.cve.iter().map(String::as_str).collect();
     if !args.target.contains("://") {
         let branch = args
             .branch
@@ -349,7 +398,7 @@ fn resolve_target(args: &JiraArgs) -> Result<Target, Box<dyn std::error::Error>>
         return Ok(Target {
             package: args.target.clone(),
             branch,
-            cve: args.cve.as_deref().map(str::to_ascii_uppercase),
+            cves: extract_cves(&given),
             mr_url: None,
             mr_title: None,
         });
@@ -362,35 +411,34 @@ fn resolve_target(args: &JiraArgs) -> Result<Target, Box<dyn std::error::Error>>
         eprintln!("[cpu-sig-tracker] reading MR {iid} from {project}");
     }
     let mr = crate::gitlab::reader(&crate::utils::gitlab_base(), &project)?.merge_request(iid)?;
-    let cve = args
-        .cve
-        .as_deref()
-        .map(str::to_ascii_uppercase)
-        .or_else(|| extract_cve(&mr.title))
-        .or_else(|| mr.description.as_deref().and_then(extract_cve));
+    let cves = if given.is_empty() {
+        extract_cves(&[&mr.title, mr.description.as_deref().unwrap_or("")])
+    } else {
+        extract_cves(&given)
+    };
     Ok(Target {
         package,
         branch: args.branch.clone().unwrap_or(mr.target_branch),
-        cve,
+        cves,
         mr_url: Some(mr.web_url),
         mr_title: Some(mr.title),
     })
 }
 
 /// The priority to file with, and why, following the workspace rule:
-/// the severity fills it when no flag does; a flag that disagrees is
+/// the severity (of `strongest`, the most severe CVE's most trusted
+/// rating) fills it when no flag does; a flag that disagrees is
 /// confirmed at a terminal, defaulting to the severity's, and kept with
 /// a note otherwise.
 fn settle_priority(
     flag: Option<&str>,
-    ratings: &[Rating],
-    cve: Option<&str>,
+    strongest: Option<(&str, &Rating)>,
     ask: bool,
 ) -> Result<(Option<String>, Option<String>), String> {
-    let derived = ratings.first().map(|r| {
+    let derived = strongest.map(|(cve, r)| {
         (
             priority_for(r.level),
-            format!("{} rates {} {}", r.source, cve.unwrap_or("it"), r.detail),
+            format!("{} rates {cve} {}", r.source, r.detail),
         )
     });
     match (flag, derived) {
@@ -426,63 +474,127 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
     let client = runtime.block_on(crate::jira::client())?;
 
     // An issue may exist already: Product Security files its own for
-    // many CVEs, and a duplicate is closed as one.
+    // many CVEs, one per CVE and release, and a duplicate is closed as
+    // one. So each CVE is searched on its own.
     let major = branch_major(&target.branch)?;
     let logged_in = crate::jira::logged_in();
-    let jql = search_jql(&target.package, target.cve.as_deref());
-    if args.verbose {
-        let who = if logged_in {
-            "logged in"
-        } else {
-            "anonymously"
-        };
-        eprintln!("[cpu-sig-tracker] searching {PROJECT} {who}: {jql}");
-    }
-    let found: Vec<Issue> = runtime.block_on(client.search(
-        &jql,
-        &["summary", "status", "versions", "priority"],
-        20,
-    ))?;
-    let (here, elsewhere): (Vec<Issue>, Vec<Issue>) =
-        found.into_iter().partition(|i| for_major(i, major));
-
-    if !here.is_empty() {
-        return report_found(args, &target, &here, &elsewhere);
-    }
-
-    // Nothing open for this release: draft one.
-    let affected = vec![branch_version(&target.branch)?];
-
-    let facts = match &target.cve {
-        Some(cve) => runtime.block_on(cve_facts(cve, args.verbose)),
-        None => CveFacts::default(),
+    let queries: Vec<Option<String>> = if target.cves.is_empty() {
+        vec![None]
+    } else {
+        target.cves.iter().cloned().map(Some).collect()
     };
-    let (ratings, cve_description) = (facts.ratings, facts.description);
-    let cve_title = target.cve.as_deref().and_then(|cve| {
-        cve_title(
-            &target.package,
+    let mut lookups = Vec::new();
+    for cve in queries {
+        let jql = search_jql(&target.package, cve.as_deref());
+        if args.verbose {
+            let who = if logged_in {
+                "logged in"
+            } else {
+                "anonymously"
+            };
+            eprintln!("[cpu-sig-tracker] searching {PROJECT} {who}: {jql}");
+        }
+        let found: Vec<Issue> = runtime.block_on(client.search(
+            &jql,
+            &["summary", "status", "versions", "priority"],
+            20,
+        ))?;
+        let (here, elsewhere) = found.into_iter().partition(|i| for_major(i, major));
+        lookups.push(Lookup {
             cve,
-            facts.redhat.as_deref(),
-            facts.ghsa.as_deref(),
-        )
-    });
-    let state = facts
-        .redhat
-        .as_deref()
-        .and_then(|j| rhel_state(j, &target.package, major));
-    let notes = empty_search_notes(
-        &target.package,
-        target.cve.as_deref(),
-        major,
-        state.as_ref(),
-        logged_in,
-    );
-    let (priority, priority_note) = settle_priority(
-        args.priority.as_deref(),
-        &ratings,
-        target.cve.as_deref(),
-        ask,
-    )?;
+            here,
+            elsewhere,
+        });
+    }
+    let resolves = found_keys(&lookups);
+
+    // What no issue covers on this release: those CVEs, or the update
+    // itself when it names none.
+    let uncovered: Vec<&str> = lookups
+        .iter()
+        .filter(|l| l.here.is_empty())
+        .filter_map(|l| l.cve.as_deref())
+        .collect();
+    let needs_draft = !uncovered.is_empty() || (target.cves.is_empty() && resolves.is_empty());
+    if !needs_draft {
+        return report_found(args, &target, &lookups, logged_in, &resolves);
+    }
+
+    let facts: Vec<(&str, CveFacts)> = uncovered
+        .iter()
+        .map(|cve| (*cve, runtime.block_on(cve_facts(cve, args.verbose))))
+        .collect();
+    let states: Vec<Option<RhelState>> = facts
+        .iter()
+        .map(|(_, f)| {
+            f.redhat
+                .as_deref()
+                .and_then(|j| rhel_state(j, &target.package, major))
+        })
+        .collect();
+    let notes = {
+        let pairs: Vec<(&str, Option<&RhelState>)> = facts
+            .iter()
+            .zip(&states)
+            .map(|((cve, _), s)| (*cve, s.as_ref()))
+            .collect();
+        empty_search_notes(&target.package, &pairs, major, logged_in)
+    };
+    let search_report = render_search(&target, &lookups, logged_in, &notes);
+    let redhat_states: Vec<serde_json::Value> = facts
+        .iter()
+        .zip(&states)
+        .map(|((cve, _), s)| serde_json::json!({"cve": cve, "state": s.as_ref().map(state_word)}))
+        .collect();
+
+    // A single CVE can name the issue; several need a person to.
+    let cve_title = match facts.as_slice() {
+        [(cve, f)] => cve_title(&target.package, cve, f.redhat.as_deref(), f.ghsa.as_deref()),
+        _ => None,
+    };
+    let Some(summary) = summary_for(args, &target, &uncovered, cve_title.as_deref()) else {
+        let why = if uncovered.len() > 1 {
+            format!(
+                "no draft: {} CVEs have no issue on {}; pass --summary to name one \
+                 issue covering them all",
+                uncovered.len(),
+                target.branch
+            )
+        } else {
+            "no draft: pass --summary (or --cve) to draft an issue".to_string()
+        };
+        if args.file {
+            return Err(why.into());
+        }
+        if args.json {
+            let out = serde_json::json!({
+                "package": target.package,
+                "branch": target.branch,
+                "cves": target.cves,
+                "logged_in": logged_in,
+                "by_cve": lookups_json(&lookups),
+                "redhat_states": redhat_states,
+                "notes": notes,
+                "draft": null,
+                "draft_cves": uncovered,
+                "filed": null,
+                "resolves": resolves,
+            });
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            print!("{search_report}");
+            println!("{}{}.", why[..1].to_uppercase(), &why[1..]);
+            print_resolves(&resolves, None);
+        }
+        return Ok(());
+    };
+
+    let rated: Vec<(&str, &[Rating])> = facts
+        .iter()
+        .map(|(cve, f)| (*cve, f.ratings.as_slice()))
+        .collect();
+    let (priority, priority_note) =
+        settle_priority(args.priority.as_deref(), strongest(&rated), ask)?;
 
     let text = match &args.description_file {
         Some(p) => Some(
@@ -491,58 +603,34 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
         ),
         None => args.description.clone(),
     };
-    let Some(summary) = summary_for(args, &target, cve_title.as_deref()) else {
-        // Nothing to call an issue by: the search is the whole answer.
-        if args.file {
-            return Err("a package name without a CVE needs --summary to file an issue".into());
-        }
-        if args.json {
-            let out = serde_json::json!({
-                "package": target.package,
-                "branch": target.branch,
-                "cve": target.cve,
-                "logged_in": logged_in,
-                "found": [],
-                "other_releases": elsewhere.iter().map(issue_json).collect::<Vec<_>>(),
-                "notes": notes,
-                "draft": null,
-                "filed": null,
-            });
-            println!("{}", serde_json::to_string_pretty(&out)?);
-        } else {
-            print!(
-                "{}",
-                render_empty_search(&target, logged_in, &elsewhere, &notes)
-            );
-            println!("No draft: pass --summary (or --cve) to draft an issue.");
-        }
-        return Ok(());
-    };
+    let blocks: Vec<CveBlock> = facts
+        .iter()
+        .map(|(cve, f)| CveBlock {
+            cve,
+            ratings: &f.ratings,
+            description: f.description.as_deref(),
+        })
+        .collect();
 
     let mut issue = NewIssue::new(PROJECT, "Bug", &summary);
     issue.components = vec![target.package.clone()];
-    issue.versions = affected;
+    issue.versions = vec![branch_version(&target.branch)?];
     issue.priority = priority;
-    issue.description = compose_description(
-        text.as_deref(),
-        target.cve.as_deref(),
-        &ratings,
-        cve_description.as_deref(),
-        target.mr_url.as_deref(),
-    );
+    issue.description = compose_description(text.as_deref(), &blocks, target.mr_url.as_deref());
 
     let checks = runtime.block_on(check_against_metadata(&client, &issue, args.verbose));
+    let draft_heading = if uncovered.is_empty() {
+        "Draft:\n".to_string()
+    } else {
+        format!("Draft, for {}:\n", uncovered.join(", "))
+    };
 
     if !args.json {
-        print!(
-            "{}",
-            render_empty_search(&target, logged_in, &elsewhere, &notes)
-        );
+        print!("{search_report}");
     }
-
     let filed = if args.file {
         if !args.json {
-            println!("Draft:\n");
+            println!("{draft_heading}");
             print!("{}", render_draft(&issue, priority_note.as_deref()));
             for c in &checks {
                 println!("  ! {c}");
@@ -569,34 +657,31 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if args.json {
+        let mut all = resolves.clone();
+        all.extend(filed.clone());
         let out = serde_json::json!({
             "package": target.package,
             "branch": target.branch,
-            "cve": target.cve,
+            "cves": target.cves,
             "logged_in": logged_in,
-            "found": [],
-            "other_releases": elsewhere.iter().map(issue_json).collect::<Vec<_>>(),
-            "redhat_state": state.as_ref().map(|s| match s {
-                RhelState::Fixed(a) => format!("Fixed ({a})"),
-                RhelState::Listed(w) => w.clone(),
-            }),
+            "by_cve": lookups_json(&lookups),
+            "redhat_states": redhat_states,
             "notes": notes,
             "draft": issue.to_json()["fields"],
+            "draft_cves": uncovered,
             "priority_from": priority_note,
             "checks": checks,
             "filed": filed,
+            "resolves": all,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
-    match filed {
-        Some(key) => {
-            println!("\nFiled {}", issue_url(&key));
-            println!("For the merge request's description:\n  Resolves: {key}");
-        }
+    match &filed {
+        Some(key) => println!("\nFiled {}", issue_url(key)),
         None if args.file => println!("\nNot filed."),
         None => {
-            println!("Draft:\n");
+            println!("{draft_heading}");
             print!("{}", render_draft(&issue, priority_note.as_deref()));
             for c in &checks {
                 println!("  ! {c}");
@@ -604,16 +689,23 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
             println!("\nNot filed: pass --file to file it.");
         }
     }
+    print_resolves(&resolves, filed.as_deref());
     Ok(())
 }
 
-/// The summary: `--summary`, else the MR's title with the CVE in front
-/// when the title does not name it, else the CVE's own title
-/// ([`cve_title`]), with `RFE: ` in front for an enhancement, as Red
-/// Hat's RFEs read. An explicit summary is never rewritten; one for an
-/// enhancement without the prefix gets a note. `None` when there is
-/// nothing to call the issue.
-fn summary_for(args: &JiraArgs, target: &Target, cve_title: Option<&str>) -> Option<String> {
+/// The summary: `--summary`; else, for one CVE or none, the MR's title
+/// with the CVE in front when the title does not name it, or the CVE's
+/// own title ([`cve_title`]); for several, the MR's title as it is,
+/// since no one CVE's title names a change fixing them all. `RFE: ` goes
+/// in front for an enhancement, as Red Hat's RFEs read. An explicit
+/// summary is never rewritten; one for an enhancement without the
+/// prefix gets a note. `None` when there is nothing to call the issue.
+fn summary_for(
+    args: &JiraArgs,
+    target: &Target,
+    uncovered: &[&str],
+    cve_title: Option<&str>,
+) -> Option<String> {
     let rfe = matches!(args.issue_type, Some(IssueType::Enhancement));
     let has_rfe = |s: &str| s.to_ascii_uppercase().starts_with("RFE:");
     if let Some(s) = &args.summary {
@@ -622,8 +714,13 @@ fn summary_for(args: &JiraArgs, target: &Target, cve_title: Option<&str>) -> Opt
         }
         return Some(s.clone());
     }
-    let title = target.mr_title.as_deref().or(cve_title)?;
-    Some(derived_summary(title, target.cve.as_deref(), rfe))
+    match uncovered {
+        [] | [_] => {
+            let title = target.mr_title.as_deref().or(cve_title)?;
+            Some(derived_summary(title, uncovered.first().copied(), rfe))
+        }
+        _ => Some(derived_summary(target.mr_title.as_deref()?, None, rfe)),
+    }
 }
 
 /// A CVE's title for an issue summary, as Red Hat's bug for it reads:
@@ -813,7 +910,7 @@ fn versions_of(issue: &Issue) -> String {
 /// One found issue, as a line of the report.
 fn issue_line(issue: &Issue) -> String {
     format!(
-        "  {} [{}] {} ({})\n",
+        "{} [{}] {} ({})\n",
         issue_url(&issue.key),
         issue.status(),
         issue.summary(),
@@ -832,36 +929,82 @@ fn issue_json(issue: &Issue) -> serde_json::Value {
     })
 }
 
-/// " about CVE-…", or nothing.
-fn about(cve: Option<&str>) -> String {
-    cve.map(|c| format!(" about {c}")).unwrap_or_default()
+/// The issue keys found for the branch's release, each once, in order:
+/// the `Resolves:` lines the MR needs before anything is filed.
+fn found_keys(lookups: &[Lookup]) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for i in lookups.iter().flat_map(|l| &l.here) {
+        if !keys.contains(&i.key) {
+            keys.push(i.key.clone());
+        }
+    }
+    keys
 }
 
-/// What a search with no issue for the branch's release found: whom it
-/// searched as, the issues open for other releases only, and what
-/// finding nothing may mean.
-fn render_empty_search(
-    target: &Target,
-    logged_in: bool,
-    elsewhere: &[Issue],
-    notes: &[String],
-) -> String {
+/// Red Hat's word for a state, for `--json`.
+fn state_word(state: &RhelState) -> String {
+    match state {
+        RhelState::Fixed(a) => format!("Fixed ({a})"),
+        RhelState::Listed(w) => w.clone(),
+    }
+}
+
+/// What each search found, for `--json`.
+fn lookups_json(lookups: &[Lookup]) -> Vec<serde_json::Value> {
+    lookups
+        .iter()
+        .map(|l| {
+            serde_json::json!({
+                "cve": l.cve,
+                "found": l.here.iter().map(issue_json).collect::<Vec<_>>(),
+                "other_releases": l.elsewhere.iter().map(issue_json).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
+/// What the searches found: for each CVE (or the package, when the
+/// update names none), the open issues on the branch's release or that
+/// there are none, then those open for other releases only, then what
+/// an empty search may be missing.
+fn render_search(target: &Target, lookups: &[Lookup], logged_in: bool, notes: &[String]) -> String {
     let who = if logged_in {
-        "to this account"
+        "searched as this account"
     } else {
-        "anonymously"
+        "searched anonymously"
     };
     let mut o = format!(
-        "No open {PROJECT} issue for {} on {}{} is visible {who}.\n",
-        target.package,
-        target.branch,
-        about(target.cve.as_deref())
+        "Open {PROJECT} issues for {} on {} ({who}):\n",
+        target.package, target.branch
     );
+    for l in lookups {
+        let label = l
+            .cve
+            .as_deref()
+            .map(|c| format!("{c}: "))
+            .unwrap_or_default();
+        if l.here.is_empty() {
+            o.push_str(&format!("  {label}none visible\n"));
+        }
+        for i in &l.here {
+            o.push_str(&format!("  {label}{}", issue_line(i)));
+        }
+    }
+    let mut shown: Vec<&str> = lookups
+        .iter()
+        .flat_map(|l| &l.here)
+        .map(|i| i.key.as_str())
+        .collect();
+    let mut elsewhere = String::new();
+    for i in lookups.iter().flat_map(|l| &l.elsewhere) {
+        if !shown.contains(&i.key.as_str()) {
+            shown.push(&i.key);
+            elsewhere.push_str(&format!("  {}", issue_line(i)));
+        }
+    }
     if !elsewhere.is_empty() {
         o.push_str("Open for other releases only:\n");
-        for i in elsewhere {
-            o.push_str(&issue_line(i));
-        }
+        o.push_str(&elsewhere);
     }
     for n in notes {
         o.push_str(&format!("note: {n}\n"));
@@ -870,53 +1013,46 @@ fn render_empty_search(
     o
 }
 
-/// Report open issues found for the update's release, and the line its
-/// MR needs; issues for other releases are listed after them.
+/// The lines the merge request's description needs: one per issue
+/// found, and the one filed.
+fn print_resolves(found: &[String], filed: Option<&str>) {
+    let keys: Vec<&str> = found.iter().map(String::as_str).chain(filed).collect();
+    if keys.is_empty() {
+        return;
+    }
+    println!("For the merge request's description:");
+    for k in keys {
+        println!("  Resolves: {k}");
+    }
+}
+
+/// Report what the searches found when every CVE (or the update) has an
+/// issue on the branch's release, and the lines its MR needs.
 fn report_found(
     args: &JiraArgs,
     target: &Target,
-    here: &[Issue],
-    elsewhere: &[Issue],
+    lookups: &[Lookup],
+    logged_in: bool,
+    resolves: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     if args.json {
         let out = serde_json::json!({
             "package": target.package,
             "branch": target.branch,
-            "cve": target.cve,
-            "found": here.iter().map(issue_json).collect::<Vec<_>>(),
-            "other_releases": elsewhere.iter().map(issue_json).collect::<Vec<_>>(),
+            "cves": target.cves,
+            "logged_in": logged_in,
+            "by_cve": lookups_json(lookups),
             "draft": null,
             "filed": null,
+            "resolves": resolves,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
-    print!("{}", render_found(target, here, elsewhere));
+    print!("{}", render_search(target, lookups, logged_in, &[]));
+    println!("Nothing filed.");
+    print_resolves(resolves, None);
     Ok(())
-}
-
-/// The text of [`report_found`].
-fn render_found(target: &Target, here: &[Issue], elsewhere: &[Issue]) -> String {
-    let mut o = format!(
-        "Open {PROJECT} issue(s) for {} on {}{}:\n",
-        target.package,
-        target.branch,
-        about(target.cve.as_deref())
-    );
-    for i in here {
-        o.push_str(&issue_line(i));
-    }
-    if !elsewhere.is_empty() {
-        o.push_str("Also open, for other releases:\n");
-        for i in elsewhere {
-            o.push_str(&issue_line(i));
-        }
-    }
-    o.push_str(&format!(
-        "Nothing filed. For the merge request's description:\n  Resolves: {}\n",
-        here[0].key
-    ));
-    o
 }
 
 #[cfg(test)]
@@ -1024,7 +1160,7 @@ mod tests {
     #[test]
     fn an_empty_search_says_what_it_may_be_missing() {
         let affected = RhelState::Listed("Affected".into());
-        let notes = empty_search_notes("rsync", Some("CVE-1"), 9, Some(&affected), false);
+        let notes = empty_search_notes("rsync", &[("CVE-1", Some(&affected))], 9, false);
         assert_eq!(notes.len(), 2, "{notes:?}");
         assert!(notes[0].starts_with("Searched anonymously"), "{notes:?}");
         assert!(
@@ -1033,90 +1169,129 @@ mod tests {
             "{notes:?}"
         );
         // Logged in, without a CVE: nothing to add.
-        assert!(empty_search_notes("rsync", None, 9, None, true).is_empty());
-        // Other answers are stated as they are.
+        assert!(empty_search_notes("rsync", &[], 9, true).is_empty());
+        // Other answers are stated as they are, one per CVE.
         let wont = RhelState::Listed("Will not fix".into());
-        assert_eq!(
-            empty_search_notes("rsync", Some("CVE-1"), 9, Some(&wont), true),
-            ["Red Hat lists RHEL 9 as Will not fix for CVE-1"]
-        );
         let fixed = RhelState::Fixed("RHSA-2025:3407".into());
+        let notes = empty_search_notes(
+            "rsync",
+            &[
+                ("CVE-1", Some(&wont)),
+                ("CVE-2", Some(&fixed)),
+                ("CVE-3", None),
+            ],
+            9,
+            true,
+        );
+        assert_eq!(notes[0], "Red Hat lists RHEL 9 as Will not fix for CVE-1");
         assert!(
-            empty_search_notes("rsync", Some("CVE-1"), 9, Some(&fixed), true)[0]
-                .contains("with RHSA-2025:3407")
+            notes[1].contains("CVE-2 in RHEL 9 with RHSA-2025:3407"),
+            "{notes:?}"
         );
         assert_eq!(
-            empty_search_notes("rsync", Some("CVE-1"), 9, None, true),
-            ["Red Hat's security data says nothing of rsync in RHEL 9"]
+            notes[2],
+            "Red Hat's security data says nothing of rsync in RHEL 9 for CVE-3"
         );
     }
 
-    fn target(cve: Option<&str>) -> Target {
+    fn target(cves: &[&str]) -> Target {
         Target {
             package: "rsync".into(),
             branch: "c9s".into(),
-            cve: cve.map(str::to_string),
+            cves: cves.iter().map(|c| c.to_string()).collect(),
             mr_url: None,
             mr_title: None,
         }
     }
 
-    #[test]
-    fn issues_for_other_releases_are_shown_but_not_taken() {
-        let here = [issue("RHEL-9", &["rhel-9.6"])];
-        let elsewhere = [issue("RHEL-10", &["rhel-10.1", "CentOS Stream 10"])];
-        let shown = render_found(&target(Some("CVE-1")), &here, &elsewhere);
-        assert!(
-            shown.starts_with("Open RHEL issue(s) for rsync on c9s about CVE-1:\n"),
-            "{shown}"
-        );
-        assert!(
-            shown.contains("Also open, for other releases:\n") && shown.contains("RHEL-10 ["),
-            "{shown}"
-        );
-        assert!(shown.contains("(rhel-10.1, CentOS Stream 10)"), "{shown}");
-        assert!(shown.ends_with("  Resolves: RHEL-9\n"), "{shown}");
-
-        let empty =
-            render_empty_search(&target(None), true, &elsewhere, &["something".to_string()]);
-        assert!(
-            empty.starts_with("No open RHEL issue for rsync on c9s is visible to this account.\n"),
-            "{empty}"
-        );
-        assert!(empty.contains("Open for other releases only:\n"), "{empty}");
-        assert!(empty.contains("note: something\n"), "{empty}");
+    fn lookup(cve: Option<&str>, here: Vec<Issue>, elsewhere: Vec<Issue>) -> Lookup {
+        Lookup {
+            cve: cve.map(str::to_string),
+            here,
+            elsewhere,
+        }
     }
 
     #[test]
-    fn a_cve_is_read_out_of_an_mr() {
+    fn each_cve_shows_its_issue_and_other_releases_are_listed_once() {
+        let other = || issue("RHEL-10", &["rhel-10.1", "CentOS Stream 10"]);
+        let lookups = [
+            lookup(
+                Some("CVE-1"),
+                vec![issue("RHEL-9", &["rhel-9.6"])],
+                vec![other()],
+            ),
+            lookup(Some("CVE-2"), vec![], vec![other()]),
+        ];
+        let shown = render_search(
+            &target(&["CVE-1", "CVE-2"]),
+            &lookups,
+            false,
+            &["something".to_string()],
+        );
+        assert!(
+            shown.starts_with("Open RHEL issues for rsync on c9s (searched anonymously):\n"),
+            "{shown}"
+        );
+        assert!(shown.contains("  CVE-1: https://"), "{shown}");
+        assert!(shown.contains("/browse/RHEL-9 [New]"), "{shown}");
+        assert!(shown.contains("  CVE-2: none visible\n"), "{shown}");
+        assert_eq!(shown.matches("RHEL-10 [").count(), 1, "{shown}");
+        assert!(
+            shown.contains("Open for other releases only:\n")
+                && shown.contains("(rhel-10.1, CentOS Stream 10)"),
+            "{shown}"
+        );
+        assert!(shown.contains("note: something\n"), "{shown}");
+        assert_eq!(found_keys(&lookups), ["RHEL-9"]);
+
+        // Without a CVE, the package's issues are unlabelled.
+        let plain = render_search(&target(&[]), &[lookup(None, vec![], vec![])], true, &[]);
         assert_eq!(
-            extract_cve("OOB write fixes for CVE-2025-27363").as_deref(),
-            Some("CVE-2025-27363")
+            plain,
+            "Open RHEL issues for rsync on c9s (searched as this account):\n  none visible\n\n"
+        );
+    }
+
+    #[test]
+    fn cves_are_read_out_of_an_mr_each_once() {
+        assert_eq!(
+            extract_cves(&["OOB write fixes for CVE-2025-27363"]),
+            ["CVE-2025-27363"]
         );
         assert_eq!(
-            extract_cve("see cve-2026-114583.").as_deref(),
-            Some("CVE-2026-114583")
+            extract_cves(&[
+                "Rebase for cve-2026-114583 and CVE-2026-119741",
+                "Fixes CVE-2026-119741.",
+            ]),
+            ["CVE-2026-114583", "CVE-2026-119741"]
         );
-        assert_eq!(extract_cve("CVE-26-1 and none"), None);
-        assert_eq!(extract_cve("no id here"), None);
+        assert!(extract_cves(&["CVE-26-1 and none", "no id here"]).is_empty());
+    }
+
+    fn rating(level: Level, source: &str, detail: &str) -> Rating {
+        Rating {
+            level,
+            source: source.to_string(),
+            detail: detail.to_string(),
+        }
     }
 
     #[test]
     fn the_description_carries_every_rating_and_the_links() {
-        let rating = |level, source: &str, detail: &str| Rating {
-            level,
-            source: source.to_string(),
-            detail: detail.to_string(),
-        };
         let ratings = [
             rating(Level::High, "Red Hat", "Important (CVSS 3: 8.1)"),
             rating(Level::High, "NVD", "CVSS 3.1 8.1 high (nvd@nist.gov)"),
         ];
         let d = compose_description(
             Some("Backport of the upstream fix, tested against the reproducer."),
-            Some("CVE-2025-27363"),
-            &ratings,
-            Some("An out of bounds write exists in FreeType versions 2.13.0 and below."),
+            &[CveBlock {
+                cve: "CVE-2025-27363",
+                ratings: &ratings,
+                description: Some(
+                    "An out of bounds write exists in FreeType versions 2.13.0 and below.",
+                ),
+            }],
             Some("https://gitlab.com/redhat/centos-stream/rpms/freetype/-/merge_requests/8"),
         );
         assert_eq!(
@@ -1130,46 +1305,83 @@ mod tests {
         );
         // A non-CVE update is only the text and the MR.
         assert_eq!(
-            compose_description(Some("RFE: ship pcilmr"), None, &[], None, None),
+            compose_description(Some("RFE: ship pcilmr"), &[], None),
             "RFE: ship pcilmr"
+        );
+        // Several CVEs: a block each, headed by its id.
+        let low = [rating(Level::Low, "Red Hat", "Low")];
+        let d = compose_description(
+            None,
+            &[
+                CveBlock {
+                    cve: "CVE-1",
+                    ratings: &ratings,
+                    description: None,
+                },
+                CveBlock {
+                    cve: "CVE-2",
+                    ratings: &low,
+                    description: None,
+                },
+            ],
+            None,
+        );
+        assert_eq!(
+            d,
+            "CVE-1:\nSeverity: high (Red Hat: Important (CVSS 3: 8.1))\n\
+             Also rated: NVD: CVSS 3.1 8.1 high (nvd@nist.gov)\n\n\
+             https://nvd.nist.gov/vuln/detail/CVE-1\n\n\
+             CVE-2:\nSeverity: low (Red Hat: Low)\n\n\
+             https://nvd.nist.gov/vuln/detail/CVE-2"
         );
     }
 
     #[test]
+    fn several_cves_take_the_most_severe_one_s_priority() {
+        let low = [rating(Level::Low, "Red Hat", "Low")];
+        let high = [rating(Level::High, "NVD", "CVSS 3.1 8.1 high")];
+        let also_high = [rating(Level::High, "Red Hat", "Important")];
+        let (cve, r) = strongest(&[
+            ("CVE-1", &low[..]),
+            ("CVE-2", &[][..]),
+            ("CVE-3", &high[..]),
+            ("CVE-4", &also_high[..]),
+        ])
+        .unwrap();
+        // The first of the most severe.
+        assert_eq!((cve, r.source.as_str()), ("CVE-3", "NVD"));
+        assert!(strongest(&[("CVE-1", &[][..])]).is_none());
+    }
+
+    #[test]
     fn a_disagreeing_priority_is_kept_with_a_note_when_nobody_can_be_asked() {
-        let ratings = [Rating {
-            level: Level::High,
-            source: "Red Hat".to_string(),
-            detail: "Important".to_string(),
-        }];
+        let important = rating(Level::High, "Red Hat", "Important");
+        let rated = Some(("CVE-1", &important));
         // No flag: the severity's.
-        let (p, why) = settle_priority(None, &ratings, Some("CVE-1"), false).unwrap();
+        let (p, why) = settle_priority(None, rated, false).unwrap();
         assert_eq!(p.as_deref(), Some("Major"));
         assert_eq!(why.as_deref(), Some("Red Hat rates CVE-1 Important"));
         // A flag that agrees, or with nothing to compare against.
         assert_eq!(
-            settle_priority(Some("Major"), &ratings, Some("CVE-1"), false)
+            settle_priority(Some("Major"), rated, false)
                 .unwrap()
                 .0
                 .as_deref(),
             Some("Major")
         );
         assert_eq!(
-            settle_priority(Some("Minor"), &[], None, false)
+            settle_priority(Some("Minor"), None, false)
                 .unwrap()
                 .0
                 .as_deref(),
             Some("Minor")
         );
         // A flag that disagrees, unattended: kept, with why it differs.
-        let (p, why) = settle_priority(Some("Critical"), &ratings, Some("CVE-1"), false).unwrap();
+        let (p, why) = settle_priority(Some("Critical"), rated, false).unwrap();
         assert_eq!(p.as_deref(), Some("Critical"));
         assert!(why.unwrap().contains("which maps to Major"));
         // Nothing to go on: Jira's default.
-        assert_eq!(
-            settle_priority(None, &[], None, false).unwrap(),
-            (None, None)
-        );
+        assert_eq!(settle_priority(None, None, false).unwrap(), (None, None));
     }
 
     #[test]
@@ -1236,19 +1448,50 @@ mod tests {
             }
             <P as clap::Parser>::parse_from(a).a
         };
-        let mut t = target(Some("CVE-1"));
+        let mut t = target(&["CVE-1"]);
         let title = Some("rsync: from the CVE (CVE-1)");
+        let one = ["CVE-1"];
         assert_eq!(
-            summary_for(&args(Some("mine")), &t, title).as_deref(),
+            summary_for(&args(Some("mine")), &t, &one, title).as_deref(),
             Some("mine")
         );
-        assert_eq!(summary_for(&args(None), &t, title).as_deref(), title);
-        assert_eq!(summary_for(&args(None), &t, None), None);
+        assert_eq!(summary_for(&args(None), &t, &one, title).as_deref(), title);
+        assert_eq!(summary_for(&args(None), &t, &one, None), None);
+        // Several CVEs: never a title made up from them.
+        let two = ["CVE-1", "CVE-2"];
+        assert_eq!(summary_for(&args(None), &t, &two, None), None);
+        assert_eq!(
+            summary_for(&args(Some("rsync: rebase to 3.5.2")), &t, &two, None).as_deref(),
+            Some("rsync: rebase to 3.5.2")
+        );
         t.mr_title = Some("MR title".into());
         assert_eq!(
-            summary_for(&args(None), &t, title).as_deref(),
+            summary_for(&args(None), &t, &one, title).as_deref(),
             Some("CVE-1: MR title")
         );
+        // The MR's title is a person's, and is taken as it is.
+        assert_eq!(
+            summary_for(&args(None), &t, &two, None).as_deref(),
+            Some("MR title")
+        );
+    }
+
+    #[test]
+    fn cve_takes_a_list() {
+        #[derive(clap::Parser)]
+        struct P {
+            #[command(flatten)]
+            a: JiraArgs,
+        }
+        let p = <P as clap::Parser>::parse_from([
+            "jira",
+            "rsync",
+            "--cve",
+            "CVE-1,CVE-2",
+            "--cve",
+            "CVE-3",
+        ]);
+        assert_eq!(p.a.cve, ["CVE-1", "CVE-2", "CVE-3"]);
     }
 
     #[test]

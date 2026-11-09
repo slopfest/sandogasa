@@ -102,7 +102,7 @@ The issue body follows a canonical format that `status` parses back
 ### `jira`
 
 ```sh
-cpu-sig-tracker jira <package> --branch c9s [--cve CVE-YYYY-N] \
+cpu-sig-tracker jira <package> --branch c9s [--cve CVE-YYYY-N,...] \
     [--summary "..."] [--description "..." | --description-file PATH] \
     [--priority Major] [--type enhancement] [--file [--yes]] [--json]
 cpu-sig-tracker jira <mr-url> [...]          # an MR already open
@@ -113,49 +113,55 @@ or drafts one. CentOS Stream's merge request template asks for an
 approved ticket, named in the MR's description as `Resolves: RHEL-N`,
 and Red Hat wants one issue per branch, so the issue comes first, one
 per branch, before the MR is opened: given a package name, `--branch`
-says which branch and `--cve` which CVE. For an MR already open
+says which branch and `--cve` which CVEs (repeated or
+comma-separated: a rebase often fixes several). For an MR already open
 without one, its URL can be given instead, and the package, branch,
-title and any CVE are read from it.
+title and the CVEs it fixes (from its title and description) are
+read from it.
 
-It first searches RHEL for open issues on that package, about the CVE
-when there is one, on any release. An issue naming a version of the
-branch's RHEL major (`CentOS Stream 9`, `rhel-9.6`, `rhel-9.6.z` for
-c9s) is the MR's: it prints the `Resolves: RHEL-N` line, and lists
-the issues for other releases after it.
-
-Finding none for the branch is reported with whom the search ran as
-(anonymously, or the configured account) and the issues open for
-other releases only. Red Hat Product Security's CVE trackers are
+It first searches RHEL for open issues on that package on any
+release, once per CVE, as Product Security files one tracker per CVE
+and release, or once for the package when there is no CVE. An issue
+naming a version of the branch's RHEL major (`CentOS Stream 9`,
+`rhel-9.6`, `rhel-9.6.z` for c9s) covers its CVE on the branch. The
+report lists, per CVE, the issues covering it or that none is
+visible, then the issues open for other releases only, and says whom
+the search ran as (anonymously, or the configured account). When
+every CVE is covered it prints the `Resolves: RHEL-N` lines the MR
+needs, one per issue, and drafts nothing. Red Hat Product Security's CVE trackers are
 restricted, invisible anonymously and to ordinary community accounts,
-so for a CVE it also says what Red Hat's security data lists for the
-package in that RHEL major: `Affected` (or `Fix deferred`, `Under
+so for each CVE with none it also says what Red Hat's security data
+lists for the package in that RHEL major: `Affected` (or `Fix deferred`, `Under
 investigation`) means a tracker probably exists, and filing may
 create a duplicate Red Hat will link, so name the CVE in the MR; a
 fix by an advisory means CentOS Stream may already have it. Then it
-drafts an issue:
+drafts one issue covering every CVE without one:
 
 - type Bug, as Red Hat files enhancement requests too, with an
   `RFE: ` summary for `--type enhancement`;
-- a summary from `--summary`, else the MR's title, else the CVE's
-  title as Red Hat's bug for it reads (`rsync: Denial of Service via
-  crafted checksums during delta transfer (CVE-2026-119741)`), or
-  GitHub's advisory's when Red Hat has none. With none of these there
-  is no draft, only the search;
+- a summary from `--summary`, else the MR's title; for a single CVE,
+  else the CVE's title as Red Hat's bug for it reads (`rsync: Denial
+  of Service via crafted checksums during delta transfer
+  (CVE-2026-119741)`), or GitHub's advisory's when Red Hat has none.
+  Several CVEs need `--summary` or an MR, as no one CVE's title names
+  the change. Without a summary there is no draft, only the search;
 - the package as the component;
 - one affected version, `CentOS Stream N` (`rhel-8.10` for c8s): RHEL
   keeps only the first affected version an issue lists, and sets the
   RHEL versions itself;
-- a priority from the CVE's severity, taken from Red Hat's rating,
-  else NVD's, else GitHub's advisory: critical → Critical, high (Red
+- a priority from the most severe CVE's severity, each taken from
+  Red Hat's rating, else NVD's, else GitHub's advisory: critical → Critical, high (Red
   Hat's Important) → Major, medium → Normal, low → Minor. Blocker is
   left to Red Hat. A `--priority` that disagrees is confirmed at a
   terminal and kept with a note otherwise;
-- a description of your text, the CVE's severity by every source that
-  rated it, NVD's description and link, and the MR.
+- a description of your text, then for each CVE its severity by
+  every source that rated it, NVD's description and link, then the
+  MR.
 
 The draft is printed exactly as it would be filed, every field and
 the whole description, because Red Hat's Jira cannot edit an issue
-once it is filed, only take comments. With Jira credentials it is also
+once it is filed, only take comments. Once filed, the `Resolves:`
+lines list the issues found and the new one. With Jira credentials it is also
 checked against the fields RHEL requires and the versions it offers.
 `--file` files it after asking (default no); `--file --yes` files
 without asking, for scripts. A public MR is read without a GitLab
