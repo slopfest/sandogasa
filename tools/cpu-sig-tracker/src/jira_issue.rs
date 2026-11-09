@@ -180,6 +180,15 @@ impl RhelState {
         matches!(self, RhelState::Listed(s)
             if matches!(s.as_str(), "Affected" | "Fix deferred" | "Under investigation"))
     }
+
+    /// Whether Red Hat assesses the CVE as not applicable to the
+    /// release: the code is not built or not reachable there, or the
+    /// platform it needs is not one RHEL runs on. The fix may still be
+    /// worth carrying for uses Red Hat does not consider, but it is a
+    /// harder case to make, so it does not set the issue's priority.
+    pub fn not_applicable(&self) -> bool {
+        matches!(self, RhelState::Listed(s) if s == "Not affected")
+    }
 }
 
 /// Where Red Hat's security data (`json`, from
@@ -248,6 +257,10 @@ pub fn empty_search_notes(
                  Filing may duplicate it, which Red Hat will link; name {cve} in the \
                  merge request so the two can be matched"
             ),
+            Some(s @ RhelState::Listed(_)) if s.not_applicable() => format!(
+                "Red Hat assesses {cve} as not applicable to RHEL {major} (Not affected), \
+                 so it does not count toward the priority"
+            ),
             Some(RhelState::Listed(word)) => {
                 format!("Red Hat lists RHEL {major} as {word} for {cve}")
             }
@@ -282,6 +295,8 @@ pub struct CveBlock<'a> {
     pub ratings: &'a [Rating],
     /// NVD's description.
     pub description: Option<&'a str>,
+    /// The RHEL major Red Hat assesses the CVE as not applicable to.
+    pub not_applicable_in: Option<u32>,
 }
 
 /// The issue's description: the submitter's own text first, then for
@@ -305,6 +320,12 @@ pub fn compose_description(text: Option<&str>, cves: &[CveBlock], mr_url: Option
                 block.push(format!("Also rated: {}", others.join("; ")));
             }
         }
+        if let Some(major) = c.not_applicable_in {
+            block.push(format!(
+                "Red Hat's assessment: not applicable to RHEL {major} (Not affected), {}",
+                redhat_cve_page(c.cve)
+            ));
+        }
         if let Some(d) = c.description {
             block.push(String::new());
             block.push(d.trim().to_string());
@@ -317,6 +338,14 @@ pub fn compose_description(text: Option<&str>, cves: &[CveBlock], mr_url: Option
         parts.push(format!("Merge request: {url}"));
     }
     parts.join("\n\n")
+}
+
+/// Red Hat's public page for a CVE.
+pub fn redhat_cve_page(cve: &str) -> String {
+    format!(
+        "https://access.redhat.com/security/cve/{}",
+        cve.to_ascii_lowercase()
+    )
 }
 
 /// The CVE whose most trusted rating is the most severe, with that
@@ -345,7 +374,8 @@ pub fn render_draft(issue: &NewIssue, priority_note: Option<&str>) -> String {
     match (&issue.priority, priority_note) {
         (Some(p), Some(n)) => o.push_str(&format!("  priority:    {p} ({n})\n")),
         (Some(p), None) => o.push_str(&format!("  priority:    {p}\n")),
-        (None, _) => o.push_str("  priority:    (Jira's default)\n"),
+        (None, Some(n)) => o.push_str(&format!("  priority:    (Jira's default; {n})\n")),
+        (None, None) => o.push_str("  priority:    (Jira's default)\n"),
     }
     o.push_str("  description:\n");
     for line in issue.description.lines() {
@@ -532,7 +562,22 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(|j| rhel_state(j, &target.package, major))
         })
         .collect();
-    let notes = {
+    let text = match &args.description_file {
+        Some(p) => Some(
+            std::fs::read_to_string(p)
+                .map_err(|e| format!("cannot read --description-file {}: {e}", p.display()))?,
+        ),
+        None => args.description.clone(),
+    };
+    // The CVEs Red Hat assesses as not applicable to this release: still
+    // fixed and described, but not what the priority is set by.
+    let not_applicable: Vec<&str> = facts
+        .iter()
+        .zip(&states)
+        .filter(|(_, s)| s.as_ref().is_some_and(RhelState::not_applicable))
+        .map(|((cve, _), _)| *cve)
+        .collect();
+    let mut notes = {
         let pairs: Vec<(&str, Option<&RhelState>)> = facts
             .iter()
             .zip(&states)
@@ -540,6 +585,13 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         empty_search_notes(&target.package, &pairs, major, logged_in)
     };
+    if !not_applicable.is_empty() && text.is_none() {
+        notes.push(format!(
+            "say in --description why {} applies here: it is what Red Hat's \
+             maintainer reads first, and the issue cannot be edited once filed",
+            not_applicable.join(", ")
+        ));
+    }
     let search_report = render_search(&target, &lookups, logged_in, &notes);
     let redhat_states: Vec<serde_json::Value> = facts
         .iter()
@@ -591,26 +643,24 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let rated: Vec<(&str, &[Rating])> = facts
         .iter()
+        .filter(|(cve, _)| !not_applicable.contains(cve))
         .map(|(cve, f)| (*cve, f.ratings.as_slice()))
         .collect();
     let (priority, priority_note) =
         settle_priority(args.priority.as_deref(), strongest(&rated), ask)?;
+    let priority_note = with_not_counted(priority_note, &not_applicable, major);
 
-    let text = match &args.description_file {
-        Some(p) => Some(
-            std::fs::read_to_string(p)
-                .map_err(|e| format!("cannot read --description-file {}: {e}", p.display()))?,
-        ),
-        None => args.description.clone(),
-    };
-    let blocks: Vec<CveBlock> = facts
+    // The CVEs that apply first, as the ones the case rests on.
+    let mut blocks: Vec<CveBlock> = facts
         .iter()
         .map(|(cve, f)| CveBlock {
             cve,
             ratings: &f.ratings,
             description: f.description.as_deref(),
+            not_applicable_in: not_applicable.contains(cve).then_some(major),
         })
         .collect();
+    blocks.sort_by_key(|b| b.not_applicable_in.is_some());
 
     let mut issue = NewIssue::new(PROJECT, "Bug", &summary);
     issue.components = vec![target.package.clone()];
@@ -691,6 +741,26 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     print_resolves(&resolves, filed.as_deref());
     Ok(())
+}
+
+/// The priority note, saying which CVEs were not counted because Red
+/// Hat assesses them as not applicable to RHEL `major`.
+pub fn with_not_counted(
+    note: Option<String>,
+    not_applicable: &[&str],
+    major: u32,
+) -> Option<String> {
+    if not_applicable.is_empty() {
+        return note;
+    }
+    let skipped = format!(
+        "not counted: {}, not applicable to RHEL {major} per Red Hat",
+        not_applicable.join(", ")
+    );
+    Some(match note {
+        Some(n) => format!("{n}; {skipped}"),
+        None => skipped,
+    })
 }
 
 /// The summary: `--summary`; else, for one CVE or none, the MR's title
@@ -1291,6 +1361,7 @@ mod tests {
                 description: Some(
                     "An out of bounds write exists in FreeType versions 2.13.0 and below.",
                 ),
+                not_applicable_in: None,
             }],
             Some("https://gitlab.com/redhat/centos-stream/rpms/freetype/-/merge_requests/8"),
         );
@@ -1317,11 +1388,13 @@ mod tests {
                     cve: "CVE-1",
                     ratings: &ratings,
                     description: None,
+                    not_applicable_in: None,
                 },
                 CveBlock {
                     cve: "CVE-2",
                     ratings: &low,
                     description: None,
+                    not_applicable_in: None,
                 },
             ],
             None,
@@ -1351,6 +1424,60 @@ mod tests {
         // The first of the most severe.
         assert_eq!((cve, r.source.as_str()), ("CVE-3", "NVD"));
         assert!(strongest(&[("CVE-1", &[][..])]).is_none());
+    }
+
+    #[test]
+    fn a_cve_red_hat_finds_not_applicable_is_described_but_not_counted() {
+        let na = RhelState::Listed("Not affected".into());
+        assert!(na.not_applicable());
+        assert!(!RhelState::Listed("Will not fix".into()).not_applicable());
+        assert!(!RhelState::Fixed("RHSA-1".into()).not_applicable());
+        assert_eq!(
+            empty_search_notes("rsync", &[("CVE-2", Some(&na))], 9, true),
+            [
+                "Red Hat assesses CVE-2 as not applicable to RHEL 9 (Not affected), \
+              so it does not count toward the priority"
+            ]
+        );
+        // The priority note says which were not counted, with or
+        // without a priority derived from the others.
+        assert_eq!(
+            with_not_counted(Some("Red Hat rates CVE-1 Important".into()), &["CVE-2"], 9)
+                .as_deref(),
+            Some(
+                "Red Hat rates CVE-1 Important; not counted: CVE-2, not applicable to \
+                 RHEL 9 per Red Hat"
+            )
+        );
+        assert_eq!(
+            with_not_counted(None, &["CVE-2", "CVE-3"], 9).as_deref(),
+            Some("not counted: CVE-2, CVE-3, not applicable to RHEL 9 per Red Hat")
+        );
+        assert_eq!(with_not_counted(None, &[], 9), None);
+        // The description says so in the CVE's own section.
+        let d = compose_description(
+            None,
+            &[CveBlock {
+                cve: "CVE-2024-12084",
+                ratings: &[],
+                description: None,
+                not_applicable_in: Some(9),
+            }],
+            None,
+        );
+        assert_eq!(
+            d,
+            "Red Hat's assessment: not applicable to RHEL 9 (Not affected), \
+             https://access.redhat.com/security/cve/cve-2024-12084\n\n\
+             https://nvd.nist.gov/vuln/detail/CVE-2024-12084"
+        );
+        // A priority Jira will default shows why there is none.
+        let mut issue = NewIssue::new("RHEL", "Bug", "s");
+        issue.description = String::new();
+        assert!(
+            render_draft(&issue, Some("not counted: CVE-2"))
+                .contains("priority:    (Jira's default; not counted: CVE-2)")
+        );
     }
 
     #[test]

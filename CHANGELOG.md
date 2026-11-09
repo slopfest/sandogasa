@@ -74,9 +74,10 @@ first, as Red Hat's bot did to two old blktrace issues,
 <https://redhat.atlassian.net/browse/RHEL-123606>, and Red Hat sets the
 RHEL versions itself); a priority from the most severe CVE's severity
 (Red Hat's rating first, then NVD's, then GitHub's; critical →
-Critical, high → Major, medium → Normal, low → Minor); and a
-description with every source's rating, NVD's text and link for each
-CVE, then the MR. The draft is shown exactly as it would be filed,
+Critical, high → Major, medium → Normal, low → Minor), not counting
+a CVE Red Hat assesses as not applicable to the release, which is
+still described, with that assessment; and a description with every
+source's rating, NVD's text and link for each CVE, then the MR. The draft is shown exactly as it would be filed,
 checked against RHEL's required fields when Jira credentials are
 configured, and filed only with `--file` and a confirmation (or
 `--file --yes`). A `--priority` that disagrees with the severity is

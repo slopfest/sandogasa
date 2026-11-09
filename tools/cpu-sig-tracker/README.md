@@ -152,8 +152,13 @@ drafts one issue covering every CVE without one:
 - a priority from the most severe CVE's severity, each taken from
   Red Hat's rating, else NVD's, else GitHub's advisory: critical → Critical, high (Red
   Hat's Important) → Major, medium → Normal, low → Minor. Blocker is
-  left to Red Hat. A `--priority` that disagrees is confirmed at a
-  terminal and kept with a note otherwise;
+  left to Red Hat. A CVE Red Hat assesses as not applicable to the
+  branch's RHEL major (`Not affected`: not built or reachable there,
+  or for a platform RHEL does not run on) is still fixed and
+  described, with Red Hat's assessment and a reminder to say in
+  `--description` why it applies, but does not count toward the
+  priority. A `--priority` that disagrees is confirmed at a terminal
+  and kept with a note otherwise;
 - a description of your text, then for each CVE its severity by
   every source that rated it, NVD's description and link, then the
   MR.
