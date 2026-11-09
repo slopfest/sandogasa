@@ -208,12 +208,6 @@ run left open, for before the next release:
 - **Check the CBS login once per run.** `cbspkg build` checks it before
   uploading sources and again before building, an extra `moshimoshi`
   each time.
-- **Say that agents must not run the CBS writes.** `add-pkg`, `build`,
-  `promote` and `upload-sources` are confirmed at a terminal with no
-  way past it, but cbspkg's README and `--help` do not yet say that an
-  agent must hand those commands to a person (only `--dry-run`, with or
-  without `--explain`, is for an agent to run), as this entry asked of
-  the build command from the start.
 - **Released builds left in `-testing`.** Promoting to `-release` now
   untags from `-testing`, but eight builds released by hand before that
   are still in both: c10s blktrace, cmake, mesa, openssl and pciutils;

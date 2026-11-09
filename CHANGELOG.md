@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### cbspkg: the docs say the CBS writes are for a person to run, not an agent
+
+cbspkg's `add-pkg`, `build`, `promote` and `upload-sources` write to
+CBS or the SIG lookaside in the name of whoever runs them. They were
+always confirmed at a terminal, but neither the README nor `--help`
+said who should run them, although the Proposed Updates plan had asked
+for that from the start. The README, the tool's long `--help` (and so
+its man page) and each of those subcommands' `--help` now say that a
+person runs them, and that an AI agent may run them only with
+`--dry-run`, then hand the command over.
+
 ### cbspkg: upload-sources checks out the branch for centpkg sources, and switches back
 
 `cbspkg build --branch c10s-CVE-2026-119741`, run from a checkout of the
