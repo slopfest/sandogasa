@@ -208,6 +208,13 @@ checked against RHEL's required fields when Jira credentials are
 configured, and filed only with `--file` and a confirmation (or
 `--file --yes`). A `--priority` that disagrees with the severity is
 confirmed. Reading a public MR no longer needs a GitLab token.
+Without a CVE there is nothing to match an existing issue on, so the
+package's open issues are listed as possibly related and the draft is
+offered regardless; an earlier version of this command took any open
+issue as the one being filed, which kept an unrelated rsync fix from
+being filed while its CVE issue was open. `--upstream URL` (repeatable)
+puts the upstream commit or issue the fix comes from in the
+description.
 
 The Proposed Updates site's address in the README is now
 `https://sigs.centos.org/proposed_updates/`, with an underscore,

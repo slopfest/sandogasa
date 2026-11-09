@@ -80,6 +80,11 @@ pub struct JiraArgs {
     #[arg(long = "type", value_name = "TYPE", value_enum, help_heading = "Issue")]
     pub issue_type: Option<IssueType>,
 
+    /// Upstream commit, issue or merge request the fix comes from, for
+    /// the description (repeatable)
+    #[arg(long, value_name = "URL", help_heading = "Issue")]
+    pub upstream: Vec<String>,
+
     /// File the drafted issue (asked first at a terminal; with --yes,
     /// without asking)
     #[arg(long, help_heading = "Writing")]
@@ -304,6 +309,22 @@ pub struct CveBlock<'a> {
 /// The issue's description: the submitter's own text first, then for
 /// each CVE its severity by every source that rated it, its description
 /// and NVD link, then the merge request.
+/// The submitter's text with the upstream links the fix comes from
+/// after it, as a list, so a reader can check the fix against its
+/// source. `None` when there is neither.
+pub fn with_upstream(text: Option<&str>, upstream: &[String]) -> Option<String> {
+    let text = text.map(str::trim).filter(|t| !t.is_empty());
+    if upstream.is_empty() {
+        return text.map(str::to_string);
+    }
+    let links: Vec<String> = upstream.iter().map(|u| format!("- {u}")).collect();
+    let block = format!("Upstream:\n{}", links.join("\n"));
+    Some(match text {
+        Some(t) => format!("{t}\n\n{block}"),
+        None => block,
+    })
+}
+
 pub fn compose_description(text: Option<&str>, cves: &[CveBlock], mr_url: Option<&str>) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(t) = text.map(str::trim).filter(|t| !t.is_empty()) {
@@ -547,7 +568,9 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
         .filter(|l| l.here.is_empty())
         .filter_map(|l| l.cve.as_deref())
         .collect();
-    let needs_draft = !uncovered.is_empty() || (target.cves.is_empty() && resolves.is_empty());
+    // Without a CVE the open issues are only possibly related, so the
+    // update always gets its draft.
+    let needs_draft = !uncovered.is_empty() || target.cves.is_empty();
     if !needs_draft {
         return report_found(args, &target, &lookups, logged_in, &resolves);
     }
@@ -587,6 +610,13 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         empty_search_notes(&target.package, &pairs, major, logged_in)
     };
+    if target.cves.is_empty() && lookups.iter().any(|l| !l.here.is_empty()) {
+        notes.push(
+            "without a CVE there is nothing to match an issue on: the open issues \
+             above are only possibly related, so check them before filing"
+                .to_string(),
+        );
+    }
     if !not_applicable.is_empty() && text.is_none() {
         notes.push(format!(
             "say in --description why {} applies here: it is what Red Hat's \
@@ -668,6 +698,7 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
     issue.components = vec![target.package.clone()];
     issue.versions = vec![branch_version(&target.branch)?];
     issue.priority = priority;
+    let text = with_upstream(text.as_deref(), &args.upstream);
     issue.description = compose_description(text.as_deref(), &blocks, target.mr_url.as_deref());
 
     let checks = runtime.block_on(check_against_metadata(&client, &issue, args.verbose));
@@ -1002,10 +1033,17 @@ fn issue_json(issue: &Issue) -> serde_json::Value {
 }
 
 /// The issue keys found for the branch's release, each once, in order:
-/// the `Resolves:` lines the MR needs before anything is filed.
+/// the `Resolves:` lines the MR needs before anything is filed. Only a
+/// search by CVE finds one: without a CVE there is nothing to match an
+/// issue on, and an open issue for the package may be about anything
+/// (see [`render_search`]).
 fn found_keys(lookups: &[Lookup]) -> Vec<String> {
     let mut keys: Vec<String> = Vec::new();
-    for i in lookups.iter().flat_map(|l| &l.here) {
+    for i in lookups
+        .iter()
+        .filter(|l| l.cve.is_some())
+        .flat_map(|l| &l.here)
+    {
         if !keys.contains(&i.key) {
             keys.push(i.key.clone());
         }
@@ -1050,11 +1088,11 @@ fn render_search(target: &Target, lookups: &[Lookup], logged_in: bool, notes: &[
         target.package, target.branch
     );
     for l in lookups {
-        let label = l
-            .cve
-            .as_deref()
-            .map(|c| format!("{c}: "))
-            .unwrap_or_default();
+        let label = match l.cve.as_deref() {
+            Some(c) => format!("{c}: "),
+            None if l.here.is_empty() => String::new(),
+            None => "possibly related: ".to_string(),
+        };
         if l.here.is_empty() {
             o.push_str(&format!("  {label}none visible\n"));
         }
@@ -1323,6 +1361,47 @@ mod tests {
             plain,
             "Open RHEL issues for rsync on c9s (searched as this account):\n  none visible\n\n"
         );
+    }
+
+    #[test]
+    fn without_a_cve_an_open_issue_is_only_possibly_related() {
+        // rsync had RHEL-303720 open for its CVE when an unrelated fix
+        // without one was to be filed: that issue is not the new one.
+        let lookups = [lookup(
+            None,
+            vec![issue("RHEL-303720", &["CentOS Stream 9"])],
+            vec![],
+        )];
+        assert!(found_keys(&lookups).is_empty());
+        let shown = render_search(&target(&[]), &lookups, true, &[]);
+        assert!(
+            shown.contains("  possibly related: https://") && shown.contains("RHEL-303720 ["),
+            "{shown}"
+        );
+        // With a CVE, the issue the search found is the one.
+        let by_cve = [lookup(
+            Some("CVE-1"),
+            vec![issue("RHEL-303720", &["CentOS Stream 9"])],
+            vec![],
+        )];
+        assert_eq!(found_keys(&by_cve), ["RHEL-303720"]);
+    }
+
+    #[test]
+    fn upstream_links_follow_the_submitter_s_text() {
+        let up = ["https://github.com/RsyncProject/rsync/issues/1157".to_string()];
+        assert_eq!(
+            with_upstream(Some("sum2 is 16 bytes, sha1 is 20."), &up).as_deref(),
+            Some(
+                "sum2 is 16 bytes, sha1 is 20.\n\nUpstream:\n\
+                 - https://github.com/RsyncProject/rsync/issues/1157"
+            )
+        );
+        assert_eq!(
+            with_upstream(None, &up).as_deref(),
+            Some("Upstream:\n- https://github.com/RsyncProject/rsync/issues/1157")
+        );
+        assert_eq!(with_upstream(Some("  "), &[]), None);
     }
 
     #[test]
