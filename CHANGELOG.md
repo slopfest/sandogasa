@@ -44,16 +44,19 @@ sandogasa-gitlab's `Issue` now reads GitLab's `confidential` flag.
 
 A CentOS Stream merge request needs an approved RHEL Jira issue, one
 per branch, and filing one by hand is easy to get wrong: which
-affected versions (the CentOS Stream version, the upcoming minor, and
-for a CVE the current minor's z-stream, whose naming does not help),
-which priority, and a description that cannot be fixed afterwards,
+affected version, which priority, and a description that cannot be
+fixed afterwards,
 since Red Hat's Jira accepts only comments once an issue exists.
 
 `cpu-sig-tracker jira <MR URL>` (or `<package> --branch cNs`) searches
 RHEL for an open issue on the package and branch, about the MR's CVE
 when it names one, and prints the `Resolves:` line the MR needs.
 Failing that it drafts the issue: type Bug, the package as component,
-the affected versions above, a priority from the CVE's severity (Red
+one affected version, `CentOS Stream N` (RHEL's single-value policy
+keeps only the first, as Red Hat's bot did to two old blktrace issues,
+<https://redhat.atlassian.net/browse/RHEL-123605> and
+<https://redhat.atlassian.net/browse/RHEL-123606>, and Red Hat sets the
+RHEL versions itself), a priority from the CVE's severity (Red
 Hat's rating first, then NVD's, then GitHub's; critical → Critical,
 high → Major, medium → Normal, low → Minor), and a description with
 every source's rating, NVD's text and the MR. The draft is shown

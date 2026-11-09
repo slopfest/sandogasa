@@ -46,7 +46,10 @@ fn prompt_gitlab_token(
     let have = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
-            .hint("A GitLab personal access token with 'api' scope is needed."),
+            .hint(
+                "A GitLab legacy (classic) personal access token with the `api` scope is \
+                 needed, created at https://gitlab.com/-/user_settings/personal_access_tokens.",
+            ),
         &saved,
         all,
     )?;

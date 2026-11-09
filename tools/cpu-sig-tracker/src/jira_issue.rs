@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use sandogasa_cve::severity::{Level, Rating};
-use sandogasa_jira::{Issue, NewIssue, Version};
+use sandogasa_jira::{Issue, NewIssue};
 
 use crate::file_issue::IssueType;
 
@@ -107,60 +107,16 @@ pub fn branch_major(branch: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("not a CentOS Stream branch: {branch} (expected c8s, c9s, c10s)"))
 }
 
-/// The version an issue for `branch` is searched by: the branch's
-/// CentOS Stream version, or `rhel-8.10` for c8s, whose last minor
-/// stands in for it.
+/// The affected version an issue for `branch` names, and is searched
+/// by: the branch's CentOS Stream version, or `rhel-8.10` for c8s,
+/// whose last minor stands in for it. One, because RHEL takes one: since
+/// 2026-10 its "single-value policy" keeps only the first affected
+/// version an issue lists, and Red Hat sets the RHEL versions itself.
 pub fn branch_version(branch: &str) -> Result<String, String> {
     Ok(match branch_major(branch)? {
         8 => "rhel-8.10".to_string(),
         n => format!("CentOS Stream {n}"),
     })
-}
-
-/// The affected versions an issue for `branch` names: the branch's
-/// CentOS Stream version and the upcoming minor, plus, for a CVE, the
-/// current minor's z-stream. c8s, past its last minor, names
-/// `rhel-8.10` and `rhel-8.10.z`.
-///
-/// The upcoming minor is the lowest `rhel-N.M` that is neither released
-/// nor archived and comes after the newest released one, which skips
-/// stale entries Jira still lists as unreleased (`rhel-9.1.0`). The
-/// current minor is the newest released one; its `.z` is named only
-/// when the project still has it open.
-pub fn affected_versions(
-    branch: &str,
-    versions: &[Version],
-    cve: bool,
-) -> Result<Vec<String>, String> {
-    let major = branch_major(branch)?;
-    if major == 8 {
-        return Ok(vec!["rhel-8.10".to_string(), "rhel-8.10.z".to_string()]);
-    }
-    let prefix = format!("rhel-{major}.");
-    let minor_of = |name: &str| -> Option<u32> { name.strip_prefix(&prefix)?.parse().ok() };
-    let newest_released = versions
-        .iter()
-        .filter(|v| v.released)
-        .filter_map(|v| minor_of(&v.name))
-        .max();
-    let upcoming = versions
-        .iter()
-        .filter(|v| !v.released && !v.archived)
-        .filter_map(|v| minor_of(&v.name))
-        .filter(|m| newest_released.is_none_or(|r| *m > r))
-        .min()
-        .ok_or_else(|| format!("{PROJECT} lists no upcoming rhel-{major} minor"))?;
-    let mut out = vec![
-        format!("CentOS Stream {major}"),
-        format!("rhel-{major}.{upcoming}"),
-    ];
-    if cve && let Some(current) = newest_released {
-        let z = format!("rhel-{major}.{current}.z");
-        if versions.iter().any(|v| v.name == z && !v.archived) {
-            out.push(z);
-        }
-    }
-    Ok(out)
 }
 
 /// The JQL that finds an open issue for `package` on `branch`, about
@@ -366,11 +322,7 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Nothing open: draft one.
-    if args.verbose {
-        eprintln!("[cpu-sig-tracker] reading {PROJECT}'s versions");
-    }
-    let versions = runtime.block_on(client.project_versions(PROJECT))?;
-    let affected = affected_versions(&target.branch, &versions, target.cve.is_some())?;
+    let affected = vec![branch_version(&target.branch)?];
 
     let (ratings, cve_description) = match &target.cve {
         Some(cve) => runtime.block_on(cve_facts(cve, args.verbose)),
@@ -659,61 +611,13 @@ fn report_found(
 mod tests {
     use super::*;
 
-    fn version(name: &str, released: bool, archived: bool) -> Version {
-        serde_json::from_value(serde_json::json!({
-            "id": "1", "name": name, "released": released, "archived": archived,
-        }))
-        .unwrap()
-    }
-
-    /// RHEL's versions as Jira listed them on 2026-11-08, stale
-    /// entries included.
-    fn rhel_versions() -> Vec<Version> {
-        vec![
-            version("rhel-9.1.0", false, false),
-            version("rhel-9.4.0", false, false),
-            version("rhel-9.6", true, true),
-            version("rhel-9.6.z", false, false),
-            version("rhel-9.7", true, false),
-            version("rhel-9.7.z", true, false),
-            version("rhel-9.8", true, false),
-            version("rhel-9.8.z", false, false),
-            version("rhel-9.9", false, false),
-            version("rhel-9.9.z", false, false),
-            version("rhel-9.10", false, false),
-            version("rhel-10.2", true, false),
-            version("rhel-10.2.z", false, false),
-            version("rhel-10.3", false, false),
-            version("rhel-10.4", false, false),
-            version("CentOS Stream 9", false, false),
-            version("CentOS Stream 10", false, false),
-        ]
-    }
-
     #[test]
-    fn a_branch_names_its_stream_and_the_upcoming_minor() {
-        let v = rhel_versions();
-        assert_eq!(
-            affected_versions("c9s", &v, false).unwrap(),
-            ["CentOS Stream 9", "rhel-9.9"]
-        );
-        // A CVE also names the current minor's z-stream.
-        assert_eq!(
-            affected_versions("c9s", &v, true).unwrap(),
-            ["CentOS Stream 9", "rhel-9.9", "rhel-9.8.z"]
-        );
-        assert_eq!(
-            affected_versions("c10s", &v, true).unwrap(),
-            ["CentOS Stream 10", "rhel-10.3", "rhel-10.2.z"]
-        );
-        // c8s is past its last minor.
-        assert_eq!(
-            affected_versions("c8s", &v, true).unwrap(),
-            ["rhel-8.10", "rhel-8.10.z"]
-        );
-        assert!(affected_versions("f45", &v, false).is_err());
-        // No upcoming minor is an error, not a guess.
-        assert!(affected_versions("c11s", &v, false).is_err());
+    fn a_branch_names_one_affected_version() {
+        assert_eq!(branch_version("c9s").unwrap(), "CentOS Stream 9");
+        assert_eq!(branch_version("c10s").unwrap(), "CentOS Stream 10");
+        // c8s is past its last minor, which stands in for it.
+        assert_eq!(branch_version("c8s").unwrap(), "rhel-8.10");
+        assert!(branch_version("f45").is_err());
     }
 
     #[test]
@@ -852,7 +756,7 @@ mod tests {
     fn the_draft_shows_every_field_as_filed() {
         let mut issue = NewIssue::new("RHEL", "Bug", "CVE-2025-27363: OOB write fixes");
         issue.components = vec!["freetype".into()];
-        issue.versions = vec!["CentOS Stream 9".into(), "rhel-9.9".into()];
+        issue.versions = vec!["CentOS Stream 9".into()];
         issue.priority = Some("Major".into());
         issue.description = "line one\n\nline two".into();
         let shown = render_draft(&issue, Some("Red Hat rates CVE-2025-27363 Important"));
@@ -860,10 +764,7 @@ mod tests {
             shown.contains("summary:     CVE-2025-27363: OOB write fixes"),
             "{shown}"
         );
-        assert!(
-            shown.contains("versions:    CentOS Stream 9, rhel-9.9"),
-            "{shown}"
-        );
+        assert!(shown.contains("versions:    CentOS Stream 9\n"), "{shown}");
         assert!(
             shown.contains("priority:    Major (Red Hat rates CVE-2025-27363 Important)"),
             "{shown}"

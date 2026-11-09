@@ -41,8 +41,8 @@ Before any subcommand that talks to GitLab or JIRA:
 cpu-sig-tracker config
 ```
 
-Prompts for a GitLab personal access token (validated against
-gitlab.com) and, optionally, Red Hat JIRA credentials. Red Hat's
+Prompts for a GitLab legacy (classic) personal access token with the
+`api` scope (validated against gitlab.com) and, optionally, Red Hat JIRA credentials. Red Hat's
 tracker is an Atlassian Cloud site (`issues.redhat.com` redirects to
 `redhat.atlassian.net`), so those are an API token created at
 <https://id.atlassian.com/manage-profile/security/api-tokens> — for a
@@ -122,10 +122,9 @@ finds one. Otherwise it drafts an issue:
 - type Bug, as Red Hat files enhancement requests too, with an
   `RFE: ` summary for `--type enhancement`;
 - the package as the component;
-- affected versions `CentOS Stream N` and the upcoming minor (the
-  lowest `rhel-N.M` neither released nor archived, after the newest
-  released one), plus the current minor's z-stream for a CVE; c8s
-  names `rhel-8.10` and `rhel-8.10.z`;
+- one affected version, `CentOS Stream N` (`rhel-8.10` for c8s): RHEL
+  keeps only the first affected version an issue lists, and sets the
+  RHEL versions itself;
 - a priority from the CVE's severity, taken from Red Hat's rating,
   else NVD's, else GitHub's advisory: critical → Critical, high (Red
   Hat's Important) → Major, medium → Normal, low → Minor. Blocker is
