@@ -8,8 +8,16 @@
 //! package as `untag-candidate` → run `untag <nvr> --release
 //! c10s` → optionally follow with `retire` to close the
 //! tracking issue once the build is gone.
+//!
+//! Its steps are koji commands a person could run, so `--explain`
+//! narrates each, shows the exact command and pauses before running it;
+//! `--dry-run` shows them and runs only the reads (#91). The check that
+//! the change is in stock has no one command, so it is narrated as a
+//! step with its result.
 
 use std::process::ExitCode;
+
+use sandogasa_cli::explain::Ui;
 
 use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name, untag_build};
 
@@ -28,9 +36,19 @@ pub struct UntagArgs {
     /// or a specific NVR (e.g. `xz-5.6.4-1~proposed.el10`).
     pub target: String,
 
-    /// Skip the JIRA-resolved precondition. Use when the
+    /// Show each step and its koji command, untagging nothing (the
+    /// read-only lookups still run)
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Narrate each step and show its koji command, pausing before
+    /// each
+    #[arg(long)]
+    pub explain: bool,
+
+    /// Skip the landed-in-stock precondition. Use when the
     /// tracking issue can't be located or you're sure the
-    /// check would pass.
+    /// change is in stock.
     #[arg(long)]
     pub force: bool,
 
@@ -58,10 +76,36 @@ pub fn run(args: &UntagArgs) -> ExitCode {
     }
 }
 
+/// A koji command against CBS, as `untag` runs it.
+fn koji_argv(args: &[&str]) -> Vec<String> {
+    ["koji", "--profile", KOJI_PROFILE]
+        .iter()
+        .chain(args)
+        .map(|s| s.to_string())
+        .collect()
+}
+
 pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let ui = Ui {
+        explain: args.explain,
+        dry_run: args.dry_run,
+        quiet: false,
+    };
     let release_tag = proposed_updates_tag(&args.release)?;
     let testing_tag = proposed_updates_testing_tag(&args.release)?;
 
+    // The login first: one cheap call, before anything else, so a
+    // missing certificate is found and explained (and, at a terminal,
+    // fixed) up front (#90).
+    ui.step("Check the CBS login (it uses the TLS certificate the cbs profile names)");
+    ui.show_command(&koji_argv(&["moshimoshi"]));
+    ui.pause_if_explain();
+    crate::cbs_auth::ensure_login(!args.yes, args.verbose)?;
+
+    ui.step("Find the builds in the SIG's -release and -testing tags");
+    ui.show_command(&koji_argv(&["list-tagged", "--quiet", "--", &release_tag]));
+    ui.show_command(&koji_argv(&["list-tagged", "--quiet", "--", &testing_tag]));
+    ui.pause_if_explain();
     if args.verbose {
         eprintln!("[cpu-sig-tracker] listing tagged NVRs in {release_tag}");
     }
@@ -79,11 +123,11 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
         &testing_nvrs,
     )?;
 
-    // The login first: one cheap call, before the slower checks and
-    // before asking to proceed, so a missing certificate is found and
-    // explained (and, at a terminal, fixed) up front (#90).
-    crate::cbs_auth::ensure_login(!args.yes, args.verbose)?;
-
+    // No single command answers this: GitLab, stock's patches and Jira.
+    ui.step(
+        "Check the change is in stock: the patches its MR adds against stock's, then its \
+         RHEL issues",
+    );
     let sig_nvr = resolved.targets.first().map(|(_, nvr)| nvr.as_str());
     let landed_check = check_landed(&resolved.package, &args.release, sig_nvr, args.verbose);
     report_check("landed in stock", &landed_check);
@@ -103,13 +147,19 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
     }
     println!("  package: {}", resolved.package);
     println!("  release: {}", args.release);
-    if !args.yes && !sandogasa_cli::confirm("Proceed?", false)? {
+    if !args.dry_run && !args.yes && !sandogasa_cli::confirm("Proceed?", false)? {
         eprintln!("aborted.");
         return Ok(());
     }
 
     let mut errors = 0usize;
     for (tag, nvr) in &resolved.targets {
+        ui.step(&format!("Remove {nvr} from {tag}"));
+        ui.show_command(&koji_argv(&["untag-build", "--", tag, nvr]));
+        if args.dry_run {
+            continue;
+        }
+        ui.pause_if_explain();
         if args.verbose {
             eprintln!("[cpu-sig-tracker] koji untag-build {tag} {nvr}");
         }
@@ -119,6 +169,9 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
         } else {
             eprintln!("untagged {nvr} from {tag}");
         }
+    }
+    if args.dry_run {
+        println!("\nDry run: nothing untagged.");
     }
     if errors > 0 {
         return Err(format!("{errors} untag operation(s) failed").into());
@@ -210,7 +263,10 @@ fn check_landed(package: &str, release: &str, sig_nvr: Option<&str>, verbose: bo
     };
     let body = issue.description.as_deref().unwrap_or("");
     let jira = crate::jira::check_all_resolved(&parse_jira_keys_from_body(body), verbose);
-    report_check("JIRA", &jira.check);
+    // Context, not the gate: whether the change landed is decided
+    // below, and stock's patches outrank Jira (#89), so a declined or
+    // unverified issue is no failure here.
+    println!("JIRA (for the record): {}", jira.check.detail());
     let stock_nvr =
         crate::status::fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package);
     precondition(&crate::landed::landed(
@@ -413,7 +469,26 @@ mod tests {
             yes: true,
             force: false,
             verbose: false,
+            dry_run: false,
+            explain: false,
         };
         run_inner(&args).expect("untag succeeds");
+    }
+
+    #[test]
+    fn the_commands_shown_are_the_ones_run() {
+        // sandogasa_koji::untag_build runs exactly this argv.
+        assert_eq!(
+            koji_argv(&["untag-build", "--", "t", "x-1-1.el10"]),
+            [
+                "koji",
+                "--profile",
+                "cbs",
+                "untag-build",
+                "--",
+                "t",
+                "x-1-1.el10"
+            ]
+        );
     }
 }

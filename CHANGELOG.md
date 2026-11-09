@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: untag offers --explain and --dry-run
+
+`untag`'s work is koji commands a person could run, but nothing showed
+them: someone wanting to untag a build by hand, or to check what the
+tool was about to do, had to read its source. As the workspace asks of
+such tools, `--explain` now narrates each step (the CBS login, listing
+the SIG's tags, the in-stock check, each `untag-build`), shows the
+exact command and pauses before running it; `--dry-run` shows the same
+and untags nothing. Resolves #91.
+
 ### cpu-sig-tracker: untag checks the CBS login first, and says how to fix it
 
 `cpu-sig-tracker untag PackageKit --release c9s` failed with koji's

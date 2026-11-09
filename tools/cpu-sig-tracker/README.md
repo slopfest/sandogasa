@@ -494,7 +494,8 @@ establish. `--csv` has the spreadsheet's columns plus the spans;
 ### `untag`
 
 ```sh
-cpu-sig-tracker untag <package|nvr> --release cNs [--yes] [--force]
+cpu-sig-tracker untag <package|nvr> --release cNs [--explain] [--dry-run] \
+    [--yes] [--force]
 ```
 
 Removes a proposed_updates build from its CBS `-release` and
@@ -512,7 +513,15 @@ anything else is asked or touched. CBS logs in with a TLS certificate
 no longer valid, `untag` says so and gives the commands that make one,
 `kinit <user>@FEDORAPROJECT.ORG` (when `klist` shows no valid ticket)
 and `centos-cert -u <user>`, the user taken from your Kerberos ticket.
-At a terminal it offers to run `centos-cert` and carries on. The RHEL issues' state is shown either way. Accepts
+At a terminal it offers to run `centos-cert` and carries on.
+
+Its steps are koji commands you could run yourself. `--explain`
+narrates each one, shows the exact command (`koji --profile cbs
+untag-build -- <tag> <nvr>`) and waits for Enter before running it;
+the in-stock check, which reads GitLab, stock's patches and Jira
+rather than running one command, is narrated with its result.
+`--dry-run` shows the same steps and untags nothing (the read-only
+lookups still run, so the builds and the check are real). The RHEL issues' state is shown either way. Accepts
 either a package name (auto-discovers currently-tagged NVRs across
 both tags) or a specific NVR. Pair with `retire` to close the
 tracking issue after the build is gone.

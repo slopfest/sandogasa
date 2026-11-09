@@ -91,7 +91,7 @@ pub fn explain(failure: &Failure, user: Option<&str>) -> String {
 /// Whether CBS accepts the login, with koji's output when not.
 fn login() -> Result<(), String> {
     let out = Command::new("koji")
-        .args(["-p", PROFILE, "moshimoshi"])
+        .args(["--profile", PROFILE, "moshimoshi"])
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("cannot run koji: {e}"))?;
@@ -129,7 +129,7 @@ fn kerberos_user() -> Option<String> {
 /// error.
 pub fn ensure_login(interactive: bool, verbose: bool) -> Result<(), String> {
     if verbose {
-        eprintln!("[cpu-sig-tracker] checking the CBS login (koji -p {PROFILE} moshimoshi)");
+        eprintln!("[cpu-sig-tracker] checking the CBS login (koji --profile {PROFILE} moshimoshi)");
     }
     let Err(output) = login() else {
         return Ok(());

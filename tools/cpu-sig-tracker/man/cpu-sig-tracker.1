@@ -391,12 +391,18 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker untag
-\fBcpu\-sig\-tracker untag\fR [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-release\fR> <\fITARGET\fR>
+\fBcpu\-sig\-tracker untag\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-force\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-release\fR> <\fITARGET\fR>
 .PP
 Untag a proposed_updates build from its CBS \-release tag after verifying the JIRA is resolved
 .TP
+\fB\-\-dry\-run\fR
+Show each step and its koji command, untagging nothing (the read\-only lookups still run)
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its koji command, pausing before each
+.TP
 \fB\-\-force\fR
-Skip the JIRA\-resolved precondition. Use when the tracking issue can\*(Aqt be located or you\*(Aqre sure the check would pass
+Skip the landed\-in\-stock precondition. Use when the tracking issue can\*(Aqt be located or you\*(Aqre sure the change is in stock
 .TP
 \fB\-\-release\fR \fI<RELEASE>\fR
 CentOS release whose proposed_updates tags to untag from (`c9s`, `c10s`, …)
