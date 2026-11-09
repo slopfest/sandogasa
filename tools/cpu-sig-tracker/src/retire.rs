@@ -19,11 +19,7 @@ use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name};
 
 use crate::dump_inventory::proposed_updates_tag;
 use crate::gitlab;
-use crate::ping::{evidence_tokens, find_evidence};
-use crate::status::{
-    fetch_proposed_updates_nvrs, fetch_stream_nvrs, parse_mr_line, scan_mr_url_in_body,
-    stream_newer_than_proposed,
-};
+use crate::status::{fetch_proposed_updates_nvrs, fetch_stream_nvrs, stream_newer_than_proposed};
 use crate::utils::{Check, parse_jira_keys_from_body, report_check};
 
 /// Why a Proposed Update is retired — the one question the operator
@@ -307,7 +303,7 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
 
     // What the reason is judged against: the MR, stock and its
     // history, the RHEL resolution.
-    let mut facts = gather_facts(&issue, body, package, &release, &jira_check, args.verbose);
+    let mut facts = gather_facts(&issue, package, &release, &jira_check, args.verbose);
     if facts.stock_past_without_evidence() {
         eprintln!(
             "note: stock {} is past the SIG's {} but nothing says the fix is in it — that is \
@@ -489,71 +485,25 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
 /// operator (or --force).
 fn gather_facts(
     issue: &gitlab::Issue,
-    body: &str,
     package: &str,
     release: &str,
     jira: &crate::jira::JiraCheck,
     verbose: bool,
 ) -> RetireFacts {
-    let base = crate::utils::gitlab_base();
-    let mut f = RetireFacts {
+    // Whether it landed is the answer untag acts on too: one function
+    // gives it to both (see crate::landed).
+    let landed = crate::landed::landed(issue, package, release, jira, verbose);
+    RetireFacts {
         jira_resolution: jira.resolution_name.clone(),
         jira_declined: jira.declined,
         jira_unanswered: jira.unanswered,
+        mr_url: landed.mr_url,
+        mr_state: landed.mr_state,
+        landed_by: landed.by,
+        release_nvr: fetch_proposed_updates_nvrs(release, verbose).remove(package),
+        stream_nvr: fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package),
         ..Default::default()
-    };
-    f.mr_url = parse_mr_line(body)
-        .map(|(u, _)| u)
-        .or_else(|| scan_mr_url_in_body(body));
-    let mut mr_title = String::new();
-    let mut mr_branch = String::new();
-    if let Some(url) = &f.mr_url {
-        let fetched: Result<sandogasa_gitlab::MergeRequest, Box<dyn std::error::Error>> =
-            match gitlab::parse_mr_url(url) {
-                Ok((_, project, iid)) => {
-                    gitlab::client(&base, &project).and_then(|c| c.merge_request(iid))
-                }
-                Err(e) => Err(e.into()),
-            };
-        match fetched {
-            Ok(mr) => {
-                f.mr_state = Some(mr.state.clone());
-                mr_title = mr.title.clone();
-                mr_branch = mr.source_branch.clone();
-            }
-            Err(e) => {
-                if verbose {
-                    eprintln!("[cpu-sig-tracker] cannot read {url}: {e}");
-                }
-            }
-        }
     }
-    f.release_nvr = fetch_proposed_updates_nvrs(release, verbose).remove(package);
-    f.stream_nvr = fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package);
-    f.landed_by = if f.mr_state.as_deref() == Some("merged") {
-        Some("MR merged".to_string())
-    } else {
-        let tokens = evidence_tokens(body, &issue.title, &mr_title, &mr_branch);
-        match gitlab::client(&base, &format!("redhat/centos-stream/rpms/{package}"))
-            .and_then(|c| c.branch_commits(release))
-        {
-            Ok(commits) => find_evidence(&commits, &tokens),
-            Err(e) => {
-                if verbose {
-                    eprintln!("[cpu-sig-tracker] cannot read stock history: {e}");
-                }
-                None
-            }
-        }
-    }
-    // Jira says the change landed only when it shows a fix: a fix
-    // version, not just a Done, which an issue closed for inactivity
-    // has too (#87).
-    .or_else(|| {
-        jira.fixed
-            .then(|| format!("RHEL issue fixed: {}", jira.check.detail()))
-    });
-    f
 }
 
 /// The reason: `--reason`, else the facts' suggestion — taken as is

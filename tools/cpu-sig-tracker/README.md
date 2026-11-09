@@ -482,8 +482,11 @@ cpu-sig-tracker untag <package|nvr> --release cNs [--yes] [--force]
 ```
 
 Removes a proposed_updates build from its CBS `-release` and
-`-testing` tags after verifying the linked JIRA issues are all fixed
-(a fix version, or `Done-Errata`; a `Done` alone does not do). Accepts
+`-testing` tags once the change is in stock, on the same evidence
+`retire` takes as landed: the SIG's MR merged, a commit on stock's
+branch naming the change (its RHEL key, a CVE, the MR's title), or
+every RHEL issue fixed (a fix version, or `Done-Errata`; a `Done`
+alone does not do). The RHEL issues' state is shown either way. Accepts
 either a package name (auto-discovers currently-tagged NVRs across
 both tags) or a specific NVR. Pair with `retire` to close the
 tracking issue after the build is gone.

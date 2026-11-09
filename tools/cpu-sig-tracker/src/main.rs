@@ -11,6 +11,7 @@ mod file_issue;
 mod gitlab;
 mod jira;
 mod jira_issue;
+mod landed;
 mod list_issues;
 mod mr;
 mod ping;

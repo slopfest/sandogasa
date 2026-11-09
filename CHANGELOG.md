@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: untag and retire take the same evidence that a change is in stock
+
+PackageKit's c10s Proposed Update could be retired but not untagged.
+Its fix reached stock through Red Hat's own commit (99e0f170, "Fix
+CVE-2026-41651"), which `retire` reads from stock's history as landed
+evidence. But its RHEL issue, RHEL-170526, was closed `Not a Bug`, and
+`untag` judged by Jira alone. So the build could only be removed with
+`--force`.
+
+`untag` now requires what `retire` does: the SIG's MR merged, a stock
+commit naming the change, or every RHEL issue fixed. Both get it from
+one function, and a test holds them to the same answer, so new
+evidence (such as #89's patch matching) reaches both at once. The rule
+is written down in the tool's new DEVELOPMENT.md.
+
 ### cpu-sig-tracker: retire tells apart an update Red Hat declined, one it never answered, and one the SIG abandoned
 
 `retire` had one reason for an update that did not land, `abandoned`,

@@ -79,13 +79,13 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
         &testing_nvrs,
     )?;
 
-    let jira_check = check_tracking_issue_jira(&resolved.package, &args.release, args.verbose);
-    report_check("JIRA resolved", &jira_check);
+    let landed_check = check_landed(&resolved.package, &args.release, args.verbose);
+    report_check("landed in stock", &landed_check);
 
-    if !matches!(jira_check, Check::Pass(_)) && !args.force {
+    if !matches!(landed_check, Check::Pass(_)) && !args.force {
         return Err(
-            "precondition not met; re-run with --force to override, or fix the \
-             underlying state (e.g. close the JIRA before untagging)"
+            "precondition not met: nothing says the change is in stock; re-run with --force \
+             to override, or retire the update for another reason first"
                 .into(),
         );
     }
@@ -175,10 +175,13 @@ fn resolve_target(
     })
 }
 
-/// Locate the tracking issue for (package, release) in the
-/// `cpu-sig-tracker`-labeled group and check whether its JIRA
-/// is resolved.
-fn check_tracking_issue_jira(package: &str, release: &str, verbose: bool) -> Check {
+/// Whether the update's change is in stock, the precondition for
+/// removing its build: the same evidence `retire` takes as landed, from
+/// [`crate::landed::landed`], so the two cannot disagree (a test holds
+/// [`precondition`] to `retire`'s check). The tracking issue names the
+/// MR and the RHEL issues; untag often runs after retire, so closed
+/// issues count.
+fn check_landed(package: &str, release: &str, verbose: bool) -> Check {
     let group_client = match gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP) {
         Ok(c) => c,
         Err(e) => return Check::Skipped(format!("GitLab group client: {e}")),
@@ -187,34 +190,37 @@ fn check_tracking_issue_jira(package: &str, release: &str, verbose: bool) -> Che
     if verbose {
         eprintln!("[cpu-sig-tracker] fetching tracking issues for label {label}");
     }
-    // Untag commonly runs after retire (which closes the
-    // tracking issue), so scan all states — a closed issue is
-    // still the source of truth for which JIRA to verify.
     let issues = match group_client.list_issues(&label, None) {
         Ok(v) => v,
         Err(e) => return Check::Skipped(format!("list_issues({label}): {e}")),
     };
-    let issue = match issues
+    let Some(issue) = issues
         .into_iter()
         .find(|i| gitlab::package_from_issue_url(&i.web_url) == Some(package))
-    {
-        Some(i) => i,
-        None => {
-            return Check::Fail(format!(
-                "no tracking issue found for {package} in {release}",
-            ));
-        }
+    else {
+        return Check::Fail(format!(
+            "no tracking issue found for {package} in {release}",
+        ));
     };
     let body = issue.description.as_deref().unwrap_or("");
-    let keys = parse_jira_keys_from_body(body);
-    if keys.is_empty() {
-        return Check::Fail(format!(
-            "tracking issue {} has no JIRA key in body",
-            issue.web_url,
-        ));
+    let jira = crate::jira::check_all_resolved(&parse_jira_keys_from_body(body), verbose);
+    report_check("JIRA", &jira.check);
+    precondition(&crate::landed::landed(
+        &issue, package, release, &jira, verbose,
+    ))
+}
+
+/// The untag precondition from what [`crate::landed::landed`] found:
+/// passed when something says the change is in stock.
+pub fn precondition(landed: &crate::landed::Landed) -> Check {
+    match &landed.by {
+        Some(why) => Check::Pass(why.clone()),
+        None => Check::Fail(
+            "nothing says the change is in stock: the MR is not merged, no stock commit \
+             names it, and no RHEL issue shows a fix"
+                .to_string(),
+        ),
     }
-    // Every fix the update carries has to have landed in stock.
-    crate::jira::check_all_resolved(&keys, verbose).check
 }
 
 #[cfg(test)]
