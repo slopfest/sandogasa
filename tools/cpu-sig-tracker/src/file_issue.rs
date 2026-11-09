@@ -68,6 +68,11 @@ pub struct FileIssueArgs {
     )]
     pub jira: Vec<String>,
 
+    /// File it confidential, for a fix still under embargo: hidden from
+    /// the public, and so from the SIG's site, until made public by hand
+    #[arg(long, help_heading = "Issue")]
+    pub embargoed: bool,
+
     /// Free-form context note prepended to the issue body as
     /// a lead paragraph before the structured metadata.
     #[arg(long, help_heading = "Issue")]
@@ -273,6 +278,9 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         println!("---");
         println!("title: {title}");
         println!("labels: {labels}");
+        if args.embargoed {
+            println!("confidential: yes (--embargoed)");
+        }
         println!(
             "assignee: {}",
             if args.assign {
@@ -299,7 +307,14 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     } else {
         None
     };
-    let issue = tracking_client.create_issue(&title, Some(&body), Some(&labels))?;
+    // Confidential from the start, for embargoed work: set afterwards, it
+    // would be public for a while (#80).
+    let issue = tracking_client.create_issue_confidential(
+        &title,
+        Some(&body),
+        Some(&labels),
+        args.embargoed,
+    )?;
     eprintln!("Filed #{} {}", issue.iid, issue.web_url);
     if let Some(me) = assignee {
         let update = gitlab::IssueUpdate {
@@ -1125,6 +1140,7 @@ mod tests {
             release: None,
             issue_type: Some(IssueType::Security),
             note: None,
+            embargoed: false,
             assign: true,
             dry_run: false,
             verbose: false,
@@ -1185,6 +1201,7 @@ mod tests {
             release: None,
             issue_type: None,
             note: None,
+            embargoed: false,
             assign: true,
             dry_run: false,
             verbose: false,

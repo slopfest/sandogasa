@@ -95,7 +95,7 @@ reason, team, …) survive a re-build.
 cpu-sig-tracker file-issue <mr-url> \
     [--affected VER-REL] [--expected-fix VER-REL] \
     [--jira RHEL-N[,RHEL-N…]] [--release cNs] [--type security] \
-    [--note "context"] [--assign] [--dry-run]
+    [--note "context"] [--embargoed] [--assign] [--dry-run]
 ```
 
 Given a CentOS Stream MR URL, files a standardized tracking issue in
@@ -122,6 +122,10 @@ build, not the SIG's: the SIG's build is stock's next release with
 `~proposed` added (`rsync-3.5.0-2~proposed.el10` for
 `rsync-3.5.0-2.el10`). The title is the package and the merge request's
 title, saying what the update does.
+
+`--embargoed` files the issue confidential from the start, for a fix
+still under embargo: it is then hidden from the public, and from the
+SIG's site, until someone makes it public in GitLab.
 
 How urgent the update is goes on the issue too. Each CVE the merge
 request or its RHEL issues name gets a `- **CVE**:` line with its
@@ -525,10 +529,15 @@ release with none reads "No updates at the moment."
 
 The file is rewritten whole on each run and carries no timestamps, so
 it changes only when the state does; `--dry-run` shows the lines that
-would change instead. Nothing embargoed is listed: tracking issues are
-read anonymously, so a confidential one is never seen, and an update
-any of whose Jira issues cannot be read anonymously is left out, whatever
-credentials are configured. Needs `koji` with the `cbs` profile.
+would change instead. Nothing embargoed is listed. Tracking issues are
+read anonymously, so a confidential one (`file-issue --embargoed`) is
+never seen. An update is listed only once it is public: every CVE it
+fixes disclosed, by Red Hat's security data (a `public_date` that has
+passed) or, when Red Hat has no record, by NVD, and its upstream merge
+request readable anonymously. When Red Hat, NVD or GitLab cannot be
+reached, the update is left out of that run with a warning. A Jira
+issue the public cannot read is not linked, but no longer keeps the
+update off the list. Needs `koji` with the `cbs` profile.
 
 ### `timeline`
 

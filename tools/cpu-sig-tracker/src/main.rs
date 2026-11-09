@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 mod builds;
 mod config;
 mod configure;
+mod disclosure;
 mod dump_inventory;
 mod file_issue;
 mod gitlab;

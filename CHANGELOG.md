@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: sync-updates decides embargo by public disclosure, not by whether Jira can be read
+
+`sync-updates` left an update off the SIG's site whenever its RHEL Jira
+issue could not be read anonymously. That was wrong in both directions.
+It hid public updates, because Red Hat Product Security's CVE trackers
+stay restricted after disclosure (RHEL-83109 answers 404). And it
+proved nothing about an embargo, which we cannot see in Jira, logged in
+or not.
+
+An update is now listed once it is public:
+- the tracking issue is not confidential, as before;
+- every CVE it fixes is disclosed, by Red Hat's security data (its
+  `public_date` has passed) or, when Red Hat has no record, by NVD;
+- its upstream merge request can be read anonymously, as an embargoed
+  fix is never a public merge request.
+
+If Red Hat, NVD or GitLab cannot be reached, the update is left out of
+that run with a warning, rather than published on a guess. A Jira issue
+the public cannot read is still left unlinked, but no longer hides the
+update. `file-issue --embargoed` files the tracking issue confidential
+from the start, which is what keeps embargoed work off the list.
+sandogasa-gitlab gains `Client::merge_request_if_visible` and
+`create_issue_confidential`. Resolves #80.
+
 ### cbspkg checks the CBS login once per run; hs-relmon review promotes the way cbspkg does
 
 `cbspkg build` checked the CBS login twice in one run, with a round trip

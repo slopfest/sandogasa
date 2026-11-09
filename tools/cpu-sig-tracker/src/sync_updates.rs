@@ -11,9 +11,14 @@
 //!
 //! Nothing embargoed may leak through it. Tracking issues are listed
 //! anonymously, so a confidential one is never seen, and its flag is
-//! checked as well; an update whose Jira issue cannot be read
-//! anonymously is left out, since Jira credentials can see what the
-//! public cannot. Left out means no row at all, not a placeholder.
+//! checked as well. An update is listed only once it is public: every
+//! CVE it fixes disclosed (Red Hat's security data, else NVD), and its
+//! upstream merge request readable anonymously (`crate::disclosure`,
+//! #80). A source that cannot be reached leaves the update out of that
+//! run. Whether its Jira issue can be read only decides whether it is
+//! linked: Product Security's trackers stay private after disclosure,
+//! and an embargoed issue is unreadable to us either way. Left out means
+//! no row at all, not a placeholder.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -273,6 +278,16 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
 
     let runtime = crate::jira::runtime()?;
     let jira = sandogasa_jira::JiraClient::new(&jira_base());
+    let http = reqwest::Client::builder()
+        .user_agent(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .build()?;
+    // A CVE's answer, once per run: several releases' updates fix the
+    // same one.
+    let mut disclosed: std::collections::HashMap<String, Result<bool, String>> = Default::default();
     let mut out = Vec::new();
     for release in releases {
         let built = builds(&release, verbose);
@@ -286,41 +301,81 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
             };
             let body = issue.description.as_deref().unwrap_or("");
             let jira_keys = crate::utils::parse_jira_keys_from_body(body);
-            // Any issue not public keeps the update off the list.
+            let mr_url = crate::status::parse_mr_line(body)
+                .map(|(u, _)| u)
+                .or_else(|| crate::status::scan_mr_url_in_body(body));
+            let cves = cve_ids(&format!("{}\n{body}", issue.title));
+            // Public yet (#80): every CVE disclosed, and the upstream
+            // merge request readable anonymously, as an embargoed fix is
+            // never sent as a public merge request. A source that cannot
+            // answer keeps the update out of this run.
             let mut public = true;
-            for key in &jira_keys {
-                if verbose {
-                    eprintln!("[cpu-sig-tracker] checking {key} is public");
-                }
-                match runtime.block_on(jira.issue(key)) {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
+            for cve in &cves {
+                let answer = match disclosed.get(cve) {
+                    Some(a) => a.clone(),
+                    None => {
+                        if verbose {
+                            eprintln!("[cpu-sig-tracker] checking {cve} is disclosed");
+                        }
+                        let a = runtime.block_on(crate::disclosure::is_public(&http, cve));
+                        disclosed.insert(cve.clone(), a.clone());
+                        a
+                    }
+                };
+                match answer {
+                    Ok(true) => {}
+                    Ok(false) => {
                         if verbose {
                             eprintln!(
-                                "[cpu-sig-tracker] {package} ({release}) left out: {key} is \
-                                 not public"
+                                "[cpu-sig-tracker] {package} ({release}) left out: {cve} is \
+                                 not disclosed yet"
                             );
                         }
                         public = false;
-                        break;
                     }
-                    // Not known to be public is not public.
+                    Err(e) => {
+                        eprintln!("warning: {package} ({release}) left out this run: {e}");
+                        public = false;
+                    }
+                }
+                if !public {
+                    break;
+                }
+            }
+            if public && let Some(url) = &mr_url {
+                match mr_visible(url) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if verbose {
+                            eprintln!(
+                                "[cpu-sig-tracker] {package} ({release}) left out: its merge \
+                                 request is not public"
+                            );
+                        }
+                        public = false;
+                    }
                     Err(e) => {
                         eprintln!(
-                            "warning: {package} ({release}) left out: could not read {key} \
-                             anonymously ({e})"
+                            "warning: {package} ({release}) left out this run: cannot read its \
+                             merge request ({e})"
                         );
                         public = false;
-                        break;
                     }
                 }
             }
             if !public {
                 continue;
             }
-            let mr_url = crate::status::parse_mr_line(body)
-                .map(|(u, _)| u)
-                .or_else(|| crate::status::scan_mr_url_in_body(body));
+            // A Jira issue the public cannot read is not linked; it no
+            // longer keeps the update off the list (#80).
+            let mut readable: Vec<String> = Vec::new();
+            for key in jira_keys {
+                if let Ok(Some(_)) = runtime.block_on(jira.issue(&key)) {
+                    readable.push(key);
+                } else if verbose {
+                    eprintln!("[cpu-sig-tracker] {key} is not public; listed without it");
+                }
+            }
             updates.push(Update {
                 package: package.to_string(),
                 issue_url: issue.web_url.clone(),
@@ -331,14 +386,24 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
                     .iter()
                     .find(|l| TYPE_LABELS.contains(&l.as_str()))
                     .cloned(),
-                cves: cve_ids(&format!("{}\n{body}", issue.title)),
+                cves,
                 mr: mr_url.and_then(|u| mr_iid(&u).map(|iid| (iid, u))),
-                jira: jira_keys,
+                jira: readable,
             });
         }
         out.push((release, updates));
     }
     Ok(out)
+}
+
+/// Whether the merge request at `url` can be read anonymously.
+fn mr_visible(url: &str) -> Result<bool, String> {
+    let (_, project, iid) = gitlab::parse_mr_url(url).map_err(|e| e.to_string())?;
+    let client = gitlab::Client::new(&gitlab_base(), &project, "").map_err(|e| e.to_string())?;
+    client
+        .merge_request_if_visible(iid)
+        .map(|mr| mr.is_some())
+        .map_err(|e| e.to_string())
 }
 
 /// The open, public tracking issues for `release`, one per package:

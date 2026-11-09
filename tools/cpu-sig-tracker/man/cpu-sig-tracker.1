@@ -48,7 +48,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker file-issue
-\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-note\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-assign\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR>
+\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-embargoed\fR] [\fB\-\-note\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-assign\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR>
 .PP
 File a tracking issue in the proposed_updates GitLab group for a given Merge Request URL
 .TP
@@ -67,6 +67,9 @@ The stock build expected to carry the fix (default: the SIG\*(Aqs build without 
 .TP
 \fB\-\-jira\fR \fI<KEY>\fR
 The RHEL issue(s) the MR resolves, overriding those read from its Resolves: lines (repeatable, or comma\-separated)
+.TP
+\fB\-\-embargoed\fR
+File it confidential, for a fix still under embargo: hidden from the public, and so from the SIG\*(Aqs site, until made public by hand
 .TP
 \fB\-\-note\fR \fI<NOTE>\fR
 Free\-form context note prepended to the issue body as a lead paragraph before the structured metadata

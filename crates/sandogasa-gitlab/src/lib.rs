@@ -438,6 +438,26 @@ impl Client {
         self.fetch_merge_request(iid, false)
     }
 
+    /// The merge request when this client may see it; `None` when GitLab
+    /// answers that it is not there for it (401, 403 or 404), which for
+    /// an anonymous client means the merge request is not public. Any
+    /// other failure is an error, not an answer.
+    pub fn merge_request_if_visible(
+        &self,
+        iid: u64,
+    ) -> Result<Option<MergeRequest>, Box<dyn std::error::Error>> {
+        let url = format!(
+            "{}/api/v4/projects/{}/merge_requests/{iid}",
+            self.base_url,
+            self.project_path.replace('/', "%2F")
+        );
+        let resp = self.http.get(&url).send()?;
+        if matches!(resp.status().as_u16(), 401 | 403 | 404) {
+            return Ok(None);
+        }
+        Ok(Some(blocking_json_ok(resp, &format!("GitLab GET {url}"))?))
+    }
+
     /// A merge request, asking GitLab to recompute its mergeability
     /// first (`with_merge_status_recheck`): on a merge request nobody
     /// has opened in months `detailed_merge_status` can still say
@@ -786,7 +806,23 @@ impl Client {
         description: Option<&str>,
         labels: Option<&str>,
     ) -> Result<Issue, Box<dyn std::error::Error>> {
+        self.create_issue_confidential(title, description, labels, false)
+    }
+
+    /// [`create_issue`](Self::create_issue), confidential from the moment
+    /// it exists when `confidential`: making it so afterwards would leave
+    /// it public for a while, which for embargoed work is a leak.
+    pub fn create_issue_confidential(
+        &self,
+        title: &str,
+        description: Option<&str>,
+        labels: Option<&str>,
+        confidential: bool,
+    ) -> Result<Issue, Box<dyn std::error::Error>> {
         let mut body = serde_json::json!({"title": title});
+        if confidential {
+            body["confidential"] = true.into();
+        }
         if let Some(desc) = description {
             body["description"] = desc.into();
         }
@@ -3033,6 +3069,52 @@ mod tests {
             .unwrap();
         assert_eq!(mr.state, "closed");
         mock.assert();
+    }
+
+    #[test]
+    fn a_merge_request_is_visible_or_not_and_an_issue_confidential_from_the_start() {
+        let mut server = mockito::Server::new();
+        let base = "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests";
+        server
+            .mock("GET", format!("{base}/90").as_str())
+            .with_status(200)
+            .with_body(
+                r#"{"iid": 90, "title": "t", "state": "opened", "web_url": "w",
+                    "source_branch": "s", "target_branch": "c10s"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{base}/7").as_str())
+            .with_status(404)
+            .create();
+        server
+            .mock("GET", format!("{base}/8").as_str())
+            .with_status(500)
+            .create();
+        let c = Client::new(&server.url(), "redhat/centos-stream/rpms/rsync", "").unwrap();
+        assert_eq!(c.merge_request_if_visible(90).unwrap().unwrap().iid, 90);
+        assert!(c.merge_request_if_visible(7).unwrap().is_none());
+        assert!(
+            c.merge_request_if_visible(8).is_err(),
+            "a failure is not an answer"
+        );
+
+        let created = server
+            .mock("POST", "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fx/issues")
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"title": "t", "confidential": true}),
+            ))
+            .with_status(201)
+            .with_body(r#"{"iid": 1, "title": "t", "state": "opened", "web_url": "w", "confidential": true}"#)
+            .create();
+        let issues = Client::new(&server.url(), "CentOS/proposed_updates/rpms/x", "t").unwrap();
+        assert!(
+            issues
+                .create_issue_confidential("t", None, None, true)
+                .unwrap()
+                .confidential
+        );
+        created.assert();
     }
 
     #[test]
