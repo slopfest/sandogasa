@@ -91,6 +91,58 @@ pub fn fork_remote(remotes: &[(String, String)], package: &str) -> Option<(Strin
     })
 }
 
+/// Where a new fork's copy stands, from its project's `import_status`.
+#[derive(Debug, PartialEq)]
+pub enum ForkCopy {
+    Ready,
+    Copying,
+    Failed,
+}
+
+/// What `import_status` says of a fork: ready once `finished` (or with
+/// none at all, for a project GitLab did not import), failed on
+/// `failed`, still copying otherwise.
+pub fn fork_copy(import_status: Option<&str>) -> ForkCopy {
+    match import_status {
+        None | Some("finished" | "none") => ForkCopy::Ready,
+        Some("failed") => ForkCopy::Failed,
+        Some(_) => ForkCopy::Copying,
+    }
+}
+
+/// Wait, a few minutes at most, for GitLab to finish copying the fork
+/// at `path`.
+fn wait_for_fork(base: &str, path: &str, verbose: bool) -> Result<(), String> {
+    const TRIES: u32 = 100;
+    let client = crate::gitlab::reader(base, path).map_err(|e| e.to_string())?;
+    for i in 0..TRIES {
+        let status = client
+            .project()
+            .map_err(|e| format!("cannot read the fork {path}: {e}"))?
+            .and_then(|p| p.import_status);
+        match fork_copy(status.as_deref()) {
+            ForkCopy::Ready => return Ok(()),
+            ForkCopy::Failed => {
+                return Err(format!(
+                    "GitLab failed to copy the fork {path}; delete it and try again"
+                ));
+            }
+            ForkCopy::Copying => {
+                if verbose || i == 0 {
+                    eprintln!(
+                        "waiting for GitLab to finish copying {path} ({})",
+                        status.as_deref().unwrap_or("?")
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        }
+    }
+    Err(format!(
+        "GitLab is still copying the fork {path} after five minutes; run this again later"
+    ))
+}
+
 /// The CentOS Stream branch `branch` is for: the one it tracks
 /// (`origin/c9s`), else its own prefix (`c9s-CVE-2026-119741`).
 pub fn target_branch(branch: &str, upstream: Option<&str>) -> Option<String> {
@@ -370,7 +422,16 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
                  ~/.config/rpkg/centpkg.conf)"
             ));
             ui.run_required(&["centpkg".to_string(), "fork".to_string()], &repo)?;
-            fork_remote(&remotes(&repo)?, &package)
+            let made = fork_remote(&remotes(&repo)?, &package);
+            // GitLab copies a new fork in the background: a push before
+            // the copy is done is refused (#93).
+            if let Some((_, path)) = &made
+                && !args.dry_run
+            {
+                ui.step(&format!("Wait for GitLab to finish copying {path}"));
+                wait_for_fork(&crate::utils::gitlab_base(), path, args.explain)?;
+            }
+            made
         }
     };
     let (remote, fork_path) = match (fork, args.dry_run) {
@@ -559,5 +620,15 @@ mod tests {
         assert_eq!(commits[0].subject, "first");
         assert_eq!(commits[0].body, "body one\n\nResolves: RHEL-1");
         assert_eq!(commits[1].subject, "second");
+    }
+
+    #[test]
+    fn a_new_fork_is_pushed_to_only_once_gitlab_has_copied_it() {
+        assert_eq!(fork_copy(Some("finished")), ForkCopy::Ready);
+        assert_eq!(fork_copy(None), ForkCopy::Ready);
+        assert_eq!(fork_copy(Some("none")), ForkCopy::Ready);
+        assert_eq!(fork_copy(Some("scheduled")), ForkCopy::Copying);
+        assert_eq!(fork_copy(Some("started")), ForkCopy::Copying);
+        assert_eq!(fork_copy(Some("failed")), ForkCopy::Failed);
     }
 }

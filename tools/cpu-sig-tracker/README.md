@@ -212,7 +212,9 @@ from the package's dist-git checkout (the current directory, or `-C`):
 
 1. If no remote points at a fork of the package in your own namespace
    (`<user>/centos_rpms_<package>`), `centpkg fork` makes one and adds
-   it as a remote named after your GitLab user.
+   it as a remote named after your GitLab user. GitLab copies a new
+   fork in the background, so `mr` waits (a few minutes at most) until
+   the copy is done before pushing to it.
 2. `git push -u <remote> <branch>`.
 3. The merge request is opened into the CentOS Stream branch the
    branch is for: the one it tracks (`origin/c9s`), else its `cNs-`

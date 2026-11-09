@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: mr waits for a new fork before pushing to it
+
+`cpu-sig-tracker mr` runs `centpkg fork` when the checkout has no
+remote for the user's fork, then pushed the branch at once. GitLab
+copies a new fork's repository in the background, so on a package
+forked for the first time, as rsync is in the first real run of the
+Proposed Updates flow, the push could arrive before the copy was done
+and be refused. `mr` now waits for the fork's import to finish (a few
+minutes at most) before pushing, narrated as a step under `--explain`.
+sandogasa-gitlab's `Project` reads `import_status` again. Resolves #93.
+
 ### cpu-sig-tracker: date a landed update by the stock evidence, and word Jira the same in untag and retire
 
 Retiring PackageKit's c10s Proposed Update as landed, on stock's

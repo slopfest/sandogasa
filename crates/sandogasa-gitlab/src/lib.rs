@@ -97,6 +97,11 @@ pub struct Project {
     pub web_url: String,
     pub ssh_url_to_repo: String,
     pub http_url_to_repo: String,
+    /// For a fork, how far GitLab has got copying the repository:
+    /// `scheduled`, `started`, `finished` or `failed`; `none` (or
+    /// absent) for a project that was never imported.
+    #[serde(default)]
+    pub import_status: Option<String>,
 }
 
 /// One file a merge request changes, with its diff.
