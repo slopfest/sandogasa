@@ -467,6 +467,23 @@ impl Client {
         Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
     }
 
+    /// The commits on `branch` that touched `path`, newest first (up to
+    /// a hundred): the last is the one that added the file, when it is
+    /// that young.
+    pub fn path_commits(
+        &self,
+        branch: &str,
+        path: &str,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let url = format!("{}/repository/commits", self.project_url());
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("ref_name", branch), ("path", path), ("per_page", "100")])
+            .send()?;
+        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+    }
+
     /// Commits on `branch` by `author` (a name or an email, GitLab's
     /// own filter) since an RFC 3339 instant; one page of up to a
     /// hundred, plenty for one person's commits since an MR was opened.
@@ -1768,6 +1785,29 @@ mod tests {
             Some("Name: PackageKit\n")
         );
         assert_eq!(c.raw_file("missing.patch", "c10s").unwrap(), None);
+    }
+
+    #[test]
+    fn the_commits_touching_a_path_are_read() {
+        let mut server = mockito::Server::new();
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2FPackageKit/repository/commits",
+            )
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("ref_name".into(), "c10s".into()),
+                mockito::Matcher::UrlEncoded("path".into(), "0001-x.patch".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"id": "99e0f170aaaa", "title": "Fix CVE-2026-41651",
+                "committed_date": "2026-04-27T10:00:00.000+00:00"}]"#,
+            )
+            .create();
+        let c = Client::new(&server.url(), "redhat/centos-stream/rpms/PackageKit", "").unwrap();
+        let commits = c.path_commits("c10s", "0001-x.patch").unwrap();
+        assert_eq!(commits[0].id, "99e0f170aaaa");
     }
 
     #[test]

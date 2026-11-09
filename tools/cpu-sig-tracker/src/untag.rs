@@ -266,7 +266,7 @@ fn check_landed(package: &str, release: &str, sig_nvr: Option<&str>, verbose: bo
     // Context, not the gate: whether the change landed is decided
     // below, and stock's patches outrank Jira (#89), so a declined or
     // unverified issue is no failure here.
-    println!("JIRA (for the record): {}", jira.check.detail());
+    println!("{}", crate::landed::jira_note(jira.check.detail()));
     let stock_nvr =
         crate::status::fetch_stream_nvrs(release, &[package.to_string()], verbose).remove(package);
     precondition(&crate::landed::landed(
@@ -275,7 +275,10 @@ fn check_landed(package: &str, release: &str, sig_nvr: Option<&str>, verbose: bo
         release,
         sig_nvr,
         stock_nvr.as_deref(),
-        jira.fixed.then(|| jira.check.detail()),
+        crate::landed::JiraFacts {
+            fixed: jira.fixed.then(|| jira.check.detail()),
+            on: jira.resolution_date,
+        },
         verbose,
     ))
 }

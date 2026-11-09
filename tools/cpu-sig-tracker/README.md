@@ -359,8 +359,15 @@ history and the RHEL issue and offered as the default at a terminal,
 and taken as is with `--yes` (an unattended run with nothing to infer
 from is an error). The build must be untagged from `-release` Koji in
 every case (retire follows `untag`); `--force` bypasses the checks.
-The RHEL issues' state is reported for the record and stamps
-`due_date` from their `resolutiondate` when resolved.
+The RHEL issues' state is printed for the record, worded as `untag`
+words it. A landed update's `due_date` is the day the evidence shows
+it in stock (the stock commit that added the matched patch, the stock
+commit naming the change, or the MR's merge), not Jira's, which can be
+months later; it is recorded on the issue as a `- **Stock fix**:`
+line, with what Jira said beside it when that differs (`… in stock on
+2026-04-27 (stock commit 99e0f170 added …); Jira closed RHEL-170526 as
+Not a Bug on 2026-10-23`). Otherwise `due_date` is when Jira settled
+the RHEL issues.
 
 The issue closes with a label saying how it ended — `landed` when the
 SIG's own MR merged, `superseded` when the fix reached stock another
@@ -426,7 +433,10 @@ serde-serialized array, each row's issues under `jira`.
 that's drifted from the canonical format, backfills stale MR / JIRA
 status lines, reconciles the GitLab work-item status against live
 JIRA + Koji (Done / Won't do / In progress / To do), and sets
-missing `start_date` / `due_date` via the GraphQL work-item API.
+`start_date` / `due_date` via the GraphQL work-item API, correcting a
+`due_date` that disagrees: the day the issue's `- **Stock fix**:` line
+records, else the day the evidence shows the change in stock, else
+when Jira settled it.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
 

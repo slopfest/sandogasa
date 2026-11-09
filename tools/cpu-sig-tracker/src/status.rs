@@ -290,23 +290,37 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             };
             // Whether the change is in stock, as untag and retire judge
             // it (crate::landed): stock's patches outrank Jira either
-            // way (#89). Asked only while the SIG still ships a build.
-            let landed = pu_nvr.as_deref().map(|nvr| {
+            // way (#89). Asked while the SIG still ships a build, and on
+            // a refresh, for the day it landed (#92).
+            let landed = (pu_nvr.is_some() || args.refresh).then(|| {
                 crate::landed::landed(
                     &issue,
                     package,
                     release,
-                    Some(nvr),
+                    pu_nvr.as_deref(),
                     stream_nvr.as_deref(),
-                    (outcome == Outcome::Fixed).then_some("every RHEL issue is fixed"),
+                    crate::landed::JiraFacts {
+                        fixed: (outcome == Outcome::Fixed).then_some("every RHEL issue is fixed"),
+                        on: jira_resolution_date,
+                    },
                     args.verbose,
                 )
             });
-            let suggestion = landed
-                .as_ref()
-                .and_then(landed_suggestion)
-                .unwrap_or(suggestion);
-            let landed_note = landed.and_then(|l| l.by.or(l.doubt));
+            let shipped = landed.as_ref().filter(|_| pu_nvr.is_some());
+            let suggestion = shipped.and_then(landed_suggestion).unwrap_or(suggestion);
+            let landed_note = shipped.and_then(|l| l.by.clone().or(l.doubt.clone()));
+            // The day it was fixed: what the issue records, else what the
+            // evidence shows, else when Jira settled it, which can be
+            // months later (RHEL-170526 closed 2026-10-23, the fix in
+            // stock since 2026-04-27).
+            let fix_date = crate::landed::stock_fix_on(body)
+                .or_else(|| {
+                    landed
+                        .as_ref()
+                        .filter(|l| l.by.is_some())
+                        .and_then(|l| l.on)
+                })
+                .or(jira_resolution_date);
 
             // Body-vs-live drift detection. Format drift is
             // free (pure body parse); JIRA drift compares the
@@ -358,7 +372,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                             &issue,
                             package,
                             release,
-                            jira_resolution_date,
+                            fix_date,
                             args.verbose,
                         );
                     }
@@ -386,14 +400,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         has_build,
                         args.verbose,
                     );
-                    maybe_refresh_dates(
-                        &project,
-                        &issue,
-                        package,
-                        release,
-                        jira_resolution_date,
-                        args.verbose,
-                    );
+                    maybe_refresh_dates(&project, &issue, package, release, fix_date, args.verbose);
                 } else if !drift_reasons.is_empty() {
                     eprintln!(
                         "skipped {}: {}, and no MR URL found",
@@ -822,7 +829,7 @@ fn maybe_refresh_dates(
     issue: &gitlab::Issue,
     package: &str,
     release: &str,
-    jira_resolution_date: Option<chrono::NaiveDate>,
+    fix_date: Option<chrono::NaiveDate>,
     verbose: bool,
 ) {
     let desired_start = crate::file_issue::find_build_start_date(package, release, verbose)
@@ -832,7 +839,7 @@ fn maybe_refresh_dates(
                 .as_deref()
                 .and_then(crate::utils::parse_iso_date)
         });
-    let desired_due = jira_resolution_date;
+    let desired_due = fix_date;
 
     let current_start_parsed = issue
         .start_date

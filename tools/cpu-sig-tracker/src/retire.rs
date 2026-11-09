@@ -94,6 +94,10 @@ pub struct RetireFacts {
     /// Why it does not count as landed though something suggested it:
     /// stock lacks a patch the update adds, or has not built it yet.
     pub landed_doubt: Option<String>,
+    /// When the evidence shows the change in stock, and that evidence
+    /// in a few words (#92).
+    pub fix_on: Option<chrono::NaiveDate>,
+    pub fix_summary: Option<String>,
     /// The RHEL issue's resolution, when it is resolved.
     pub jira_resolution: Option<String>,
     /// Every RHEL issue the update resolves was declined (#88).
@@ -301,7 +305,9 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     // The RHEL issues: informational, and one source of the reason.
     // Every one the update resolves counts.
     let jira_check = crate::jira::check_all_resolved(&jira_keys, args.verbose);
-    report_check("JIRA resolved", &jira_check.check);
+    // Context, not a check: stock's evidence decides (#89), worded as
+    // untag words it (crate::landed).
+    println!("{}", crate::landed::jira_note(jira_check.check.detail()));
 
     // Precondition: no pu build tagged (retire follows untag).
     let build_check = check_package_untagged(&release, package, args.verbose);
@@ -396,8 +402,43 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     if let Some((date, source)) = &start_date {
         println!("  start_date: {date} (from {source})");
     }
-    if let Some(date) = jira_check.resolution_date {
-        println!("  due_date: {date} (from JIRA resolutiondate)");
+    // Landed: the day the evidence shows it in stock, not Jira's, which
+    // can be months later (#92); otherwise the day Jira settled it.
+    let due = match (reason, facts.fix_on) {
+        (Reason::Landed, Some(on)) => Some((
+            on,
+            facts
+                .fix_summary
+                .clone()
+                .unwrap_or_else(|| "the evidence".to_string()),
+        )),
+        _ => jira_check
+            .resolution_date
+            .map(|d| (d, "JIRA resolutiondate".to_string())),
+    };
+    if let Some((date, source)) = &due {
+        println!("  due_date: {date} (from {source})");
+    }
+    // The evidence goes on the issue, so it is there after the build is
+    // gone; with Jira's record beside it when that says otherwise.
+    let evidence_line = match (reason, &facts.recorded_fix, facts.fix_on, &facts.stream_nvr) {
+        (Reason::Landed, None, Some(on), Some(stock)) => Some(crate::landed::stock_fix_line(
+            stock,
+            on,
+            facts.fix_summary.as_deref().unwrap_or("the evidence"),
+            crate::landed::jira_disagreement(
+                &jira_keys,
+                jira_check.fixed,
+                jira_check.resolution_name.as_deref(),
+                jira_check.resolution_date,
+                Some(on),
+            )
+            .as_deref(),
+        )),
+        _ => None,
+    };
+    if let Some(line) = &evidence_line {
+        println!("  records: {line}");
     }
     if !args.yes && !sandogasa_cli::confirm("Proceed?", false)? {
         eprintln!("aborted.");
@@ -416,20 +457,29 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     }
     client.add_note(iid, &note)?;
 
-    // What a person established goes on the issue, where timeline
-    // reads it ahead of any inference.
-    if let Some(nvr) = &facts.recorded_fix {
-        let who = whoami().unwrap_or_else(|| "the operator".to_string());
-        let line = crate::utils::format_stock_fix_line(nvr, &who, chrono::Utc::now().date_naive());
-        if let Err(e) = client.edit_issue(
+    // What a person established, or the evidence showed, goes on the
+    // issue, where timeline reads it ahead of any inference.
+    let fix_line = match &facts.recorded_fix {
+        Some(nvr) => {
+            let who = whoami().unwrap_or_else(|| "the operator".to_string());
+            Some(crate::utils::format_stock_fix_line(
+                nvr,
+                &who,
+                chrono::Utc::now().date_naive(),
+            ))
+        }
+        None => evidence_line.clone(),
+    };
+    if let Some(line) = &fix_line
+        && let Err(e) = client.edit_issue(
             iid,
             &gitlab::IssueUpdate {
-                description: Some(crate::utils::with_stock_fix_line(body, &line)),
+                description: Some(crate::utils::with_stock_fix_line(body, line)),
                 ..Default::default()
             },
-        ) {
-            eprintln!("warning: could not record the stock fix on the issue: {e}");
-        }
+        )
+    {
+        eprintln!("warning: could not record the stock fix on the issue: {e}");
     }
 
     // Flip the work-item status so browsers of the GitLab UI see a
@@ -448,9 +498,7 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
     let formatted_start = start_date
         .as_ref()
         .map(|(d, _)| d.format("%Y-%m-%d").to_string());
-    let formatted_due = jira_check
-        .resolution_date
-        .map(|d| d.format("%Y-%m-%d").to_string());
+    let formatted_due = due.as_ref().map(|(d, _)| d.format("%Y-%m-%d").to_string());
     if formatted_start.is_some() || formatted_due.is_some() {
         if args.verbose {
             eprintln!("[cpu-sig-tracker] setting start_date/due_date via GraphQL");
@@ -514,7 +562,10 @@ fn gather_facts(
         release,
         release_nvr.as_deref(),
         stream_nvr.as_deref(),
-        jira.fixed.then(|| jira.check.detail()),
+        crate::landed::JiraFacts {
+            fixed: jira.fixed.then(|| jira.check.detail()),
+            on: jira.resolution_date,
+        },
         verbose,
     );
     RetireFacts {
@@ -525,6 +576,8 @@ fn gather_facts(
         mr_state: landed.mr_state,
         landed_by: landed.by,
         landed_doubt: landed.doubt,
+        fix_on: landed.on,
+        fix_summary: landed.summary,
         release_nvr,
         stream_nvr,
         ..Default::default()
@@ -932,6 +985,8 @@ mod tests {
             jira_declined: false,
             jira_unanswered: false,
             landed_doubt: None,
+            fix_on: None,
+            fix_summary: None,
             recorded_fix: None,
         }
     }

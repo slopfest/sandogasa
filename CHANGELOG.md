@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: date a landed update by the stock evidence, and word Jira the same in untag and retire
+
+Retiring PackageKit's c10s Proposed Update as landed, on stock's
+matched patch, set its `due_date` to 2026-10-23: the day Red Hat
+closed the SIG's RHEL-170526 as `Not a Bug`, six months after the fix
+reached stock in commit 99e0f170 on 2026-04-27. The same run printed
+`check JIRA resolved: FAIL` above the check that decided it, worded
+apart from `untag`'s new "for the record" line.
+
+`landed()` now says when the change landed, by the evidence that
+decided it: the stock commit that added the matched patch, the stock
+commit naming the change, the MR's merge, or Jira's resolution only
+when Jira decided. `retire` uses that date for `due_date` and records
+it as a `- **Stock fix**:` line, with Jira's own record beside it when
+that differs, so it outlives the build. `status --refresh` takes the
+date from that line, then from the evidence, then from Jira, closed
+issues included, and corrects a `due_date` that disagrees. Both
+commands print Jira through one function. Fixes #92.
+
 ### cpu-sig-tracker: untag offers --explain and --dry-run
 
 `untag`'s work is koji commands a person could run, but nothing showed
