@@ -14,16 +14,37 @@ use std::path::PathBuf;
 /// The hub URL `profile` names, or `None` when no configuration file
 /// defines it.
 pub fn hub_url(profile: &str) -> Option<String> {
+    setting(profile, "server")
+}
+
+/// Setting `key` of `profile` (`server`, `cert`, `authtype`, …), or
+/// `None` when no configuration file sets it.
+pub fn setting(profile: &str, key: &str) -> Option<String> {
     // The last file to define it wins, so look from the end.
     config_files()
         .iter()
         .rev()
         .filter_map(|path| std::fs::read_to_string(path).ok())
-        .find_map(|text| server_in(&text, profile))
+        .find_map(|text| setting_in(&text, profile, key))
+}
+
+/// The certificate file `profile` logs in with, `~` expanded, when it
+/// names one: CBS's `cbs` profile does (`~/.centos.cert`).
+pub fn cert_path(profile: &str) -> Option<PathBuf> {
+    let cert = setting(profile, "cert")?;
+    Some(match cert.strip_prefix("~/") {
+        Some(rest) => dirs::home_dir()?.join(rest),
+        None => PathBuf::from(cert),
+    })
 }
 
 /// The `server` of the `[profile]` section of one INI file.
 pub fn server_in(text: &str, profile: &str) -> Option<String> {
+    setting_in(text, profile, "server")
+}
+
+/// Setting `key` of the `[profile]` section of one INI file.
+pub fn setting_in(text: &str, profile: &str, wanted: &str) -> Option<String> {
     let mut in_section = false;
     let mut server = None;
     for line in text.lines() {
@@ -41,7 +62,7 @@ pub fn server_in(text: &str, profile: &str) -> Option<String> {
         let Some((key, value)) = line.split_once(['=', ':']) else {
             continue;
         };
-        if key.trim() == "server" {
+        if key.trim() == wanted {
             server = Some(value.trim().to_string());
         }
     }
@@ -96,5 +117,11 @@ server: https://kojihub.stream.centos.org/kojihub
             Some("https://kojihub.stream.centos.org/kojihub")
         );
         assert_eq!(server_in(text, "cbs"), None);
+        let cbs = "[cbs]\nserver = https://cbs.centos.org/kojihub/\ncert = ~/.centos.cert\n";
+        assert_eq!(
+            setting_in(cbs, "cbs", "cert").as_deref(),
+            Some("~/.centos.cert")
+        );
+        assert_eq!(setting_in(cbs, "cbs", "authtype"), None);
     }
 }

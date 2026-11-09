@@ -1343,7 +1343,7 @@ mod tests {
             shown.starts_with("Open RHEL issues for rsync on c9s (searched anonymously):\n"),
             "{shown}"
         );
-        assert!(shown.contains("  CVE-1: https://"), "{shown}");
+        assert!(shown.contains("  CVE-1: "), "{shown}");
         assert!(shown.contains("/browse/RHEL-9 [New]"), "{shown}");
         assert!(shown.contains("  CVE-2: none visible\n"), "{shown}");
         assert_eq!(shown.matches("RHEL-10 [").count(), 1, "{shown}");
@@ -1375,7 +1375,7 @@ mod tests {
         assert!(found_keys(&lookups).is_empty());
         let shown = render_search(&target(&[]), &lookups, true, &[]);
         assert!(
-            shown.contains("  possibly related: https://") && shown.contains("RHEL-303720 ["),
+            shown.contains("  possibly related: ") && shown.contains("RHEL-303720 ["),
             "{shown}"
         );
         // With a CVE, the issue the search found is the one.

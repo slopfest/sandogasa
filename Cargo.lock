@@ -305,6 +305,7 @@ dependencies = [
  "sandogasa-inventory",
  "sandogasa-jira",
  "sandogasa-koji",
+ "sandogasa-kojihub",
  "sandogasa-rpmvercmp",
  "serde",
  "serde_json",

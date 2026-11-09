@@ -20,6 +20,7 @@ sandogasa-gitlab = { workspace = true }
 sandogasa-inventory = { workspace = true }
 sandogasa-jira = { workspace = true }
 sandogasa-koji = { workspace = true }
+sandogasa-kojihub = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

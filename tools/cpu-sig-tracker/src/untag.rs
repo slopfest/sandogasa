@@ -79,6 +79,11 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
         &testing_nvrs,
     )?;
 
+    // The login first: one cheap call, before the slower checks and
+    // before asking to proceed, so a missing certificate is found and
+    // explained (and, at a terminal, fixed) up front (#90).
+    crate::cbs_auth::ensure_login(!args.yes, args.verbose)?;
+
     let sig_nvr = resolved.targets.first().map(|(_, nvr)| nvr.as_str());
     let landed_check = check_landed(&resolved.package, &args.release, sig_nvr, args.verbose);
     report_check("landed in stock", &landed_check);
@@ -369,6 +374,8 @@ mod tests {
             dir.path(),
             "koji",
             &[
+                // The CBS login check (#90).
+                ("moshimoshi", "olá, tester!"),
                 // NVR currently tagged in both -release and -testing.
                 (
                     "list-tagged --quiet -- proposed_updates10s-packages-main-release",

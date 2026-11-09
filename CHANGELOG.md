@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: untag checks the CBS login first, and says how to fix it
+
+`cpu-sig-tracker untag PackageKit --release c9s` failed with koji's
+traceback, once per tag: `TLSV13_ALERT_CERTIFICATE_REQUIRED`, then
+`GSSAPIAuthError: unable to obtain a session`. The cause was simple:
+the `cbs` koji profile logs in with a TLS certificate,
+`~/.centos.cert`, and the file did not exist. Nothing said so, and the
+fix (`centos-cert -u <user>`, from a Fedora Kerberos ticket) is not one
+anyone who does not work on CentOS every day would know.
+
+`untag` now tries the login first, with one `koji -p cbs moshimoshi`,
+before its other checks and before asking to proceed. A failure names
+the cause from the profile's own settings (the certificate missing,
+rejected by `centos-cert -v`, or koji's own first line) and gives the
+commands that fix it, with the user from the Kerberos ticket. At a
+terminal it offers to run `centos-cert` and continues. Resolves #90.
+
+sandogasa-kojihub's `config` gains `setting`, `setting_in` and
+`cert_path`, reading any of a koji profile's settings.
+
 ### cpu-sig-tracker: decide whether an update landed by the patches stock carries
 
 Jira could not say whether a Proposed Update had landed, in either

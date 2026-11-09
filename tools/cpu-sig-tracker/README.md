@@ -504,7 +504,15 @@ patch the MR adds, in a build at or past the SIG's (see `status`); or,
 for an MR adding no patches, a commit on stock's branch naming the
 change (its RHEL key, a CVE, the MR's title) or every RHEL issue fixed
 (a fix version, or `Done-Errata`; a `Done` alone does not do). A patch
-stock lacks keeps it from counting, whatever Jira says. The RHEL issues' state is shown either way. Accepts
+stock lacks keeps it from counting, whatever Jira says.
+
+The CBS login is checked first, with `koji -p cbs moshimoshi`, before
+anything else is asked or touched. CBS logs in with a TLS certificate
+(`cert = ~/.centos.cert` in the `cbs` profile); when it is missing or
+no longer valid, `untag` says so and gives the commands that make one,
+`kinit <user>@FEDORAPROJECT.ORG` (when `klist` shows no valid ticket)
+and `centos-cert -u <user>`, the user taken from your Kerberos ticket.
+At a terminal it offers to run `centos-cert` and carries on. The RHEL issues' state is shown either way. Accepts
 either a package name (auto-discovers currently-tagged NVRs across
 both tags) or a specific NVR. Pair with `retire` to close the
 tracking issue after the build is gone.
