@@ -100,7 +100,7 @@ pub(crate) fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Erro
     ui.step("Check the CBS login (it uses the TLS certificate the cbs profile names)");
     ui.show_command(&koji_argv(&["moshimoshi"]));
     ui.pause_if_explain();
-    crate::cbs_auth::ensure_login(!args.yes, args.verbose)?;
+    sandogasa_cbs::login::ensure_login("cpu-sig-tracker", !args.yes, args.verbose)?;
 
     ui.step("Find the builds in the SIG's -release and -testing tags");
     ui.show_command(&koji_argv(&["list-tagged", "--quiet", "--", &release_tag]));

@@ -20,6 +20,35 @@ succeeded. Both checkouts are steps under `--explain` and `--dry-run`.
 A checkout with uncommitted changes is refused before anything is
 forked or asked, with a message saying why.
 
+### New sandogasa-cbs crate: CentOS Build System conventions for SIG tools
+
+Each CentOS SIG tool spelled CBS's names out for itself:
+cpu-sig-tracker built `proposed_updates<N>s-packages-main-<stage>`
+with its own format string, hs-relmon parsed `hyperscale9s-…` tags
+its own way, and the CBS login check lived inside cpu-sig-tracker.
+Nothing knew which collection a SIG's dist-git branch builds into,
+which is the first thing a build tool shared by the SIGs (#77) has to
+work out.
+
+sandogasa-cbs holds those conventions in one place:
+- `Collection` names a collection's build target, buildroot tag and
+  `-candidate`/`-testing`/`-release` tags, as `koji -p cbs list-targets`
+  shows them.
+- `Sig::collection_for_branch` maps a branch to its collection. For
+  Proposed Updates that is `c<N>s-proposed-<RHEL key>`. For Hyperscale
+  it covers `c<N>s-hs`, `-hsx`, `-hs+fb`, `-hs+asahi` and `-hsk`, and
+  the older `c<N>s-sig-hyperscale[-experimental|-spin]`, and systemd's
+  `c<N>s-sig-hyperscale-v<N>` branches for emergency builds of older
+  releases.
+- `Collection::rhel_variant` names the RHEL collection that Facebook's
+  Stream branches also build into (`hyperscale9-packages-facebook-el9`).
+- `Collection::mock_config` names the mock config with the matching
+  buildroot.
+- `Sig::gitlab_group` names where the SIG's package repos live.
+- The CBS login check moves here from cpu-sig-tracker as
+  `sandogasa_cbs::login`. cpu-sig-tracker's `untag` and `dump-inventory`
+  now use the crate, with no change in behaviour.
+
 ### cpu-sig-tracker: mr opens the MR description with an AI-assistance disclosure
 
 The merge requests `cpu-sig-tracker mr` opened said nothing about AI

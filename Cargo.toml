@@ -5,6 +5,7 @@ members = [
     "crates/sandogasa-bugclass",
     "crates/sandogasa-build",
     "crates/sandogasa-bugzilla",
+    "crates/sandogasa-cbs",
     "crates/sandogasa-cli",
     "crates/sandogasa-closure",
     "crates/sandogasa-config",
@@ -137,6 +138,7 @@ sandogasa-bodhi = { version = "0.27", path = "crates/sandogasa-bodhi" }
 sandogasa-bugclass = { version = "0.27", path = "crates/sandogasa-bugclass" }
 sandogasa-build = { version = "0.27", path = "crates/sandogasa-build" }
 sandogasa-bugzilla = { version = "0.27", path = "crates/sandogasa-bugzilla" }
+sandogasa-cbs = { version = "0.27", path = "crates/sandogasa-cbs" }
 # `default-features = false` so a member that needs no TLS does not
 # get one: cargo forbids a member turning off a default its workspace
 # dependency enabled, so the choice has to be made here. The `tls`

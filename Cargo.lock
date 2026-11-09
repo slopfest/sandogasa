@@ -297,6 +297,7 @@ dependencies = [
  "clap",
  "reqwest",
  "sandogasa-build",
+ "sandogasa-cbs",
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-cve",
@@ -1969,6 +1970,14 @@ dependencies = [
 [[package]]
 name = "sandogasa-build"
 version = "0.27.1"
+
+[[package]]
+name = "sandogasa-cbs"
+version = "0.27.1"
+dependencies = [
+ "sandogasa-cli",
+ "sandogasa-kojihub",
+]
 
 [[package]]
 name = "sandogasa-cli"

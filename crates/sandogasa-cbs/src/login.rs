@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The CBS login, checked before anything is written to CBS (#90).
+//! The CBS login, checked before anything is written to CBS.
 //!
 //! CBS's `cbs` koji profile logs in with a TLS client certificate
 //! (`cert = ~/.centos.cert`), which `centos-cert -u <user>` makes from a
@@ -14,8 +14,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// The koji profile CBS is reached through.
-pub const PROFILE: &str = "cbs";
+use crate::PROFILE;
 
 /// Why the login failed, as far as can be told.
 #[derive(Debug, Clone, PartialEq)]
@@ -126,10 +125,10 @@ fn kerberos_user() -> Option<String> {
 /// Make sure CBS accepts the login before anything is written to it. A
 /// failure is explained, and at a terminal (`interactive`) the fix is
 /// offered and the login tried again; otherwise the explanation is the
-/// error.
-pub fn ensure_login(interactive: bool, verbose: bool) -> Result<(), String> {
+/// error. `tool` names the caller in the `verbose` progress line.
+pub fn ensure_login(tool: &str, interactive: bool, verbose: bool) -> Result<(), String> {
     if verbose {
-        eprintln!("[cpu-sig-tracker] checking the CBS login (koji --profile {PROFILE} moshimoshi)");
+        eprintln!("[{tool}] checking the CBS login (koji --profile {PROFILE} moshimoshi)");
     }
     let Err(output) = login() else {
         return Ok(());

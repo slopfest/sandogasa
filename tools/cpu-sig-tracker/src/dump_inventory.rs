@@ -13,6 +13,7 @@
 
 use std::process::ExitCode;
 
+use sandogasa_cbs::{Collection, Sig, Stage};
 use sandogasa_inventory::{Inventory, InventoryMeta, Package, WorkloadMeta};
 use sandogasa_koji::{list_tagged_nvrs, parse_nvr_name};
 
@@ -54,7 +55,7 @@ pub struct DumpInventoryArgs {
 /// `proposed_updates<N>s-packages-main-release` where N is the
 /// major version digit.
 pub fn proposed_updates_tag(release: &str) -> Result<String, String> {
-    proposed_updates_tag_with_suffix(release, "release")
+    proposed_updates_tag_with_suffix(release, Stage::Release)
 }
 
 /// Build the CBS `-testing` sibling tag
@@ -62,21 +63,22 @@ pub fn proposed_updates_tag(release: &str) -> Result<String, String> {
 /// packages that have been built but not yet promoted to the
 /// `-release` tag.
 pub fn proposed_updates_testing_tag(release: &str) -> Result<String, String> {
-    proposed_updates_tag_with_suffix(release, "testing")
+    proposed_updates_tag_with_suffix(release, Stage::Testing)
 }
 
-fn proposed_updates_tag_with_suffix(release: &str, suffix: &str) -> Result<String, String> {
-    let digits = release
+fn proposed_updates_tag_with_suffix(release: &str, stage: Stage) -> Result<String, String> {
+    let major = release
         .strip_prefix('c')
         .and_then(|s| s.strip_suffix('s'))
         .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .and_then(|s| s.parse().ok())
         .ok_or_else(|| {
             format!(
                 "unrecognized release '{release}': expected 'c<N>s' \
                  (e.g. c9s, c10s)"
             )
         })?;
-    Ok(format!("proposed_updates{digits}s-packages-main-{suffix}"))
+    Ok(Collection::new(Sig::ProposedUpdates.name(), major, true, "main").tag(stage))
 }
 
 pub fn run(args: &DumpInventoryArgs) -> ExitCode {

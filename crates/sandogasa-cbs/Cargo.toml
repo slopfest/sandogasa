@@ -1,0 +1,13 @@
+[package]
+name = "sandogasa-cbs"
+description = "CentOS Build System conventions for SIG tools: tags, branches, login"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sandogasa-cli = { workspace = true }
+sandogasa-kojihub = { workspace = true }

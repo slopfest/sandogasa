@@ -52,6 +52,9 @@ library crates:
 - **sandogasa-build** — build-script helper recording the git describe a tool was built from, for its `--version`
 - **sandogasa-bugclass** — bug classification (CVE, FTBFS, update request, etc.) across issue trackers
 - **sandogasa-bugzilla** — Bugzilla REST API client
+- **sandogasa-cbs** — CentOS Build System conventions for SIG tools:
+  collection targets and tags, SIG branch names, mock configs, and the
+  CBS login check
 - **sandogasa-cli** — shared CLI utilities (external tool availability
   checks, yes/no prompts, word wrapping, and an optional `http` feature
   with the API clients' shared reqwest plumbing)

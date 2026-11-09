@@ -12,6 +12,7 @@ repository.workspace = true
 chrono = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
+sandogasa-cbs = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["explain"] }
 sandogasa-config = { workspace = true }
 sandogasa-cve = { workspace = true }
