@@ -222,6 +222,26 @@ What has to exist first:
   emit exactly these remote-add lines, and the upstreaming step the
   `checkout -b … upstream/cNs` / `cherry-pick` / `push -u fork`
   sequence.
+- **Build and tag on CBS, run by a human only** (2026-11-09). Step 5
+  of the Proposed Updates flow pushes the fix branch to the SIG repo
+  as `cNs-proposed-<topic>` and builds it on CBS against
+  `proposed_updates<N>s-packages-main-el<N>s`; moving the build from
+  candidate to testing to release is by hand too. Home: a
+  `cpu-sig-tracker build` subcommand (and `promote` for the tags),
+  since that tool already knows the SIG's tags and tracking issues and
+  sits beside the fork setup (#77) and the `jira` step. Michel's
+  constraint: **it is run by Michel, not by an LLM session**, which
+  must not trigger builds on his behalf. So:
+  - before submitting, it shows the exact branch, commit, NVR and CBS
+    target and asks for confirmation at a terminal;
+  - there is no flag that skips the confirmation, and without a TTY it
+    refuses rather than proceeds (unlike `--yes` elsewhere);
+  - its README, `--help` and any skill or CLAUDE.md text mentioning it
+    say agents must not run it and should hand the command to Michel;
+  - it offers dbranch's `--explain` (the steps are `git push` and
+    `cbs build`/`cbs tag-build`, which a person can run by hand); only
+    `--dry-run`, with or without `--explain`, is fine for an agent to
+    run, since it changes nothing.
 
 ## koji-lag
 
