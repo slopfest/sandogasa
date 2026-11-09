@@ -8,7 +8,7 @@ cbspkg \- Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedo
 .SH DESCRIPTION
 Packaging for CentOS SIGs that build in the CentOS Build System (CBS), knowing each SIG\*(Aqs conventions: where its package repos live, which branch builds into which collection, and what its targets and tags are called. Proposed Updates and Hyperscale are known.
 .PP
-add\-pkg, build, promote and upload\-sources write to CBS or the SIG lookaside in the name of whoever runs them, so they are run by a person: each is confirmed at a terminal, refused without one, and has no option to skip the question. An AI agent must not run them; it may run them with \-\-dry\-run (with or without \-\-explain), which changes nothing, and hand the command to a person to run.
+add\-pkg, build, promote and upload\-sources act in CBS or the SIG lookaside in your name; see "Commands run by a person" in sandogasa\*(Aqs README.
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -21,8 +21,6 @@ Print version
 \fBcbspkg add\-pkg\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-owner\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGE\fR]
 .PP
 List a package in the CBS tags its branch builds through, as its first build needs
-.PP
-Run by a person, never by an agent; an agent may run it with \-\-dry\-run only.
 .TP
 \fB\-\-branch\fR \fI<BRANCH>\fR
 The branch whose collection to list it in (default: the one checked out)
@@ -40,7 +38,7 @@ The package\*(Aqs owner in CBS (default: your CBS login)
 The package\*(Aqs dist\-git checkout (default: the current directory)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Print help
 .TP
 [\fIPACKAGE\fR]
 The package (default: the one the checkout\*(Aqs remotes are for)
@@ -48,8 +46,6 @@ The package (default: the one the checkout\*(Aqs remotes are for)
 \fBcbspkg build\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-owner\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-scratch\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Build the checked\-out SIG branch in CBS: the target, the SIG repo\*(Aqs URL and the commit worked out from the branch
-.PP
-Run by a person, never by an agent; an agent may run it with \-\-dry\-run only.
 .TP
 \fB\-\-branch\fR \fI<BRANCH>\fR
 The branch to build (default: the one checked out)
@@ -70,7 +66,7 @@ The package\*(Aqs dist\-git checkout (default: the current directory)
 Build without keeping the result (no tags, no listing needed)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Print help
 .SS cbspkg config
 \fBcbspkg config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
@@ -85,8 +81,6 @@ Print help
 \fBcbspkg promote\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-to\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINVR\fR]
 .PP
 Move a build to its collection\*(Aqs next stage (\-testing, then \-release, untagging it from \-testing)
-.PP
-Run by a person, never by an agent; an agent may run it with \-\-dry\-run only.
 .TP
 \fB\-\-branch\fR \fI<BRANCH>\fR
 The branch whose collections to promote in (default: the one checked out)
@@ -114,7 +108,7 @@ release
 .RE
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Print help
 .TP
 [\fINVR\fR]
 The build to promote (default: the package\*(Aqs newest in each of the branch\*(Aqs collections)
@@ -157,8 +151,6 @@ A CentOS Stream merge request URL (a Proposed Update), or a package name
 \fBcbspkg upload\-sources\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Upload the files a branch\*(Aqs sources names to the SIG lookaside, where CBS fetches them
-.PP
-Run by a person, never by an agent; an agent may run it with \-\-dry\-run only.
 .TP
 \fB\-\-branch\fR \fI<BRANCH>\fR
 The branch whose sources to upload (default: the one checked out)
@@ -173,4 +165,4 @@ Narrate each step and show its command, pausing before each
 The package\*(Aqs dist\-git checkout (default: the current directory)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help (see a summary with \*(Aq\-h\*(Aq)
+Print help

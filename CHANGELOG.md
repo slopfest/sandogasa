@@ -2,16 +2,18 @@
 
 ## Unreleased
 
-### cbspkg: the docs say the CBS writes are for a person to run, not an agent
+### Docs: one rule for the commands a person runs, not an agent
 
-cbspkg's `add-pkg`, `build`, `promote` and `upload-sources` write to
-CBS or the SIG lookaside in the name of whoever runs them. They were
-always confirmed at a terminal, but neither the README nor `--help`
-said who should run them, although the Proposed Updates plan had asked
-for that from the start. The README, the tool's long `--help` (and so
-its man page) and each of those subcommands' `--help` now say that a
-person runs them, and that an AI agent may run them only with
-`--dry-run`, then hand the command over.
+The tools that build, tag, untag or upload in someone's name — CBS and
+Koji, a lookaside, dput or Debusine — or that create a Bodhi update or
+give karma never said who should run them. An AI agent working for the
+user could run cpu-sig-tracker's `untag`, hs-relmon's pruning,
+ebranch's `--submit` or dbranch's uploads, with `--yes` too. The root
+README now has one rule, "Commands run by a person": such a command is
+run by a person, and an agent may run it only with `--dry-run`, never
+with `--yes`, then hands it over. The tools keep `--yes`, since a
+person running it is answerable for it. cbspkg's README and `--help`
+point to the rule rather than repeating it per subcommand. Refs #100.
 
 ### cbspkg: upload-sources checks out the branch for centpkg sources, and switches back
 

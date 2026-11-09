@@ -11,14 +11,9 @@ A SIG's package repo is a pull mirror of the package's CentOS Stream
 repo: GitLab keeps Stream's branches current, and the SIG's own
 branches sit beside them. CBS builds from that repo.
 
-## Run by a person
-
-`add-pkg`, `build`, `promote` and `upload-sources` write to CBS or the
-SIG lookaside in the name of whoever runs them. Each one is confirmed
-at a terminal and refused without one, and none has an option to skip
-the question. **An AI agent must not run them.** It may run them with
-`--dry-run` (with or without `--explain`), which changes nothing, and
-hand the command it shows to a person to run.
+`add-pkg`, `build`, `promote` and `upload-sources` act in CBS or the SIG
+lookaside in your name: see
+[Commands run by a person](../../README.md#commands-run-by-a-person).
 
 ## Installation
 

@@ -85,6 +85,24 @@ library crates:
 - **sandogasa-sourcehut** — Sourcehut (sr.ht) GraphQL API client for user
   activity reporting
 
+## Commands run by a person
+
+A command that builds, tags, untags or uploads — to CBS or Koji, a
+lookaside cache, or an archive through dput or Debusine — or that
+creates a Bodhi update or gives karma acts in the name of whoever runs
+it, so a person runs it. **An AI agent must not.** It may run such a
+command with `--dry-run` (with or without `--explain`), which changes
+nothing, and hands the command it shows to a person; never without
+`--dry-run`, and never with `--yes`. A person running it with `--yes`
+is answerable for it, so the tools keep the flag.
+
+Among them: cbspkg's `add-pkg`, `build`, `promote` and
+`upload-sources`; cpu-sig-tracker's `untag`; hs-relmon's `prune-*`,
+`retire`, `review` and `dupe-subpkgs --untag`; ebranch's
+`check-update --submit` or `--give-karma` and `copr-prune`; dbranch's
+upload and tag stages. A new command of that kind falls under the same
+rule without being listed.
+
 ## Installation
 
 On Fedora:

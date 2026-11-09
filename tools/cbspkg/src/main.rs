@@ -23,12 +23,9 @@ use upload_sources::UploadSourcesArgs;
 /// which branch builds into which collection, and what its targets and
 /// tags are called. Proposed Updates and Hyperscale are known.
 ///
-/// add-pkg, build, promote and upload-sources write to CBS or the SIG
-/// lookaside in the name of whoever runs them, so they are run by a
-/// person: each is confirmed at a terminal, refused without one, and
-/// has no option to skip the question. An AI agent must not run them;
-/// it may run them with --dry-run (with or without --explain), which
-/// changes nothing, and hand the command to a person to run.
+/// add-pkg, build, promote and upload-sources act in CBS or the SIG
+/// lookaside in your name; see "Commands run by a person" in
+/// sandogasa's README.
 #[derive(Parser)]
 #[command(
     about,
@@ -45,16 +42,10 @@ struct Cli {
 enum Command {
     /// List a package in the CBS tags its branch builds through, as
     /// its first build needs
-    ///
-    /// Run by a person, never by an agent; an agent may run it with
-    /// --dry-run only.
     AddPkg(AddPkgArgs),
 
     /// Build the checked-out SIG branch in CBS: the target, the SIG
     /// repo's URL and the commit worked out from the branch
-    ///
-    /// Run by a person, never by an agent; an agent may run it with
-    /// --dry-run only.
     Build(BuildArgs),
 
     /// Set up the GitLab token.
@@ -62,9 +53,6 @@ enum Command {
 
     /// Move a build to its collection's next stage (-testing, then
     /// -release, untagging it from -testing)
-    ///
-    /// Run by a person, never by an agent; an agent may run it with
-    /// --dry-run only.
     Promote(PromoteArgs),
 
     /// Make sure the SIG has its repo for a package, a pull mirror of
@@ -73,9 +61,6 @@ enum Command {
 
     /// Upload the files a branch's sources names to the SIG lookaside,
     /// where CBS fetches them
-    ///
-    /// Run by a person, never by an agent; an agent may run it with
-    /// --dry-run only.
     UploadSources(UploadSourcesArgs),
 }
 
