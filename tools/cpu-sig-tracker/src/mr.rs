@@ -388,12 +388,13 @@ fn run_inner(args: &MrArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    if !args.explain {
-        println!(
-            "Merge request from {fork_path}:{branch} into {upstream_path}:{target}\n\n\
-             Title: {title}\n\n{body}"
-        );
-    }
+    // Shown whatever the narration: under --explain (a config default
+    // can turn it on) the steps say what is done, not what the merge
+    // request will say.
+    println!(
+        "\nMerge request from {fork_path}:{branch} into {upstream_path}:{target}\n\n\
+         Title: {title}\n\n{body}"
+    );
     if !args.dry_run && !args.yes {
         if !std::io::stdin().is_terminal() {
             return Err(
