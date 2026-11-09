@@ -110,3 +110,22 @@ Print help
 .TP
 <\fIMR_URL|PACKAGE\fR>
 A CentOS Stream merge request URL (a Proposed Update), or a package name
+.SS cbspkg upload-sources
+\fBcbspkg upload\-sources\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Upload the files a branch\*(Aqs sources names to the SIG lookaside, where CBS fetches them
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch whose sources to upload (default: the one checked out)
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

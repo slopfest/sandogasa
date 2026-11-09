@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### cbspkg: upload-sources puts a branch's sources in the SIG lookaside, and build checks for them
+
+rsync's first Proposed Updates build in CBS (task 6077804) failed before
+compiling anything. Its `get_sources.sh` got a 404 for every tarball,
+because a SIG build fetches sources from the SIGs' lookaside on
+git.centos.org, not CentOS Stream's, and nothing had been uploaded
+there. Each file has to be uploaded with
+`centos-lookaside-upload-sig -f <file> -n <pkg>` before the package's
+first SIG build. Nothing said so, and `cbspkg build` submitted the
+build anyway.
+
+`cbspkg upload-sources` reads `sources` from the branch's commit and
+asks the SIG lookaside for each file, uploading only the ones it lacks.
+Missing local files are fetched from Stream's lookaside with
+`centpkg sources`, and every file is checked against its sha512 before
+it goes up. The upload is confirmed at a terminal and shows each
+command. `cbspkg build` runs the same check before building, scratch
+builds included, and its confirmation now shows the exact `cbs build`
+command rather than its parts. sandogasa-cbs gains a `lookaside` module,
+and sandogasa-cli's `explain` gains `command_line`, which quotes a
+command for printing. Resolves #99.
+
 ### cbspkg: build builds the checked-out SIG branch in CBS
 
 Building a SIG update in CBS by hand means typing `cbs build <target>

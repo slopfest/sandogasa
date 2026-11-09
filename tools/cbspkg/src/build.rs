@@ -19,7 +19,7 @@ use std::process::{Command, ExitCode, Stdio};
 use sandogasa_cbs::{Collection, PROFILE, Sig, Stage};
 use sandogasa_cli::explain::Ui;
 
-use crate::add_pkg::{list_missing, resolve};
+use crate::add_pkg::{Checkout, list_missing, resolve};
 
 #[derive(clap::Args)]
 pub struct BuildArgs {
@@ -47,6 +47,15 @@ pub struct BuildArgs {
     /// Build without keeping the result (no tags, no listing needed)
     #[arg(long)]
     pub scratch: bool,
+}
+
+/// Where a checkout's branch is to be built from: the SIG's remote
+/// (`name`, URL), its project path, and the branch's commit.
+pub struct Located {
+    pub remote: String,
+    pub url: String,
+    pub sig_path: String,
+    pub commit: String,
 }
 
 /// The host of a git remote URL: `gitlab.com` for
@@ -124,22 +133,10 @@ fn latest_in(tag: &str, package: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let ui = Ui {
-        explain: args.explain,
-        dry_run: args.dry_run,
-        quiet: false,
-    };
-    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
-    let mut tools = vec![
-        ("git", "sudo dnf install git-core", Some("--version")),
-        ("koji", "sudo dnf install koji", Some("--help")),
-    ];
-    if !args.dry_run {
-        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
-    }
-    sandogasa_cli::require_tools(&tools)?;
-    let checkout = resolve(&repo, args.branch.as_deref(), None)?;
+/// Find the SIG's remote and the branch's commit: the branch itself or,
+/// when it is only on the SIG's remote (after `sig-repo` made no local
+/// branch), the remote's.
+pub fn locate(checkout: &Checkout, repo: &Path) -> Result<Located, Box<dyn std::error::Error>> {
     let (branch, package) = (&checkout.branch, &checkout.package);
     let sig = Sig::ALL
         .into_iter()
@@ -160,20 +157,13 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
                  git+ssh://git@gitlab.com/{sig_path}.git`"
             )
         })?;
-    let host = remote_host(&url).ok_or_else(|| format!("cannot tell the host of {url}"))?;
-
-    // The commit, and whether the SIG's repo has it: CBS fetches it
-    // from there. Reading both changes nothing, so it is done even in
-    // a dry run.
-    // The branch itself, or, when it is only on the SIG's remote (as
-    // after `sig-repo` without a local branch), the remote's.
     let commit = git(
-        &repo,
+        repo,
         &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
     )
     .or_else(|_| {
         git(
-            &repo,
+            repo,
             &[
                 "rev-parse",
                 "--verify",
@@ -182,6 +172,41 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         )
     })
     .map_err(|_| format!("neither {branch} nor {remote}/{branch} is a branch here"))?;
+    Ok(Located {
+        remote,
+        url,
+        sig_path,
+        commit,
+    })
+}
+
+fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let ui = Ui {
+        explain: args.explain,
+        dry_run: args.dry_run,
+        quiet: false,
+    };
+    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    let mut tools = vec![
+        ("git", "sudo dnf install git-core", Some("--version")),
+        ("koji", "sudo dnf install koji", Some("--help")),
+    ];
+    if !args.dry_run {
+        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
+    }
+    sandogasa_cli::require_tools(&tools)?;
+    let checkout = resolve(&repo, args.branch.as_deref(), None)?;
+    let (branch, package) = (&checkout.branch, &checkout.package);
+    let Located {
+        remote,
+        url,
+        sig_path,
+        commit,
+    } = locate(&checkout, &repo)?;
+    let host = remote_host(&url).ok_or_else(|| format!("cannot tell the host of {url}"))?;
+
+    // Whether the SIG's repo has the commit: CBS fetches it from there.
+    // Reading changes nothing, so it is done even in a dry run.
     ui.step(&format!(
         "Find the commit to build, and check {sig_path} has it"
     ));
@@ -210,6 +235,11 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     let scm = scm_url(&host, &sig_path, &commit);
 
+    // CBS fetches the sources from the SIG lookaside, scratch builds
+    // too (#99).
+    if !crate::upload_sources::upload_missing(&ui, &repo, &checkout, &commit)? {
+        return Ok(());
+    }
     if !args.scratch
         && !list_missing(
             &ui,
@@ -221,10 +251,10 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     {
         return Ok(());
     }
-    let targets: Vec<String> = checkout
+    let builds: Vec<(&Collection, Vec<String>)> = checkout
         .collections
         .iter()
-        .map(Collection::target)
+        .map(|c| (c, build_argv(&c.target(), &scm, args.scratch)))
         .collect();
     let kind = if args.scratch {
         "a scratch build"
@@ -236,26 +266,28 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         if !std::io::stdin().is_terminal() {
             return Err("building in CBS is confirmed at a terminal; run it in one".into());
         }
-        println!(
-            "{package} {branch} at {}\n  from {scm}\n  in {}",
-            &commit[..12.min(commit.len())],
-            targets.join(", ")
-        );
+        // The exact commands, whatever the narration: what would
+        // otherwise be pieced together from shell history.
+        println!("{package} {branch} at {}:", &commit[..12.min(commit.len())]);
+        for (_, argv) in &builds {
+            println!("  {}", sandogasa_cli::explain::command_line(argv));
+        }
         if !sandogasa_cli::confirm(&format!("Start {kind}?"), true)? {
             println!("Nothing built.");
             return Ok(());
         }
     }
-    for (collection, target) in checkout.collections.iter().zip(&targets) {
+    for (collection, argv) in &builds {
         ui.step(&format!(
-            "Start {kind} of {package} in {target}, which puts it in {}",
+            "Start {kind} of {package} in {}, which puts it in {}",
+            collection.target(),
             if args.scratch {
                 "no tag".to_string()
             } else {
                 collection.tag(Stage::Candidate)
             }
         ));
-        ui.run_required(&build_argv(target, &scm, args.scratch), &repo)?;
+        ui.run_required(argv, &repo)?;
     }
     if !args.scratch && !args.dry_run {
         for collection in &checkout.collections {

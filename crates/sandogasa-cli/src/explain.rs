@@ -351,6 +351,17 @@ impl Ui {
 /// Quote an argument for display so the printed line is copy-paste
 /// safe. Leaves shell-safe tokens (including Debian version chars
 /// `~+:`) unquoted; single-quotes anything else.
+/// A command as a person would type it, each argument quoted for the
+/// shell where it needs to be: what `--explain` shows, for a tool that
+/// also prints a command outside the narration (in a confirmation, or
+/// as the next step to run).
+pub fn command_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| shell_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn shell_quote(arg: &str) -> String {
     if arg.is_empty() {
         return "''".to_string();
@@ -443,6 +454,14 @@ mod tests {
             3
         );
         assert!(ui.run(&["true".to_string()], Path::new(".")).unwrap());
+    }
+
+    #[test]
+    fn a_command_line_quotes_only_what_needs_it() {
+        let argv: Vec<String> = ["cbs", "build", "t", "git+https://x/y.git#abc"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(command_line(&argv), "cbs build t 'git+https://x/y.git#abc'");
     }
 
     #[test]

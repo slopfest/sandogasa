@@ -9,10 +9,12 @@ mod build;
 mod config;
 mod configure;
 mod sig_repo;
+mod upload_sources;
 
 use add_pkg::AddPkgArgs;
 use build::BuildArgs;
 use sig_repo::SigRepoArgs;
+use upload_sources::UploadSourcesArgs;
 
 /// Packaging for CentOS SIGs that build in the CentOS Build System
 /// (CBS), knowing each SIG's conventions: where its package repos live,
@@ -46,6 +48,10 @@ enum Command {
     /// Make sure the SIG has its repo for a package, a pull mirror of
     /// CentOS Stream's, and push a merge request's change to it
     SigRepo(SigRepoArgs),
+
+    /// Upload the files a branch's sources names to the SIG lookaside,
+    /// where CBS fetches them
+    UploadSources(UploadSourcesArgs),
 }
 
 fn main() -> ExitCode {
@@ -56,6 +62,7 @@ fn main() -> ExitCode {
         Command::Build(args) => build::run(&args),
         Command::Config(args) => configure::run(&args),
         Command::SigRepo(args) => sig_repo::run(&args),
+        Command::UploadSources(args) => upload_sources::run(&args),
     }
 }
 

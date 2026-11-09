@@ -19,6 +19,7 @@
 //! repository from `c10s-hs` (see [`Sig::collection_for_branch`]).
 
 pub mod login;
+pub mod lookaside;
 pub mod packages;
 
 /// The koji profile CBS is reached through, and the `cbs` command

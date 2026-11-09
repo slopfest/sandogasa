@@ -17,8 +17,9 @@ branches sit beside them. CBS builds from that repo.
 cargo install cbspkg
 ```
 
-`add-pkg` needs `koji` and `cbs` (centos-packager) and a CBS login
-(`~/.centos.cert`, from `centos-cert`). `sig-repo` needs `git`. Creating a repo needs a GitLab token with the
+`add-pkg`, `build` and `upload-sources` need `koji`, `cbs` and
+`centos-lookaside-upload-sig` (centos-packager), `centpkg`, and a CBS
+login (`~/.centos.cert`, from `centos-cert`). `sig-repo` needs `git`. Creating a repo needs a GitLab token with the
 `api` scope, from `GITLAB_TOKEN` or `cbspkg config`, belonging to an
 account with the Maintainer role in the SIG's group.
 
@@ -78,9 +79,14 @@ it as `add-pkg` does, after asking. `--scratch` builds without keeping
 the result, which needs no listing. A Hyperscale Facebook branch is
 built for its RHEL collection too.
 
+CBS fetches the sources from the SIG lookaside, so before building,
+`build` checks for them and uploads what is missing as `upload-sources`
+does, after asking; scratch builds need them too.
+
 The build is confirmed at a terminal and refused without one, after the
-CBS login is checked. Once it is done, `build` prints the
-`cbs tag-build` that offers it for testing. `--explain` and
+CBS login is checked; the confirmation shows the exact `cbs build`
+command. Once it is done, `build` prints the `cbs tag-build` that
+offers it for testing. `--explain` and
 `--dry-run` show each command.
 
 ### `config`
@@ -91,6 +97,27 @@ cbspkg config [--all]
 
 Asks for the GitLab token, checks it with GitLab, and saves it to
 `~/.config/cbspkg/config.toml`.
+
+### `upload-sources`
+
+```sh
+cbspkg upload-sources [-C DIR] [--branch BRANCH] [--explain] [--dry-run]
+```
+
+Uploads the files the branch's `sources` file names to the SIG
+lookaside (`git.centos.org/sources/<pkg>/<file>/sha512/<sum>/<file>`),
+which is where CBS fetches a SIG build's sources, not CentOS Stream's
+lookaside. The `sources` file is read from the branch's commit, and
+the lookaside is asked for each file first, so files already there are
+left alone and a second run does nothing.
+
+A file the checkout lacks, or has with another sum, is fetched with
+`centpkg sources`, from CentOS Stream's lookaside, which fetches the
+checked-out branch's: `upload-sources` asks for the branch to be checked
+out when it is not. Every file is checked against its sha512 before
+`centos-lookaside-upload-sig -f <file> -n <pkg>` uploads it. The
+upload is confirmed at a terminal, showing each command, and refused
+without one. `--explain` and `--dry-run` show each step's command.
 
 ### `sig-repo`
 
