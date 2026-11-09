@@ -35,8 +35,15 @@ pub enum Reason {
     /// The problem is fixed in stock — by the SIG's MR merging, or
     /// another way (labelled `superseded`).
     Landed,
-    /// The SIG gives up on the change (Bugzilla's CANTFIX).
+    /// The SIG gives up on the change for its own reasons (Bugzilla's
+    /// CANTFIX).
     Abandoned,
+    /// Red Hat said no: the RHEL issue was closed `Not a Bug`, `Won't
+    /// Do`, `Obsolete` or the like.
+    Declined,
+    /// Red Hat never responded: the RHEL issue was closed with no sign
+    /// of a fix, as for inactivity, and the change went nowhere.
+    Unanswered,
 }
 
 impl Reason {
@@ -49,6 +56,8 @@ impl Reason {
             Reason::Landed if mr_merged => "landed",
             Reason::Landed => "superseded",
             Reason::Abandoned => "abandoned",
+            Reason::Declined => "declined",
+            Reason::Unanswered => "unanswered",
         }
     }
 
@@ -56,7 +65,7 @@ impl Reason {
     pub fn work_item_status(self) -> &'static str {
         match self {
             Reason::Landed => "Done",
-            Reason::Abandoned => "Won't do",
+            Reason::Abandoned | Reason::Declined | Reason::Unanswered => "Won't do",
         }
     }
 
@@ -64,6 +73,8 @@ impl Reason {
         match s.trim().to_ascii_lowercase().as_str() {
             "landed" | "fixed" | "l" | "f" => Some(Reason::Landed),
             "abandoned" | "a" => Some(Reason::Abandoned),
+            "declined" | "d" => Some(Reason::Declined),
+            "unanswered" | "u" => Some(Reason::Unanswered),
             _ => None,
         }
     }
@@ -86,6 +97,10 @@ pub struct RetireFacts {
     pub landed_by: Option<String>,
     /// The RHEL issue's resolution, when it is resolved.
     pub jira_resolution: Option<String>,
+    /// Every RHEL issue the update resolves was declined (#88).
+    pub jira_declined: bool,
+    /// Every one was closed with no sign of a fix: no answer (#88).
+    pub jira_unanswered: bool,
     /// The stock build a person named as carrying the fix, to record
     /// on the issue.
     pub recorded_fix: Option<String>,
@@ -111,6 +126,12 @@ pub fn suggest_reason(f: &RetireFacts) -> Option<Reason> {
     if f.landed_by.is_some() {
         return Some(Reason::Landed);
     }
+    if f.jira_declined {
+        return Some(Reason::Declined);
+    }
+    if f.jira_unanswered {
+        return Some(Reason::Unanswered);
+    }
     f.jira_resolution.as_deref().map(|_| Reason::Abandoned)
 }
 
@@ -129,6 +150,22 @@ pub fn reason_check(reason: Reason, f: &RetireFacts) -> Check {
             ),
         },
         Reason::Abandoned => Check::Pass("the SIG's call; nothing to verify".to_string()),
+        // Said of Red Hat, so Jira has to say it too.
+        Reason::Declined if f.jira_declined => Check::Pass(format!(
+            "Red Hat declined it (RHEL issue closed {})",
+            f.jira_resolution.as_deref().unwrap_or("without a fix")
+        )),
+        Reason::Declined => Check::Fail(
+            "nothing on record says Red Hat declined it: no RHEL issue was closed Not a Bug, \
+             Won't Do or the like; retire it as abandoned or unanswered, or --force"
+                .to_string(),
+        ),
+        Reason::Unanswered if f.jira_unanswered => Check::Pass(
+            "the RHEL issue was closed with no sign of a fix, as for inactivity".to_string(),
+        ),
+        // An issue left open with nobody answering is the SIG's
+        // judgement, as for abandoned.
+        Reason::Unanswered => Check::Pass("the SIG's judgement: no response".to_string()),
     }
 }
 
@@ -146,6 +183,17 @@ pub fn mr_note_body(reason: Reason, f: &RetireFacts, issue_url: &str) -> String 
         Reason::Abandoned => "the CentOS Proposed Updates SIG is withdrawing this change and \
              closing this merge request with it; the Proposed Update that carried it is \
              retired."
+            .to_string(),
+        Reason::Declined => format!(
+            "Red Hat declined this change (its RHEL issue was closed {}), so the CentOS \
+             Proposed Updates SIG is withdrawing it and closing this merge request; the \
+             Proposed Update that carried it is retired.",
+            f.jira_resolution.as_deref().unwrap_or("without a fix")
+        ),
+        Reason::Unanswered => "this change got no response, and its RHEL issue was closed \
+             without a fix, so the CentOS Proposed Updates SIG is withdrawing it and closing \
+             this merge request; the Proposed Update that carried it is retired. It can be \
+             proposed again."
             .to_string(),
     };
     format!(
@@ -168,10 +216,11 @@ pub struct RetireArgs {
     #[arg(long, help_heading = "Selection")]
     pub release: Option<String>,
 
-    /// Why: landed (the problem is fixed in stock — labelled
-    /// `superseded` when not by the SIG's own MR) or abandoned (the
-    /// SIG gives up). Inferred from the MR, stock and the RHEL issue
-    /// when omitted, and asked at a terminal.
+    /// Why: landed (fixed in stock; `superseded` when not by the SIG's
+    /// own MR), declined (Red Hat said no), unanswered (Red Hat never
+    /// responded) or abandoned (the SIG's own call). Inferred from the
+    /// MR, stock and the RHEL issues when omitted, and asked at a
+    /// terminal.
     #[arg(long, value_enum, help_heading = "Reason")]
     pub reason: Option<Reason>,
 
@@ -309,10 +358,10 @@ pub(crate) fn run_inner(args: &RetireArgs) -> Result<(), Box<dyn std::error::Err
         );
     }
 
-    // The MR, when it is still open, is told; an abandoned change's
-    // MR is the SIG's own and is closed with it.
+    // The MR, when it is still open, is told; a change retired without
+    // a fix has its MR, the SIG's own, closed with it.
     let mr_open = facts.mr_state.as_deref() == Some("opened");
-    let close_mr = mr_open && reason == Reason::Abandoned;
+    let close_mr = mr_open && reason != Reason::Landed;
 
     println!();
     println!("Will close {}", issue.web_url);
@@ -449,6 +498,8 @@ fn gather_facts(
     let base = crate::utils::gitlab_base();
     let mut f = RetireFacts {
         jira_resolution: jira.resolution_name.clone(),
+        jira_declined: jira.declined,
+        jira_unanswered: jira.unanswered,
         ..Default::default()
     };
     f.mr_url = parse_mr_line(body)
@@ -544,7 +595,10 @@ fn ask_reason(
     let default = suggested
         .map(|r| format!(", default {}", r.label(true)))
         .unwrap_or_default();
-    let q = format!("Why retire it? [landed (fixed in stock)/abandoned{default}]: ");
+    let q = format!(
+        "Why retire it? [landed (fixed in stock)/declined (Red Hat said no)/unanswered (no \
+         response)/abandoned (our call){default}]: "
+    );
     let line = read(&q).unwrap_or_default();
     match (Reason::parse(&line), line.trim().is_empty(), suggested) {
         (Some(r), _, _) => Ok(r),
@@ -892,6 +946,8 @@ mod tests {
             stream_nvr: stream.map(str::to_string),
             landed_by: None,
             jira_resolution: None,
+            jira_declined: false,
+            jira_unanswered: false,
             recorded_fix: None,
         }
     }
@@ -1337,5 +1393,53 @@ mod tests {
         }
         assert_eq!(Reason::Abandoned.label(true), "abandoned");
         assert_eq!(Reason::Landed.label(true), "landed");
+        assert_eq!(Reason::Declined.label(true), "declined");
+        assert_eq!(Reason::Unanswered.label(false), "unanswered");
+        assert_eq!(Reason::parse("D"), Some(Reason::Declined));
+        assert_eq!(Reason::parse("unanswered"), Some(Reason::Unanswered));
+    }
+
+    #[test]
+    fn red_hat_saying_no_and_never_answering_are_told_apart() {
+        // PackageKit c10s: RHEL-170526 closed Not a Bug.
+        let declined = RetireFacts {
+            jira_resolution: Some("Not a Bug".into()),
+            jira_declined: true,
+            ..Default::default()
+        };
+        assert_eq!(suggest_reason(&declined), Some(Reason::Declined));
+        assert!(matches!(
+            reason_check(Reason::Declined, &declined),
+            Check::Pass(d) if d.contains("Not a Bug")
+        ));
+        // blktrace: closed Done for inactivity, no fix version.
+        let unanswered = RetireFacts {
+            jira_resolution: Some("Done".into()),
+            jira_unanswered: true,
+            ..Default::default()
+        };
+        assert_eq!(suggest_reason(&unanswered), Some(Reason::Unanswered));
+        assert!(matches!(
+            reason_check(Reason::Unanswered, &unanswered),
+            Check::Pass(_)
+        ));
+        // Saying Red Hat declined needs Jira to say so.
+        assert!(matches!(
+            reason_check(Reason::Declined, &unanswered),
+            Check::Fail(_)
+        ));
+        // Neither, and nothing landed: the SIG's own call, if anything.
+        let other = RetireFacts {
+            jira_resolution: Some("Done".into()),
+            ..Default::default()
+        };
+        assert_eq!(suggest_reason(&other), Some(Reason::Abandoned));
+        for r in [Reason::Declined, Reason::Unanswered, Reason::Abandoned] {
+            assert_eq!(r.work_item_status(), "Won't do");
+        }
+        let note = mr_note_body(Reason::Declined, &declined, "https://example/issue");
+        assert!(note.contains("Red Hat declined this change") && note.contains("Not a Bug"));
+        assert!(note.contains("<!-- cpu-sig-tracker: retired declined -->"));
+        assert!(mr_note_body(Reason::Unanswered, &unanswered, "u").contains("got no response"));
     }
 }

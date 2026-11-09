@@ -161,6 +161,11 @@ pub struct JiraCheck {
     /// Whether Jira shows a fix ([`Verdict::Fixed`]), the one thing
     /// that says the change reached RHEL.
     pub fixed: bool,
+    /// Whether Red Hat said no ([`Verdict::Declined`]).
+    pub declined: bool,
+    /// Whether the issue was closed with no sign of a fix
+    /// ([`Verdict::Unverified`]): no answer, rather than a no.
+    pub unanswered: bool,
 }
 
 /// What a RHEL issue's resolution says about the change it asks for
@@ -318,6 +323,8 @@ pub fn combine_checks(checks: Vec<JiraCheck>) -> JiraCheck {
         resolution_name,
         resolution_date,
         fixed: checks.iter().all(|c| c.fixed),
+        declined: checks.iter().all(|c| c.declined),
+        unanswered: checks.iter().all(|c| c.unanswered),
     }
 }
 
@@ -331,6 +338,8 @@ pub fn check_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
             resolution_name: None,
             resolution_date: None,
             fixed: false,
+            declined: false,
+            unanswered: false,
         }
     }
     let Some(key) = jira_key else {
@@ -356,6 +365,8 @@ pub fn check_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
                 };
                 return JiraCheck {
                     fixed: matches!(v, Verdict::Fixed { .. }),
+                    declined: matches!(v, Verdict::Declined(_)),
+                    unanswered: matches!(v, Verdict::Unverified(_)),
                     resolution_name: original.resolution().map(str::to_string),
                     resolution_date: original.resolution_date(),
                     check,
@@ -368,6 +379,8 @@ pub fn check_resolved(jira_key: Option<&str>, verbose: bool) -> JiraCheck {
     JiraCheck {
         check: verdict_check(key, &verdict),
         fixed: matches!(verdict, Verdict::Fixed { .. }),
+        declined: matches!(verdict, Verdict::Declined(_)),
+        unanswered: matches!(verdict, Verdict::Unverified(_)),
         resolution_name: judged.resolution().map(str::to_string),
         resolution_date: judged.resolution_date(),
     }
@@ -380,6 +393,8 @@ mod tests {
     fn checked(check: Check, resolution: Option<&str>, day: Option<u32>) -> JiraCheck {
         JiraCheck {
             fixed: matches!(check, Check::Pass(_)),
+            declined: false,
+            unanswered: false,
             check,
             resolution_name: resolution.map(str::to_string),
             resolution_date: day.and_then(|d| chrono::NaiveDate::from_ymd_opt(2026, 12, d)),

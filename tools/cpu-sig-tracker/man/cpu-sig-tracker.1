@@ -284,7 +284,7 @@ With a package name: the release to retire it in (e.g. `c10s`), when it is track
 .SH REASON
 .TP
 \fB\-\-reason\fR \fI<REASON>\fR
-Why: landed (the problem is fixed in stock — labelled `superseded` when not by the SIG\*(Aqs own MR) or abandoned (the SIG gives up). Inferred from the MR, stock and the RHEL issue when omitted, and asked at a terminal
+Why: landed (fixed in stock; `superseded` when not by the SIG\*(Aqs own MR), declined (Red Hat said no), unanswered (Red Hat never responded) or abandoned (the SIG\*(Aqs own call). Inferred from the MR, stock and the RHEL issues when omitted, and asked at a terminal
 .br
 
 .br
@@ -293,7 +293,11 @@ Why: landed (the problem is fixed in stock — labelled `superseded` when not by
 .IP \(bu 2
 landed: The problem is fixed in stock — by the SIG\*(Aqs MR merging, or another way (labelled `superseded`)
 .IP \(bu 2
-abandoned: The SIG gives up on the change (Bugzilla\*(Aqs CANTFIX)
+abandoned: The SIG gives up on the change for its own reasons (Bugzilla\*(Aqs CANTFIX)
+.IP \(bu 2
+declined: Red Hat said no: the RHEL issue was closed `Not a Bug`, `Won\*(Aqt Do`, `Obsolete` or the like
+.IP \(bu 2
+unanswered: Red Hat never responded: the RHEL issue was closed with no sign of a fix, as for inactivity, and the change went nowhere
 .RE
 .TP
 \fB\-\-stock\-fix\fR \fI<NVR>\fR

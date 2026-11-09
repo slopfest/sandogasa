@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: retire tells apart an update Red Hat declined, one it never answered, and one the SIG abandoned
+
+`retire` had one reason for an update that did not land, `abandoned`,
+for three different endings: Red Hat saying no (PackageKit's c10s
+issue, RHEL-170526, was closed `Not a Bug`), Red Hat never answering
+(blktrace's RHEL-123605 and RHEL-123606 were closed for inactivity,
+their merge requests never reviewed), and the SIG giving up for its own
+reasons. They could not be counted apart, and only `landed` was ever
+inferred.
+
+Two reasons join it. `declined` is inferred when every RHEL issue was
+declined, and needs that on record. `unanswered` is inferred when
+every RHEL issue was closed with no sign of a fix (#87's verdicts).
+Both are labelled as named, close the work item as Won't do, and close
+the SIG's open merge request with a note saying which it was.
+`abandoned` stays for the SIG's own call. Resolves #88.
+
 ### cpu-sig-tracker: count a RHEL issue as fixed only when Jira shows a fix
 
 The blktrace Proposed Updates were retired on 2026-11-09 with their
