@@ -31,6 +31,18 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   `root:root 0644` is fine: the system layer is for shared,
   non-secret settings, with credentials left to the per-user file
   (or an environment variable), where the 600 enforcement applies.
+- **secret** — secrets in the desktop keyring rather than the config
+  file, through libsecret's `secret-tool`. An entry stands for the
+  service it unlocks, not the tool, with attributes `application
+  sandogasa`, `service <API host>` and, when a service needs one,
+  `account <who>` (`SecretRef`), so every tool talking to gitlab.com
+  reads one GitLab token. `resolve` finds a secret in the environment,
+  then the keyring, then the config file; `keep` / `keep_for_file`
+  store one in the keyring and say where it went, falling back to the
+  file when there is no keyring to use. `SecretStore` is the seam:
+  `SecretTool` for real use, `MemoryStore` for tests that must not
+  touch the user's keyring. `ConfigFile::remove` takes a moved secret
+  out of the file, which `save` alone never does.
 - **prompt_field** — prompt the user for a config value with support for
   sensitive (hidden) input and optional sync validation.
   `prompt_optional_field` and `prompt_optional_field_validated` take

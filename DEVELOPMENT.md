@@ -394,6 +394,38 @@ Practically:
   measurement behind it can be revised by taking a new measurement; a
   number with nothing behind it never gets revised at all.
 
+## Secrets go in the keyring, one entry per service
+
+A token in `~/.config/<tool>/config.toml` is readable by anything
+running as the user, lands in backups, and was once printed into an
+assistant's transcript by a `grep` for an unrelated setting (#79). So a
+tool's secrets live in the desktop keyring, through
+`sandogasa_config::secret`, and the config file holds them only where
+no keyring can be used.
+
+- **An entry is a service, not a tool:** `SecretRef::for_url` of the
+  API base, so cpu-sig-tracker, cbspkg and hs-relmon read one GitLab
+  token for gitlab.com and rotating it is one store. Add
+  `.account(…)` only where a service needs one (Jira's token belongs to
+  an Atlassian email).
+- **Read with `resolve`:** environment variable, then keyring, then
+  the file, so existing setups keep working.
+- **Write with `keep_for_file` in the `config` command**, then call
+  `ConfigFile::remove` for the key when the keyring took it:
+  `save` lays the struct over the file and never removes a key, so a
+  token moved to the keyring would otherwise stay in plain text.
+- **Tests never touch the user's keyring.** Each tool's `keyring()`
+  returns a `MemoryStore` under `cfg(test)` and `SecretTool` otherwise,
+  in the tool crate itself, where `cfg(test)` applies. `SecretTool` also
+  skips lookups for loopback hosts, which only test servers are.
+- **Never print a secret.** Errors and messages name the entry
+  (`SecretRef::lookup_command`), never its value.
+
+`secret-tool` is shelled out to rather than linked: the `keyring` crate
+is not packaged in Fedora, `secret-service` is missing from EPEL 9, and
+`secret-tool` is there everywhere the tools are, and is what a person
+types to check an entry.
+
 ## Config files layer: /etc, then ~/.config, then the command line
 
 Every tool's config is read in layers: an optional system-wide

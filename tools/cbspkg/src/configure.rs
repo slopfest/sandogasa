@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! `config` subcommand: set up the GitLab token in
-//! `~/.config/cbspkg/config.toml`.
+//! `config` subcommand: set up the GitLab token, in the desktop keyring
+//! when there is one, else in `~/.config/cbspkg/config.toml`.
 
 use std::process::ExitCode;
 
@@ -21,11 +21,15 @@ pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
 /// saved one as the default, check it with GitLab, and save it.
 fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
     let existing: Config = config::load_user().ok().unwrap_or_default();
-    let saved = existing
-        .gitlab
-        .as_ref()
-        .map(|g| g.access_token.clone())
-        .unwrap_or_default();
+    // The saved token: the keyring's, else the file's (#79).
+    let file = existing.gitlab.as_ref().map(|g| g.access_token.clone());
+    let saved = sandogasa_config::secret::resolve(
+        config::keyring(),
+        None,
+        &config::gitlab_secret(),
+        file.as_deref(),
+    )
+    .unwrap_or_default();
     let have = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
@@ -54,11 +58,24 @@ fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
     if token.is_empty() {
         return Err("no GitLab token provided".into());
     }
+    // Into the keyring when there is one, out of the file then.
+    let token = sandogasa_config::secret::keep_for_file(
+        config::keyring(),
+        "GitLab token",
+        &config::gitlab_secret(),
+        token,
+    );
+    let in_keyring = token.is_empty();
     config::save(&Config {
-        gitlab: Some(GitlabConfig {
+        gitlab: (!in_keyring).then_some(GitlabConfig {
             access_token: token,
         }),
     })?;
+    // save() lays the struct over the file and never removes a key, so
+    // a token now in the keyring is taken out of the file here.
+    if in_keyring {
+        config::remove("gitlab", "access_token")?;
+    }
     eprintln!("Saved to {}", config::config_path().display());
     Ok(())
 }

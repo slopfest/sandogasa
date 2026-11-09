@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! `config` subcommand — interactively set up GitLab and JIRA
-//! credentials in `~/.config/cpu-sig-tracker/config.toml`.
+//! credentials: the tokens in the desktop keyring when there is one,
+//! the rest in `~/.config/cpu-sig-tracker/config.toml`.
 
 use std::process::ExitCode;
 
@@ -21,19 +22,61 @@ pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
 /// Ask for what is missing, or with `all` for every setting with the
 /// saved value as the default, check the credentials, and save.
 fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let existing = config::load().ok().unwrap_or_default();
+    let mut existing = config::load().ok().unwrap_or_default();
+    // A token kept in the keyring is the saved one when the file has
+    // none (#79).
+    let keyring = crate::secrets::keyring();
+    let file_gitlab = existing.gitlab.as_ref().map(|g| g.access_token.clone());
+    if let Some(token) = sandogasa_config::secret::resolve(
+        keyring,
+        None,
+        &crate::secrets::gitlab(),
+        file_gitlab.as_deref(),
+    ) {
+        existing.gitlab = Some(GitlabConfig {
+            access_token: token,
+        });
+    }
+    if let Some(j) = existing.jira.as_mut()
+        && j.access_token.is_empty()
+        && let Ok(Some(token)) = keyring.lookup(&crate::secrets::jira(j.email.as_deref()))
+    {
+        j.access_token = token;
+    }
 
     let gitlab_token = prompt_gitlab_token(existing.gitlab.as_ref(), all)?;
-    let jira = prompt_jira(existing.jira.as_ref(), all)?;
+    let mut jira = prompt_jira(existing.jira.as_ref(), all)?;
 
+    // Into the keyring when there is one, out of the file then.
+    let gitlab_token =
+        crate::secrets::keep_for_file("GitLab token", &crate::secrets::gitlab(), gitlab_token);
+    if let Some(j) = jira.as_mut() {
+        j.access_token = crate::secrets::keep_for_file(
+            "JIRA API token",
+            &crate::secrets::jira(j.email.as_deref()),
+            std::mem::take(&mut j.access_token),
+        );
+    }
+    let in_keyring = (
+        gitlab_token.is_empty(),
+        jira.as_ref().is_some_and(|j| j.access_token.is_empty()),
+    );
     let cfg = Config {
-        gitlab: Some(GitlabConfig {
+        gitlab: (!gitlab_token.is_empty()).then_some(GitlabConfig {
             access_token: gitlab_token,
         }),
         jira,
     };
 
     config::save(&cfg)?;
+    // save() lays the struct over the file and never removes a key, so
+    // a token now in the keyring is taken out of the file here.
+    if in_keyring.0 {
+        config::remove("gitlab", "access_token")?;
+    }
+    if in_keyring.1 {
+        config::remove("jira", "access_token")?;
+    }
     eprintln!("Saved to {}", config::config_path().display());
     Ok(())
 }

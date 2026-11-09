@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Secrets in the desktop keyring: sandogasa-config gains a secret module; cpu-sig-tracker and cbspkg use it
+
+Every tool kept its tokens in plain text in `~/.config/<tool>/config.toml`.
+A file at mode 0600 is still readable by anything running as the user
+and lands in backups. On 2026-11-09 a `grep` for an unrelated setting
+printed cpu-sig-tracker's GitLab token into an assistant's session, and
+the token had to be revoked.
+
+`sandogasa_config::secret` keeps secrets in the desktop keyring through
+libsecret's `secret-tool`. An entry stands for the service it unlocks
+rather than the tool: `application sandogasa`, `service <API host>` and,
+where needed, `account <who>`. Every tool talking to gitlab.com
+therefore reads one GitLab token, and rotating it is one store.
+Secrets are read from the environment first, then the keyring, then the
+config file, so existing setups keep working. A `config` command stores
+a token in the keyring and removes it from the file, or keeps it in the
+file and says why when there is no keyring to use. Tests use an
+in-memory keyring, never the user's. `ConfigFile::remove` takes a key
+out of the file, which `save` alone never does.
+
+cpu-sig-tracker (its GitLab token, and its Jira token keyed by the
+Atlassian email) and cbspkg (its GitLab token) use it now: the next
+`config` run moves their tokens from the file to the keyring. The other
+tools follow (#79).
+
 ### Docs: one rule for the commands a person runs, not an agent
 
 The tools that build, tag, untag or upload in someone's name — CBS and

@@ -99,8 +99,12 @@ command. Once it is done, `build` names the `cbspkg promote` (and the
 cbspkg config [--all]
 ```
 
-Asks for the GitLab token, checks it with GitLab, and saves it to
-`~/.config/cbspkg/config.toml`.
+Asks for the GitLab token, checks it with GitLab, and keeps it in the
+desktop keyring (through `secret-tool`), as the entry every sandogasa
+tool reads for that GitLab instance (`secret-tool lookup application
+sandogasa service gitlab.com`). Without a keyring to use it goes to
+`~/.config/cbspkg/config.toml` instead; a token found there is moved to
+the keyring the next time `config` runs. `GITLAB_TOKEN` overrides both.
 
 ### `upload-sources`
 

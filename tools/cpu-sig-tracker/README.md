@@ -53,10 +53,16 @@ scoped token, `read:jira-user` and `read:jira-work`, plus
 email of the Atlassian account it belongs to; both are checked against
 the site before being
 kept. Authenticated calls go through Atlassian's API gateway, the only
-place a scoped token is honoured; anonymous reads go to the site. Credentials are
-written to `~/.config/cpu-sig-tracker/config.toml` with 0600
-permissions, and can also be supplied via the `GITLAB_TOKEN`, and
-`JIRA_EMAIL` with `JIRA_TOKEN`, environment variables. Anonymous JIRA
+place a scoped token is honoured; anonymous reads go to the site. The
+tokens are kept in the desktop keyring (through `secret-tool`), as
+entries shared with the other sandogasa tools that use the same
+service, e.g. `secret-tool lookup application sandogasa service
+gitlab.com`; the Jira email and anything without a keyring to use
+(no `secret-tool`, no Secret Service) go to
+`~/.config/cpu-sig-tracker/config.toml`, with 0600 permissions. A token
+found in that file is moved to the keyring the next time `config`
+runs. The `GITLAB_TOKEN`, and `JIRA_EMAIL` with `JIRA_TOKEN`,
+environment variables override both. Anonymous JIRA
 access works for public issues. Links to issues use the
 `redhat.atlassian.net` host throughout.
 

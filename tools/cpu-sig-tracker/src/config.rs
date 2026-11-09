@@ -12,6 +12,8 @@ pub struct Config {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitlabConfig {
+    /// Empty when the token is in the keyring (#79).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub access_token: String,
 }
 
@@ -23,7 +25,9 @@ pub struct JiraConfig {
     /// personal access token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    /// The API token (Cloud) or personal access token (self-hosted).
+    /// The API token (Cloud) or personal access token (self-hosted);
+    /// empty when it is in the keyring (#79).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub access_token: String,
 }
 
@@ -37,6 +41,12 @@ pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
 
 pub fn save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
     config_file().save(config)
+}
+
+/// Take `key` out of `table` in the config file: for a secret now in
+/// the keyring, which `save` would otherwise leave there.
+pub fn remove(table: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    config_file().remove(table, key)
 }
 
 pub fn config_path() -> std::path::PathBuf {

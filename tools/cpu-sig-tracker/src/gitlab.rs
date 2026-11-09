@@ -8,18 +8,19 @@ pub use sandogasa_gitlab::{
     parse_issue_url, parse_mr_url,
 };
 
-/// Load the GitLab token from `GITLAB_TOKEN` env or config.
+/// The GitLab token: `GITLAB_TOKEN`, else the keyring's, else the
+/// config file's.
 pub fn load_token() -> Result<String, Box<dyn std::error::Error>> {
-    let token = std::env::var("GITLAB_TOKEN").ok().or_else(|| {
-        crate::config::load()
-            .ok()
-            .and_then(|c| c.gitlab.map(|g| g.access_token))
-    });
-    token.ok_or_else(|| {
-        "GitLab token not found; set GITLAB_TOKEN or add \
-        [gitlab] access_token = \"…\" to the config file"
-            .into()
-    })
+    let file = crate::config::load()
+        .ok()
+        .and_then(|c| c.gitlab.map(|g| g.access_token));
+    sandogasa_config::secret::resolve(
+        crate::secrets::keyring(),
+        Some("GITLAB_TOKEN"),
+        &crate::secrets::gitlab(),
+        file.as_deref(),
+    )
+    .ok_or_else(|| "no GitLab token: run `cpu-sig-tracker config`, or set GITLAB_TOKEN".into())
 }
 
 /// Project-level client for `project_path`, with the token loaded

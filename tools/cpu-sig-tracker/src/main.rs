@@ -17,6 +17,7 @@ mod mr;
 mod patches;
 mod ping;
 mod retire;
+mod secrets;
 mod status;
 mod sync_updates;
 #[cfg(test)]

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+pub mod secret;
+
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -213,6 +215,29 @@ impl ConfigFile {
     pub fn save<T: Serialize>(&self, config: &T) -> Result<(), Box<dyn std::error::Error>> {
         let new: toml_edit::DocumentMut = toml::to_string_pretty(config)?.parse()?;
         self.edit(|doc| overlay_items(doc.as_table_mut(), new.as_table()))
+    }
+
+    /// Remove `key` from `table` in the user file, and the table too when
+    /// that leaves it empty; nothing when the file or key is not there.
+    /// [`save`](Self::save) never removes a key (it lays the struct over
+    /// the file), so a secret moved to the keyring is taken out of the
+    /// file this way.
+    pub fn remove(&self, table: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.path.exists() {
+            return Ok(());
+        }
+        self.edit(|doc| {
+            let emptied = match doc.get_mut(table).and_then(|t| t.as_table_like_mut()) {
+                Some(t) => {
+                    t.remove(key);
+                    t.is_empty()
+                }
+                None => false,
+            };
+            if emptied {
+                doc.remove(table);
+            }
+        })
     }
 
     /// Change part of the **user** config file in place, keeping its
@@ -851,6 +876,32 @@ mod tests {
         assert!(text.contains("non-voting = [\"jspaleta\"]"), "{text}");
         assert!(text.contains("[defaults.agenda]\nhistory = 20"), "{text}");
         assert!(text.starts_with("# hand-written"), "{text}");
+    }
+
+    #[test]
+    fn a_secret_moved_to_the_keyring_is_removed_from_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[gitlab]\naccess_token = \"glpat-old\"\n\n[jira]\nemail = \"me@example.com\"\naccess_token = \"t\"\n",
+        )
+        .unwrap();
+        let cf = ConfigFile::from_path(path.clone());
+        cf.remove("gitlab", "access_token").unwrap();
+        cf.remove("jira", "access_token").unwrap();
+        cf.remove("nvd", "api_key").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("glpat-old") && !text.contains("[gitlab]"),
+            "{text}"
+        );
+        assert!(!text.contains("access_token"), "{text}");
+        assert!(text.contains("email = \"me@example.com\""), "{text}");
+        // No file: nothing to do, and none is made.
+        let none = ConfigFile::from_path(dir.path().join("absent.toml"));
+        none.remove("gitlab", "access_token").unwrap();
+        assert!(!dir.path().join("absent.toml").exists());
     }
 
     #[test]
