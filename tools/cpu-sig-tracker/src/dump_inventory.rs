@@ -2,9 +2,9 @@
 
 //! `dump-inventory` subcommand.
 //!
-//! Enumerates packages currently tagged into
-//! `<release>-proposed_updates` in Koji and writes them to a
-//! sandogasa-inventory TOML file. The CentOS release (e.g. `c10s`)
+//! Enumerates packages currently tagged into a release's
+//! `proposed_updates<N>s-packages-main-release` or `-testing` tag in
+//! CBS and writes them to a sandogasa-inventory TOML file. The CentOS release (e.g. `c10s`)
 //! becomes a workload in the inventory, with all discovered packages
 //! listed under it.
 //!
@@ -39,9 +39,9 @@ pub struct DumpInventoryArgs {
     pub prune: bool,
 
     /// CentOS release(s) to enumerate, e.g. "c10s" or "c9s,c10s"
-    /// (CSV or repeated). The Koji tag queried per release is
-    /// "proposed_updates<N>s-packages-main-release" where N is the
-    /// major version digit.
+    /// (CSV or repeated). The Koji tags queried per release are
+    /// "proposed_updates<N>s-packages-main-release" and its
+    /// "-testing", where N is the major version digit.
     #[arg(short, long = "release", value_delimiter = ',')]
     pub releases: Vec<String>,
 
@@ -137,27 +137,34 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
     let mut total_added = 0usize;
     let mut total_pruned = 0usize;
     for (release, tag) in &tags {
-        if args.verbose {
-            eprintln!("[cpu-sig-tracker] listing tagged NVRs in {tag}");
-        }
-        let nvrs = match list_tagged_nvrs(tag, Some(&args.koji_profile)) {
-            Ok(v) => v,
+        // -release and -testing both: an update in testing is in flight
+        // and tracked (status, sync-updates), so it belongs in the
+        // workload before it is released.
+        let testing_tag = match proposed_updates_testing_tag(release) {
+            Ok(t) => t,
             Err(e) => {
-                eprintln!("error: koji list-tagged {tag} failed: {e}");
+                eprintln!("error: {e}");
                 return ExitCode::FAILURE;
             }
         };
-
-        let mut package_names: Vec<String> = nvrs
-            .iter()
-            .filter_map(|nvr| parse_nvr_name(nvr).map(|s| s.to_string()))
-            .collect();
-        package_names.sort();
-        package_names.dedup();
+        let mut nvrs: Vec<String> = Vec::new();
+        for t in [tag, &testing_tag] {
+            if args.verbose {
+                eprintln!("[cpu-sig-tracker] listing tagged NVRs in {t}");
+            }
+            match list_tagged_nvrs(t, Some(&args.koji_profile)) {
+                Ok(v) => nvrs.extend(v),
+                Err(e) => {
+                    eprintln!("error: koji list-tagged {t} failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        let package_names = package_names(&nvrs);
 
         if args.verbose {
             eprintln!(
-                "[cpu-sig-tracker] {} unique package(s) in {tag}",
+                "[cpu-sig-tracker] {} unique package(s) in {tag} and {testing_tag}",
                 package_names.len()
             );
         }
@@ -187,33 +194,10 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
         }
         total_added += added;
 
-        // Collect the "currently tagged" set for prune: union
-        // of -release and -testing. Packages in -testing but
-        // not -release are still in-flight and shouldn't be
-        // dropped from the workload.
+        // What prune keeps is what was just listed: anything in
+        // -release or -testing.
         let pruned = if args.prune {
-            let testing_tag = match proposed_updates_testing_tag(release) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            if args.verbose {
-                eprintln!("[cpu-sig-tracker] listing tagged NVRs in {testing_tag}");
-            }
-            let testing_nvrs = match list_tagged_nvrs(&testing_tag, Some(&args.koji_profile)) {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("error: koji list-tagged {testing_tag} failed: {e}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            let tagged: std::collections::HashSet<String> = nvrs
-                .iter()
-                .chain(testing_nvrs.iter())
-                .filter_map(|nvr| parse_nvr_name(nvr).map(|s| s.to_string()))
-                .collect();
+            let tagged: std::collections::HashSet<String> = package_names.iter().cloned().collect();
             prune_workload(&mut inventory, release, &tagged)
         } else {
             0
@@ -260,6 +244,17 @@ pub fn run(args: &DumpInventoryArgs) -> ExitCode {
         tags.len(),
     );
     ExitCode::SUCCESS
+}
+
+/// The packages `nvrs` are builds of, each once, sorted.
+fn package_names(nvrs: &[String]) -> Vec<String> {
+    let mut names: Vec<String> = nvrs
+        .iter()
+        .filter_map(|nvr| parse_nvr_name(nvr).map(|s| s.to_string()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Drop workload entries for `release` whose package names
@@ -389,10 +384,17 @@ mod tests {
         install_fake_bin(
             dir.path(),
             "koji",
-            &[(
-                "list-tagged --quiet -- proposed_updates10s-packages-main-release",
-                "PackageKit-1.2.8-9~proposed.el10\nxz-5.6.4-1~proposed.el10\n",
-            )],
+            &[
+                (
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-release",
+                    "PackageKit-1.2.8-9~proposed.el10\nxz-5.6.4-1~proposed.el10\n",
+                ),
+                // An update in testing, not released yet.
+                (
+                    "list-tagged --quiet -- proposed_updates10s-packages-main-testing",
+                    "rsync-3.5.0-2~proposed.el10\n",
+                ),
+            ],
         );
         let existing_path = std::env::var("PATH").unwrap_or_default();
         let new_path = format!("{}:{existing_path}", dir.path().display());
@@ -412,6 +414,7 @@ mod tests {
         let packages = &inv.inventory.workloads["c10s"].packages;
         assert!(packages.iter().any(|p| p == "PackageKit"), "{packages:?}");
         assert!(packages.iter().any(|p| p == "xz"), "{packages:?}");
+        assert!(packages.iter().any(|p| p == "rsync"), "{packages:?}");
     }
 
     #[test]
@@ -475,5 +478,20 @@ name = "PackageKit"
         );
         // Orphan [[package]] entries stay.
         assert!(inv.package.iter().any(|p| p.name == "mutter"));
+    }
+
+    /// rsync's c9s update, in -testing only, is in the workload with the
+    /// released packages.
+    #[test]
+    fn packages_in_testing_count_as_well_as_released_ones() {
+        let nvrs: Vec<String> = [
+            "xz-5.6.4-1~proposed.el10",
+            "blktrace-1.3.0-13~proposed.el10",
+            "rsync-3.5.0-2~proposed.el10",
+            "blktrace-1.3.0-13~proposed.el10",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(package_names(&nvrs), ["blktrace", "rsync", "xz"]);
     }
 }

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cpu-sig-tracker: dump-inventory adds the packages in -testing too
+
+`dump-inventory` left out rsync, whose two Proposed Updates were in
+`-testing` but not yet released, so `status --refresh -p rsync` could
+not reach its tracking issues while they mattered most. It listed only
+the `-release` tag, although its own `--prune` already kept anything in
+`-release` or `-testing` as in flight, and `status`, `sync-updates`
+and `untag` all treat `-testing` as tracked. It now adds packages from
+both tags.
+
 ### Secrets in the desktop keyring: sandogasa-config gains a secret module; cpu-sig-tracker and cbspkg use it
 
 Every tool kept its tokens in plain text in `~/.config/<tool>/config.toml`.

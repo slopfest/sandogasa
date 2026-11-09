@@ -79,7 +79,8 @@ cpu-sig-tracker dump-inventory --release c9s,c10s -o inventory.toml
 ```
 
 Enumerates packages tagged into `proposed_updates<N>s-packages-main-release`
-for each release and writes a `sandogasa-inventory` TOML file. Safe
+or its `-testing` tag for each release, an update in testing being one
+the SIG already tracks, and writes a `sandogasa-inventory` TOML file. Safe
 to re-run — existing entries are preserved, newly-discovered packages
 are added, and each release becomes its own workload.
 

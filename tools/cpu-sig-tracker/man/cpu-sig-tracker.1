@@ -40,7 +40,7 @@ Output file (sandogasa\-inventory TOML). If it exists, merge in the newly\-disco
 Drop packages from each workload that are no longer tagged in either the `\-release` or `\-testing` tag for that release. Orphan `[[package]]` entries (metadata blocks for packages no longer referenced by any workload) are left in place so user\-entered fields aren\*(Aqt lost
 .TP
 \fB\-r\fR, \fB\-\-release\fR \fI<RELEASES>\fR
-CentOS release(s) to enumerate, e.g. "c10s" or "c9s,c10s" (CSV or repeated). The Koji tag queried per release is "proposed_updates<N>s\-packages\-main\-release" where N is the major version digit
+CentOS release(s) to enumerate, e.g. "c10s" or "c9s,c10s" (CSV or repeated). The Koji tags queried per release are "proposed_updates<N>s\-packages\-main\-release" and its "\-testing", where N is the major version digit
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
