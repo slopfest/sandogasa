@@ -710,46 +710,13 @@ impl Client {
         iid: u64,
     ) -> Result<Vec<MergeRequestDiff>, Box<dyn std::error::Error>> {
         let url = format!("{}/merge_requests/{iid}/diffs", self.project_url());
-        let mut out = Vec::new();
-        for page in 1.. {
-            let resp = self
-                .http
-                .get(&url)
-                .query(&[("per_page", "100"), ("page", &page.to_string())])
-                .send()?;
-            let batch: Vec<MergeRequestDiff> =
-                blocking_json_ok(resp, &format!("GitLab GET {url}"))?;
-            let done = batch.len() < 100;
-            out.extend(batch);
-            if done {
-                break;
-            }
-        }
-        Ok(out)
+        get_all_pages(&self.http, &url, &[], &[])
     }
 
     /// The top-level files and directories of branch or tag `reference`.
     pub fn tree(&self, reference: &str) -> Result<Vec<TreeEntry>, Box<dyn std::error::Error>> {
         let url = format!("{}/repository/tree", self.project_url());
-        let mut out = Vec::new();
-        for page in 1.. {
-            let resp = self
-                .http
-                .get(&url)
-                .query(&[
-                    ("ref", reference),
-                    ("per_page", "100"),
-                    ("page", &page.to_string()),
-                ])
-                .send()?;
-            let batch: Vec<TreeEntry> = blocking_json_ok(resp, &format!("GitLab GET {url}"))?;
-            let done = batch.len() < 100;
-            out.extend(batch);
-            if done {
-                break;
-            }
-        }
-        Ok(out)
+        get_all_pages(&self.http, &url, &[("ref", reference)], &[])
     }
 
     /// File `path` at `reference`, or `None` when it is not there.
@@ -870,24 +837,7 @@ impl Client {
             "{}/api/v4/projects/{}/repository/branches",
             self.base_url, encoded
         );
-        let mut out = Vec::new();
-        let mut page = 1u32;
-        loop {
-            let page_str = page.to_string();
-            let resp = self
-                .http
-                .get(&url)
-                .query(&[("per_page", "100"), ("page", page_str.as_str())])
-                .send()?;
-            let batch: Vec<Branch> = blocking_json_ok(resp, &format!("GitLab GET {url}"))?;
-            let n = batch.len();
-            out.extend(batch);
-            if n < 100 {
-                break;
-            }
-            page += 1;
-        }
-        Ok(out)
+        get_all_pages(&self.http, &url, &[], &[])
     }
 
     /// Change project settings (`PUT /projects/:id`): only the fields

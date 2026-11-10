@@ -49,16 +49,18 @@ pub fn format_patch_shas(text: &str) -> Vec<String> {
 
 /// The commit a patch URL names: GitHub and GitLab `/commit/<sha>`
 /// (and `.patch` or `.diff` after it), `/commits/<sha>`, and cgit's
-/// `id=<sha>`. At least seven hex digits, as a short id may be.
+/// `id=<sha>`. At least seven hex digits, as a short id may be. Each
+/// marker is tried in turn until one is followed by a commit id, as
+/// cgit's `/commit/?id=<sha>` names it after `id=`, not `/commit/`.
 pub fn url_sha(url: &str) -> Option<String> {
-    let after = ["/commit/", "/commits/", "id=", "h="]
-        .iter()
-        .find_map(|m| url.split_once(m).map(|(_, rest)| rest))?;
-    let sha: String = after
-        .chars()
-        .take_while(|c| c.is_ascii_hexdigit())
-        .collect();
-    (sha.len() >= 7).then(|| sha.to_ascii_lowercase())
+    ["/commit/", "/commits/", "id=", "h="].iter().find_map(|m| {
+        let (_, after) = url.split_once(m)?;
+        let sha: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit())
+            .collect();
+        (sha.len() >= 7).then(|| sha.to_ascii_lowercase())
+    })
 }
 
 /// The commits a spec's `PatchN:` (or `Patch:`) lines name by URL.
@@ -247,6 +249,20 @@ fn is_hex(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// cgit names the commit after `id=`, past `/commit/`.
+    #[test]
+    fn a_cgit_commit_url_names_its_commit() {
+        assert_eq!(
+            url_sha("https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0f599d36ab12").as_deref(),
+            Some("0f599d36ab12")
+        );
+        assert_eq!(
+            url_sha("https://github.com/x/y/commit/0F599D36AB12.patch").as_deref(),
+            Some("0f599d36ab12")
+        );
+        assert_eq!(url_sha("https://example.com/commit/?id=zz"), None);
+    }
 
     const AC49: &str = "ac49526d1c2b5e3f4a6b7c8d9e0f1a2b3c4d5e6f";
 

@@ -348,9 +348,6 @@ impl Ui {
     }
 }
 
-/// Quote an argument for display so the printed line is copy-paste
-/// safe. Leaves shell-safe tokens (including Debian version chars
-/// `~+:`) unquoted; single-quotes anything else.
 /// A command as a person would type it, each argument quoted for the
 /// shell where it needs to be: what `--explain` shows, for a tool that
 /// also prints a command outside the narration (in a confirmation, or
@@ -362,6 +359,9 @@ pub fn command_line(argv: &[String]) -> String {
         .join(" ")
 }
 
+/// Quote an argument for display so the printed line is copy-paste
+/// safe. Leaves shell-safe tokens (including Debian version chars
+/// `~+:`) unquoted; single-quotes anything else.
 fn shell_quote(arg: &str) -> String {
     if arg.is_empty() {
         return "''".to_string();

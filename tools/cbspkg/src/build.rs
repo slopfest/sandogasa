@@ -180,6 +180,9 @@ pub fn locate(checkout: &Checkout, repo: &Path) -> Result<Located, Box<dyn std::
         &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
     )
     .or_else(|_| {
+        // Only on the SIG's remote: fetch first, so the commit is the
+        // branch's now, not where the remote-tracking ref last was.
+        git(repo, &["fetch", "--quiet", &remote])?;
         git(
             repo,
             &[
@@ -328,22 +331,35 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
             ui.run_required(argv, &repo)?;
             continue;
         }
-        let (code, output) = ui.run_capture(argv, &repo)?;
-        print!("{output}");
-        if code != 0 {
-            // The builds started already keep running: say how to
-            // follow them.
+        // Whatever stops the run here, the builds started already keep
+        // running: say how to follow them.
+        let started = |tasks: &[String]| {
             if !tasks.is_empty() {
                 println!(
                     "\nThe builds started already are running; to wait for them: {}",
-                    sandogasa_cli::explain::command_line(&watch_argv(&tasks))
+                    sandogasa_cli::explain::command_line(&watch_argv(tasks))
                 );
             }
+        };
+        let (code, output) = match ui.run_capture(argv, &repo) {
+            Ok(r) => r,
+            Err(e) => {
+                started(&tasks);
+                return Err(e.into());
+            }
+        };
+        print!("{output}");
+        if code != 0 {
+            started(&tasks);
             return Err(format!("{} failed (exit {code})", argv.join(" ")).into());
         }
         if !args.dry_run {
-            let task = created_task(&output)
-                .ok_or_else(|| format!("cbs build printed no task for {}", collection.target()))?;
+            let Some(task) = created_task(&output) else {
+                started(&tasks);
+                return Err(
+                    format!("cbs build printed no task for {}", collection.target()).into(),
+                );
+            };
             tasks.push(task.to_string());
         }
     }

@@ -102,6 +102,15 @@ pub fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
+/// Whether an error is the transport failing (no connection, a reset,
+/// a timeout), which another attempt may get past, rather than one it
+/// cannot: a malformed URL, a redirect loop, a body that does not
+/// decode.
+#[cfg(feature = "http")]
+fn is_transport(e: &reqwest::Error) -> bool {
+    e.is_connect() || e.is_timeout() || e.is_request()
+}
+
 /// Send the request `build` makes, retrying transient failures under
 /// `policy`. A transport error that outlasts the attempts is returned;
 /// a transient status that does is returned as the last response, so
@@ -121,7 +130,7 @@ where
                 retry_after(resp.headers()),
             ),
             Ok(resp) => return Ok(resp),
-            Err(e) if retry + 1 < attempts => (e.to_string(), None),
+            Err(e) if retry + 1 < attempts && is_transport(&e) => (e.to_string(), None),
             Err(e) => return Err(e),
         };
         retry += 1;
@@ -150,7 +159,7 @@ where
                 retry_after(resp.headers()),
             ),
             Ok(resp) => return Ok(resp),
-            Err(e) if retry + 1 < attempts => (e.to_string(), None),
+            Err(e) if retry + 1 < attempts && is_transport(&e) => (e.to_string(), None),
             Err(e) => return Err(e),
         };
         retry += 1;

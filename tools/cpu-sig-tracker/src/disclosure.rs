@@ -77,15 +77,24 @@ pub fn nvd_record(json: &str) -> Record {
 }
 
 /// Whether `cve` is public: Red Hat's record decides when there is one,
-/// NVD's otherwise. An error when a source cannot be reached.
+/// NVD's otherwise. An error when a source cannot be reached, after
+/// the workspace's usual retries: NVD in particular answers 503 under
+/// load, and an error leaves the update out of the run.
 pub async fn is_public(http: &reqwest::Client, cve: &str) -> Result<bool, String> {
+    is_public_with(http, cve, &sandogasa_cli::retry::Policy::DEFAULT).await
+}
+
+/// [`is_public`] under `policy`.
+pub async fn is_public_with(
+    http: &reqwest::Client,
+    cve: &str,
+    policy: &sandogasa_cli::retry::Policy,
+) -> Result<bool, String> {
     let redhat = format!(
         "{}/hydra/rest/securitydata/cve/{cve}.json",
         redhat_base().trim_end_matches('/')
     );
-    let resp = http
-        .get(&redhat)
-        .send()
+    let resp = sandogasa_cli::retry::send("Red Hat security data", policy, || http.get(&redhat))
         .await
         .map_err(|e| format!("cannot reach Red Hat's security data for {cve}: {e}"))?;
     match resp.status().as_u16() {
@@ -107,9 +116,7 @@ pub async fn is_public(http: &reqwest::Client, cve: &str) -> Result<bool, String
         "{}/rest/json/cves/2.0?cveId={cve}",
         nvd_base().trim_end_matches('/')
     );
-    let resp = http
-        .get(&nvd)
-        .send()
+    let resp = sandogasa_cli::retry::send("NVD", policy, || http.get(&nvd))
         .await
         .map_err(|e| format!("cannot reach NVD for {cve}: {e}"))?;
     match resp.status().as_u16() {
@@ -211,7 +218,8 @@ mod tests {
         ]);
         sandogasa_cli::init();
         let http = reqwest::Client::new();
-        let public = |cve: &str| rt.block_on(is_public(&http, cve));
+        let policy = sandogasa_cli::retry::Policy::immediate(2);
+        let public = |cve: &str| rt.block_on(is_public_with(&http, cve, &policy));
         assert_eq!(public("CVE-2026-1"), Ok(true));
         assert_eq!(public("CVE-2026-2"), Ok(false), "disclosure still to come");
         assert_eq!(public("CVE-2026-3"), Ok(true), "Red Hat has none, NVD does");

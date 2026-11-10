@@ -51,9 +51,10 @@ pub const MASS_REBUILD_AGENT: &str = "releng";
 /// push at all.
 const PUSH_ROLES: [&str; 3] = ["owner", "admin", "commit"];
 
-/// How long to wait before asking datagrepper again after it answered
-/// with a gateway error, which it does under load.
-const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+/// How datagrepper is retried: it answers gateway errors under load.
+/// Two attempts, as a package's history is a hint the plan does without
+/// when it cannot be had.
+const RETRY: sandogasa_cli::retry::Policy = sandogasa_cli::retry::Policy::attempts(2);
 
 /// One push to the package's branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,29 +263,18 @@ pub fn search_url(base: &str, package: &str, page: u64) -> String {
 
 /// One page, asked again once after a gateway error.
 async fn get_page(http: &reqwest::Client, url: &str, package: &str) -> Result<String, String> {
-    let mut retried = false;
-    loop {
-        let resp = http
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| format!("cannot reach datagrepper: {e}"))?;
-        let status = resp.status().as_u16();
-        if matches!(status, 502..=504) && !retried {
-            retried = true;
-            tokio::time::sleep(RETRY_DELAY).await;
-            continue;
-        }
-        if !resp.status().is_success() {
-            return Err(format!(
-                "datagrepper answered HTTP {status} for {package}'s pushes"
-            ));
-        }
-        return resp
-            .text()
-            .await
-            .map_err(|e| format!("cannot read datagrepper's answer: {e}"));
+    let resp = sandogasa_cli::retry::send("datagrepper", &RETRY, || http.get(url))
+        .await
+        .map_err(|e| format!("cannot reach datagrepper: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "datagrepper answered HTTP {} for {package}'s pushes",
+            resp.status().as_u16()
+        ));
     }
+    resp.text()
+        .await
+        .map_err(|e| format!("cannot read datagrepper's answer: {e}"))
 }
 
 /// The latest pushes to `rpms/<package>`'s `branch`, newest first, at

@@ -42,14 +42,16 @@ pub fn diagnose(koji_output: &str, cert: Option<&Path>, cert_valid: Option<bool>
     match (cert, cert_valid) {
         (Some(c), _) if !c.exists() => Failure::MissingCert(c.to_path_buf()),
         (Some(c), Some(false)) => Failure::InvalidCert(c.to_path_buf()),
-        _ => Failure::Other(
-            koji_output
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty())
-                .unwrap_or("koji gave no reason")
-                .to_string(),
-        ),
+        _ => {
+            let mut lines = koji_output.lines().map(str::trim).filter(|l| !l.is_empty());
+            // A Python traceback says what failed on its last line.
+            let reason = if koji_output.contains("Traceback (most recent call last)") {
+                lines.next_back()
+            } else {
+                lines.next()
+            };
+            Failure::Other(reason.unwrap_or("koji gave no reason").to_string())
+        }
     }
 }
 
@@ -194,6 +196,20 @@ fn check_login(tool: &str, interactive: bool, verbose: bool) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_traceback_is_explained_by_its_last_line() {
+        let out = "Traceback (most recent call last):\n  File \"/usr/bin/koji\", line 9\n\
+                   koji.GSSAPIAuthError: unable to obtain a session\n";
+        assert_eq!(
+            diagnose(out, None, None),
+            Failure::Other("koji.GSSAPIAuthError: unable to obtain a session".into())
+        );
+        assert_eq!(
+            diagnose("\nRefused\nmore\n", None, None),
+            Failure::Other("Refused".into())
+        );
+    }
 
     #[test]
     fn the_fedora_account_is_read_from_klist() {

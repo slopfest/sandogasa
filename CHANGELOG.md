@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Fixes from the release review
+
+A review of everything since v0.27.1 found these:
+
+- cpu-sig-tracker missed patches named by a cgit commit URL
+  (`…/commit/?id=<sha>`): the commit id was looked for right after
+  `/commit/` and not found, so such a patch was never compared with
+  stock's. Each marker is now tried until one is followed by an id.
+- `cbspkg build` on a branch that exists only on the SIG's remote read
+  its commit from the remote-tracking ref before fetching, so it could
+  build the commit before the latest push. It fetches first now.
+- A `[packages.<name>]` table in cbspkg's config made `build`, `promote`
+  and `add-pkg` fail on a Proposed Updates or Extras checkout of a
+  package of the same name; it applies to Hyperscale's collections
+  only.
+- When several builds start together and a later one fails to start
+  for any reason, `cbspkg build` now prints the `cbs watch-task` for
+  those already running, not only when `cbs` exits non-zero.
+- A failed CBS login now quotes the last line of koji's traceback,
+  which says what went wrong, instead of `Traceback (most recent call
+  last):`.
+- sandogasa-cli's `retry::send` retried every request error, a
+  malformed URL or a redirect loop included; it retries transport
+  failures only now (connect, timeout, request).
+- cpu-sig-tracker's disclosure check (`sync-updates`) and ebranch's
+  push history go through that shared retry, so NVD or datagrepper
+  answering 503 under load is retried before the update or history is
+  left out.
+- sandogasa-gitlab's `list_branches`, `tree` and `merge_request_diffs`
+  page through the shared helper rather than three copies of it.
+
 ### cbspkg: build a Hyperscale package for several variants, Stream or RHEL, in one run
 
 Some Hyperscale packages are built from one commit into several

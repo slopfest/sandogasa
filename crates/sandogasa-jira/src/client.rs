@@ -369,6 +369,18 @@ fn build_http_client() -> Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A token is only attached to an https base URL (loopback aside,
+    /// for tests), so it never goes over the wire in cleartext.
+    #[test]
+    fn a_token_is_refused_for_a_plaintext_base_url() {
+        let plain = || JiraClient::new("http://issues.example.com");
+        assert!(plain().with_api_key("k".into()).is_err());
+        assert!(plain().with_api_token("a@b".into(), "t".into()).is_err());
+        let https = || JiraClient::new("https://issues.example.com");
+        assert!(https().with_api_key("k".into()).is_ok());
+        assert!(https().with_api_token("a@b".into(), "t".into()).is_ok());
+    }
     use wiremock::matchers::{
         body_json, header, method, path, query_param, query_param_is_missing,
     };

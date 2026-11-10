@@ -13,7 +13,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-cbs = { workspace = true }
-sandogasa-cli = { workspace = true, features = ["explain"] }
+sandogasa-cli = { workspace = true, features = ["explain", "http"] }
 sandogasa-config = { workspace = true }
 sandogasa-cve = { workspace = true }
 sandogasa-fedrq = { workspace = true }

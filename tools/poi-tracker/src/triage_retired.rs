@@ -116,10 +116,6 @@ pub fn bugs_for_branch(bugs: &[Bug], branch: &str) -> Vec<Bug> {
         .collect()
 }
 
-/// Retry an async fallible operation a few times, sleeping a
-/// little longer between each attempt. Used for transient
-/// network failures from Pagure / Bugzilla — the failure
-/// message includes the operation label so users can see what's
 /// Retry an async fallible operation a few times, sleeping a little
 /// longer between each attempt, for transient network failures from
 /// Pagure / Bugzilla. Every error counts as transient here: the clients

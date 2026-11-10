@@ -249,7 +249,13 @@ pub fn resolve(
         None => collections,
         Some(v) if !v.is_empty() => collections_with(sig, collections, &branch, v)?,
         Some(_) => {
+            // A [packages] table is about Hyperscale's variants: a
+            // Proposed Updates or Extras checkout of the same package
+            // goes by its branch.
+            let hyperscale = sig == Sig::Hyperscale
+                && collections.iter().all(|c| c.sig == Sig::Hyperscale.name());
             let configured = match crate::config::load() {
+                Ok(_) if !hyperscale => None,
                 Ok(c) => c
                     .packages
                     .get(&package)
