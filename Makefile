@@ -51,6 +51,11 @@ findings: ## Render FINDINGS to HTML and PDF (SRC=... for another file)
 cov: ## Report test coverage, failing under 82.5% lines
 	$(CARGO) cov
 
+.PHONY: cov-crate
+cov-crate: ## Per-file line coverage of one crate (CRATE=<name>)
+	@test -n "$(CRATE)" || { echo "usage: make cov-crate CRATE=<name>" >&2; exit 2; }
+	$(CARGO) llvm-cov test -p $(CRATE) --summary-only --ignore-filename-regex 'src/main\.rs$$'
+
 .PHONY: audit
 audit: ## Check dependencies against RustSec advisories
 	$(CARGO) audit
