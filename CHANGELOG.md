@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### ebranch: check-update --submit reads what a build bundles in seconds, and says it is looking
+
+On the libical 4 side tag, `check-update --submit` went quiet for many
+minutes between the last reviewer finding and the bugs it proposed,
+and `-v` printed nothing either. For every open CVE tracker of a
+package in the update, it checks whether the build carries the fix in
+a bundled copy, and to find that copy it read what each of the
+build's subpackages provides with its own `koji` command: about a
+minute for asterisk's 99 provides, and more for every other build
+with a tracker. Resolves #111.
+
+`sandogasa_cve::bundled::Copies` now reads a build's provides from the
+Koji hub the `koji` CLI is configured for, the RPM list in one request
+and the provides in batches of 200 (asterisk: under two seconds, the
+same 99 lines). When no hub is configured it reads through the `koji`
+CLI as before, and when the hub fails it says so before falling back
+to the CLI, so a slow read is never silent.
+fedora-cve-triage reads bundled copies the same way. The bug proposal
+says it has started ("Looking for the bugs this update closes (N
+build(s))..."), and check-update's `-v` now reaches it, naming each
+lookup.
+
+New in sandogasa-kojihub: `HubClient::rpms_deps`, one `multiCall` of
+`getRPMDeps`, and the `RpmDeps` type it returns. New in sandogasa-cve:
+`Copies::with_hub`.
+
 ## v0.28.0
 
 ### ebranch: escalate follows up the releng tickets it filed

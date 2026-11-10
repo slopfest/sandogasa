@@ -841,14 +841,21 @@ pub fn build_provides(nvr: &str, profile: Option<&str>) -> Result<String, String
     let nvras = build_rpm_nvras(nvr, profile)?;
     let mut text = String::new();
     for nvra in subpackage_nvras(&nvras) {
-        for (name, version) in rpm_provides(nvra, profile)? {
-            match version {
-                Some(v) => text.push_str(&format!("{name} = {v}\n")),
-                None => text.push_str(&format!("{name}\n")),
-            }
-        }
+        push_provides(&mut text, &rpm_provides(nvra, profile)?);
     }
     Ok(text)
+}
+
+/// Append `provides` to `text` in [`build_provides`]'s format, one per
+/// line as `name = version` or `name`: shared by every reader of a
+/// build's provides, as they fill the same cache.
+pub fn push_provides(text: &mut String, provides: &[(String, Option<String>)]) {
+    for (name, version) in provides {
+        match version {
+            Some(v) => text.push_str(&format!("{name} = {v}\n")),
+            None => text.push_str(&format!("{name}\n")),
+        }
+    }
 }
 
 #[cfg(test)]

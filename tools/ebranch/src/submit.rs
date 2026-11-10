@@ -49,6 +49,8 @@ pub struct SubmitOptions {
     /// Koji profile for reading build changelogs, when not the
     /// default one.
     pub koji_profile: Option<String>,
+    /// `-v`: name each lookup the bug proposal makes.
+    pub verbose: bool,
 }
 
 /// Resolve the update notes from `--notes` (inline) or `--notes-file`
@@ -172,6 +174,7 @@ async fn propose_bugs(
     report: &crate::check_update::CheckUpdateReport,
     already_listed: &[u64],
     koji_profile: Option<&str>,
+    verbose: bool,
 ) -> Result<Vec<u64>, String> {
     // The check knows each package's old and new version-release,
     // which is what says how much of a changelog is new.
@@ -183,6 +186,12 @@ async fn propose_bugs(
     if builds.is_empty() {
         return Ok(Vec::new());
     }
+    // The changelogs, open bugs and CVE fixes take a while on a big
+    // side tag, and nothing else is printed until the proposal.
+    eprintln!(
+        "\nLooking for the bugs this update closes ({} build(s))...",
+        builds.len()
+    );
     let old_versions: std::collections::BTreeMap<String, Option<String>> = report
         .changes
         .iter()
@@ -216,8 +225,15 @@ async fn propose_bugs(
         unsatisfied: &report.installability_issues,
         full_analysis: report.full_analysis,
     };
-    let candidates =
-        crate::discover::candidates(bz, &changelogs, &old_versions, &facts, already_listed).await;
+    let candidates = crate::discover::candidates(
+        bz,
+        &changelogs,
+        &old_versions,
+        &facts,
+        already_listed,
+        verbose,
+    )
+    .await;
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
@@ -540,6 +556,7 @@ pub fn run(
             report,
             &bugs,
             opts.koji_profile.as_deref(),
+            opts.verbose,
         ))?);
     }
     let bugs = if bugs.is_empty() {
@@ -633,6 +650,7 @@ mod tests {
             assume_yes: false,
             koji_profile: None,
             rpmfusion: vec![],
+            verbose: false,
         }
     }
 

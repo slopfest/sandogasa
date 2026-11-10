@@ -226,6 +226,7 @@ mod tests {
                 (&osv::vuln_url("CVE-2026-1"), osv_json),
             ],
         );
+        sandogasa_cli::install_crypto_provider();
         let http = reqwest::Client::new();
         let fetched = RefCell::new(Vec::new());
         let note = |what: &str| fetched.borrow_mut().push(what.to_string());

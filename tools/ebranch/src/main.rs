@@ -2071,6 +2071,7 @@ fn main() -> ExitCode {
                             assume_yes: a.yes,
                             koji_profile: a.koji_profile.clone(),
                             rpmfusion: rpmfusion_found.clone(),
+                            verbose: a.verbose,
                         };
                         let aliases = match submit::run(source, &report, &sopts) {
                             Ok(aliases) => aliases,

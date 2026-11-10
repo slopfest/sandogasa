@@ -53,6 +53,9 @@ pub struct Copies {
     http: reqwest::Client,
     github_token: Option<String>,
     verbose: bool,
+    /// The Koji hub what a build provides is read from, in batches;
+    /// `None` reads it through the `koji` CLI, one RPM at a time.
+    hub: Option<String>,
     provides: DiskCache,
     contains: DiskCache,
     tags: DiskCache,
@@ -64,6 +67,51 @@ const TAGS_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The cache directory the shared answers live under.
 const CACHE_TOOL: &str = "sandogasa-cve";
+
+/// How many RPMs' provides one `multiCall` asks for: a build with
+/// hundreds of subpackages is read in a few requests, none of them
+/// large enough to trouble the hub.
+const PROVIDES_CHUNK: usize = 200;
+
+/// Everything the build `nvr` provides, read from the Koji hub at
+/// `hub_url` in the format [`sandogasa_koji::build_provides`] writes:
+/// the build's RPMs in one request, then one RPM per subpackage in
+/// batches of [`PROVIDES_CHUNK`]. An RPM whose provides cannot be read
+/// fails the whole read, as there.
+///
+/// The hub client blocks, and blocking inside an async runtime panics,
+/// so the requests run on a thread of their own.
+fn provides_from_hub(hub_url: &str, nvr: &str) -> Result<String, String> {
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let hub = sandogasa_kojihub::HubClient::new(hub_url);
+            let nvrs = [nvr.to_string()];
+            let nvras = sandogasa_kojihub::retry(2, || hub.builds_rpm_nvras(&nvrs))
+                .map_err(|e| e.to_string())?
+                .pop()
+                .ok_or("the hub answered no build")?
+                .map_err(|e| e.to_string())?;
+            // A build with no binary RPMs provides nothing, as the
+            // koji CLI's reading of it says too.
+            let wanted: Vec<String> = sandogasa_koji::subpackage_nvras(&nvras)
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            let mut text = String::new();
+            for chunk in wanted.chunks(PROVIDES_CHUNK) {
+                let answers = sandogasa_kojihub::retry(2, || hub.rpms_deps(chunk, 1))
+                    .map_err(|e| e.to_string())?;
+                for (nvra, answer) in chunk.iter().zip(answers) {
+                    let deps = answer.map_err(|e| format!("{nvra}: {e}"))?;
+                    sandogasa_koji::push_provides(&mut text, &deps);
+                }
+            }
+            Ok(text)
+        })
+        .join()
+        .unwrap_or_else(|_| Err("reading from the hub panicked".to_string()))
+    })
+}
 
 impl Copies {
     /// Copies read through `http`, with `github_token` (when given) to
@@ -79,6 +127,7 @@ impl Copies {
             http,
             github_token,
             verbose,
+            hub: sandogasa_kojihub::config::hub_url("koji"),
             provides: DiskCache::new(CACHE_TOOL, "build-provides", None, refresh),
             contains: DiskCache::new(CACHE_TOOL, "git-contains", None, refresh),
             tags: DiskCache::new(CACHE_TOOL, "github-tags", Some(TAGS_TTL), refresh),
@@ -93,26 +142,54 @@ impl Copies {
             http,
             github_token,
             verbose: false,
+            hub: None,
             provides: cache("build-provides", None),
             contains: cache("git-contains", None),
             tags: cache("github-tags", Some(TAGS_TTL)),
         }
     }
 
+    /// Read what a build provides from the Koji hub at `hub_url`
+    /// rather than the one the `koji` CLI's configuration names.
+    pub fn with_hub(mut self, hub_url: &str) -> Self {
+        self.hub = Some(hub_url.to_string());
+        self
+    }
+
     /// Everything the build `nvr` provides, from Koji, one per line
-    /// (see [`sandogasa_koji::build_provides`]). `None` when koji is not
-    /// installed or the build cannot be read; a list read in part is
-    /// never kept.
+    /// (see [`sandogasa_koji::build_provides`]). Read from the hub in
+    /// batches when one is configured, through the `koji` CLI one RPM
+    /// at a time when not, or when the hub fails. `None` when neither
+    /// can read the build; a list read in part is never kept.
     pub fn build_provides(&self, nvr: &str) -> Option<String> {
         let key = format!("{nvr}.provides");
         if let Some(text) = self.provides.load(&key) {
             return Some(text);
         }
-        if !sandogasa_koji::is_available() {
+        if self.hub.is_none() && !sandogasa_koji::is_available() {
             return None;
         }
         if self.verbose {
             eprintln!("Reading what {nvr} provides from Koji...");
+        }
+        if let Some(hub) = &self.hub {
+            match provides_from_hub(hub, nvr) {
+                Ok(text) => {
+                    self.provides.store(&key, &text);
+                    return Some(text);
+                }
+                Err(e) => {
+                    // Said whatever the verbosity: the CLI reads one
+                    // RPM at a time, which takes minutes on a big build.
+                    eprintln!(
+                        "warning: the Koji hub could not say what {nvr} provides ({e}); \
+                         asking the koji CLI, one RPM at a time"
+                    );
+                }
+            }
+        }
+        if !sandogasa_koji::is_available() {
+            return None;
         }
         match sandogasa_koji::build_provides(nvr, None) {
             Ok(text) => {
@@ -427,6 +504,223 @@ mod tests {
             product: product.into(),
             version: version.into(),
         }
+    }
+
+    /// An XML-RPC `multiCall` answer of `results`, each a `<value>`.
+    fn multicall_xml(results: &[String]) -> String {
+        let wrapped: String = results
+            .iter()
+            .map(|r| format!("<value><array><data>{r}</data></array></value>"))
+            .collect();
+        format!(
+            "<?xml version=\"1.0\"?><methodResponse><params><param><value><array><data>\
+             {wrapped}</data></array></value></param></params></methodResponse>"
+        )
+    }
+
+    fn rpm_xml(name: &str, arch: &str) -> String {
+        format!(
+            "<value><struct>\
+             <member><name>name</name><value><string>{name}</string></value></member>\
+             <member><name>version</name><value><string>24.0.0</string></value></member>\
+             <member><name>release</name><value><string>3.fc46</string></value></member>\
+             <member><name>arch</name><value><string>{arch}</string></value></member>\
+             </struct></value>"
+        )
+    }
+
+    fn provide_xml(name: &str, version: &str) -> String {
+        format!(
+            "<value><struct>\
+             <member><name>name</name><value><string>{name}</string></value></member>\
+             <member><name>version</name><value><string>{version}</string></value></member>\
+             <member><name>type</name><value><int>1</int></value></member>\
+             </struct></value>"
+        )
+    }
+
+    /// The hub is asked for the build's RPMs once and for one RPM per
+    /// subpackage in one batch, from inside an async runtime (where a
+    /// blocking client would panic). Read through `provides_from_hub`,
+    /// which has no CLI to fall back to, so a request the mocks do not
+    /// expect fails the test rather than reaching a real Koji.
+    #[tokio::test]
+    async fn a_builds_provides_are_read_from_the_hub_in_one_batch() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let rpms = [
+            rpm_xml("asterisk", "src"),
+            rpm_xml("asterisk", "x86_64"),
+            rpm_xml("asterisk", "i686"),
+            rpm_xml("asterisk-calendar", "x86_64"),
+            rpm_xml("asterisk-debuginfo", "x86_64"),
+        ]
+        .concat();
+        Mock::given(method("POST"))
+            .and(body_string_contains("listBuildRPMs"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(multicall_xml(&[format!(
+                    "<value><array><data>{rpms}</data></array></value>"
+                )])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let main = format!(
+            "<value><array><data>{}{}</data></array></value>",
+            provide_xml("asterisk", "24.0.0-3.fc46"),
+            provide_xml("bundled(pjproject)", "2.15.1"),
+        );
+        let calendar = format!(
+            "<value><array><data>{}</data></array></value>",
+            provide_xml("config(asterisk-calendar)", ""),
+        );
+        Mock::given(method("POST"))
+            .and(body_string_contains("getRPMDeps"))
+            // One per subpackage: asterisk once, not for i686 too, and
+            // no debuginfo.
+            .and(body_string_contains("asterisk-24.0.0-3.fc46.x86_64"))
+            .and(body_string_contains(
+                "asterisk-calendar-24.0.0-3.fc46.x86_64",
+            ))
+            .and(|req: &Request| {
+                let body = String::from_utf8_lossy(&req.body);
+                !body.contains(".i686") && !body.contains("-debuginfo")
+            })
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(multicall_xml(&[main, calendar])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let text = provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").unwrap();
+        assert_eq!(
+            text,
+            "asterisk = 24.0.0-3.fc46\n\
+             bundled(pjproject) = 2.15.1\n\
+             config(asterisk-calendar)\n"
+        );
+        assert_eq!(
+            bundled_version(&text, "pjproject"),
+            Some(Some("2.15.1".into()))
+        );
+    }
+
+    /// A build read from the hub is kept, so the next question about
+    /// it asks nothing, and its copies are read from what was kept.
+    #[tokio::test]
+    async fn what_the_hub_says_a_build_provides_is_kept() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        sandogasa_cli::install_crypto_provider();
+        let server = MockServer::start().await;
+        let rpms = format!(
+            "<value><array><data>{}</data></array></value>",
+            rpm_xml("asterisk", "x86_64")
+        );
+        Mock::given(method("POST"))
+            .and(body_string_contains("listBuildRPMs"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(multicall_xml(&[rpms])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let provides = format!(
+            "<value><array><data>{}</data></array></value>",
+            provide_xml("bundled(pjproject)", "2.15.1")
+        );
+        Mock::given(method("POST"))
+            .and(body_string_contains("getRPMDeps"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(multicall_xml(&[provides])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let copies = Copies::at(dir.path(), reqwest::Client::new(), None).with_hub(&server.uri());
+        let nvr = "asterisk-24.0.0-3.fc46";
+        assert_eq!(
+            copies.build_provides(nvr).as_deref(),
+            Some("bundled(pjproject) = 2.15.1\n")
+        );
+        // Answered from the cache: each mock expects one request.
+        assert_eq!(copies.declared(nvr, "pjproject").as_deref(), Some("2.15.1"));
+        assert_eq!(copies.declared(nvr, "openssl"), None);
+    }
+
+    /// A build with no binary RPMs provides nothing, from the hub as from
+    /// the koji CLI, and no RPM is asked about.
+    #[tokio::test]
+    async fn a_build_without_binary_rpms_provides_nothing() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let only_src = format!(
+            "<value><array><data>{}</data></array></value>",
+            rpm_xml("asterisk", "src")
+        );
+        Mock::given(method("POST"))
+            .and(body_string_contains("listBuildRPMs"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(multicall_xml(&[only_src])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("getRPMDeps"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").as_deref(),
+            Ok("")
+        );
+    }
+
+    /// A fault for any subpackage fails the read, so a list missing the
+    /// subpackage that declares a copy is never kept.
+    #[test]
+    fn a_subpackage_the_hub_cannot_read_fails_the_whole_read() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt.block_on(MockServer::start());
+        let rpms = format!(
+            "<value><array><data>{}{}</data></array></value>",
+            rpm_xml("asterisk", "x86_64"),
+            rpm_xml("asterisk-calendar", "x86_64"),
+        );
+        let fault = "<value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>No such rpm</string></value></member>\
+             </struct></value>";
+        rt.block_on(async {
+            Mock::given(method("POST"))
+                .and(body_string_contains("listBuildRPMs"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(multicall_xml(&[rpms])))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(body_string_contains("getRPMDeps"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                    "<?xml version=\"1.0\"?><methodResponse><params><param><value><array><data>\
+                     <value><array><data><value><array><data></data></array></value></data></array></value>\
+                     {fault}</data></array></value></param></params></methodResponse>"
+                )))
+                .mount(&server)
+                .await;
+        });
+        let err = provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").unwrap_err();
+        assert!(
+            err.contains("asterisk-calendar-24.0.0-3.fc46.x86_64"),
+            "{err}"
+        );
+        assert!(err.contains("No such rpm"), "{err}");
     }
 
     #[test]

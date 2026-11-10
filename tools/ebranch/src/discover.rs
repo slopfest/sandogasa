@@ -177,6 +177,7 @@ pub async fn candidates(
     old_versions: &BTreeMap<String, Option<String>>,
     update: &UpdateFacts<'_>,
     already_listed: &[u64],
+    verbose: bool,
 ) -> Vec<Candidate> {
     let from_changelog = changelog_candidates(changelogs, old_versions);
 
@@ -192,7 +193,7 @@ pub async fn candidates(
     // need the fix looked up first; the verdict cannot read it off
     // the title.
     let mut facts = crate::karma::fetch_bugs(bz, &wanted).await;
-    crate::karma::attach_cve_facts(&mut facts, update, false).await;
+    crate::karma::attach_cve_facts(&mut facts, update, verbose).await;
     let mut out = Vec::new();
     for id in wanted {
         let Some(bug) = facts.get(&id) else { continue };

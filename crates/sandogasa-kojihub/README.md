@@ -30,6 +30,9 @@ credentials and no `koji` CLI required (contrast with
   - `list_hosts()` / `list_channels()` — id → name pairs.
   - `builds_rpm_nvras(nvrs)` — each build's binary RPMs as NVRAs,
     through one `multiCall` of `listBuildRPMs`.
+  - `rpms_deps(nvras, dep_type)` — each RPM's requires, provides,
+    obsoletes or conflicts (`RpmDeps`, name and version), through one
+    `multiCall` of `getRPMDeps`.
   - `latest_builds(tag, packages)` — each package's newest build in a
     tag (NVR and completion time), following inheritance, through one
     `multiCall` of `getLatestBuilds`.

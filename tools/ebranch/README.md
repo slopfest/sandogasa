@@ -827,6 +827,8 @@ python 3.13.17 (asahi-installer-0.9.2-4.fc45), at or past the fix in
 …"):
 
 ```console
+Looking for the bugs this update closes (1 build(s))...
+
 This update looks like it closes:
   #2504649 rust-fd-find: FTBFS in Fedora rawhide/f45
     open against rust-fd-find

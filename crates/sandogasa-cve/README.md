@@ -28,7 +28,9 @@ Where a CVE is fixed, and whether a build has that fix.
 - **`bundled`** — judging a library copy a package bundles: the
   `bundled(<library>) = <version>` declaration (`bundled_version`,
   `declarations`, `copy_for_cve`), read from a build in Koji
-  (`Copies::declared`), against the library's fixed versions
+  (`Copies::declared`; from the hub the `koji` CLI's configuration
+  names, in batches, or another with `Copies::with_hub`, and through
+  the `koji` CLI when no hub answers), against the library's fixed versions
   (`against_fixes`) or by whether the copy's own release tag holds one
   of the fix commits OSV records (`Copies::git_verdict`). Answers that
   never change are kept under `$XDG_CACHE_HOME/sandogasa-cve/`, shared

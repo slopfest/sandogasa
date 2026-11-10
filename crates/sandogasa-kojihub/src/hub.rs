@@ -110,6 +110,10 @@ pub struct HostConfig {
     pub revoke_ts: Option<f64>,
 }
 
+/// One RPM's dependencies of a type, as `(name, version)` pairs with
+/// `None` for an unversioned one: what [`HubClient::rpms_deps`] reads.
+pub type RpmDeps = Vec<(String, Option<String>)>;
+
 /// Typed client for the Koji hub.
 pub struct HubClient {
     client: Client,
@@ -156,6 +160,34 @@ impl HubClient {
             .multicall(&calls)?
             .into_iter()
             .map(|r| r.map(|v| rpm_nvras(&v)))
+            .collect())
+    }
+
+    /// The dependencies of type `dep_type` (0 requires, 1 provides,
+    /// 2 obsoletes, 3 conflicts, as `koji call getRPMDeps` numbers them)
+    /// of each binary RPM in `nvras` (`name-version-release.arch`), as
+    /// `(name, version)` pairs with `None` for an unversioned one, asked
+    /// in one `multiCall` of `getRPMDeps`. One result per RPM, in order;
+    /// an RPM the hub does not know is a fault in its own slot.
+    pub fn rpms_deps(
+        &self,
+        nvras: &[String],
+        dep_type: i64,
+    ) -> Result<Vec<Result<RpmDeps, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = nvras
+            .iter()
+            .map(|nvra| {
+                (
+                    "getRPMDeps",
+                    vec![Value::String(nvra.clone()), Value::Int(dep_type)],
+                )
+            })
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| r.map(|v| rpm_deps(&v, dep_type)))
             .collect())
     }
 
@@ -622,6 +654,27 @@ fn rpm_nvras(answer: &Value) -> Vec<String> {
         .collect()
 }
 
+/// A `getRPMDeps` answer as `(name, version)` pairs of `dep_type`,
+/// with an empty version as `None`. The type is checked again here, as
+/// the CLI parser does, rather than trusting the hub's filter.
+fn rpm_deps(answer: &Value, dep_type: i64) -> RpmDeps {
+    answer
+        .as_array()
+        .unwrap_or_default()
+        .iter()
+        .filter(|d| d.get("type").and_then(Value::as_int) == Some(dep_type))
+        .filter_map(|d| {
+            let name = d.get("name").and_then(Value::as_str)?.to_string();
+            let version = d
+                .get("version")
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty())
+                .map(str::to_string);
+            Some((name, version))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,6 +765,58 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].as_ref().unwrap(), &["libical-4.0.7-1.fc46.x86_64"]);
         assert!(matches!(got[1], Err(Error::Fault { code: 1000, .. })));
+    }
+
+    #[test]
+    fn rpm_provides_come_back_per_rpm_from_one_multicall() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let dep = |name: &str, version: &str, ty: i64| {
+            format!(
+                "<value><struct>\
+                 <member><name>name</name><value><string>{name}</string></value></member>\
+                 <member><name>version</name><value><string>{version}</string></value></member>\
+                 <member><name>type</name><value><int>{ty}</int></value></member>\
+                 <member><name>flags</name><value><int>8</int></value></member>\
+                 </struct></value>"
+            )
+        };
+        let server = block_on(MockServer::start());
+        // A versioned and an unversioned provide, a stray require the
+        // filter drops, then an RPM the hub does not know.
+        let body = response(&format!(
+            "<value><array><data><value><array><data>{}{}{}</data></array></value></data></array></value>\
+             <value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>No such rpm</string></value></member>\
+             </struct></value>",
+            dep("bundled(openssl)", "3.5.5", 1),
+            dep("config(asterisk)", "", 1),
+            dep("libc.so.6()(64bit)", "", 0),
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("<methodName>multiCall</methodName>"))
+                .and(body_string_contains("getRPMDeps"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        let nvras = ["asterisk-24.0.0-3.fc46.x86_64", "nope-1-1.x86_64"].map(String::from);
+        let got = hub.rpms_deps(&nvras, 1).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            got[0].as_ref().unwrap(),
+            &[
+                ("bundled(openssl)".to_string(), Some("3.5.5".to_string())),
+                ("config(asterisk)".to_string(), None),
+            ]
+        );
+        assert!(matches!(got[1], Err(Error::Fault { code: 1000, .. })));
+        assert!(hub.rpms_deps(&[], 1).unwrap().is_empty());
     }
 
     #[test]
