@@ -1,0 +1,44 @@
+# CentOS Stream with the EPEL minor release that builds against it:
+# the newest EPEL 10 minor (10.4 on 2026-11-10) targets the moving
+# stream, so `-b c10.4s -r @epel` is what an epel10.4 build is pushed
+# on top of.
+#
+#   fedrq pkgs -b c10.4s -r @epel sandogasa       # EPEL 10.4 stable
+#   fedrq pkgs -b c10.4s -r @testing sandogasa    # plus its updates-testing
+#
+# fedrq's own CentOS Stream release cannot say this: its `@epel` follows
+# the `epel-10` metalink, which MirrorManager points at the newest
+# *released* minor (10.3 that day), and its `epel10.4` branch asks for
+# `epel-z-10.4`, which only exists for released minors. MirrorManager
+# answers `epel-10.N` for every minor, the newest included, and that is
+# the name the repos here use.
+#
+# The capture group becomes $releasever (`10.4`): the EPEL URLs use it
+# whole, the CentOS Stream ones $releasever_major, since Stream is
+# published per major.
+#
+# Install beside the other files where fedrq looks: /etc/fedrq/ or
+# ~/.config/fedrq/, with the repos/ directory alongside.
+
+[releases.centos-stream-minor]
+matcher = '^c(\d+\.\d+)s$'
+defpaths = ["centos-stream-minor.repo"]
+system_repos = false
+
+defs.base = [
+    "stream-minor-baseos",
+    "stream-minor-baseos-source",
+    "stream-minor-appstream",
+    "stream-minor-appstream-source",
+    "stream-minor-crb",
+    "stream-minor-crb-source",
+]
+defs.epel = ["@base", "epel-minor", "epel-minor-source"]
+# As fedrq's own epel release spells it: the minor's stable EPEL plus
+# its updates-testing, without the base.
+defs.testing = [
+    "epel-minor",
+    "epel-minor-source",
+    "epel-minor-testing",
+    "epel-minor-testing-source",
+]

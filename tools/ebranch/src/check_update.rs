@@ -900,6 +900,14 @@ pub(crate) trait BodhiQuery: Sync {
     }
 }
 
+/// Whether the Bodhi release with `branch` and `name` is the one
+/// `dist_branch` ships to: by branch, or by name without its hyphen, as
+/// EPEL 10's minors share the `epel10` branch and only the name
+/// (`EPEL-10.4`) says which one it is (#124).
+fn release_is_for(branch: &str, name: &str, dist_branch: &str) -> bool {
+    branch == dist_branch || name.replace('-', "").eq_ignore_ascii_case(dist_branch)
+}
+
 /// The Bodhi a real run talks to.
 pub(crate) struct BodhiApi;
 
@@ -921,7 +929,7 @@ impl BodhiQuery for BodhiApi {
                     "FEDORA" | "FEDORA-EPEL" | "FEDORA-EPEL-NEXT"
                 )
             })
-            .find(|r| r.branch == dist_branch || r.name.eq_ignore_ascii_case(dist_branch))
+            .find(|r| release_is_for(&r.branch, &r.name, dist_branch))
             .map(|r| r.candidate_tag.clone())
             .filter(|t| !t.is_empty())
     }
@@ -1604,8 +1612,16 @@ fn check_update_body(
     // would read as every dependency unsatisfied.
     let stable = services.repos.view(Some(&branch), opts.repo.as_deref());
     stable.repolist().map_err(|e| {
+        let hint = sandogasa_release_hint(&branch)
+            .map(|file| {
+                format!(
+                    " ({branch} is defined by sandogasa's configs/fedrq/{file}: install it, \
+                     with the repos/ directory beside it, in /etc/fedrq/ or ~/.config/fedrq/)"
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "fedrq cannot query {branch}{}: {e}",
+            "fedrq cannot query {branch}{}: {e}{hint}",
             opts.repo
                 .as_deref()
                 .map(|r| format!(" with -r {r}"))
@@ -1682,7 +1698,15 @@ fn check_update_body(
 
     // Prefer @testing when the update has been pushed to testing,
     // since it has authoritative repo metadata (no staleness issue).
-    let testing_fedrq = services.repos.view(Some(&new_branch), Some("@testing"));
+    // The newest EPEL minor's testing is read through the Stream it is
+    // paired with: fedrq's own `epel10.4` asks for a repo that does not
+    // exist (#124).
+    let testing_view = if is_stream_minor(&branch) {
+        &branch
+    } else {
+        &new_branch
+    };
+    let testing_fedrq = services.repos.view(Some(testing_view), Some("@testing"));
 
     // Two gates: Bodhi must say the update is in testing (when we know),
     // and @testing must actually carry one of the expected NVRs (covers
@@ -2882,7 +2906,7 @@ fn epel_guard_error(branch: &str) -> String {
         "{branch} can't resolve base-OS dependencies on its own and has no \
          assumed base (epel8, epel9, epel9-next and epel10 map to al8, al9, c9s \
          and c10s; a minor-release branch such as epel10.3 is read from what \
-         its Koji build tag inherits — c10s, c10.3-snapshot or al10.2 — which \
+         its Koji build tag inherits — c10.4s, c10.3-snapshot or al10.2 — which \
          needs koji); pass a base branch plus the EPEL repo, e.g. -b c10s -r @epel"
     )
 }
@@ -2904,7 +2928,10 @@ fn epel_base(branch: &str) -> Option<&'static str> {
 /// The fedrq base for an EPEL minor-release branch, from the external
 /// repos its Koji build tag inherits — the buildroot's own answer to
 /// "which RHEL is this". The newest minor builds against the moving
-/// stream (`c10-baseos` → `c10s`), a minor in freeze against a pinned
+/// stream (`c10-baseos` → `c10.4s` for epel10.4: sandogasa's fedrq
+/// config, which pairs Stream with that minor's own EPEL repos, as
+/// fedrq's `c10s` reads the newest *released* minor's; #124), a minor
+/// in freeze against a pinned
 /// snapshot (`c10-snapshot-baseos` → `c10.3-snapshot` for epel10.3:
 /// sandogasa's fedrq config, which pairs the snapshot with that
 /// minor's own EPEL repos), and a released minor against RHEL itself
@@ -2933,7 +2960,14 @@ fn minor_base_from_repos<'a>(
                 return Some(format!("c{minor}-snapshot"));
             }
             if tail.starts_with('-') {
-                return Some(format!("c{n}s"));
+                // EPEL minors exist from 10 on; an older stream has one
+                // EPEL, which fedrq's own release reads.
+                let has_minors = n.parse::<u32>().is_ok_and(|major| major >= 10);
+                return Some(if has_minors {
+                    format!("c{minor}s")
+                } else {
+                    format!("c{n}s")
+                });
             }
         }
         if r.strip_prefix("rhel")
@@ -3085,11 +3119,12 @@ fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
 }
 
 /// Resolve the branch for a Bodhi update: an explicit `--branch` wins;
-/// otherwise the release's dist-git branch as Bodhi records it (EPEL 10
-/// minor releases such as EPEL-10.4 all ship from `epel10`), falling
+/// otherwise the release's dist-git branch as Bodhi records it, falling
 /// back to deriving it from the release name (e.g. "EPEL-9" → "epel9",
 /// "F44" → "f44"); [`apply_epel_defaults`] pairs a derived EPEL branch
-/// with its base distro.
+/// with its base distro. EPEL 10's minor releases all ship from the
+/// `epel10` dist-git branch, but each has its own repos, so EPEL-10.4
+/// is checked as `epel10.4` (#124).
 fn resolve_bodhi_branch(
     user: Option<String>,
     release_branch: Option<&str>,
@@ -3098,10 +3133,42 @@ fn resolve_bodhi_branch(
     if let Some(b) = user {
         return Ok(b);
     }
-    release_branch
-        .map(str::to_string)
-        .or_else(|| release_name.map(|r| r.to_lowercase().replace('-', "")))
-        .ok_or_else(|| "could not determine branch from Bodhi release; use --branch".to_string())
+    let from_name = release_name.map(|r| r.to_lowercase().replace('-', ""));
+    match (release_branch, from_name) {
+        (Some(b), Some(n)) if n.strip_prefix(b).is_some_and(|m| m.starts_with('.')) => Ok(n),
+        (Some(b), _) => Ok(b.to_string()),
+        (None, Some(n)) => Ok(n),
+        (None, None) => {
+            Err("could not determine branch from Bodhi release; use --branch".to_string())
+        }
+    }
+}
+
+/// Whether `branch` is a CentOS Stream paired with an EPEL minor
+/// (`c10.4s`), sandogasa's fedrq release for the newest minor.
+fn is_stream_minor(branch: &str) -> bool {
+    branch
+        .strip_prefix('c')
+        .and_then(|b| b.strip_suffix('s'))
+        .and_then(|v| v.split_once('.'))
+        .is_some_and(|(major, minor)| {
+            !major.is_empty()
+                && !minor.is_empty()
+                && major.bytes().all(|c| c.is_ascii_digit())
+                && minor.bytes().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// Where a release fedrq does not know comes from, when it is one of
+/// sandogasa's own: the config file to install, or nothing.
+fn sandogasa_release_hint(branch: &str) -> Option<&'static str> {
+    if is_stream_minor(branch) {
+        Some("centos-stream-minor.toml")
+    } else if branch.ends_with("-snapshot") {
+        Some("centos-snapshot.toml")
+    } else {
+        None
+    }
 }
 
 /// Extract a testing branch from a side tag name.
@@ -5431,7 +5498,7 @@ mod tests {
             Some(repos.iter().map(|s| s.to_string()).collect())
         };
         for (minor, base) in [
-            ("epel10.4", "c10s"),
+            ("epel10.4", "c10.4s"),
             ("epel10.3", "c10.3-snapshot"),
             ("epel10.2", "al10.2"),
         ] {
@@ -5500,11 +5567,103 @@ mod tests {
 
     #[test]
     fn resolve_bodhi_branch_prefers_the_dist_git_branch() {
-        // EPEL 10 minor releases ship from the epel10 branch; the name
-        // alone would give the unmapped epel10.4.
+        assert_eq!(
+            resolve_bodhi_branch(None, Some("f44"), Some("F44")),
+            Ok("f44".to_string())
+        );
+        // A name that is not the branch plus a minor says nothing more.
+        assert_eq!(
+            resolve_bodhi_branch(None, Some("epel9"), Some("EPEL-9")),
+            Ok("epel9".to_string())
+        );
+        assert_eq!(
+            resolve_bodhi_branch(None, Some("epel10"), Some("EPEL-100")),
+            Ok("epel10".to_string())
+        );
+    }
+
+    /// EPEL 10's minors all ship from the epel10 dist-git branch, but
+    /// each has its own repos: the minor is what is checked (#124).
+    #[test]
+    fn resolve_bodhi_branch_keeps_an_epel_minor() {
         assert_eq!(
             resolve_bodhi_branch(None, Some("epel10"), Some("EPEL-10.4")),
-            Ok("epel10".to_string())
+            Ok("epel10.4".to_string())
+        );
+    }
+
+    #[test]
+    fn a_bodhi_release_is_found_by_branch_or_by_its_name() {
+        // As Bodhi had them on 2026-11-10.
+        assert!(release_is_for("epel10", "EPEL-10.4", "epel10.4"));
+        assert!(release_is_for("epel10", "EPEL-10.4", "epel10"));
+        assert!(release_is_for("epel10.3", "EPEL-10.3", "epel10.3"));
+        assert!(release_is_for("f44", "F44", "f44"));
+        assert!(!release_is_for("epel10", "EPEL-10.4", "epel10.3"));
+        assert!(!release_is_for("epel10.3", "EPEL-10.3", "epel10.4"));
+    }
+
+    #[test]
+    fn a_stream_minor_is_told_from_other_branches() {
+        for b in ["c10.4s", "c11.0s"] {
+            assert!(is_stream_minor(b), "{b}");
+        }
+        for b in [
+            "c10s",
+            "c10.3-snapshot",
+            "c.4s",
+            "c10.s",
+            "cx.4s",
+            "al10.2",
+            "c10.4",
+        ] {
+            assert!(!is_stream_minor(b), "{b}");
+        }
+        assert_eq!(
+            sandogasa_release_hint("c10.4s"),
+            Some("centos-stream-minor.toml")
+        );
+        assert_eq!(
+            sandogasa_release_hint("c10.3-snapshot"),
+            Some("centos-snapshot.toml")
+        );
+        assert_eq!(sandogasa_release_hint("c10s"), None);
+    }
+
+    /// The fedrq release sandogasa ships for the newest EPEL minor
+    /// matches the branch ebranch asks for, and reads the minor's own
+    /// EPEL repos rather than fedrq's `epel-z-` ones, which do not
+    /// exist for that minor.
+    #[test]
+    fn the_stream_minor_config_matches_and_names_the_minors_repos() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../configs/fedrq");
+        let toml: toml::Value = toml::from_str(
+            &std::fs::read_to_string(format!("{dir}/centos-stream-minor.toml")).unwrap(),
+        )
+        .unwrap();
+        let release = &toml["releases"]["centos-stream-minor"];
+        assert_eq!(release["matcher"].as_str(), Some(r"^c(\d+\.\d+)s$"));
+        let repo =
+            std::fs::read_to_string(format!("{dir}/repos/centos-stream-minor.repo")).unwrap();
+        for def in ["base", "epel", "testing"] {
+            for id in release["defs"][def].as_array().unwrap() {
+                let id = id.as_str().unwrap();
+                assert!(
+                    id.starts_with('@') || repo.contains(&format!("[{id}]")),
+                    "{def}: {id} is not defined in the repo file"
+                );
+            }
+        }
+        assert!(repo.contains("repo=epel-$releasever&"), "{repo}");
+        assert!(
+            repo.lines()
+                .filter(|l| l.starts_with("metalink="))
+                .all(|l| !l.contains("epel-z")),
+            "{repo}"
+        );
+        assert!(
+            repo.contains("centos-baseos-$releasever_major-stream"),
+            "{repo}"
         );
     }
 

@@ -642,11 +642,19 @@ minor-release branch (`epel10.3`) has no fixed base: the newest minor
 builds against the moving stream, one in freeze against a pinned
 CentOS Stream snapshot, a released one against RHEL itself. So its
 base is read from Koji — the external repos `epel10.N-build` inherits
-name it: `c10-*` → `c10s`, `c10-snapshot-*` → `c10.3-snapshot` (for
-epel10.3: sandogasa's fedrq config, which pairs the snapshot with that
+name it: `c10-*` → `c10.4s` (for epel10.4: sandogasa's fedrq config
+`centos-stream-minor.toml`, which pairs CentOS Stream with that minor's
+own EPEL repos, where fedrq's `c10s -r @epel` reads the newest released
+minor's), `c10-snapshot-*` → `c10.3-snapshot` (for epel10.3:
+sandogasa's `centos-snapshot.toml`, which pairs the snapshot with that
 minor's own EPEL repos), `rhel10.N-*` → `al10.N` (AlmaLinux's rebuild
 of that RHEL minor, paired with the minor's own EPEL repos; Koji's RHEL
-repos are not public) — and the note says which repos decided it.
+repos are not public) — and the note says which repos decided it. A
+Bodhi update for an EPEL 10 minor is checked as that minor
+(`EPEL-10.4` as `epel10.4`), although every minor ships from the
+`epel10` dist-git branch. Both configs live in `configs/fedrq/` and
+install, with the `repos/` directory beside them, in `/etc/fedrq/` or
+`~/.config/fedrq/`; a run that needs one fedrq does not have says so.
 Before any query, fedrq is asked to list the repos for the pair, so a
 branch or group it refuses is an error up front rather than a run in
 which every dependency looks unsatisfied.

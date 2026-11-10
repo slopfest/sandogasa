@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### ebranch checks an EPEL 10 minor's update against that minor's own repos
+
+`ebranch check-update sandogasa-0.28.0-1.el10_4` compared the build
+with 0.20.0-2.el10_3, though EPEL 10.4 already had 0.27.1-1.el10_4, and
+its bug proposal then offered every version request from 0.21.0 to
+0.26.0. The newest EPEL minor was checked as `-b c10s -r @epel`, and
+fedrq's `@epel` there follows the `epel-10` metalink, which
+MirrorManager points at the newest *released* minor (10.3 that day).
+fedrq's own `epel10.4` branch does not help: it asks for
+`epel-z-10.4`, which exists only for released minors.
+
+The newest minor is now checked as `-b c10.4s -r @epel`, from a new
+fedrq release in `configs/fedrq/centos-stream-minor.toml`: CentOS
+Stream with that minor's own EPEL repos, named `epel-10.N` as
+MirrorManager answers for every minor. Its `@testing` is read the same
+way. A Bodhi update for an EPEL 10 minor is checked as that minor
+(`EPEL-10.4` as `epel10.4`, where it was `epel10`), and its Bodhi
+release is found by name, so the not-newest and other-update checks
+run for it again; they had been skipped with "no Bodhi release for
+epel10.4". A run that needs the config fedrq does not have names the
+file to install. Fixes #124.
+
 ### ebranch check-update votes or submits again from a kept check
 
 A vote or submit that went wrong after `check-update` had finished its
