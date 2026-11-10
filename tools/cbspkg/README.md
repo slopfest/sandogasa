@@ -23,6 +23,47 @@ SIG's repository files, is built from the SIG's repo (`c9s-proposed`,
 lookaside in your name: see
 [Commands run by a person](../../README.md#commands-run-by-a-person).
 
+## Hyperscale variants
+
+A Hyperscale branch builds into the variant its suffix names:
+
+| Variant | Branch suffix | Also against RHEL |
+|---|---|---|
+| main | `hs` (or the older `sig-hyperscale`) | |
+| spin | `hs-spin` (or `sig-hyperscale-spin`) | |
+| experimental | `hsx` (or `sig-hyperscale-experimental`) | |
+| kernel | `hsk` | |
+| asahi | `hs+asahi` | |
+| gnome (deprecated) | `hs+gnome` | |
+| facebook | `hs+fb` | yes |
+| intel (deprecated) | `hs+intel` | |
+
+`build`, `promote` and `add-pkg` take `--variant <name>` to use other
+variants instead, by name or branch suffix, and `--rhel <name>` to
+build one against RHEL rather than CentOS Stream
+(`hyperscale9-packages-facebook-el9`, which only facebook has). Both
+repeat, so one commit can go to several: perf's `c9s-hs` is built with
+
+```sh
+cbspkg build --variant main --rhel facebook
+```
+
+into `hyperscale9s-packages-main-el9s` and
+`hyperscale9-packages-facebook-el9`. `--variant` gives the Stream
+builds in full, so `--variant facebook` builds facebook for Stream
+only; `--rhel` alone adds RHEL builds to the branch's own variant, so
+`cbspkg build --rhel facebook` does the same for perf. A deprecated
+variant is still built, with a note. A package that is always built
+that way can say so in `~/.config/cbspkg/config.toml`, which a plain
+`cbspkg build` then follows on the branches of the variants it lists
+(perf's `c9s-hs` and `c10s-hs`, not its `c10s-hsx`):
+
+```toml
+[packages.perf]
+variants = ["main"]
+rhel = ["facebook"]
+```
+
 ## Installation
 
 ```sh
@@ -40,8 +81,8 @@ account with the Maintainer role in the SIG's group.
 ### `add-pkg`
 
 ```sh
-cbspkg add-pkg [PACKAGE] [-C DIR] [--branch BRANCH] [--owner USER] \
-    [--explain] [--dry-run]
+cbspkg add-pkg [PACKAGE] [-C DIR] [--branch BRANCH] [--variant VARIANT]… \
+    [--rhel VARIANT]… [--owner USER] [--explain] [--dry-run]
 ```
 
 Lists a package in the CBS tags its branch builds through, which a
@@ -69,8 +110,8 @@ pauses before each; `--dry-run` shows them without changing anything.
 ### `build`
 
 ```sh
-cbspkg build [-C DIR] [--branch BRANCH] [--scratch] [--owner USER] \
-    [--explain] [--dry-run]
+cbspkg build [-C DIR] [--branch BRANCH] [--variant VARIANT]… [--rhel VARIANT]… \
+    [--scratch] [--background] [--nowait] [--owner USER] [--explain] [--dry-run]
 ```
 
 Builds the checked-out branch (or `--branch`, which may exist only on
@@ -89,7 +130,13 @@ there first: `build` fetches the SIG remote and stops with the
 package listed in the collection's tags; when it is not, `build` lists
 it as `add-pkg` does, after asking. `--scratch` builds without keeping
 the result, which needs no listing. A Hyperscale Facebook branch is
-built for its RHEL collection too.
+built for its RHEL collection too, and `--variant` and `--rhel` choose
+the variants (see [Hyperscale variants](#hyperscale-variants)).
+
+Several builds run at once: each is started with `cbs build --nowait`,
+and one `cbs watch-task <task>…` waits for them all. `--nowait` leaves
+them running and prints that `cbs watch-task` instead. `--background`
+builds at a lower priority (`cbs build --background`).
 
 CBS fetches the sources from the SIG lookaside, so before building,
 `build` checks for them and uploads what is missing as `upload-sources`
@@ -142,8 +189,8 @@ without one. `--explain` and `--dry-run` show each step's command.
 ### `promote`
 
 ```sh
-cbspkg promote [NVR] [-C DIR] [--branch BRANCH] [--to testing|release] \
-    [--explain] [--dry-run]
+cbspkg promote [NVR] [-C DIR] [--branch BRANCH] [--variant VARIANT]… \
+    [--rhel VARIANT]… [--to testing|release] [--explain] [--dry-run]
 ```
 
 Moves a build to its collection's next stage: from `-candidate` to

@@ -9,6 +9,21 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     pub gitlab: Option<GitlabConfig>,
+    /// Per package: what `build`, `promote` and `add-pkg` do without
+    /// `--variant` or `--rhel` (`[packages.perf]`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub packages: std::collections::BTreeMap<String, PackageConfig>,
+}
+
+/// A package's Hyperscale variants, as `--variant` and `--rhel` give
+/// them: perf's `variants = ["main"]`, `rhel = ["facebook"]`.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rhel: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,4 +99,28 @@ pub fn gitlab_token() -> Option<String> {
         &gitlab_secret(),
         file.as_deref(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// perf's defaults, as the README gives them.
+    #[test]
+    fn a_package_table_sets_its_variants() {
+        let c: Config =
+            toml::from_str("[packages.perf]\nvariants = [\"main\"]\nrhel = [\"facebook\"]\n")
+                .unwrap();
+        assert_eq!(
+            c.packages["perf"],
+            PackageConfig {
+                variants: vec!["main".into()],
+                rhel: vec!["facebook".into()],
+            }
+        );
+        let none: Config = toml::from_str("").unwrap();
+        assert!(none.packages.is_empty());
+        // A misspelt key is an error, not a table quietly ignored.
+        assert!(toml::from_str::<Config>("[packages.perf]\nvariant = [\"main\"]\n").is_err());
+    }
 }

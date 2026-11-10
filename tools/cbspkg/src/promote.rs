@@ -28,26 +28,29 @@ pub struct PromoteArgs {
 
     /// The branch whose collections to promote in (default: the one
     /// checked out)
-    #[arg(long, value_name = "BRANCH")]
+    #[arg(long, value_name = "BRANCH", help_heading = "Selection")]
     pub branch: Option<String>,
-
-    /// Show each step and its command without running anything
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Narrate each step and show its command, pausing before each
-    #[arg(long)]
-    pub explain: bool,
 
     /// The package's dist-git checkout (default: the current
     /// directory)
-    #[arg(short = 'C', long, value_name = "DIR")]
+    #[arg(short = 'C', long, value_name = "DIR", help_heading = "Selection")]
     pub repo: Option<PathBuf>,
+
+    #[command(flatten, next_help_heading = "Selection")]
+    pub variants: crate::add_pkg::VariantArgs,
 
     /// The stage to promote to (default: the one after where the
     /// build is)
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, help_heading = "Stages")]
     pub to: Option<To>,
+
+    /// Show each step and its command without running anything
+    #[arg(long, help_heading = "Writing")]
+    pub dry_run: bool,
+
+    /// Narrate each step and show its command, pausing before each
+    #[arg(long, help_heading = "Output")]
+    pub explain: bool,
 }
 
 /// The stages a build can be promoted to.
@@ -117,7 +120,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
     }
     sandogasa_cli::require_tools(&tools)?;
-    let checkout = resolve(&repo, args.branch.as_deref(), None)?;
+    let checkout = resolve(&repo, args.branch.as_deref(), None, Some(&args.variants))?;
     let package = &checkout.package;
 
     // Which build, where it is, and what promoting it takes, per

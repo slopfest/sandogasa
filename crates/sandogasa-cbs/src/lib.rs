@@ -198,8 +198,10 @@ impl Collection {
     /// RHEL snapshots, months behind Stream and with an older
     /// toolchain.
     pub fn rhel_variant(&self) -> Option<Collection> {
-        (self.stream && self.sig == "hyperscale" && self.repository == "facebook")
-            .then(|| Collection::new(&self.sig, self.major, false, &self.repository))
+        (self.stream
+            && self.sig == Sig::Hyperscale.name()
+            && hyperscale_variant(&self.repository).is_some_and(|v| v.rhel))
+        .then(|| Collection::new(&self.sig, self.major, false, &self.repository))
     }
 
     /// The mock config (shipped in mock-core-configs and
@@ -286,17 +288,11 @@ impl Sig {
     /// proposed change, named after its first RHEL issue) builds into
     /// `main`.
     ///
-    /// Hyperscale, by the branch's suffix after `c<N>s-`:
-    ///
-    /// | Suffix | Repository |
-    /// |---|---|
-    /// | `hs`, `sig-hyperscale` | `main` |
-    /// | `sig-hyperscale-v<N>` (an older release, for emergency builds) | `main` |
-    /// | `hs+asahi` | `asahi` |
-    /// | `hs+fb` | `facebook` |
-    /// | `hsk` | `kernel` |
-    /// | `hsx`, `sig-hyperscale-experimental` | `experimental` |
-    /// | `sig-hyperscale-spin` | `spin` |
+    /// Hyperscale, by the branch's suffix after `c<N>s-`: a variant's
+    /// ([`HYPERSCALE_VARIANTS`], or the legacy `sig-hyperscale`,
+    /// `sig-hyperscale-experimental` and `sig-hyperscale-spin`), or
+    /// `sig-hyperscale-v<N>`, an older release kept for emergency builds,
+    /// into `main`.
     ///
     /// Anything else is an error naming the branch, rather than a guess.
     pub fn collection_for_branch(self, branch: &str) -> Result<Collection, String> {
@@ -305,8 +301,8 @@ impl Sig {
                 "{branch} is not a {} branch CBS builds from (expected {})",
                 self.name(),
                 match self {
-                    Sig::Hyperscale => "c<N>s-hs, -hsx, -hs+fb, -hs+asahi or -hsk",
-                    Sig::ProposedUpdates => "c<N>s-proposed-<RHEL key>",
+                    Sig::Hyperscale => hyperscale_branches(),
+                    Sig::ProposedUpdates => "c<N>s-proposed-<RHEL key>".to_string(),
                 }
             )
         };
@@ -317,7 +313,6 @@ impl Sig {
                 .filter(|key| !key.is_empty())
                 .map(|_| "main"),
             Sig::Hyperscale => match suffix {
-                "hs" | "sig-hyperscale" => Some("main"),
                 // systemd's c10s-sig-hyperscale-v257 and the like: older
                 // releases kept for emergency builds, into main.
                 v if v
@@ -326,12 +321,13 @@ impl Sig {
                 {
                     Some("main")
                 }
-                "hs+asahi" => Some("asahi"),
-                "hs+fb" => Some("facebook"),
-                "hsk" => Some("kernel"),
-                "hsx" | "sig-hyperscale-experimental" => Some("experimental"),
+                "sig-hyperscale" => Some("main"),
+                "sig-hyperscale-experimental" => Some("experimental"),
                 "sig-hyperscale-spin" => Some("spin"),
-                _ => None,
+                _ => HYPERSCALE_VARIANTS
+                    .iter()
+                    .find(|v| v.suffix == suffix)
+                    .map(|v| v.name),
             },
         }
         .ok_or_else(unknown)?;
@@ -352,6 +348,114 @@ impl Sig {
 /// which every SIG's repo for it mirrors.
 pub fn stream_project(package: &str) -> String {
     format!("redhat/centos-stream/rpms/{package}")
+}
+
+/// One of Hyperscale's variants, as its docs name them
+/// (`policies/branches.md`): the repository it builds into, and the
+/// suffix of the branches built for it (`c10s-hs+fb`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Variant {
+    /// The repository: `main`, `facebook`, ….
+    pub name: &'static str,
+    /// The branch suffix: `hs`, `hs+fb`, ….
+    pub suffix: &'static str,
+    /// Still built, but on its way out.
+    pub deprecated: bool,
+    /// Also built against RHEL rather than CentOS Stream
+    /// (`hyperscale9-packages-facebook-el9`).
+    pub rhel: bool,
+}
+
+const fn variant(
+    name: &'static str,
+    suffix: &'static str,
+    deprecated: bool,
+    rhel: bool,
+) -> Variant {
+    Variant {
+        name,
+        suffix,
+        deprecated,
+        rhel,
+    }
+}
+
+/// Hyperscale's variants, as its docs list them on 2026-11-10, and as
+/// CBS has targets for. `hotfixes` is a destination tag only, built
+/// through `main`, so it is not one.
+pub const HYPERSCALE_VARIANTS: &[Variant] = &[
+    variant("main", "hs", false, false),
+    variant("spin", "hs-spin", false, false),
+    variant("experimental", "hsx", false, false),
+    variant("kernel", "hsk", false, false),
+    variant("asahi", "hs+asahi", false, false),
+    variant("gnome", "hs+gnome", true, false),
+    variant("facebook", "hs+fb", false, true),
+    variant("intel", "hs+intel", true, false),
+];
+
+/// The branches Hyperscale builds from, for an error naming them:
+/// `c<N>s-hs, -hs-spin, …`.
+pub fn hyperscale_branches() -> String {
+    let suffixes: Vec<String> = HYPERSCALE_VARIANTS
+        .iter()
+        .map(|v| format!("-{}", v.suffix))
+        .collect();
+    format!("c<N>s{}", suffixes.join(", "))
+}
+
+/// The Hyperscale variant `name` is: its name (`facebook`) or its
+/// branch suffix (`hs+fb`).
+pub fn hyperscale_variant(name: &str) -> Option<Variant> {
+    HYPERSCALE_VARIANTS
+        .iter()
+        .copied()
+        .find(|v| v.name == name || v.suffix == name)
+}
+
+/// The collections for building into Hyperscale's `stream` variants on
+/// CentOS Stream `major`, and its `rhel` variants against RHEL, in that
+/// order: `(["main"], ["facebook"])` for 9 is `hyperscale9s-packages-main`
+/// and `hyperscale9-packages-facebook`. Each is a name or a branch
+/// suffix ([`hyperscale_variant`]); an unknown one, or a RHEL one with
+/// no RHEL target, is an error listing what there is.
+pub fn hyperscale_collections(
+    major: u32,
+    stream: &[String],
+    rhel: &[String],
+) -> Result<Vec<Collection>, String> {
+    let names = |pick: fn(&Variant) -> bool| {
+        HYPERSCALE_VARIANTS
+            .iter()
+            .filter(|v| pick(v))
+            .map(|v| v.name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut out: Vec<Collection> = Vec::new();
+    for (wanted, on_stream) in [(stream, true), (rhel, false)] {
+        for w in wanted {
+            let v = hyperscale_variant(w).ok_or_else(|| {
+                format!(
+                    "{w} is not a Hyperscale variant (there are {})",
+                    names(|_| true)
+                )
+            })?;
+            if !on_stream && !v.rhel {
+                return Err(format!(
+                    "Hyperscale builds {} for CentOS Stream only; against RHEL there is {}",
+                    v.name,
+                    names(|v| v.rhel)
+                ));
+            }
+            let c = Collection::new(Sig::Hyperscale.name(), major, on_stream, v.name);
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// What SIGs' release packages are named: `centos-release-hyperscale`,
@@ -549,6 +653,49 @@ mod tests {
         assert_eq!(hs.own_branch_major("c10s-hsx"), None);
     }
 
+    /// perf-7.3~rc2-1, built from c9s-hs into main on Stream and
+    /// facebook on RHEL (`koji -p cbs list-tagged`, 2026-11-10).
+    #[test]
+    fn hyperscale_variants_are_chosen_by_name_or_branch_suffix() {
+        let c = hyperscale_collections(9, &["main".into()], &["facebook".into()]).unwrap();
+        assert_eq!(
+            c.iter().map(Collection::target).collect::<Vec<_>>(),
+            [
+                "hyperscale9s-packages-main-el9s",
+                "hyperscale9-packages-facebook-el9"
+            ]
+        );
+        let c = hyperscale_collections(10, &["hs+fb".into(), "facebook".into()], &[]).unwrap();
+        assert_eq!(c.len(), 1, "the same variant once");
+        assert_eq!(c[0].target(), "hyperscale10s-packages-facebook-el10s");
+        let err = hyperscale_collections(9, &[], &["main".into()]).unwrap_err();
+        assert!(
+            err.contains("CentOS Stream only") && err.contains("facebook"),
+            "{err}"
+        );
+        let err = hyperscale_collections(9, &["hotfixes".into()], &[]).unwrap_err();
+        assert!(
+            err.contains("not a Hyperscale variant") && err.contains("intel"),
+            "{err}"
+        );
+        assert!(hyperscale_variant("hs+intel").unwrap().deprecated);
+        assert!(hyperscale_variant("gnome").unwrap().deprecated);
+        assert!(!hyperscale_variant("main").unwrap().deprecated);
+        let branches = hyperscale_branches();
+        assert!(
+            branches.starts_with("c<N>s-hs, -hs-spin,") && branches.contains("-hs+intel"),
+            "{branches}"
+        );
+        // Facebook alone is also built against RHEL, by its branch too.
+        let fb = Sig::Hyperscale.collection_for_branch("c9s-hs+fb").unwrap();
+        assert_eq!(
+            fb.rhel_variant().unwrap().target(),
+            "hyperscale9-packages-facebook-el9"
+        );
+        let main = Sig::Hyperscale.collection_for_branch("c9s-hs").unwrap();
+        assert_eq!(main.rhel_variant(), None);
+    }
+
     #[test]
     fn proposed_updates_builds_its_topic_branches_into_main() {
         let c = Sig::ProposedUpdates
@@ -584,6 +731,9 @@ mod tests {
             ("c9s-hsx", "experimental"),
             ("c9s-sig-hyperscale-experimental", "experimental"),
             ("c8s-sig-hyperscale-spin", "spin"),
+            ("c10s-hs-spin", "spin"),
+            ("c9s-hs+gnome", "gnome"),
+            ("c9s-hs+intel", "intel"),
         ] {
             let c = Sig::Hyperscale.collection_for_branch(branch).unwrap();
             assert_eq!(c.repository, repository, "{branch}");

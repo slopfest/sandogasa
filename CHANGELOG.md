@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### cbspkg: build a Hyperscale package for several variants, Stream or RHEL, in one run
+
+Some Hyperscale packages are built from one commit into several
+variants: perf-7.3~rc2-1 went from `c9s-hs` into
+`hyperscale9s-packages-main` and, against RHEL,
+`hyperscale9-packages-facebook`. cbspkg built a branch into its one
+variant (and RHEL facebook only for `hs+fb` branches), so the rest was
+typed by hand, target by target. It also did not know the current
+`hs-spin`, `hs+gnome` and `hs+intel` branches.
+
+`build`, `promote` and `add-pkg` now take `--variant` (a Hyperscale
+docs variant name, or its branch suffix) to use other variants than
+the branch's, and `--rhel` to build one against RHEL, refusing those
+with no RHEL target; both repeat, and `--rhel` alone adds to the
+branch's own variant, so perf's is `cbspkg build --rhel facebook`. A
+`[packages.<name>]` table in the config (`variants`, `rhel`) sets a
+package's default on the branches of the variants it lists. Several builds
+run at once: each started with `cbs build --nowait`, then one
+`cbs watch-task` for all, each command shown under `--explain`.
+`build --nowait` leaves them running and prints that command, and
+`--background` lowers their priority; if one fails to start, the
+`cbs watch-task` for those already running is printed. gnome and
+intel are deprecated, and still built, with a note. `build`, `promote` and `add-pkg` group their flags
+under headings now that they have more than six. In sandogasa-cbs,
+`Variant`, `HYPERSCALE_VARIANTS`, `hyperscale_variant` and
+`hyperscale_collections` name the variants and `hyperscale_branches`
+lists their branches; `Sig::collection_for_branch` and
+`Collection::rhel_variant` take the branch suffixes and RHEL builds
+from them.
+Resolves #105.
+
 ### cbspkg: sig-repo makes the SIG repo open on its newest SIG branch
 
 A SIG repo kept whatever default branch GitLab gave it, so its page

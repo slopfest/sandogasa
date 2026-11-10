@@ -28,25 +28,50 @@ pub struct AddPkgArgs {
 
     /// The branch whose collection to list it in (default: the one
     /// checked out)
-    #[arg(long, value_name = "BRANCH")]
+    #[arg(long, value_name = "BRANCH", help_heading = "Selection")]
     pub branch: Option<String>,
-
-    /// Show each step and its command without running anything
-    #[arg(long)]
-    pub dry_run: bool,
-
-    /// Narrate each step and show its command, pausing before each
-    #[arg(long)]
-    pub explain: bool,
-
-    /// The package's owner in CBS (default: your CBS login)
-    #[arg(long, value_name = "USER")]
-    pub owner: Option<String>,
 
     /// The package's dist-git checkout (default: the current
     /// directory)
-    #[arg(short = 'C', long, value_name = "DIR")]
+    #[arg(short = 'C', long, value_name = "DIR", help_heading = "Selection")]
     pub repo: Option<PathBuf>,
+
+    #[command(flatten, next_help_heading = "Selection")]
+    pub variants: VariantArgs,
+
+    /// Show each step and its command without running anything
+    #[arg(long, help_heading = "Writing")]
+    pub dry_run: bool,
+
+    /// The package's owner in CBS (default: your CBS login)
+    #[arg(long, value_name = "USER", help_heading = "Writing")]
+    pub owner: Option<String>,
+
+    /// Narrate each step and show its command, pausing before each
+    #[arg(long, help_heading = "Output")]
+    pub explain: bool,
+}
+
+/// Which Hyperscale variants to work on instead of the branch's own
+/// collection: `build`, `promote` and `add-pkg` share them.
+#[derive(clap::Args, Debug, Default, Clone)]
+pub struct VariantArgs {
+    /// A Hyperscale variant to build against RHEL rather than CentOS
+    /// Stream (repeatable; facebook is the one there is)
+    #[arg(long, value_name = "VARIANT")]
+    pub rhel: Vec<String>,
+
+    /// A Hyperscale variant to use instead of the branch's: a name
+    /// (facebook) or branch suffix (hs+fb); repeatable
+    #[arg(long, value_name = "VARIANT")]
+    pub variant: Vec<String>,
+}
+
+impl VariantArgs {
+    /// Whether any variant was asked for.
+    pub fn is_empty(&self) -> bool {
+        self.variant.is_empty() && self.rhel.is_empty()
+    }
 }
 
 /// What a checkout is about: its branch, the collections that branch
@@ -93,9 +118,9 @@ pub fn collections_for(branch: &str, sigs: &[Sig]) -> Result<Vec<Collection>, St
             _ => {
                 return Err(format!(
                     "{branch} is not a branch a known SIG builds from (c<N>s-proposed-<RHEL \
-                     key> for Proposed Updates; c<N>s-hs, -hsx, -hs+fb, -hs+asahi or -hsk for \
-                     Hyperscale), and the checkout's remotes do not settle which SIG it is \
-                     for: pass --branch"
+                     key> for Proposed Updates; {} for Hyperscale), and the checkout's remotes \
+                     do not settle which SIG it is for: pass --branch",
+                    sandogasa_cbs::hyperscale_branches()
                 ));
             }
         },
@@ -131,12 +156,76 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The collections `variants` ask for, in place of the branch's own
+/// (`collections`): Hyperscale's, on the branch's Stream release. No
+/// variants leaves them as they are; `--rhel` alone adds RHEL builds to
+/// the branch's own Stream variant; variants for another SIG, or for a
+/// release package (which goes through Extras), are an error.
+pub fn collections_with(
+    sig: Sig,
+    collections: Vec<Collection>,
+    branch: &str,
+    variants: &VariantArgs,
+) -> Result<Vec<Collection>, String> {
+    if variants.is_empty() {
+        return Ok(collections);
+    }
+    if sig != Sig::Hyperscale {
+        return Err(
+            "--variant and --rhel choose Hyperscale's variants; this is \
+                    a Proposed Updates package"
+                .to_string(),
+        );
+    }
+    if collections.iter().any(Collection::is_extras) {
+        return Err(
+            "a release package builds through Extras only: drop --variant and --rhel".into(),
+        );
+    }
+    let major = sandogasa_cbs::stream_major(branch)
+        .ok_or_else(|| format!("{branch} names no CentOS Stream release"))?;
+    let stream: Vec<String> = if variants.variant.is_empty() {
+        collections
+            .iter()
+            .filter(|c| c.stream)
+            .map(|c| c.repository.clone())
+            .collect()
+    } else {
+        variants.variant.clone()
+    };
+    sandogasa_cbs::hyperscale_collections(major, &stream, &variants.rhel)
+}
+
+/// A package's variants from its `[packages.<name>]` table, when they
+/// are for this branch: the table lists the branch's own variant, or
+/// lists only RHEL builds. perf's `variants = ["main"]` is for `c9s-hs`,
+/// not `c9s-hsx`.
+pub fn configured_for(
+    package: &crate::config::PackageConfig,
+    collections: &[Collection],
+) -> Option<VariantArgs> {
+    let for_branch = package.variants.is_empty()
+        || collections.iter().filter(|c| c.stream).any(|c| {
+            package.variants.iter().any(|v| {
+                sandogasa_cbs::hyperscale_variant(v).is_some_and(|v| v.name == c.repository)
+            })
+        });
+    for_branch.then(|| VariantArgs {
+        variant: package.variants.clone(),
+        rhel: package.rhel.clone(),
+    })
+}
+
 /// Work out [`Checkout`] for `repo`, with `branch` and `package`
-/// overriding what the checkout says.
+/// overriding what the checkout says, and `variants` (else the
+/// package's in the config, [`configured_for`]) the collections; `None`
+/// for a command that needs only the SIG's repo, which then takes the
+/// branch's collections as they are.
 pub fn resolve(
     repo: &Path,
     branch: Option<&str>,
     package: Option<&str>,
+    variants: Option<&VariantArgs>,
 ) -> Result<Checkout, Box<dyn std::error::Error>> {
     let branch = match branch {
         Some(b) => b.to_string(),
@@ -156,6 +245,36 @@ pub fn resolve(
             repo.display()
         )
     })?;
+    let collections = match variants {
+        None => collections,
+        Some(v) if !v.is_empty() => collections_with(sig, collections, &branch, v)?,
+        Some(_) => {
+            let configured = match crate::config::load() {
+                Ok(c) => c
+                    .packages
+                    .get(&package)
+                    .and_then(|p| configured_for(p, &collections)),
+                Err(e) => {
+                    eprintln!(
+                        "warning: cannot read {} ({e}); going by the branch alone",
+                        crate::config::config_path().display()
+                    );
+                    None
+                }
+            };
+            match configured {
+                Some(v) => collections_with(sig, collections, &branch, &v)?,
+                None => collections,
+            }
+        }
+    };
+    for c in &collections {
+        if c.sig == Sig::Hyperscale.name()
+            && sandogasa_cbs::hyperscale_variant(&c.repository).is_some_and(|v| v.deprecated)
+        {
+            println!("Note: Hyperscale's {} variant is deprecated.", c.repository);
+        }
+    }
     let checkout = Checkout {
         branch,
         collections,
@@ -279,7 +398,12 @@ fn run_inner(args: &AddPkgArgs) -> Result<(), Box<dyn std::error::Error>> {
         quiet: false,
     };
     let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
-    let checkout = resolve(&repo, args.branch.as_deref(), args.package.as_deref())?;
+    let checkout = resolve(
+        &repo,
+        args.branch.as_deref(),
+        args.package.as_deref(),
+        Some(&args.variants),
+    )?;
     let mut tools = vec![("koji", "sudo dnf install koji", Some("--help"))];
     if !args.dry_run {
         tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
@@ -424,5 +548,67 @@ mod tests {
             (sig, c[0].prefix().as_str()),
             (Sig::ProposedUpdates, "proposed_updates9s-packages-main")
         );
+    }
+
+    fn variants(variant: &[&str], rhel: &[&str]) -> VariantArgs {
+        VariantArgs {
+            variant: variant.iter().map(|s| s.to_string()).collect(),
+            rhel: rhel.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// perf, from c9s-hs: main on Stream and facebook on RHEL, in place
+    /// of the branch's main alone; `--rhel` alone adds to the branch's.
+    #[test]
+    fn variants_replace_the_branchs_collection() {
+        let (sig, own) = collections_of("perf", "c9s-hs", &[Sig::Hyperscale]).unwrap();
+        let prefixes = |c: Vec<Collection>| c.iter().map(Collection::prefix).collect::<Vec<_>>();
+        let both = [
+            "hyperscale9s-packages-main",
+            "hyperscale9-packages-facebook",
+        ];
+        let c = collections_with(
+            sig,
+            own.clone(),
+            "c9s-hs",
+            &variants(&["main"], &["facebook"]),
+        );
+        assert_eq!(prefixes(c.unwrap()), both);
+        let c = collections_with(sig, own.clone(), "c9s-hs", &variants(&[], &["facebook"]));
+        assert_eq!(prefixes(c.unwrap()), both, "--rhel alone adds to main");
+        // --variant gives the Stream builds in full: facebook alone.
+        let c = collections_with(sig, own.clone(), "c9s-hs", &variants(&["hs+fb"], &[]));
+        assert_eq!(prefixes(c.unwrap()), ["hyperscale9s-packages-facebook"]);
+        let c = collections_with(sig, own.clone(), "c9s-hs", &variants(&[], &[])).unwrap();
+        assert_eq!(c, own, "no variants: the branch's own");
+        let (pu, pu_own) = collections_of("rsync", "c9s-proposed-RHEL-1", &[]).unwrap();
+        let err = collections_with(pu, pu_own, "c9s-proposed-RHEL-1", &variants(&["main"], &[]));
+        assert!(err.unwrap_err().contains("Proposed Updates"));
+        let (hs, extras) =
+            collections_of("centos-release-hyperscale", "c9s-sig-hyperscale", &[]).unwrap();
+        let err = collections_with(hs, extras, "c9s-sig-hyperscale", &variants(&["main"], &[]));
+        assert!(err.unwrap_err().contains("Extras"));
+    }
+
+    /// perf's table steers its main branches, not its others.
+    #[test]
+    fn a_packages_defaults_are_for_the_branches_of_its_variants() {
+        let perf = crate::config::PackageConfig {
+            variants: vec!["main".into()],
+            rhel: vec!["facebook".into()],
+        };
+        let on = |branch: &str| {
+            let (_, own) = collections_of("perf", branch, &[Sig::Hyperscale]).unwrap();
+            configured_for(&perf, &own)
+        };
+        assert_eq!(on("c9s-hs").unwrap().rhel, ["facebook"]);
+        assert!(on("c10s-hsx").is_none(), "experimental is not main");
+        assert!(on("c9s-hsk").is_none());
+        let rhel_only = crate::config::PackageConfig {
+            variants: vec![],
+            rhel: vec!["facebook".into()],
+        };
+        let (_, own) = collections_of("perf", "c10s-hsx", &[Sig::Hyperscale]).unwrap();
+        assert!(configured_for(&rhel_only, &own).is_some());
     }
 }

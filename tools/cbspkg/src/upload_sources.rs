@@ -316,7 +316,7 @@ fn run_inner(args: &UploadSourcesArgs) -> Result<(), Box<dyn std::error::Error>>
     };
     let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
     sandogasa_cli::require_tools(&[("git", "sudo dnf install git-core", Some("--version"))])?;
-    let checkout = resolve(&repo, args.branch.as_deref(), None)?;
+    let checkout = resolve(&repo, args.branch.as_deref(), None, None)?;
     let located = crate::build::locate(&checkout, &repo)?;
     upload_missing(&ui, &repo, &checkout, &located.remote, &located.commit)?;
     Ok(())

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cbspkg 1 2026-11-09 "sandogasa 0.27.1" "Sandogasa Manual"
+.TH cbspkg 1 2026-11-10 "sandogasa 0.27.1" "Sandogasa Manual"
 .SH NAME
 cbspkg \- Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedora
 .SH SYNOPSIS
@@ -18,55 +18,80 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 Print version
 .SH COMMANDS
 .SS cbspkg add-pkg
-\fBcbspkg add\-pkg\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-owner\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGE\fR]
+\fBcbspkg add\-pkg\fR [\fB\-\-branch\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-\-dry\-run\fR] [\fB\-\-owner\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIPACKAGE\fR]
 .PP
 List a package in the CBS tags its branch builds through, as its first build needs
-.TP
-\fB\-\-branch\fR \fI<BRANCH>\fR
-The branch whose collection to list it in (default: the one checked out)
-.TP
-\fB\-\-dry\-run\fR
-Show each step and its command without running anything
-.TP
-\fB\-\-explain\fR
-Narrate each step and show its command, pausing before each
-.TP
-\fB\-\-owner\fR \fI<USER>\fR
-The package\*(Aqs owner in CBS (default: your CBS login)
-.TP
-\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
-The package\*(Aqs dist\-git checkout (default: the current directory)
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
 [\fIPACKAGE\fR]
 The package (default: the one the checkout\*(Aqs remotes are for)
-.SS cbspkg build
-\fBcbspkg build\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-owner\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-scratch\fR] [\fB\-h\fR|\fB\-\-help\fR]
-.PP
-Build the checked\-out SIG branch in CBS: the target, the SIG repo\*(Aqs URL and the commit worked out from the branch
+.SH SELECTION
 .TP
 \fB\-\-branch\fR \fI<BRANCH>\fR
-The branch to build (default: the one checked out)
-.TP
-\fB\-\-dry\-run\fR
-Show each step and its command without running anything
-.TP
-\fB\-\-explain\fR
-Narrate each step and show its command, pausing before each
-.TP
-\fB\-\-owner\fR \fI<USER>\fR
-The owner to list a new package under (default: your CBS login)
+The branch whose collection to list it in (default: the one checked out)
 .TP
 \fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
 The package\*(Aqs dist\-git checkout (default: the current directory)
 .TP
-\fB\-\-scratch\fR
-Build without keeping the result (no tags, no listing needed)
+\fB\-\-rhel\fR \fI<VARIANT>\fR
+A Hyperscale variant to build against RHEL rather than CentOS Stream (repeatable; facebook is the one there is)
+.TP
+\fB\-\-variant\fR \fI<VARIANT>\fR
+A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or branch suffix (hs+fb); repeatable
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.TP
+\fB\-\-owner\fR \fI<USER>\fR
+The package\*(Aqs owner in CBS (default: your CBS login)
+.SH OUTPUT
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.SS cbspkg build
+\fBcbspkg build\fR [\fB\-\-branch\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-\-background\fR] [\fB\-\-nowait\fR] [\fB\-\-owner\fR] [\fB\-\-scratch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Build the checked\-out SIG branch in CBS: the target, the SIG repo\*(Aqs URL and the commit worked out from the branch
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SH SELECTION
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch to build (default: the one checked out)
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-rhel\fR \fI<VARIANT>\fR
+A Hyperscale variant to build against RHEL rather than CentOS Stream (repeatable; facebook is the one there is)
+.TP
+\fB\-\-variant\fR \fI<VARIANT>\fR
+A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or branch suffix (hs+fb); repeatable
+.SH BUILDING
+.TP
+\fB\-\-background\fR
+Build at a lower priority (cbs build \-\-background)
+.TP
+\fB\-\-nowait\fR
+Start the builds and leave them running, printing the command that waits for them
+.TP
+\fB\-\-owner\fR \fI<USER>\fR
+The owner to list a new package under (default: your CBS login)
+.TP
+\fB\-\-scratch\fR
+Build without keeping the result (no tags, no listing needed)
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.SH OUTPUT
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
 .SS cbspkg config
 \fBcbspkg config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
@@ -78,21 +103,29 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cbspkg promote
-\fBcbspkg promote\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-to\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINVR\fR]
+\fBcbspkg promote\fR [\fB\-\-branch\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-\-to\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINVR\fR]
 .PP
 Move a build to its collection\*(Aqs next stage (\-testing, then \-release, untagging it from \-testing)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fINVR\fR]
+The build to promote (default: the package\*(Aqs newest in each of the branch\*(Aqs collections)
+.SH SELECTION
 .TP
 \fB\-\-branch\fR \fI<BRANCH>\fR
 The branch whose collections to promote in (default: the one checked out)
 .TP
-\fB\-\-dry\-run\fR
-Show each step and its command without running anything
-.TP
-\fB\-\-explain\fR
-Narrate each step and show its command, pausing before each
-.TP
 \fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
 The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-rhel\fR \fI<VARIANT>\fR
+A Hyperscale variant to build against RHEL rather than CentOS Stream (repeatable; facebook is the one there is)
+.TP
+\fB\-\-variant\fR \fI<VARIANT>\fR
+A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or branch suffix (hs+fb); repeatable
+.SH STAGES
 .TP
 \fB\-\-to\fR \fI<TO>\fR
 The stage to promote to (default: the one after where the build is)
@@ -106,12 +139,14 @@ testing
 .IP \(bu 2
 release
 .RE
+.SH WRITING
 .TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.SH OUTPUT
 .TP
-[\fINVR\fR]
-The build to promote (default: the package\*(Aqs newest in each of the branch\*(Aqs collections)
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
 .SS cbspkg sig-repo
 \fBcbspkg sig\-repo\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-sig\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL|PACKAGE\fR>
 .PP

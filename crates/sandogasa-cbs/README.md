@@ -41,9 +41,18 @@ assert_eq!(
 | Hyperscale | `c<N>s-sig-hyperscale-v<N>` (older releases, for emergency builds) | `main` |
 | Hyperscale | `c<N>s-hs+asahi` | `asahi` |
 | Hyperscale | `c<N>s-hs+fb` | `facebook` |
+| Hyperscale | `c<N>s-hs+gnome` (deprecated) | `gnome` |
+| Hyperscale | `c<N>s-hs+intel` (deprecated) | `intel` |
+| Hyperscale | `c<N>s-hs-spin`, `c<N>s-sig-hyperscale-spin` | `spin` |
 | Hyperscale | `c<N>s-hsk` | `kernel` |
 | Hyperscale | `c<N>s-hsx`, `c<N>s-sig-hyperscale-experimental` | `experimental` |
-| Hyperscale | `c<N>s-sig-hyperscale-spin` | `spin` |
+
+Hyperscale's variants, as its docs name them, are `HYPERSCALE_VARIANTS`
+(name, branch suffix, whether deprecated, whether also built against
+RHEL); `hyperscale_variant` finds one by name or suffix, and
+`hyperscale_collections` gives the collections for some on Stream and
+some against RHEL: `(["main"], ["facebook"])` for 9 is
+`hyperscale9s-packages-main` and `hyperscale9-packages-facebook`.
 
 `Sig::detect` finds the SIG and collection for a branch of any of them.
 Any other branch is an error that names it.

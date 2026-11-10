@@ -26,3 +26,4 @@ mockito = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["man"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+toml = { workspace = true }

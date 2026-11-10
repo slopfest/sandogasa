@@ -70,6 +70,8 @@ fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
         gitlab: (!in_keyring).then_some(GitlabConfig {
             access_token: token,
         }),
+        // Not written: save() keeps the file's [packages] as they are.
+        ..Default::default()
     })?;
     // save() lays the struct over the file and never removes a key, so
     // a token now in the keyring is taken out of the file here.
