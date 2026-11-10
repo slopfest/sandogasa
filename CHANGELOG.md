@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+### Every tool saves its secrets through one shared helper
+
+Moving the secrets to the keyring (#79) left ten copies of the same
+steps, one per tool: filling the prompts from the keyring, keeping each
+secret there, turning a cleared one off, and taking the moved ones out
+of the config file. They had already drifted. cpu-sig-tracker offered a
+Jira token from its file before the keyring's, so a stale one could be
+saved back over the shared entry, and skipping Jira at its prompts left
+the old token in use. Resolves #117.
+
+sandogasa-config now has them once: `secret::Slot` describes a secret in
+a tool's config, `secret::fill` sets each prompt's default from the
+keyring first and records how each stood (`secret::Before`). An
+optional secret turned off is left off on a plain run, neither offered
+nor asked about; `--all`, or any run for a required one, offers it
+again, asking first whether to use the keyring's entry when it still
+has one (`sandogasa_cli::ask_to_reenable`, yes by default for a
+required secret, no for an optional one). `secret::is_set` is what a
+tool checks before sending a secret, so `-` is never used as one; and
+`secret::save_with` (or `secret::settle`, for a tool that saves its own
+way) keeps each, turns a cleared one off, and takes the moved ones out
+of the file. A value the keyring already holds is no longer stored
+again, so a re-run no longer prints "kept in the keyring" for it.
+`keyring_fn!()` defines a tool's `keyring()` in the tool's own crate,
+so its tests always get one in memory, and the `test-support` feature
+shares the tests' `EnvGuard`. All ten tools use them.
+
+Behaviour brought in line along the way:
+
+- cpu-sig-tracker offers the Jira token from the keyring first, and
+  skipping Jira at `config --all` turns it off; a later run says
+  "JIRA: off for cpu-sig-tracker (`config --all` to set it up)" rather
+  than checking `-` against Jira.
+- When a secret is off but the keyring still holds the shared entry,
+  every tool's `config` asks whether to use the entry again rather than
+  for a new token: on any run for a required secret, yes by default
+  (the Bugzilla keys, the GitLab tokens, pkg-acl's Pagure token,
+  fesco-chair's Forgejo token), and only at `config --all` for an
+  optional one, no by default (an NVD or GitHub key, a report instance,
+  cpu-sig-tracker's Jira).
+- A required secret's prompt refuses `-`, which would have written the
+  marker that turns it off and left every later run without it; a
+  secret turned off shows as off at the prompts rather than as set; and
+  sandogasa-cli's key checks never send a key that is empty or `-` to
+  the service, the key a replacement prompt took included.
+- No tool sends a secret turned off to its service as if it were one:
+  fesco-chair checked `-` as a Forgejo token, poi-tracker and
+  fedora-cve-triage as a Bugzilla key, ebranch as an NVD key, and
+  ebranch's escalate could take `-` as the Forgejo token to file with.
+- ebranch refuses to keep a secret under another instance's entry than
+  the one it was read for, should a URL change during `config`.
+- fedora-review-digest's and hs-relmon's libraries take the keyring as
+  a parameter, so their binaries' tests can no longer reach the user's
+  keyring.
+- cpu-sig-tracker's and hs-relmon's `config` read the user's file alone,
+  so values shipped in `/etc` are no longer copied into it.
+- poi-tracker and sandogasa-pkg-acl name the dist-git secret "Pagure
+  token" throughout, as its keyring entry does.
+- sandogasa-report's `config` gains `--all`, which goes over the
+  instances whose token is turned off as well, offering the keyring's
+  token again where it has one; before, one turned off could only be
+  turned back on by editing the overlay.
+
+Three of cpu-sig-tracker's tests ran the real `fedrq`, which fetched
+CentOS Stream's repository metadata from the network; they now give it
+a stand-in answer, as their other tools already had. A cbspkg test
+that passed only when an earlier test had installed the TLS provider
+installs it itself.
+
 ### Every tool keeps its secrets in the desktop keyring
 
 ebranch, fedora-cve-triage, fedora-review-digest, fesco-chair,

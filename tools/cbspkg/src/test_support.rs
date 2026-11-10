@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! Shared helpers for the subcommands' tests: fake `koji`, `cbs` and
-//! friends on PATH, a scoped env-var guard, and a package checkout in a
-//! temp dir whose SIG remote is a local bare repo, so `git fetch` and
-//! `git push` work without a network.
+//! friends on PATH, the workspace's scoped env-var guard ([`EnvGuard`],
+//! re-exported), and a package checkout in a temp dir whose SIG remote
+//! is a local bare repo, so `git fetch` and `git push` work without a
+//! network.
 //!
 //! The module is gated on `cfg(test)` at its `main.rs` declaration.
 //! Tests using [`Fixture`] change PATH, HOME and the XDG dirs, so they
@@ -39,43 +40,7 @@ pub fn install_fake_bin(dir: &Path, name: &str, cases: &[(&str, &str)]) -> PathB
     path
 }
 
-/// RAII guard: sets env vars on construction (`None` unsets), restores
-/// the originals on drop. Callers serialize with
-/// `#[serial_test::serial]`.
-pub struct EnvGuard {
-    originals: Vec<(String, Option<String>)>,
-}
-
-impl EnvGuard {
-    pub fn new(vars: &[(&str, Option<&str>)]) -> Self {
-        let mut originals = Vec::with_capacity(vars.len());
-        for (k, v) in vars {
-            originals.push(((*k).to_string(), std::env::var(k).ok()));
-            // SAFETY: callers serialize with #[serial_test::serial].
-            unsafe {
-                match v {
-                    Some(v) => std::env::set_var(k, v),
-                    None => std::env::remove_var(k),
-                }
-            }
-        }
-        Self { originals }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (k, v) in &self.originals {
-            // SAFETY: callers serialize env mutations.
-            unsafe {
-                match v {
-                    Some(prev) => std::env::set_var(k, prev),
-                    None => std::env::remove_var(k),
-                }
-            }
-        }
-    }
-}
+pub use sandogasa_config::test_support::EnvGuard;
 
 /// Run git in `dir`, with an identity and no signing, panicking on
 /// failure; its output trimmed.
@@ -144,17 +109,17 @@ impl Fixture {
         let cache = tmp.path().join("cache").display().to_string();
         let state = tmp.path().join("state").display().to_string();
         let env = EnvGuard::new(&[
-            ("PATH", Some(&path)),
-            ("HOME", Some(&home_s)),
-            ("XDG_CONFIG_HOME", Some(&config)),
-            ("XDG_CACHE_HOME", Some(&cache)),
-            ("XDG_STATE_HOME", Some(&state)),
-            ("GIT_CONFIG_GLOBAL", Some("/dev/null")),
-            ("GIT_CONFIG_NOSYSTEM", Some("1")),
-            ("GITLAB_TOKEN", None),
-            ("CBSPKG_LOOKASIDE_BASE", Some("http://127.0.0.1:9")),
-            ("CBSPKG_GITLAB_BASE", Some("http://127.0.0.1:9")),
-        ]);
+            ("PATH", &path),
+            ("HOME", &home_s),
+            ("XDG_CONFIG_HOME", &config),
+            ("XDG_CACHE_HOME", &cache),
+            ("XDG_STATE_HOME", &state),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("CBSPKG_LOOKASIDE_BASE", "http://127.0.0.1:9"),
+            ("CBSPKG_GITLAB_BASE", "http://127.0.0.1:9"),
+        ])
+        .unset(&["GITLAB_TOKEN"]);
         // Every CBS tool is a fake that answers only what a test lets
         // it; anything else fails.
         install_fake_bin(&bin, "koji", &[("--help", "")]);

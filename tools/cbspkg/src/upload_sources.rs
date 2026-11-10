@@ -359,7 +359,7 @@ mod tests {
             .with_status(status)
             .expect(1)
             .create();
-        let env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", Some(&server.url()))]);
+        let env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", &server.url())]);
         (server, mock, env)
     }
 
@@ -444,9 +444,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn the_lookaside_can_be_pointed_elsewhere() {
-        let _env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", None)]);
+        let _env = EnvGuard::new(&[]).unset(&["CBSPKG_LOOKASIDE_BASE"]);
         assert_eq!(lookaside_base(), SIG_LOOKASIDE);
-        let _env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", Some("http://127.0.0.1:1"))]);
+        let _env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", "http://127.0.0.1:1")]);
         assert_eq!(lookaside_base(), "http://127.0.0.1:1");
     }
 
@@ -472,6 +472,8 @@ mod tests {
 
     #[test]
     fn the_lookaside_is_asked_with_a_head_request() {
+        // Not left to whichever test happened to run first.
+        sandogasa_cli::install_crypto_provider();
         let mut server = mockito::Server::new();
         server
             .mock("HEAD", "/sources/rsync/a.tar.gz/sha512/1/a.tar.gz")

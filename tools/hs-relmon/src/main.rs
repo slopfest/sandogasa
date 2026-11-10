@@ -21,6 +21,11 @@ use hs_relmon::repos;
 use hs_relmon::retire;
 use hs_relmon::review;
 
+// The keyring lives here, not in the library: the library is built
+// without cfg(test) for this binary's tests, so a keyring it chose
+// could be the user's.
+sandogasa_config::keyring_fn!();
+
 #[derive(Parser)]
 #[command(
     name = "hs-relmon",
@@ -961,7 +966,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             manifest,
             add_missing,
         } => {
-            let client = gitlab::group_client_from_group_url(&group)?;
+            let client = gitlab::group_client_from_group_url(keyring(), &group)?;
             let issues = client.list_issues(ISSUE_LABEL, None)?;
 
             let manifest_names = match &manifest {
@@ -1174,7 +1179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .into_iter()
                     .flat_map(|(_, b)| b)
                     .collect();
-                match gitlab::client_from_project_url(&url)
+                match gitlab::client_from_project_url(keyring(), &url)
                     .and_then(|c| repos::plan_for_repo(&c, &pkg.name, &builds))
                 {
                     Ok(p) => plans.push(p),
@@ -1213,7 +1218,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // them all.
                 let outcome = repos::apply(&plans, yes, |p| {
                     let url = format!("{group}/{}", p.package);
-                    gitlab::client_from_project_url(&url)
+                    gitlab::client_from_project_url(keyring(), &url)
                         .and_then(|c| c.update_project(&p.update()))
                 })?;
                 println!(
@@ -1305,9 +1310,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ensure_cbs_auth(dry_run)?;
             // The token is the one precondition worth failing on before
             // any request: a dry run only reads, so it may go without.
-            let token_ok = gitlab::load_token().is_ok();
+            let token_ok = gitlab::load_token(keyring()).is_ok();
             if !dry_run && !token_ok {
-                gitlab::load_token()?;
+                gitlab::load_token(keyring())?;
             }
             let m = manifest::Manifest::load(&path)?;
             let cbs_client = cbs::Client::new();
@@ -1316,13 +1321,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !token_ok {
                     return None;
                 }
-                gitlab::client_from_project_url(url)
+                gitlab::client_from_project_url(keyring(), url)
                     .and_then(|c| c.project_status())
                     .ok()
                     .map(|s| s.archived)
             };
             let archive = |url: &str| -> Result<(), Box<dyn std::error::Error>> {
-                gitlab::client_from_project_url(url)?.archive_project()
+                gitlab::client_from_project_url(keyring(), url)?.archive_project()
             };
             let mut failures = 0usize;
             for package in &packages {
@@ -1409,7 +1414,7 @@ fn resolve_releases(release: &[String]) -> Result<Vec<String>, Box<dyn std::erro
 /// error doesn't silently suppress issue filing; the filing attempt
 /// itself will then surface the real error.
 fn project_issue_block_reason(project_url: &str) -> Option<&'static str> {
-    let client = gitlab::client_from_project_url(project_url).ok()?;
+    let client = gitlab::client_from_project_url(keyring(), project_url).ok()?;
     let status = client.project_status().ok()?;
     status.issue_block_reason()
 }
@@ -1456,17 +1461,9 @@ const GITLAB_BASE: &str = "https://gitlab.com";
 /// Ask for the GitLab token when there is none (with `all`, offering
 /// the saved one as the default), check it, and save it.
 fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
-    // The saved token: the keyring's, else the file's (#79).
-    let file = config::load()
-        .ok()
-        .and_then(|c| c.gitlab.map(|g| g.access_token));
-    let saved = sandogasa_config::secret::resolve(
-        config::keyring(),
-        None,
-        &config::gitlab_secret(),
-        file.as_deref(),
-    )
-    .unwrap_or_default();
+    let cf = config::config_file();
+    let (saved, before) =
+        config::saved_token(&cf, keyring(), args.all, &sandogasa_cli::ask_to_reenable);
     let existing = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
@@ -1494,25 +1491,11 @@ fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
     }
 
     // Into the keyring when there is one, out of the file then.
-    let token = sandogasa_config::secret::keep_for_file(
-        config::keyring(),
-        "GitLab token",
-        &config::gitlab_secret(),
-        token,
-    );
-    let in_keyring = token.is_empty();
-    let cfg = config::Config {
-        gitlab: (!in_keyring).then_some(config::GitlabConfig {
-            access_token: token,
-        }),
-    };
-    let path = config::config_path()?;
-    config::save(&cfg)?;
-    // save() never removes a key, so the moved token is taken out here.
-    if in_keyring && config::remove("gitlab", "access_token")? {
-        eprintln!("Nothing else to keep in {}; removed it.", path.display());
-    } else {
+    let path = cf.path();
+    if config::save_token(&cf, keyring(), token, &before)? {
         eprintln!("Saved to {}", path.display());
+    } else {
+        eprintln!("Nothing else to keep in {}; removed it.", path.display());
     }
 
     Ok(())
@@ -1543,7 +1526,7 @@ fn maybe_set_in_progress(
     if issue.status == IN_PROGRESS {
         return;
     }
-    let client = match gitlab::client_from_project_url(project_url) {
+    let client = match gitlab::client_from_project_url(keyring(), project_url) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{package}: setting status: {e}");
@@ -1583,7 +1566,7 @@ fn maybe_close_issue(
     if issue.state != "opened" {
         return;
     }
-    let client = match gitlab::client_from_project_url(project_url) {
+    let client = match gitlab::client_from_project_url(keyring(), project_url) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{package}: closing issue: {e}");
@@ -1641,7 +1624,7 @@ fn resolve_issue_ref(
 fn lookup_issue(
     project_url: &str,
 ) -> Result<Option<check_latest::IssueRef>, Box<dyn std::error::Error>> {
-    let client = gitlab::client_from_project_url(project_url)?;
+    let client = gitlab::client_from_project_url(keyring(), project_url)?;
     let issues = client.list_issues(ISSUE_LABEL, None)?;
     match issues.first() {
         Some(issue) => Ok(Some(resolve_issue_ref(&client, issue)?)),
@@ -1654,7 +1637,7 @@ fn file_or_update_issue(
     title: &str,
     description: &str,
 ) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
-    let client = gitlab::client_from_project_url(project_url)?;
+    let client = gitlab::client_from_project_url(keyring(), project_url)?;
 
     // Check for an existing open issue first.
     let open_issues = client.list_issues(ISSUE_LABEL, Some("opened"))?;

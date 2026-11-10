@@ -8,6 +8,7 @@
 //! 700, file 600), and carries standing preferences such as the crates
 //! `check-crate` ignores.
 
+use sandogasa_config::secret::{Before, SecretRef, Slot};
 use serde::{Deserialize, Serialize};
 
 /// Top-level config structure.
@@ -338,9 +339,6 @@ pub async fn ask_forgejo_token(forge: &mut ForgejoConfig, review: bool) -> Resul
     .map_err(|e| format!("failed to read Forgejo token: {e}"))?
     .trim()
     .to_string();
-    if forge.token.is_empty() {
-        return Ok(());
-    }
     let url = forge.url.clone();
     forge.token = validated_key("Fedora Forgejo", "token", forge.token.clone(), move |k| {
         let url = url.clone();
@@ -397,19 +395,59 @@ pub async fn ask_and_save_forgejo_token(url: &str) -> Result<Option<String>, Str
     // Checked against the Forgejo the run uses, which may come from
     // the system-wide file; that URL is not copied into the user's.
     let own_url = std::mem::replace(&mut config.forgejo.url, url.to_string());
+    // The file's token is for the file's own Forgejo: taken only when
+    // that is the run's, else only the keyring's for the run's is offered.
+    let same = crate::secrets::forgejo(&own_url) == crate::secrets::forgejo(url);
+    if !same {
+        config.forgejo.token.clear();
+    }
+    // Filled for that Forgejo, now its URL is known. A token turned off
+    // stays off: not asked for, and no token to file with.
+    let before = sandogasa_config::secret::fill(
+        crate::secrets::keyring(),
+        env!("CARGO_PKG_NAME"),
+        vec![forgejo_slot(&mut config, url)],
+        false,
+        &sandogasa_cli::ask_to_reenable,
+    );
     ask_forgejo_token(&mut config.forgejo, false).await?;
-    let token = std::mem::take(&mut config.forgejo.token);
-    if token.is_empty() {
+    let token = config.forgejo.token.clone();
+    // None given, or turned off for ebranch, which is no token either.
+    if !sandogasa_config::secret::is_set(&token) {
         return Ok(None);
     }
-    // Kept for the Forgejo it was checked against.
-    config.forgejo.token = crate::secrets::keep_for_file(
-        "Forgejo token",
-        &crate::secrets::forgejo(url),
-        token.clone(),
-    );
+    if !same {
+        // The file keeps its own Forgejo's token; this one goes to the
+        // keyring only, and with none, is used for this run alone.
+        let held = matches!(&before[..], [Before::Set { keyring: Some(v) }] if *v == token);
+        if !held
+            && !sandogasa_config::secret::keep_for_file(
+                crate::secrets::keyring(),
+                "Forgejo token",
+                &crate::secrets::forgejo(url),
+                token.clone(),
+            )
+            .is_empty()
+        {
+            println!(
+                "Not saved: {} holds the token for {own_url}, so this one is for this run only.",
+                cf.path().display()
+            );
+        }
+        return Ok(Some(token));
+    }
     config.forgejo.url = own_url;
-    save_with_secrets(&cf, &mut config, &["forgejo"])?;
+    // Kept for the Forgejo it was checked against; the other secrets
+    // are left as the file has them.
+    sandogasa_config::secret::save_with(
+        &cf,
+        crate::secrets::keyring(),
+        env!("CARGO_PKG_NAME"),
+        &mut config,
+        &before,
+        |c| vec![forgejo_slot(c, url)],
+    )
+    .map_err(|e| format!("failed to save config: {e}"))?;
     if !config.forgejo.token.is_empty() {
         println!("Saved the token to {}", cf.path().display());
     }
@@ -520,8 +558,10 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         config.bugzilla.url = "https://bugzilla.redhat.com".to_string();
     }
     println!("Bugzilla URL: {}", config.bugzilla.url);
-    // Secrets kept in the keyring are the saved ones (#79).
-    let had = secrets_from_keyring(&mut config);
+    // Secrets kept in the keyring are the saved ones (#79), each read
+    // for the instance its URL names: every URL is settled above, and
+    // saving refuses a URL changed since.
+    let filled = secrets_from_keyring(&mut config, review, &sandogasa_cli::ask_to_reenable);
 
     // API key.
     config.bugzilla.api_key = ask(
@@ -633,8 +673,7 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         review,
     )
     .map_err(|e| format!("failed to read NVD API key: {e}"))?;
-    if !config.nvd.api_key.is_empty() {
-        config.nvd.api_key = sandogasa_cli::credential::validated_key("NVD", "API key", config.nvd.api_key.clone(), |k| {
+    config.nvd.api_key = sandogasa_cli::credential::validated_key("NVD", "API key", config.nvd.api_key.clone(), |k| {
             Box::pin(async move {
                 use sandogasa_cve::cache::KeyCheck;
                 match sandogasa_cve::cache::check_api_key(&k).await {
@@ -659,7 +698,6 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
             })
         })
         .await.key;
-    }
 
     // Fedora's Forgejo: only escalate's last step, the releng ticket
     // for a request nobody answered, needs it.
@@ -694,7 +732,8 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     // instance that serves searches to anyone, which is how a key
     // pasted three times was reported "valid".
     let key = config.rpmfusion_bugzilla.api_key.trim().to_string();
-    if !key.is_empty() && !sandogasa_bugzilla::looks_like_api_key(&key) {
+    // Not a key at all when off, so nothing to judge the shape of.
+    if sandogasa_config::secret::is_set(&key) && !sandogasa_bugzilla::looks_like_api_key(&key) {
         eprintln!(
             "warning: that does not look like a Bugzilla API key — they are 40 \
              alphanumeric characters, this is {}. A hidden prompt shows nothing \
@@ -703,59 +742,50 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         );
     }
     config.rpmfusion_bugzilla.api_key = key.clone();
-    if !key.is_empty() {
-        let url = config.rpmfusion_bugzilla.url.clone();
-        let rest = config.rpmfusion_bugzilla.rest_path.clone();
-        config.rpmfusion_bugzilla.api_key = sandogasa_cli::credential::validated_key(
-            "RPM Fusion Bugzilla",
-            "API key",
-            key,
-            move |k| {
-                let (url, rest) = (url.clone(), rest.clone());
-                Box::pin(async move {
-                    let bz = match sandogasa_bugzilla::BzClient::new(&url)
-                        .with_rest_path(&rest)
-                        .with_stock_auth()
-                        .with_api_key(k)
-                    {
-                        Ok(bz) => bz,
-                        Err(e) => {
-                            return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
-                                "could not check: {e}"
-                            ));
-                        }
-                    };
-                    match bz.check_api_key().await {
-                        Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
-                            sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
-                        }
-                        Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
-                            sandogasa_cli::credential::KeyVerdict::Refused(format!(
-                                "refused: {why}"
-                            ))
-                        }
-                        Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
-                            sandogasa_cli::credential::KeyVerdict::Unknown(format!(
-                                "could not tell: {why}"
-                            ))
-                        }
-                        Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
-                            "could not tell.".to_string(),
-                        ),
-                        Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+    let url = config.rpmfusion_bugzilla.url.clone();
+    let rest = config.rpmfusion_bugzilla.rest_path.clone();
+    config.rpmfusion_bugzilla.api_key =
+        sandogasa_cli::credential::validated_key("RPM Fusion Bugzilla", "API key", key, move |k| {
+            let (url, rest) = (url.clone(), rest.clone());
+            Box::pin(async move {
+                let bz = match sandogasa_bugzilla::BzClient::new(&url)
+                    .with_rest_path(&rest)
+                    .with_stock_auth()
+                    .with_api_key(k)
+                {
+                    Ok(bz) => bz,
+                    Err(e) => {
+                        return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
                             "could not check: {e}"
-                        )),
+                        ));
                     }
-                })
-            },
-        )
+                };
+                match bz.check_api_key().await {
+                    Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
+                        sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
+                    }
+                    Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
+                        sandogasa_cli::credential::KeyVerdict::Refused(format!("refused: {why}"))
+                    }
+                    Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
+                        sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                            "could not tell: {why}"
+                        ))
+                    }
+                    Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
+                        "could not tell.".to_string(),
+                    ),
+                    Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                        "could not check: {e}"
+                    )),
+                }
+            })
+        })
         .await
         .key;
-    }
 
     // Into the keyring when there is one, out of the file then.
-    secrets_to_keyring(&mut config, &had);
-    if save_with_secrets(&cf, &mut config, &ALL_TABLES)? {
+    if save_with_secrets(&cf, &mut config, &filled)? {
         println!("\nConfig saved to {}", cf.path().display());
     } else {
         println!(
@@ -767,116 +797,119 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     Ok(())
 }
 
-/// The tables of [`secret_fields`], all of them.
-const ALL_TABLES: [&str; 4] = ["bugzilla", "nvd", "forgejo", "rpmfusion-bugzilla"];
-
-/// One secret the config file can hold: its table and key there, what
-/// to call it, its keyring entry, and its value.
-struct SecretField<'a> {
-    table: &'static str,
-    key: &'static str,
-    what: &'static str,
-    entry: sandogasa_config::secret::SecretRef,
-    value: &'a mut String,
+/// The Forgejo token's slot, for the Forgejo at `url`.
+fn forgejo_slot<'a>(config: &'a mut EbranchConfig, url: &str) -> Slot<'a> {
+    Slot {
+        table: "forgejo",
+        key: "token",
+        what: "Forgejo token",
+        entry: crate::secrets::forgejo(url),
+        value: &mut config.forgejo.token,
+        required: false,
+    }
 }
 
 /// Every secret the config file can hold, each with the entry for the
 /// service its table points at.
-fn secret_fields(config: &mut EbranchConfig) -> [SecretField<'_>; 4] {
+fn secret_slots(config: &mut EbranchConfig) -> Vec<Slot<'_>> {
     use crate::secrets;
-    [
-        SecretField {
+    vec![
+        Slot {
             table: "bugzilla",
             key: "api_key",
             what: "Bugzilla API key",
             entry: secrets::bugzilla(&config.bugzilla.url),
             value: &mut config.bugzilla.api_key,
+            required: true,
         },
-        SecretField {
+        Slot {
             table: "nvd",
             key: "api_key",
             what: "NVD API key",
             entry: secrets::nvd(),
             value: &mut config.nvd.api_key,
+            required: false,
         },
-        SecretField {
+        Slot {
             table: "forgejo",
             key: "token",
             what: "Forgejo token",
             entry: secrets::forgejo(&config.forgejo.url),
             value: &mut config.forgejo.token,
+            required: false,
         },
-        SecretField {
+        Slot {
             table: "rpmfusion-bugzilla",
             key: "api_key",
             what: "RPM Fusion Bugzilla API key",
             entry: secrets::bugzilla(&config.rpmfusion_bugzilla.url),
             value: &mut config.rpmfusion_bugzilla.api_key,
+            required: false,
         },
     ]
 }
 
+/// How the secrets stood when [`secrets_from_keyring`] filled them, and
+/// the entry each was read under.
+struct Filled {
+    before: Vec<Before>,
+    entries: Vec<SecretRef>,
+}
+
 /// Fill each secret from the keyring, which wins over the file's
-/// value: the saved values `config` offers as defaults. A secret turned
-/// off for ebranch ([`sandogasa_config::secret::OFF`]) stays off, so
-/// keeping the default keeps it off. Which secrets had a value, so
-/// [`secrets_to_keyring`] can tell one cleared from one never set.
-fn secrets_from_keyring(config: &mut EbranchConfig) -> Vec<bool> {
-    secret_fields(config)
-        .into_iter()
-        .map(|f| {
-            if f.value != sandogasa_config::secret::OFF {
-                *f.value = crate::secrets::resolve(None, &f.entry, f.value);
-            }
-            !f.value.is_empty()
-        })
-        .collect()
+/// value: the saved values `config` offers as defaults (see
+/// [`sandogasa_config::secret::fill`], which `review`, the `--all` run,
+/// and `ask` go to). Each is read under the entry for the URL `config`
+/// names now, so fill after any change to it.
+fn secrets_from_keyring(
+    config: &mut EbranchConfig,
+    review: bool,
+    ask: &dyn Fn(&str, bool) -> bool,
+) -> Filled {
+    let entries = secret_slots(config)
+        .iter()
+        .map(|s| s.entry.clone())
+        .collect();
+    let before = sandogasa_config::secret::fill(
+        crate::secrets::keyring(),
+        env!("CARGO_PKG_NAME"),
+        secret_slots(config),
+        review,
+        ask,
+    );
+    Filled { before, entries }
 }
 
-/// Keep each secret in the keyring when there is one, leaving the
-/// file's value empty then. One that had a value (`had`, from
-/// [`secrets_from_keyring`]) and was cleared is turned off for ebranch:
-/// the file says [`sandogasa_config::secret::OFF`], and the shared
-/// keyring entry is kept for the tools that use it.
-fn secrets_to_keyring(config: &mut EbranchConfig, had: &[bool]) {
-    for (f, had) in secret_fields(config).into_iter().zip(had) {
-        if f.value.is_empty() && *had {
-            if let Some(note) = sandogasa_config::secret::kept_on_clear(
-                crate::secrets::keyring(),
-                env!("CARGO_PKG_NAME"),
-                f.what,
-                &f.entry,
-            ) {
-                eprintln!("{note}");
-            }
-            *f.value = sandogasa_config::secret::OFF.to_string();
-            continue;
-        }
-        *f.value = crate::secrets::keep_for_file(f.what, &f.entry, std::mem::take(f.value));
-    }
-}
-
-/// Save `config` to the user file, then take out of it every secret
-/// of the `tables` named that is empty: kept in the keyring, or
-/// cleared. `save` lays the struct over the file and never removes a
-/// key, so a token moved to the keyring would otherwise stay there in
-/// plain text. Whether the file is still there.
+/// Keep each secret in the keyring when there is one, turning one that
+/// was set and is now cleared off for ebranch, then save `config` to
+/// the user file without the secrets the keyring holds (see
+/// [`sandogasa_config::secret::save_with`]). Refused when a URL changed
+/// since `filled`: the value offered was the other instance's, and
+/// would be kept for this one. Whether the file is still there.
 fn save_with_secrets(
     cf: &sandogasa_config::ConfigFile,
     config: &mut EbranchConfig,
-    tables: &[&str],
+    filled: &Filled,
 ) -> Result<bool, String> {
-    cf.save(&*config)
-        .map_err(|e| format!("failed to save config: {e}"))?;
-    let mut gone = false;
-    for f in secret_fields(config) {
-        if f.value.is_empty() && tables.contains(&f.table) {
-            gone |= cf
-                .remove(f.table, f.key)
-                .map_err(|e| format!("failed to update config: {e}"))?;
+    for (slot, was) in secret_slots(config).iter().zip(&filled.entries) {
+        if slot.entry != *was {
+            return Err(format!(
+                "the {} was read for {} but would be kept for {}; run `ebranch config` again",
+                slot.what,
+                was.service(),
+                slot.entry.service()
+            ));
         }
     }
-    Ok(!gone)
+    sandogasa_config::secret::save_with(
+        cf,
+        crate::secrets::keyring(),
+        env!("CARGO_PKG_NAME"),
+        config,
+        &filled.before,
+        secret_slots,
+    )
+    .map_err(|e| format!("failed to save config: {e}"))
 }
 
 /// The built-in rooms with `configured` laid over them.
@@ -893,6 +926,8 @@ fn with_builtin_rooms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use sandogasa_config::secret::never;
 
     #[test]
     fn configured_rooms_add_to_and_override_the_built_in_ones() {
@@ -1048,24 +1083,22 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn a_secret_cleared_at_the_prompt_is_turned_off_for_ebranch() {
-        use crate::secrets::test_support::EnvGuard;
+        use sandogasa_config::test_support::EnvGuard;
         let dir = tempfile::tempdir().unwrap();
         let _env = EnvGuard::new(&[("XDG_CONFIG_HOME", &dir.path().to_string_lossy())]);
         let path = config_with_secrets(dir.path());
         let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
         // A first run moves the RPM Fusion key into the keyring.
         let mut config: EbranchConfig = cf.load_user().unwrap();
-        let had = secrets_from_keyring(&mut config);
-        secrets_to_keyring(&mut config, &had);
-        save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap();
+        let filled = secrets_from_keyring(&mut config, false, &never);
+        save_with_secrets(&cf, &mut config, &filled).unwrap();
         assert_eq!(rpmfusion_bugzilla().unwrap().api_key, "rpmfusion-from-file");
 
         // Cleared at the next run's prompt.
         let mut config: EbranchConfig = cf.load_user().unwrap();
-        let had = secrets_from_keyring(&mut config);
+        let filled = secrets_from_keyring(&mut config, false, &never);
         config.rpmfusion_bugzilla.api_key.clear();
-        secrets_to_keyring(&mut config, &had);
-        save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap();
+        save_with_secrets(&cf, &mut config, &filled).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("api_key = \"-\""), "{text}");
         assert!(rpmfusion_bugzilla().is_none(), "read-only again");
@@ -1076,16 +1109,44 @@ mod tests {
             "the shared entry is kept"
         );
 
-        // Kept as the default at a later run, it stays off.
+        // A later plain run leaves it off without asking: optional, it
+        // was turned off on purpose, and the prompt sees it as set.
         let mut config: EbranchConfig = cf.load_user().unwrap();
-        let had = secrets_from_keyring(&mut config);
+        let filled =
+            secrets_from_keyring(&mut config, false, &|q, _| panic!("a plain run asked: {q}"));
         assert_eq!(
             config.rpmfusion_bugzilla.api_key,
             sandogasa_config::secret::OFF
         );
-        secrets_to_keyring(&mut config, &had);
-        save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap();
+        assert!(!sandogasa_config::secret::is_set(
+            &config.rpmfusion_bugzilla.api_key
+        ));
+        save_with_secrets(&cf, &mut config, &filled).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("api_key = \"-\""), "still off:\n{text}");
         assert!(rpmfusion_bugzilla().is_none());
+
+        // `--all` offers it: blank, unless the keyring's is taken back,
+        // which for an optional secret is not the default.
+        let mut config: EbranchConfig = cf.load_user().unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        secrets_from_keyring(&mut config, true, &|q, default| {
+            asked.borrow_mut().push((q.to_string(), default));
+            false
+        });
+        assert_eq!(config.rpmfusion_bugzilla.api_key, "", "offered blank");
+        assert_eq!(
+            *asked.borrow(),
+            [(
+                "RPM Fusion Bugzilla API key: off for ebranch (the keyring has one). \
+                 Use it again?"
+                    .to_string(),
+                false
+            )]
+        );
+        let mut config: EbranchConfig = cf.load_user().unwrap();
+        secrets_from_keyring(&mut config, true, &|_, _| true);
+        assert_eq!(config.rpmfusion_bugzilla.api_key, "rpmfusion-from-file");
         for e in [
             crate::secrets::bugzilla("https://bugzilla.keyring.test"),
             crate::secrets::nvd(),
@@ -1102,7 +1163,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn secrets_kept_in_the_keyring_are_the_ones_used() {
-        use crate::secrets::test_support::EnvGuard;
+        use sandogasa_config::test_support::EnvGuard;
         let dir = tempfile::tempdir().unwrap();
         let _env = EnvGuard::new(&[
             ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
@@ -1120,13 +1181,13 @@ mod tests {
         // What `config` does once it has the answers.
         let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
         let mut config: EbranchConfig = cf.load_user().unwrap();
+        let filled = secrets_from_keyring(&mut config, false, &never);
         config.bugzilla.api_key = "bz-new".into();
         config.nvd.api_key = "nvd-new".into();
         config.forgejo.token = "forge-new".into();
         config.rpmfusion_bugzilla.api_key = "rpmfusion-new".into();
         // Nothing cleared: each was replaced.
-        secrets_to_keyring(&mut config, &[true; 4]);
-        assert!(save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap());
+        assert!(save_with_secrets(&cf, &mut config, &filled).unwrap());
 
         let text = std::fs::read_to_string(&path).unwrap();
         for gone in ["api_key", "token", "-new", "-from-file", "[nvd]"] {
@@ -1142,7 +1203,7 @@ mod tests {
         assert_eq!(rpmfusion_bugzilla().unwrap().api_key, "rpmfusion-new");
         // And `config` offers them as the saved values.
         let mut again: EbranchConfig = cf.load_user().unwrap();
-        secrets_from_keyring(&mut again);
+        secrets_from_keyring(&mut again, false, &never);
         assert_eq!(again.bugzilla.api_key, "bz-new");
         assert_eq!(again.rpmfusion_bugzilla.api_key, "rpmfusion-new");
 
@@ -1151,7 +1212,7 @@ mod tests {
         assert_eq!(resolve_api_key(None, bz).unwrap(), "bz-from-env");
         assert_eq!(resolve_api_key(Some("bz-flag"), bz).unwrap(), "bz-flag");
 
-        for f in secret_fields(&mut again) {
+        for f in secret_slots(&mut again) {
             crate::secrets::keyring().clear(&f.entry).unwrap();
         }
     }
@@ -1161,7 +1222,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn a_bugzilla_key_is_read_for_the_bugzilla_in_use() {
-        use crate::secrets::test_support::EnvGuard;
+        use sandogasa_config::test_support::EnvGuard;
         let dir = tempfile::tempdir().unwrap();
         let _env = EnvGuard::new(&[
             ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
@@ -1177,6 +1238,139 @@ mod tests {
         assert!(err.contains("ebranch config"), "{err}");
         // No key anywhere: RPM Fusion stays read-only.
         assert!(rpmfusion_bugzilla().is_none());
+        crate::secrets::keyring().clear(&entry).unwrap();
+    }
+
+    /// Each secret is read for the instance its URL names, and a URL
+    /// changed after reading is refused at saving rather than keeping the
+    /// other instance's token for it.
+    #[test]
+    #[serial_test::serial]
+    fn a_secret_is_never_kept_for_a_url_it_was_not_read_for() {
+        use sandogasa_config::test_support::EnvGuard;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::new(&[("XDG_CONFIG_HOME", &dir.path().to_string_lossy())]);
+        let path = dir.path().join("ebranch/config.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "[bugzilla]\nurl = \"https://bugzilla.two.test\"\n\
+             [forgejo]\nurl = \"https://forge.two.test\"\n",
+        )
+        .unwrap();
+        let store = crate::secrets::keyring();
+        let one = crate::secrets::bugzilla("https://bugzilla.one.test");
+        let two = crate::secrets::bugzilla("https://bugzilla.two.test");
+        let forge_one = crate::secrets::forgejo("https://forge.one.test");
+        let forge_two = crate::secrets::forgejo("https://forge.two.test");
+        store.store(&one, "bz-one").unwrap();
+        store.store(&two, "bz-two").unwrap();
+        store.store(&forge_one, "forge-one").unwrap();
+        store.store(&forge_two, "forge-two").unwrap();
+
+        let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
+        let mut config: EbranchConfig = cf.load_user().unwrap();
+        let filled = secrets_from_keyring(&mut config, false, &never);
+        assert_eq!(config.bugzilla.api_key, "bz-two", "the instance in use");
+        assert_eq!(config.forgejo.token, "forge-two");
+
+        // A URL changed after filling: refused, nothing written.
+        let text = std::fs::read_to_string(&path).unwrap();
+        config.forgejo.url = "https://forge.one.test".into();
+        let err = save_with_secrets(&cf, &mut config, &filled).unwrap_err();
+        assert!(
+            err.contains("forge.two.test") && err.contains("forge.one.test"),
+            "{err}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert_eq!(
+            store.lookup(&forge_one).unwrap().as_deref(),
+            Some("forge-one")
+        );
+
+        // Filled again for the new URL, it is that instance's token.
+        let filled = secrets_from_keyring(&mut config, false, &never);
+        assert_eq!(config.forgejo.token, "forge-one");
+        assert!(save_with_secrets(&cf, &mut config, &filled).unwrap());
+        for e in [one, two, forge_one, forge_two] {
+            store.clear(&e).unwrap();
+        }
+    }
+
+    /// A Forgejo token turned off is no token: reading it gives none, and
+    /// escalate asking for one gets none, never the marker to check or
+    /// send.
+    #[test]
+    #[serial_test::serial]
+    fn a_forgejo_token_turned_off_is_no_token() {
+        use sandogasa_config::test_support::EnvGuard;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::new(&[("XDG_CONFIG_HOME", &dir.path().to_string_lossy())]);
+        let path = dir.path().join("ebranch/config.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "[forgejo]\nurl = \"https://forge.off.test\"\ntoken = \"-\"\n",
+        )
+        .unwrap();
+        let entry = crate::secrets::forgejo("https://forge.off.test");
+        crate::secrets::keyring().store(&entry, "shared").unwrap();
+        assert_eq!(forgejo().token, "", "off: not read from the keyring");
+
+        // Escalate asking for one now gets none, and asks nothing: the
+        // marker is never checked against the Forgejo or returned to
+        // file with, and the file keeps it off.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let answer = rt
+            .block_on(ask_and_save_forgejo_token("https://forge.off.test"))
+            .unwrap();
+        assert_eq!(answer, None);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("token = \"-\""), "{text}");
+        crate::secrets::keyring().clear(&entry).unwrap();
+    }
+
+    /// Escalate asking for a token for one Forgejo never takes the token
+    /// the file holds for another: it offers the keyring's for the run's
+    /// Forgejo, and leaves the file's alone.
+    #[test]
+    #[serial_test::serial]
+    fn another_forgejos_token_is_never_used_for_the_run() {
+        use sandogasa_config::test_support::EnvGuard;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::new(&[("XDG_CONFIG_HOME", &dir.path().to_string_lossy())]);
+        let path = dir.path().join("ebranch/config.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = "[forgejo]\nurl = \"https://forge.other.test\"\ntoken = \"other-token\"\n";
+        std::fs::write(&path, file).unwrap();
+        // The run's Forgejo is on loopback, so checking the token there
+        // is refused at once and says nothing about it.
+        let run = "http://127.0.0.1:9";
+        let entry = crate::secrets::forgejo(run);
+        crate::secrets::keyring()
+            .store(&entry, "run-token")
+            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let answer = rt.block_on(ask_and_save_forgejo_token(run)).unwrap();
+        assert_eq!(answer.as_deref(), Some("run-token"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), file);
+        assert_eq!(
+            crate::secrets::keyring().lookup(&entry).unwrap().as_deref(),
+            Some("run-token")
+        );
+        assert_eq!(
+            crate::secrets::keyring()
+                .lookup(&crate::secrets::forgejo("https://forge.other.test"))
+                .unwrap(),
+            None,
+            "the file's token is not moved anywhere"
+        );
         crate::secrets::keyring().clear(&entry).unwrap();
     }
 

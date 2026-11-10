@@ -153,25 +153,17 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         config.bugzilla.url = BugzillaConfig::DEFAULT_URL.to_string();
     }
     println!("Bugzilla URL: {}", config.bugzilla.url);
-    // A secret kept in the keyring is the saved one (#79), as reading
-    // takes it first: a stale value an older run left in the file must
-    // not be offered, and so saved back over the shared entry. One turned
-    // off for poi-tracker stays off.
-    let off = sandogasa_config::secret::OFF;
-    if config.bugzilla.api_key != off
-        && let Some(key) = crate::secrets::lookup(&crate::secrets::bugzilla(&config.bugzilla.url))
-    {
-        config.bugzilla.api_key = key;
-    }
-    if config.dist_git.api_token != off
-        && let Some(token) = crate::secrets::lookup(&crate::secrets::distgit())
-    {
-        config.dist_git.api_token = token;
-    }
-    let had = [
-        !config.bugzilla.api_key.is_empty(),
-        !config.dist_git.api_token.is_empty(),
-    ];
+    // The keyring's secret is the saved one (#79), as reading takes it
+    // first: a stale value an older run left in the file must not be
+    // offered, and so saved back over the shared entry. See `fill` for
+    // what one turned off for poi-tracker is offered.
+    let before = sandogasa_config::secret::fill(
+        crate::secrets::keyring(),
+        env!("CARGO_PKG_NAME"),
+        slots(&mut config),
+        args.all,
+        &sandogasa_cli::ask_to_reenable,
+    );
 
     config.bugzilla.api_key = ask(
         &Setting::new("Bugzilla", "API key").sensitive().hint(
@@ -219,7 +211,7 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
         "Bugzilla",
         "API key",
-        config.bugzilla.api_key.clone(),
+        std::mem::take(&mut config.bugzilla.api_key),
         move |key| {
             let url = url.clone();
             Box::pin(async move {
@@ -247,7 +239,7 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     .await
     .key;
 
-    let removed = save_keeping_secrets(&cf, config, had)
+    let removed = save_keeping_secrets(&cf, config, &before)
         .map_err(|e| format!("failed to save config: {e}"))?;
     if removed {
         println!(
@@ -260,70 +252,56 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     Ok(())
 }
 
+/// The secrets `config` holds, for [`sandogasa_config::secret::fill`]
+/// and [`save_keeping_secrets`].
+fn slots(config: &mut PoiTrackerConfig) -> Vec<sandogasa_config::secret::Slot<'_>> {
+    use sandogasa_config::secret::Slot;
+    vec![
+        Slot {
+            table: "bugzilla",
+            key: "api_key",
+            what: "Bugzilla API key",
+            entry: crate::secrets::bugzilla(&config.bugzilla.url),
+            value: &mut config.bugzilla.api_key,
+            required: true,
+        },
+        Slot {
+            table: "dist-git",
+            key: "api_token",
+            what: "Pagure token",
+            entry: crate::secrets::distgit(),
+            value: &mut config.dist_git.api_token,
+            required: false,
+        },
+    ]
+}
+
 /// Save `config` to `cf`, its secrets in the keyring when there is
 /// one and then out of the file, since `save` never removes a key. A
-/// secret left empty is taken out of the file; one in the keyring
-/// stays there, since other tools may read it. Whether the file, left
+/// secret cleared at the prompts is turned off for poi-tracker; one in
+/// the keyring stays there, since other tools may read it. `before` is
+/// what [`sandogasa_config::secret::fill`] said. Whether the file, left
 /// with nothing in it, was removed.
 fn save_keeping_secrets(
     cf: &sandogasa_config::ConfigFile,
     mut config: PoiTrackerConfig,
-    had: [bool; 2],
+    before: &[sandogasa_config::secret::Before],
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let bugzilla = crate::secrets::bugzilla(&config.bugzilla.url);
-    let distgit = crate::secrets::distgit();
-    let mut out_of_file = Vec::new();
-    for (table, key, what, secret, value, had) in [
-        (
-            "bugzilla",
-            "api_key",
-            "Bugzilla API key",
-            &bugzilla,
-            &mut config.bugzilla.api_key,
-        ),
-        (
-            "dist-git",
-            "api_token",
-            "dist-git API token",
-            &distgit,
-            &mut config.dist_git.api_token,
-        ),
-    ]
-    .into_iter()
-    .zip(had)
-    .map(|((t, k, w, s, v), had)| (t, k, w, s, v, had))
-    {
-        if value.is_empty() && had {
-            // Cleared: turned off for poi-tracker, its file saying so;
-            // the keyring entry is the service's, which other tools use.
-            if let Some(note) = sandogasa_config::secret::kept_on_clear(
-                crate::secrets::keyring(),
-                env!("CARGO_PKG_NAME"),
-                what,
-                secret,
-            ) {
-                eprintln!("{note}");
-            }
-            *value = sandogasa_config::secret::OFF.to_string();
-        } else if !value.is_empty() {
-            *value = crate::secrets::keep_for_file(what, secret, std::mem::take(value));
-        }
-        if value.is_empty() {
-            out_of_file.push((table, key));
-        }
-    }
-    cf.save(&config)?;
-    let mut removed = false;
-    for (table, key) in out_of_file {
-        removed |= cf.remove(table, key)?;
-    }
-    Ok(removed)
+    let kept = sandogasa_config::secret::save_with(
+        cf,
+        crate::secrets::keyring(),
+        env!("CARGO_PKG_NAME"),
+        &mut config,
+        before,
+        slots,
+    )?;
+    Ok(!kept)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::EnvGuard;
+    use sandogasa_config::test_support::EnvGuard;
 
     const PLAIN_TEXT: &str = "[bugzilla]\n\
         api_key = \"bz-from-file\"\n\
@@ -368,7 +346,7 @@ mod tests {
         assert_eq!(resolve_distgit_token(None).unwrap(), "pagure-from-file");
 
         let cf = config_file();
-        let removed = save_keeping_secrets(&cf, cf.load_user().unwrap(), [true, true]).unwrap();
+        let removed = save_keeping_secrets(&cf, cf.load_user().unwrap(), &set_from_file()).unwrap();
         assert!(!removed, "the email and URL are still in the file");
         let text = std::fs::read_to_string(cf.path()).unwrap();
         assert!(!text.contains("from-file"), "the file is left without them");
@@ -404,7 +382,7 @@ mod tests {
         let cf = config_file();
         let mut config: PoiTrackerConfig = cf.load_user().unwrap();
         config.dist_git.api_token.clear();
-        save_keeping_secrets(&cf, config, [true, true]).unwrap();
+        save_keeping_secrets(&cf, config, &set_from_file()).unwrap();
         let text = std::fs::read_to_string(cf.path()).unwrap();
         assert!(!text.contains("pagure-from-file"), "{text}");
         // Turned off for poi-tracker: the marker is in its file, and the
@@ -412,6 +390,168 @@ mod tests {
         assert!(text.contains("api_token = \"-\""), "{text}");
         assert!(resolve_distgit_token(None).is_err());
         assert_eq!(resolve_api_key(None).unwrap(), "bz-from-file");
+        clear_keyring();
+    }
+
+    /// Both secrets as `fill` finds them in [`PLAIN_TEXT`].
+    fn set_from_file() -> [sandogasa_config::secret::Before; 2] {
+        let set = sandogasa_config::secret::Before::Set { keyring: None };
+        [set.clone(), set]
+    }
+
+    /// A config with both secrets turned off for poi-tracker.
+    fn both_off() -> PoiTrackerConfig {
+        let off = sandogasa_config::secret::OFF;
+        PoiTrackerConfig {
+            bugzilla: BugzillaConfig {
+                api_key: off.into(),
+                url: "https://bugzilla.keyring.test".into(),
+                ..Default::default()
+            },
+            dist_git: DistGitConfig {
+                api_token: off.into(),
+            },
+        }
+    }
+
+    /// `fill` as `cmd_config` calls it, `review` being `--all`.
+    fn fill(
+        config: &mut PoiTrackerConfig,
+        review: bool,
+        ask: &dyn Fn(&str, bool) -> bool,
+    ) -> Vec<sandogasa_config::secret::Before> {
+        sandogasa_config::secret::fill(
+            crate::secrets::keyring(),
+            "poi-tracker",
+            slots(config),
+            review,
+            ask,
+        )
+    }
+
+    /// An `ask` that records each question and its default, answering
+    /// `answer`.
+    fn recording(
+        asked: &std::cell::RefCell<Vec<(String, bool)>>,
+        answer: bool,
+    ) -> impl Fn(&str, bool) -> bool + '_ {
+        move |q, default_yes| {
+            asked.borrow_mut().push((q.to_string(), default_yes));
+            answer
+        }
+    }
+
+    fn store_both(bugzilla: &str, pagure: &str) {
+        let keyring = crate::secrets::keyring();
+        keyring
+            .store(
+                &crate::secrets::bugzilla("https://bugzilla.keyring.test"),
+                bugzilla,
+            )
+            .unwrap();
+        keyring.store(&crate::secrets::distgit(), pagure).unwrap();
+    }
+
+    /// The prompts offer the keyring's secret for the configured
+    /// Bugzilla over a stale one in the file.
+    #[test]
+    #[serial_test::serial]
+    fn the_prompts_offer_the_keyrings_secret() {
+        use sandogasa_config::secret::{Before, never};
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let mut config = both_off();
+        config.bugzilla.api_key = "bz-stale".into();
+        config.dist_git.api_token.clear();
+        crate::secrets::keyring()
+            .store(
+                &crate::secrets::bugzilla("https://bugzilla.keyring.test"),
+                "bz-fresh",
+            )
+            .unwrap();
+        let before = fill(&mut config, false, &never);
+        assert_eq!(
+            before,
+            [
+                Before::Set {
+                    keyring: Some("bz-fresh".into())
+                },
+                Before::Absent
+            ]
+        );
+        assert_eq!(config.bugzilla.api_key, "bz-fresh");
+        clear_keyring();
+    }
+
+    /// A plain run: the dist-git token, optional and turned off, stays
+    /// "-" and is not asked about, so its prompt asks nothing either;
+    /// the Bugzilla key, required, is asked about, defaulting to yes,
+    /// and otherwise offered blank, so "-" is never the key Bugzilla is
+    /// asked to accept.
+    #[test]
+    #[serial_test::serial]
+    fn a_plain_run_asks_only_about_the_required_key() {
+        use sandogasa_config::secret::{Before, OFF};
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let none = std::cell::RefCell::new(Vec::new());
+        let mut config = both_off();
+        assert_eq!(
+            fill(&mut config, false, &recording(&none, true)),
+            [Before::Off, Before::Off]
+        );
+        assert!(none.borrow().is_empty(), "no entry, nothing to ask");
+        assert_eq!(config.bugzilla.api_key, "");
+        assert_eq!(config.dist_git.api_token, OFF);
+
+        store_both("bz-kept", "pagure-kept");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let mut config = both_off();
+        fill(&mut config, false, &recording(&asked, false));
+        assert_eq!(config.bugzilla.api_key, "");
+        assert_eq!(config.dist_git.api_token, OFF);
+        let mut config = both_off();
+        fill(&mut config, false, &recording(&asked, true));
+        assert_eq!(config.bugzilla.api_key, "bz-kept");
+        assert_eq!(config.dist_git.api_token, OFF);
+        let q = "Bugzilla API key: off for poi-tracker (the keyring has one). Use it again?";
+        assert_eq!(
+            asked.into_inner(),
+            [(q.to_string(), true), (q.to_string(), true)]
+        );
+        clear_keyring();
+    }
+
+    /// `--all` goes over the optional token too: asked about, defaulting
+    /// to no, and offered blank unless the answer is yes.
+    #[test]
+    #[serial_test::serial]
+    fn a_review_offers_the_optional_token_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        store_both("bz-kept", "pagure-kept");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let mut config = both_off();
+        fill(&mut config, true, &recording(&asked, false));
+        assert_eq!(config.dist_git.api_token, "");
+        let mut config = both_off();
+        fill(&mut config, true, &|q, default_yes| {
+            asked.borrow_mut().push((q.to_string(), default_yes));
+            q.starts_with("Pagure")
+        });
+        assert_eq!(config.bugzilla.api_key, "");
+        assert_eq!(config.dist_git.api_token, "pagure-kept");
+        let bz = "Bugzilla API key: off for poi-tracker (the keyring has one). Use it again?";
+        let pagure = "Pagure token: off for poi-tracker (the keyring has one). Use it again?";
+        assert_eq!(
+            asked.into_inner(),
+            [
+                (bz.to_string(), true),
+                (pagure.to_string(), false),
+                (bz.to_string(), true),
+                (pagure.to_string(), false),
+            ]
+        );
         clear_keyring();
     }
 

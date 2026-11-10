@@ -13,8 +13,6 @@ mod prune_retired;
 mod reconcile;
 mod secrets;
 mod semver_audit;
-#[cfg(test)]
-mod test_support;
 mod triage_retired;
 mod triage_updates;
 mod unkeep;

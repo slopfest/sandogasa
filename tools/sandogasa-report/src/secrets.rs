@@ -7,23 +7,4 @@
 //! tests get a keyring in memory, so `cargo test` never reads or
 //! writes the user's.
 
-use sandogasa_config::secret::{SecretRef, SecretStore};
-
-/// The keyring: `secret-tool`, or in this crate's tests one in memory.
-pub fn keyring() -> &'static dyn SecretStore {
-    #[cfg(test)]
-    {
-        static MEMORY: std::sync::OnceLock<sandogasa_config::secret::MemoryStore> =
-            std::sync::OnceLock::new();
-        MEMORY.get_or_init(Default::default)
-    }
-    #[cfg(not(test))]
-    {
-        &sandogasa_config::secret::SecretTool
-    }
-}
-
-/// [`sandogasa_config::secret::keep_for_file`] with [`keyring`].
-pub fn keep_for_file(what: &str, secret: &SecretRef, value: String) -> String {
-    sandogasa_config::secret::keep_for_file(keyring(), what, secret, value)
-}
+sandogasa_config::keyring_fn!();

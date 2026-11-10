@@ -1,6 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 pub mod secret;
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
+/// Define `pub fn keyring()` in the calling crate: the desktop keyring
+/// through `secret-tool`, or under that crate's own `cfg(test)` a
+/// keyring in memory, so its tests never read or write the user's. A
+/// macro because `cfg(test)` is the crate being tested, not this one.
+#[macro_export]
+macro_rules! keyring_fn {
+    () => {
+        /// The keyring: `secret-tool`, or in this crate's tests one in memory.
+        pub fn keyring() -> &'static dyn $crate::secret::SecretStore {
+            #[cfg(test)]
+            {
+                static MEMORY: std::sync::OnceLock<$crate::secret::MemoryStore> =
+                    std::sync::OnceLock::new();
+                MEMORY.get_or_init(Default::default)
+            }
+            #[cfg(not(test))]
+            {
+                &$crate::secret::SecretTool
+            }
+        }
+    };
+}
 
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -507,7 +532,10 @@ fn ask_with(
         eprintln!("The saved {name} is not valid ({e}), so it is asked for again.");
     }
     if keep && !review {
-        if setting.sensitive {
+        if setting.sensitive && saved == secret::OFF {
+            // Turned off for this tool: say so, rather than that it is set.
+            println!("{name}: (off; `config --all` offers it again)");
+        } else if setting.sensitive {
             println!("{name}: (set)");
         } else {
             println!("{name}: {saved}");
@@ -536,6 +564,12 @@ fn ask_with(
         }
         if keep && answer == "-" && clears(setting) {
             return Ok(String::new());
+        }
+        // A required secret cannot be turned off: `-` would be written as
+        // the marker that does, and every later run would find no secret.
+        if setting.sensitive && !setting.optional && answer == secret::OFF {
+            eprintln!("{name} is required, so it cannot be turned off; enter it.");
+            continue;
         }
         if let Some(validate) = setting.validate
             && let Err(e) = validate(&answer)
@@ -1093,6 +1127,20 @@ mod tests {
         assert!(prompts.is_empty());
     }
 
+    /// A secret turned off is kept off without asking on a plain run,
+    /// and a required one cannot be turned off by answering `-`.
+    #[test]
+    fn a_secret_turned_off_stays_off_and_a_required_one_cannot_be() {
+        let nvd = Setting::new("NVD", "API key").sensitive().optional();
+        let (value, prompts) = ask_scripted(&nvd, secret::OFF, false, &[]);
+        assert_eq!(value, secret::OFF);
+        assert!(prompts.is_empty());
+        let key = Setting::new("Bugzilla", "API key").sensitive();
+        let (value, prompts) = ask_scripted(&key, "", false, &["-", "abc"]);
+        assert_eq!(value, "abc", "`-` refused, then the key taken");
+        assert_eq!(prompts.len(), 2);
+    }
+
     #[test]
     fn a_missing_value_is_asked_for() {
         let key = Setting::new("Bugzilla", "API key").sensitive();
@@ -1141,10 +1189,11 @@ mod tests {
     #[test]
     fn review_never_shows_a_secret_or_clears_a_required_one() {
         let key = Setting::new("Bugzilla", "API key").sensitive();
-        let (value, prompts) = ask_scripted(&key, "secret", true, &["-"]);
-        // Required: "-" is an answer like any other.
-        assert_eq!(value, "-");
-        assert_eq!(prompts, ["Enter Bugzilla API key [set; Enter keeps]: "]);
+        let (value, prompts) = ask_scripted(&key, "secret", true, &["-", ""]);
+        // Required: `-` would turn it off, so it is refused, and Enter
+        // then keeps the saved one.
+        assert_eq!(value, "secret");
+        assert_eq!(prompts, ["Enter Bugzilla API key [set; Enter keeps]: "; 2]);
         assert!(!prompts[0].contains("secret"));
     }
 

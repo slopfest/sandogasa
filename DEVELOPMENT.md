@@ -410,14 +410,34 @@ no keyring can be used.
   an Atlassian email).
 - **Read with `resolve`:** environment variable, then keyring, then
   the file, so existing setups keep working.
-- **Write with `keep_for_file` in the `config` command**, then call
-  `ConfigFile::remove` for the key when the keyring took it:
-  `save` lays the struct over the file and never removes a key, so a
-  token moved to the keyring would otherwise stay in plain text.
-- **Tests never touch the user's keyring.** Each tool's `keyring()`
-  returns a `MemoryStore` under `cfg(test)` and `SecretTool` otherwise,
-  in the tool crate itself, where `cfg(test)` applies. `SecretTool` also
-  skips lookups for loopback hosts, which only test servers are.
+- **In the `config` command, use the shared helpers, not a copy of
+  them.** List the tool's secrets as `secret::Slot`s (table, key, what to
+  call it, entry, field); `secret::fill` sets each prompt's default,
+  keyring first, and says how each stood (`secret::Before`), and
+  `secret::save_with` keeps each in the keyring, saves, and takes the
+  moved ones out of the file. Mark each slot `required` or not. An
+  optional secret turned off stays off on a plain `config` run, neither
+  offered nor asked about, so turning one off means not being asked
+  again; the `--all` run (`fill`'s `review`) offers it again, and a
+  required one is offered on any run, as the tool cannot work without
+  it. When the keyring still holds the entry, `fill` asks whether to use
+  it again through `sandogasa_cli::ask_to_reenable` (yes by default for a
+  required secret, no for an optional one), or `secret::never` where
+  nothing may be asked. Check `secret::is_set` before sending a secret
+  to its service, so `-` is never checked or used as one. `save` lays
+  the struct over the file and never removes a key, so a token moved to
+  the keyring would otherwise stay in plain text. `secret::settle` is the
+  same without the save, for a tool whose save is its own.
+- **Tests never touch the user's keyring.** Define a tool's `keyring()`
+  with `sandogasa_config::keyring_fn!()`, which gives a `MemoryStore`
+  under `cfg(test)` and `SecretTool` otherwise. It is a macro because
+  `cfg(test)` is the tool crate's, so it has to expand there. Code in a
+  tool's library target takes the store as a parameter instead, as the
+  binary's tests link that library built without `cfg(test)`.
+  `SecretTool` also skips lookups for loopback hosts, which only test
+  servers are. Tests that set the environment use
+  `sandogasa_config::test_support::EnvGuard` (the `test-support`
+  feature, as a dev-dependency) under `#[serial_test::serial]`.
 - **Never print a secret.** Errors and messages name the entry
   (`SecretRef::lookup_command`), never its value.
 - **Clearing a secret turns it off for that tool, and never removes its

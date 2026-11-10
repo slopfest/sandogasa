@@ -429,6 +429,13 @@ mod tests {
         });
 
         let dir = tempdir().unwrap();
+        // Stream's own xz, as fedrq answers it, so the run never asks the
+        // real fedrq, which would fetch CentOS Stream's repositories.
+        install_fake_bin(
+            dir.path(),
+            "fedrq",
+            &[("pkgs --src", "xz : 5.6.2 : 5.el10")],
+        );
         install_fake_bin(
             dir.path(),
             "koji",

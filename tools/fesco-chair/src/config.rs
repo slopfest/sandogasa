@@ -34,43 +34,66 @@ pub fn stored_token() -> Option<String> {
     (!config.forgejo.token.is_empty()).then_some(config.forgejo.token)
 }
 
-/// Save `config` to `cf`, the token in the keyring when there is one:
-/// `save` lays the struct over the file and never removes a key, so a
-/// token moved to the keyring is taken out of the file here. Whether
-/// the file, left with nothing in it, was removed.
+/// The secrets `config` holds, for [`sandogasa_config::secret::fill`]
+/// and [`save`].
+pub fn slots(config: &mut Config) -> Vec<sandogasa_config::secret::Slot<'_>> {
+    vec![sandogasa_config::secret::Slot {
+        table: "forgejo",
+        key: "token",
+        what: "Forgejo token",
+        entry: crate::secrets::forgejo(),
+        value: &mut config.forgejo.token,
+        required: true,
+    }]
+}
+
+/// Save `config` to `cf`, the token in the keyring when there is one
+/// and out of the file then; `before` is what
+/// [`sandogasa_config::secret::fill`] said. Whether the file, left with
+/// nothing in it, was removed.
 pub fn save(
     cf: &sandogasa_config::ConfigFile,
     mut config: Config,
+    before: &[sandogasa_config::secret::Before],
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    if !config.forgejo.token.is_empty() {
-        config.forgejo.token = crate::secrets::keep_for_file(
-            "Forgejo token",
-            &crate::secrets::forgejo(),
-            std::mem::take(&mut config.forgejo.token),
-        );
-    }
-    let in_keyring = config.forgejo.token.is_empty();
-    cf.save(&config)?;
-    if in_keyring {
-        return cf.remove("forgejo", "token");
-    }
-    Ok(false)
+    let kept = sandogasa_config::secret::save_with(
+        cf,
+        crate::secrets::keyring(),
+        "fesco-chair",
+        &mut config,
+        before,
+        slots,
+    )?;
+    Ok(!kept)
+}
+
+/// The config `cmd_config` starts from, with what
+/// [`sandogasa_config::secret::fill`] said: the token kept in the
+/// keyring is the saved one (#79). The token is required, so one turned
+/// off is offered on every run: blank, so the marker is never checked
+/// against the forge, unless `ask` says to use the keyring's entry again.
+/// `review` is the `--all` run.
+fn for_prompts(
+    cf: &sandogasa_config::ConfigFile,
+    review: bool,
+    ask: &dyn Fn(&str, bool) -> bool,
+) -> (Config, Vec<sandogasa_config::secret::Before>) {
+    let mut config: Config = cf.load_user().unwrap_or_default();
+    let before = sandogasa_config::secret::fill(
+        crate::secrets::keyring(),
+        "fesco-chair",
+        slots(&mut config),
+        review,
+        ask,
+    );
+    (config, before)
 }
 
 /// Interactive config setup: prompt for the Forgejo token (again,
 /// with `all`), validate it against the instance, and save.
 pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("fesco-chair");
-    let mut config: Config = cf.load_user().unwrap_or_default();
-    // A token kept in the keyring is the saved one (#79).
-    if let Some(token) = sandogasa_config::secret::resolve(
-        crate::secrets::keyring(),
-        None,
-        &crate::secrets::forgejo(),
-        Some(&config.forgejo.token),
-    ) {
-        config.forgejo.token = token;
-    }
+    let (mut config, before) = for_prompts(&cf, args.all, &sandogasa_cli::ask_to_reenable);
 
     println!("fesco-chair configuration\n");
     println!("Config file: {}\n", cf.path().display());
@@ -101,7 +124,7 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     config.forgejo.token = sandogasa_cli::credential::validated_key_blocking(
         "Forgejo",
         "token",
-        config.forgejo.token.clone(),
+        std::mem::take(&mut config.forgejo.token),
         |token| {
             use sandogasa_cli::credential::KeyVerdict;
             match sandogasa_forgejo::validate_token(sources::FORGE_URL, token) {
@@ -113,7 +136,7 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     )
     .key;
 
-    let removed = save(&cf, config).map_err(|e| format!("failed to save config: {e}"))?;
+    let removed = save(&cf, config, &before).map_err(|e| format!("failed to save config: {e}"))?;
     if removed {
         println!(
             "\nNothing else to keep in {}; removed it.",
@@ -128,6 +151,70 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The prompt offers the keyring's token over a stale one in the
+    /// file, and saving it again leaves the file without it.
+    #[test]
+    #[serial_test::serial]
+    fn the_prompt_offers_the_keyrings_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let cf = sandogasa_config::ConfigFile::from_path(dir.path().join("config.toml"));
+        std::fs::write(cf.path(), "[forgejo]\ntoken = \"stale\"\n").unwrap();
+        let keyring = crate::secrets::keyring();
+        keyring.store(&crate::secrets::forgejo(), "fresh").unwrap();
+        let (config, before) = for_prompts(&cf, false, &sandogasa_config::secret::never);
+        assert_eq!(
+            before,
+            [sandogasa_config::secret::Before::Set {
+                keyring: Some("fresh".into())
+            }]
+        );
+        assert_eq!(config.forgejo.token, "fresh");
+        assert!(save(&cf, config, &before).unwrap());
+        assert!(!cf.path().exists());
+        keyring.clear(&crate::secrets::forgejo()).unwrap();
+    }
+
+    /// The token is required, so one turned off is offered on a plain
+    /// run too: blank, so "-" is never the saved value the forge is asked
+    /// to accept; with the keyring's entry there, it is asked about,
+    /// defaulting to yes, and a yes offers that again and saving takes
+    /// the marker out.
+    #[test]
+    #[serial_test::serial]
+    fn a_token_turned_off_is_offered_blank() {
+        use sandogasa_config::secret::{Before, never};
+        let dir = tempfile::tempdir().unwrap();
+        let cf = sandogasa_config::ConfigFile::from_path(dir.path().join("config.toml"));
+        std::fs::write(cf.path(), "[forgejo]\ntoken = \"-\"\n").unwrap();
+        let (config, before) = for_prompts(&cf, false, &|q: &str, _| panic!("asked {q}"));
+        assert_eq!(
+            (config.forgejo.token.as_str(), &before[..]),
+            ("", &[Before::Off][..])
+        );
+
+        let keyring = crate::secrets::keyring();
+        keyring.store(&crate::secrets::forgejo(), "kept").unwrap();
+        let (config, _) = for_prompts(&cf, false, &never);
+        assert_eq!(config.forgejo.token, "");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let (config, before) = for_prompts(&cf, false, &|q: &str, default_yes| {
+            asked.borrow_mut().push((q.to_string(), default_yes));
+            true
+        });
+        assert_eq!(
+            asked.into_inner(),
+            [(
+                "Forgejo token: off for fesco-chair (the keyring has one). Use it again?"
+                    .to_string(),
+                true
+            )]
+        );
+        assert_eq!(config.forgejo.token, "kept");
+        assert!(save(&cf, config, &before).unwrap());
+        assert!(!cf.path().exists(), "the marker left the file");
+        keyring.clear(&crate::secrets::forgejo()).unwrap();
+    }
 
     #[test]
     fn config_round_trips_and_defaults() {

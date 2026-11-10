@@ -9,6 +9,7 @@
 //! bug is assigned to when claiming it.
 
 use sandogasa_config::ConfigFile;
+use sandogasa_config::secret::{Before, SecretStore, Slot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -37,8 +38,9 @@ pub struct Credentials {
 /// The reviewer's credentials: the API key from `$BUGZILLA_API_KEY` and
 /// the email from `$BUGZILLA_EMAIL`, the key falling back to the keyring,
 /// each then to the config file and then an interactive prompt that saves
-/// it. Loads (and saves) the config file once for both.
-pub fn credentials() -> Result<Credentials, Box<dyn std::error::Error>> {
+/// it. Loads (and saves) the config file once for both. `store` is the
+/// keyring.
+pub fn credentials(store: &dyn SecretStore) -> Result<Credentials, Box<dyn std::error::Error>> {
     let file = ConfigFile::for_tool("fedora-review-digest");
     let mut cfg: Config = file.load_user().unwrap_or_default();
     let mut dirty = false;
@@ -50,7 +52,7 @@ pub fn credentials() -> Result<Credentials, Box<dyn std::error::Error>> {
             let in_file = cfg.bugzilla.api_key.clone();
             let in_file = (!in_file.trim().is_empty()).then_some(in_file);
             match sandogasa_config::secret::resolve(
-                crate::secrets::keyring(),
+                store,
                 None,
                 &crate::secrets::bugzilla(),
                 in_file.as_deref(),
@@ -90,31 +92,52 @@ pub fn credentials() -> Result<Credentials, Box<dyn std::error::Error>> {
     };
 
     if prompted_key {
-        save(&file, cfg)?;
+        // None was found, so there is nothing to turn off: a new key.
+        save(&file, store, &mut cfg, &[Before::Absent])?;
     } else if dirty {
         file.save(&cfg)?;
     }
     Ok(Credentials { api_key, email })
 }
 
-/// Save `cfg` to `file`, the API key in the keyring when there is one:
-/// `save` lays the struct over the file and never removes a key, so a
-/// key moved to the keyring is taken out of the file here. Whether the
-/// file, left with nothing in it, was removed.
-pub fn save(file: &ConfigFile, mut cfg: Config) -> Result<bool, Box<dyn std::error::Error>> {
-    if !cfg.bugzilla.api_key.trim().is_empty() {
-        cfg.bugzilla.api_key = crate::secrets::keep_for_file(
-            "Bugzilla API key",
-            &crate::secrets::bugzilla(),
-            std::mem::take(&mut cfg.bugzilla.api_key),
-        );
-    }
-    let in_keyring = cfg.bugzilla.api_key.is_empty();
-    file.save(&cfg)?;
-    if in_keyring {
-        return file.remove("bugzilla", "api_key");
-    }
-    Ok(false)
+/// The secrets `cfg` holds: the Bugzilla API key.
+fn slots(cfg: &mut Config) -> Vec<Slot<'_>> {
+    vec![Slot {
+        table: "bugzilla",
+        key: "api_key",
+        what: "Bugzilla API key",
+        entry: crate::secrets::bugzilla(),
+        value: &mut cfg.bugzilla.api_key,
+        // `--post` cannot work without it.
+        required: true,
+    }]
+}
+
+/// Fill `cfg`'s API key from `store`, the keyring, which wins over the
+/// file's, so `config` offers it as the saved value (see
+/// [`sandogasa_config::secret::fill`], which `review`, the `--all` run,
+/// and `ask` go to). How it stood, for [`save`].
+pub fn fill(
+    store: &dyn SecretStore,
+    cfg: &mut Config,
+    review: bool,
+    ask: &dyn Fn(&str, bool) -> bool,
+) -> Vec<Before> {
+    sandogasa_config::secret::fill(store, env!("CARGO_PKG_NAME"), slots(cfg), review, ask)
+}
+
+/// Save `cfg` to `file`, the API key in `store`, the keyring, when there
+/// is one and out of the file then (see
+/// [`sandogasa_config::secret::save_with`]); `before` is what [`fill`]
+/// said. Whether the file is still there, which it is not once nothing
+/// is left in it.
+pub fn save(
+    file: &ConfigFile,
+    store: &dyn SecretStore,
+    cfg: &mut Config,
+    before: &[Before],
+) -> Result<bool, Box<dyn std::error::Error>> {
+    sandogasa_config::secret::save_with(file, store, env!("CARGO_PKG_NAME"), cfg, before, slots)
 }
 
 /// A non-empty environment variable, trimmed away when blank/unset.

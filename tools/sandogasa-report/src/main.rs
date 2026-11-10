@@ -19,8 +19,6 @@ mod koji;
 mod report;
 mod secrets;
 mod sourcehut;
-#[cfg(test)]
-mod test_support;
 
 #[derive(Parser)]
 #[command(

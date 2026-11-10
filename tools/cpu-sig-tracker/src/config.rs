@@ -10,7 +10,7 @@ pub struct Config {
     pub jira: Option<JiraConfig>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GitlabConfig {
     /// Empty when the token is in the keyring (#79).
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -31,23 +31,12 @@ pub struct JiraConfig {
     pub access_token: String,
 }
 
-fn config_file() -> sandogasa_config::ConfigFile {
+pub fn config_file() -> sandogasa_config::ConfigFile {
     sandogasa_config::ConfigFile::for_tool("cpu-sig-tracker")
 }
 
 pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
     config_file().load()
-}
-
-pub fn save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    config_file().save(config)
-}
-
-/// Take `key` out of `table` in the config file: for a secret now in
-/// the keyring, which `save` would otherwise leave there. Whether the
-/// file, left with nothing in it, was removed.
-pub fn remove(table: &str, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    config_file().remove(table, key)
 }
 
 pub fn config_path() -> std::path::PathBuf {

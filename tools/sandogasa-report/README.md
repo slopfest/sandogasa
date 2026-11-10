@@ -87,7 +87,9 @@ Two subcommands:
   Token input is hidden and needs a real terminal. Tokens go in the
   desktop keyring, one entry per instance (see
   [GitLab authentication](#gitlab-authentication)); the overlay holds
-  them only where no keyring can be used.
+  them only where no keyring can be used. An instance whose token is
+  turned off (`"-"` in the overlay) is skipped; `--all` goes over it
+  too, offering the keyring's token again where it has one.
 
 ```sh
 # One-time interactive setup: asks for every credential the

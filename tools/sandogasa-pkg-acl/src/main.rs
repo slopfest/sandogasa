@@ -2,8 +2,6 @@
 
 mod config;
 mod secrets;
-#[cfg(test)]
-mod test_support;
 
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -223,24 +221,60 @@ fn resolve_target(
     }
 }
 
+/// The secret `config` holds, for [`sandogasa_config::secret::fill`]
+/// and [`save_keeping_token`].
+fn slots(config: &mut AppConfig) -> Vec<sandogasa_config::secret::Slot<'_>> {
+    vec![sandogasa_config::secret::Slot {
+        table: "dist-git",
+        key: "api_token",
+        what: "Pagure token",
+        entry: secrets::distgit(),
+        value: &mut config.dist_git.api_token,
+        required: true,
+    }]
+}
+
 /// Save `username` and the API token to `cf`, the token in the keyring
 /// when there is one and then out of the file, since `save` never
-/// removes a key. Whether the file, left with nothing in it, was
-/// removed.
+/// removes a key; `before` is what [`sandogasa_config::secret::fill`]
+/// said. Whether the file, left with nothing in it, was removed.
 fn save_keeping_token(
     cf: &ConfigFile,
     token: String,
     username: String,
+    before: &[sandogasa_config::secret::Before],
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let api_token = secrets::keep_for_file("dist-git API token", &secrets::distgit(), token);
-    let in_keyring = api_token.is_empty();
-    cf.save(&AppConfig {
+    let mut config = AppConfig {
         dist_git: DistGitConfig {
-            api_token,
+            api_token: token,
             username,
         },
-    })?;
-    Ok(in_keyring && cf.remove("dist-git", "api_token")?)
+    };
+    let kept = sandogasa_config::secret::save_with(
+        cf,
+        secrets::keyring(),
+        TOOL_NAME,
+        &mut config,
+        before,
+        slots,
+    )?;
+    Ok(!kept)
+}
+
+/// The token `config` offers as the saved one, and what
+/// [`sandogasa_config::secret::fill`] said: the keyring's comes first
+/// (#79). The token is required, so one turned off for this tool is
+/// offered on every run: blank, so it is asked for anew, unless the
+/// keyring still holds an entry and `ask` says to use it again (the
+/// file then loses the marker when saved). `review` is the `--all` run.
+fn saved_token(
+    config: &mut AppConfig,
+    review: bool,
+    ask: &dyn Fn(&str, bool) -> bool,
+) -> (String, Vec<sandogasa_config::secret::Before>) {
+    let before =
+        sandogasa_config::secret::fill(secrets::keyring(), TOOL_NAME, slots(config), review, ask);
+    (std::mem::take(&mut config.dist_git.api_token), before)
 }
 
 /// Ask for the API token when there is none (with `all`, offering the
@@ -248,25 +282,17 @@ fn save_keeping_token(
 /// it belongs to. A token dist-git refuses can be replaced on the spot.
 async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let cf = ConfigFile::for_tool(TOOL_NAME);
-    let file_token = match cf.load_user::<AppConfig>() {
+    let mut config = match cf.load_user::<AppConfig>() {
         Ok(config) => {
             println!("Found config at {}", cf.path().display());
-            config.dist_git.api_token
+            config
         }
         Err(_) => {
             println!("No config found at {}", cf.path().display());
-            String::new()
+            AppConfig::default()
         }
     };
-    // A token kept in the keyring is the saved one when the file has
-    // none (#79).
-    let mut token = sandogasa_config::secret::resolve(
-        secrets::keyring(),
-        None,
-        &secrets::distgit(),
-        Some(&file_token),
-    )
-    .unwrap_or_default();
+    let (mut token, before) = saved_token(&mut config, args.all, &sandogasa_cli::ask_to_reenable);
     let mut review = args.all;
     loop {
         token = sandogasa_config::ask(
@@ -280,7 +306,7 @@ async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
         match client.verify_token().await {
             Ok(username) => {
                 println!("OK (authenticated as {username})");
-                if save_keeping_token(&cf, token, username)? {
+                if save_keeping_token(&cf, token, username, &before)? {
                     println!(
                         "Nothing else to keep in {}; removed it.",
                         cf.path().display()
@@ -1127,7 +1153,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::test_support::EnvGuard;
+    use sandogasa_config::test_support::EnvGuard;
 
     /// A config directory of its own, with no token exported.
     fn isolated(dir: &tempfile::TempDir) -> EnvGuard {
@@ -1154,7 +1180,7 @@ mod tests {
         assert_eq!(resolve_token().unwrap(), "pagure-from-file");
 
         let removed =
-            save_keeping_token(&cf, "pagure-from-keyring".into(), "salimma".into()).unwrap();
+            save_keeping_token(&cf, "pagure-from-keyring".into(), "salimma".into(), &[]).unwrap();
         assert!(!removed, "the username is still in the file");
         let text = std::fs::read_to_string(cf.path()).unwrap();
         assert!(!text.contains("api_token"), "the file is left without it");
@@ -1168,6 +1194,97 @@ mod tests {
         // The environment still wins.
         let _env2 = EnvGuard::new(&[("PAGURE_API_TOKEN", "pagure-from-env")]);
         assert_eq!(resolve_token().unwrap(), "pagure-from-env");
+        secrets::keyring().clear(&secrets::distgit()).unwrap();
+    }
+
+    /// A config whose token is turned off for this tool.
+    fn turned_off() -> AppConfig {
+        AppConfig {
+            dist_git: DistGitConfig {
+                api_token: sandogasa_config::secret::OFF.into(),
+                username: "salimma".into(),
+            },
+        }
+    }
+
+    /// Turned off with an entry in the keyring, a yes uses the entry
+    /// again: saving takes the marker out of the file and stores nothing.
+    #[test]
+    #[serial_test::serial]
+    fn a_token_turned_off_can_use_the_keyring_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        secrets::keyring()
+            .store(&secrets::distgit(), "pagure-kept")
+            .unwrap();
+        let asked = std::cell::RefCell::new(String::new());
+        let (token, before) = saved_token(&mut turned_off(), false, &|q: &str, default_yes| {
+            assert!(default_yes, "the token is required");
+            *asked.borrow_mut() = q.to_string();
+            true
+        });
+        assert_eq!(
+            asked.into_inner(),
+            "Pagure token: off for sandogasa-pkg-acl (the keyring has one). Use it again?"
+        );
+        assert_eq!(token, "pagure-kept");
+
+        let cf = ConfigFile::for_tool(TOOL_NAME);
+        std::fs::create_dir_all(cf.path().parent().unwrap()).unwrap();
+        std::fs::write(
+            cf.path(),
+            "[dist-git]\napi_token = \"-\"\nusername = \"salimma\"\n",
+        )
+        .unwrap();
+        save_keeping_token(&cf, token, "salimma".into(), &before).unwrap();
+        let text = std::fs::read_to_string(cf.path()).unwrap();
+        assert!(!text.contains("api_token"), "{text}");
+        assert_eq!(resolve_token().unwrap(), "pagure-kept");
+        secrets::keyring().clear(&secrets::distgit()).unwrap();
+    }
+
+    /// A no offers the token blank, so a new one is asked for, as does
+    /// having no entry to go back to, which is not even asked about; the
+    /// new token entered then turns it back on.
+    #[test]
+    #[serial_test::serial]
+    fn a_token_turned_off_is_otherwise_asked_for() {
+        use sandogasa_config::secret::{Before, never};
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let (token, before) =
+            saved_token(&mut turned_off(), false, &|q: &str, _| panic!("asked {q}"));
+        assert_eq!((token.as_str(), &before[..]), ("", &[Before::Off][..]));
+
+        secrets::keyring()
+            .store(&secrets::distgit(), "pagure-kept")
+            .unwrap();
+        let (token, before) = saved_token(&mut turned_off(), false, &never);
+        assert_eq!((token.as_str(), &before[..]), ("", &[Before::Off][..]));
+        // The new token answered is kept, and the marker leaves the file.
+        let cf = ConfigFile::for_tool(TOOL_NAME);
+        std::fs::create_dir_all(cf.path().parent().unwrap()).unwrap();
+        std::fs::write(
+            cf.path(),
+            "[dist-git]\napi_token = \"-\"\nusername = \"salimma\"\n",
+        )
+        .unwrap();
+        save_keeping_token(&cf, "pagure-new".into(), "salimma".into(), &before).unwrap();
+        let text = std::fs::read_to_string(cf.path()).unwrap();
+        assert!(!text.contains("api_token"), "{text}");
+        assert_eq!(resolve_token().unwrap(), "pagure-new");
+
+        // Not turned off: the keyring's, without asking.
+        let mut on = turned_off();
+        on.dist_git.api_token.clear();
+        let (token, before) = saved_token(&mut on, false, &|q: &str, _| panic!("asked {q}"));
+        assert_eq!(token, "pagure-new");
+        assert_eq!(
+            before,
+            [Before::Set {
+                keyring: Some("pagure-new".into())
+            }]
+        );
         secrets::keyring().clear(&secrets::distgit()).unwrap();
     }
 

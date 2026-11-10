@@ -5,21 +5,9 @@
 //! else the config file. The tool's own tests get a keyring in memory,
 //! so `cargo test` never reads or writes the user's.
 
-use sandogasa_config::secret::{SecretRef, SecretStore};
+use sandogasa_config::secret::{SecretRef, Slot};
 
-/// The keyring: `secret-tool`, or in this crate's tests one in memory.
-pub fn keyring() -> &'static dyn SecretStore {
-    #[cfg(test)]
-    {
-        static MEMORY: std::sync::OnceLock<sandogasa_config::secret::MemoryStore> =
-            std::sync::OnceLock::new();
-        MEMORY.get_or_init(Default::default)
-    }
-    #[cfg(not(test))]
-    {
-        &sandogasa_config::secret::SecretTool
-    }
-}
+sandogasa_config::keyring_fn!();
 
 /// The GitLab token's entry, for the GitLab instance in use.
 pub fn gitlab() -> SecretRef {
@@ -37,9 +25,35 @@ pub fn jira(email: Option<&str>) -> SecretRef {
     }
 }
 
-/// [`sandogasa_config::secret::keep_for_file`] with [`keyring`].
-pub fn keep_for_file(what: &str, secret: &SecretRef, value: String) -> String {
-    sandogasa_config::secret::keep_for_file(keyring(), what, secret, value)
+/// The secrets `config` holds, for [`sandogasa_config::secret::fill`]
+/// and [`sandogasa_config::secret::save_with`]: the GitLab token, then
+/// the Jira token, each when its table is there. `config` gives the
+/// GitLab table before filling, so the slots line up between the two.
+pub fn slots(c: &mut crate::config::Config) -> Vec<Slot<'_>> {
+    let mut slots = Vec::new();
+    if let Some(g) = c.gitlab.as_mut() {
+        slots.push(Slot {
+            table: "gitlab",
+            key: "access_token",
+            what: "GitLab token",
+            entry: gitlab(),
+            value: &mut g.access_token,
+            required: true,
+        });
+    }
+    if let Some(j) = c.jira.as_mut() {
+        let entry = jira(j.email.as_deref());
+        slots.push(Slot {
+            table: "jira",
+            key: "access_token",
+            what: "JIRA API token",
+            entry,
+            value: &mut j.access_token,
+            // Anonymous access works for public issues.
+            required: false,
+        });
+    }
+    slots
 }
 
 #[cfg(test)]
@@ -60,7 +74,12 @@ mod tests {
             ("GITLAB_TOKEN", ""),
         ]);
         assert!(crate::gitlab::load_token().is_err());
-        let file = keep_for_file("GitLab token", &gitlab(), "glpat-from-keyring".into());
+        let file = sandogasa_config::secret::keep_for_file(
+            keyring(),
+            "GitLab token",
+            &gitlab(),
+            "glpat-from-keyring".into(),
+        );
         assert_eq!(file, "", "the file is left without it");
         assert_eq!(crate::gitlab::load_token().unwrap(), "glpat-from-keyring");
         // The environment still wins.

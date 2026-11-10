@@ -5,21 +5,9 @@
 //! config file. The tool's own tests get a keyring in memory, so
 //! `cargo test` never reads or writes the user's.
 
-use sandogasa_config::secret::{SecretRef, SecretStore};
+use sandogasa_config::secret::SecretRef;
 
-/// The keyring: `secret-tool`, or in this crate's tests one in memory.
-pub fn keyring() -> &'static dyn SecretStore {
-    #[cfg(test)]
-    {
-        static MEMORY: std::sync::OnceLock<sandogasa_config::secret::MemoryStore> =
-            std::sync::OnceLock::new();
-        MEMORY.get_or_init(Default::default)
-    }
-    #[cfg(not(test))]
-    {
-        &sandogasa_config::secret::SecretTool
-    }
-}
+sandogasa_config::keyring_fn!();
 
 /// The Forgejo token's entry: forge.fedoraproject.org's, which every
 /// sandogasa tool talking to that forge reads.
@@ -27,44 +15,11 @@ pub fn forgejo() -> SecretRef {
     SecretRef::for_url(crate::sources::FORGE_URL, "sandogasa: Forgejo token")
 }
 
-/// [`sandogasa_config::secret::keep_for_file`] with [`keyring`].
-pub fn keep_for_file(what: &str, secret: &SecretRef, value: String) -> String {
-    sandogasa_config::secret::keep_for_file(keyring(), what, secret, value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Sets environment variables for its lifetime, restoring them on
-    /// drop. Callers serialize with `#[serial_test::serial]`.
-    struct EnvGuard(Vec<(String, Option<String>)>);
-
-    impl EnvGuard {
-        fn new(vars: &[(&str, &str)]) -> Self {
-            let mut old = Vec::new();
-            for (k, v) in vars {
-                old.push((k.to_string(), std::env::var(k).ok()));
-                // SAFETY: serialized by #[serial_test::serial].
-                unsafe { std::env::set_var(k, v) };
-            }
-            Self(old)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (k, v) in &self.0 {
-                // SAFETY: serialized by #[serial_test::serial].
-                unsafe {
-                    match v {
-                        Some(v) => std::env::set_var(k, v),
-                        None => std::env::remove_var(k),
-                    }
-                }
-            }
-        }
-    }
+    use sandogasa_config::test_support::EnvGuard;
 
     /// A token `config` keeps in the keyring is what the tool then
     /// logs in with, and the file is left without it.
@@ -93,7 +48,7 @@ mod tests {
                 token: "from-keyring".into(),
             },
         };
-        let removed = crate::config::save(&cf, config).unwrap();
+        let removed = crate::config::save(&cf, config, &[]).unwrap();
         assert!(removed, "nothing else was in the file");
         assert!(!path.exists());
         assert_eq!(crate::sources::forge_token().unwrap(), "from-keyring");

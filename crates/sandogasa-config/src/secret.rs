@@ -421,6 +421,183 @@ fn quote(arg: &str) -> String {
     }
 }
 
+/// One secret a tool's config holds, for [`fill`], [`settle`] and
+/// [`save_with`]: where in the file it goes, what to call it, its
+/// keyring entry, and the field holding it.
+pub struct Slot<'a> {
+    pub table: &'a str,
+    pub key: &'a str,
+    /// What to call it in messages ("Bugzilla API key").
+    pub what: &'a str,
+    pub entry: SecretRef,
+    pub value: &'a mut String,
+    /// Whether the tool cannot work without it: a required secret turned
+    /// off is asked about on any run, and using the keyring's entry again
+    /// is the default; an optional one only with `--all`, and not the
+    /// default, as it was turned off on purpose.
+    pub required: bool,
+}
+
+/// How a secret stood before a tool's prompts, as [`fill`] found it, for
+/// [`settle`] to decide what an empty answer means.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Before {
+    /// Never set: nothing in the keyring or the file.
+    #[default]
+    Absent,
+    /// Set, with what the keyring held for it (`None` when it came from
+    /// the file), so it is not looked up again.
+    Set { keyring: Option<String> },
+    /// Turned off for this tool ([`OFF`] in its file), and left off.
+    Off,
+}
+
+/// Whether `value` is a secret to use: set, and not turned off. What a
+/// tool checks before sending one to its service, so neither an empty
+/// value nor [`OFF`] is ever checked or used as one.
+pub fn is_set(value: &str) -> bool {
+    !value.is_empty() && value != OFF
+}
+
+/// The question [`fill`] asks whether a secret turned off for `tool` is
+/// to use the keyring's entry again: one wording for every tool, also for
+/// one that asks it itself.
+pub fn reenable_question(what: &str, tool: &str) -> String {
+    format!("{what}: off for {tool} (the keyring has one). Use it again?")
+}
+
+/// The `ask` answer for a run that cannot ask: a secret turned off stays
+/// off.
+pub fn never(_question: &str, _default_yes: bool) -> bool {
+    false
+}
+
+/// Fill each slot with the value `tool`'s `config` offers as its saved
+/// one: the keyring's, which reading takes first, so a stale value left in
+/// the file is never offered and saved back over the shared entry.
+///
+/// A secret turned off ([`OFF`]) is left alone on a plain run when it is
+/// optional: it stays off, and its prompt sees a value and asks nothing,
+/// so turning it off means not being asked again. With `review` (the
+/// `--all` run, which goes over every setting), or for a required one on
+/// any run, it is offered again: when the keyring still holds its entry,
+/// `ask` is asked [`reenable_question`], defaulting to yes for a
+/// required secret and no for an optional one, and a yes offers the
+/// entry's value (which [`settle`] then takes the marker out for);
+/// otherwise it is offered blank, so the marker never reaches a check
+/// against the service. `ask` is `sandogasa_cli::ask_to_reenable`, or
+/// [`never`] where nothing may be asked. How each slot stood, for
+/// [`settle`].
+pub fn fill(
+    store: &dyn SecretStore,
+    tool: &str,
+    slots: Vec<Slot<'_>>,
+    review: bool,
+    ask: &dyn Fn(&str, bool) -> bool,
+) -> Vec<Before> {
+    slots
+        .into_iter()
+        .map(|s| {
+            if s.value == OFF {
+                if !review && !s.required {
+                    return Before::Off;
+                }
+                if let Some(v) = store.lookup(&s.entry).ok().flatten()
+                    && ask(&reenable_question(s.what, tool), s.required)
+                {
+                    *s.value = v.clone();
+                    return Before::Set { keyring: Some(v) };
+                }
+                s.value.clear();
+                return Before::Off;
+            }
+            match store.lookup(&s.entry).ok().flatten() {
+                Some(v) => {
+                    *s.value = v.clone();
+                    Before::Set { keyring: Some(v) }
+                }
+                None if !s.value.is_empty() => Before::Set { keyring: None },
+                None => Before::Absent,
+            }
+        })
+        .collect()
+}
+
+/// Settle each slot after `tool`'s prompts, `before` being what [`fill`]
+/// said. A value the keyring already held is left there, quietly. A new
+/// value is kept in the keyring (or the file, without one). An empty
+/// answer depends on how the secret stood: one that was set is turned off
+/// for the tool, its file saying [`OFF`], with [`kept_on_clear`]'s note;
+/// one that was off stays off, quietly; one never set stays absent. The
+/// `(table, key)` of each secret to take out of the file.
+pub fn settle<'a>(
+    store: &dyn SecretStore,
+    tool: &str,
+    slots: Vec<Slot<'a>>,
+    before: &[Before],
+) -> Vec<(&'a str, &'a str)> {
+    let mut out_of_file = Vec::new();
+    let absent = Before::Absent;
+    for (i, s) in slots.into_iter().enumerate() {
+        let before = before.get(i).unwrap_or(&absent);
+        if s.value == OFF {
+            continue;
+        }
+        if s.value.is_empty() {
+            match before {
+                Before::Set { .. } => {
+                    if let Some(note) = kept_on_clear(store, tool, s.what, &s.entry) {
+                        eprintln!("{note}");
+                    }
+                    *s.value = OFF.to_string();
+                }
+                Before::Off => *s.value = OFF.to_string(),
+                Before::Absent => out_of_file.push((s.table, s.key)),
+            }
+            continue;
+        }
+        if let Before::Set {
+            keyring: Some(held),
+        } = before
+            && *held == *s.value
+        {
+            s.value.clear();
+            out_of_file.push((s.table, s.key));
+            continue;
+        }
+        *s.value = keep_for_file(store, s.what, &s.entry, std::mem::take(s.value));
+        if s.value.is_empty() {
+            out_of_file.push((s.table, s.key));
+        }
+    }
+    out_of_file
+}
+
+/// [`settle`] `config`'s secrets, which `slots` lists, then save it to
+/// `cf` and take each secret the keyring holds out of the file: `save`
+/// lays the struct over the file and never removes a key, so a secret
+/// moved to the keyring would otherwise stay there in plain text.
+/// Whether the file is still there (false once nothing was left in it).
+pub fn save_with<T: serde::Serialize>(
+    cf: &crate::ConfigFile,
+    store: &dyn SecretStore,
+    tool: &str,
+    config: &mut T,
+    before: &[Before],
+    slots: impl for<'b> FnOnce(&'b mut T) -> Vec<Slot<'b>>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let out_of_file: Vec<(String, String)> = settle(store, tool, slots(config), before)
+        .into_iter()
+        .map(|(t, k)| (t.to_string(), k.to_string()))
+        .collect();
+    cf.save(&*config)?;
+    let mut removed = false;
+    for (table, key) in out_of_file {
+        removed |= cf.remove(&table, &key)?;
+    }
+    Ok(!removed)
+}
+
 /// The tools that keep a secret under each label, so a tool clearing
 /// one can say which others it would break: entries are shared by
 /// service, and removing one is removing it for all of them. Sorted by
@@ -732,6 +909,231 @@ mod tests {
             missing.lookup(&gitlab),
             Err(SecretError::Unavailable(_))
         ));
+    }
+
+    /// A tool's config as the tools write theirs: secrets and other
+    /// fields left out when empty, so a file of nothing is empty.
+    #[derive(Default, serde::Serialize, serde::Deserialize)]
+    struct Sample {
+        #[serde(default)]
+        bugzilla: SampleTable,
+        #[serde(default)]
+        nvd: SampleTable,
+    }
+
+    #[derive(Default, serde::Serialize, serde::Deserialize)]
+    struct SampleTable {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        api_key: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        email: String,
+    }
+
+    fn sample_slots(c: &mut Sample) -> Vec<Slot<'_>> {
+        vec![
+            Slot {
+                table: "bugzilla",
+                key: "api_key",
+                what: "Bugzilla API key",
+                entry: SecretRef::for_url(
+                    "https://bugzilla.redhat.com",
+                    "sandogasa: Bugzilla API key",
+                ),
+                value: &mut c.bugzilla.api_key,
+                required: true,
+            },
+            Slot {
+                table: "nvd",
+                key: "api_key",
+                what: "NVD API key",
+                entry: SecretRef::for_url(
+                    "https://services.nvd.nist.gov",
+                    "sandogasa: NVD API key",
+                ),
+                value: &mut c.nvd.api_key,
+                required: false,
+            },
+        ]
+    }
+
+    /// One `config` run end to end: an old file's secrets are offered
+    /// from the keyring first when it has them, then moved there, the
+    /// file keeping only what is not secret; one never set stays absent.
+    #[test]
+    fn save_with_moves_secrets_out_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[bugzilla]\napi_key = \"stale-in-file\"\nemail = \"me@example.com\"\n",
+        )
+        .unwrap();
+        let cf = crate::ConfigFile::from_path(path.clone());
+        let store = MemoryStore::default();
+        let bz = SecretRef::for_url("https://bugzilla.redhat.com", "sandogasa: Bugzilla API key");
+        // Another tool stored a newer key in the shared entry.
+        store.store(&bz, "newer-in-keyring").unwrap();
+        let mut c: Sample = cf.load_user().unwrap();
+        let before = fill(&store, "poi-tracker", sample_slots(&mut c), false, &never);
+        assert_eq!(
+            c.bugzilla.api_key, "newer-in-keyring",
+            "the keyring's is offered"
+        );
+        assert_eq!(
+            before,
+            [
+                Before::Set {
+                    keyring: Some("newer-in-keyring".into())
+                },
+                Before::Absent
+            ]
+        );
+        assert!(save_with(&cf, &store, "poi-tracker", &mut c, &before, sample_slots).unwrap());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("api_key"), "{text}");
+        assert!(text.contains("email = \"me@example.com\""), "{text}");
+        assert_eq!(
+            store.lookup(&bz).unwrap().as_deref(),
+            Some("newer-in-keyring")
+        );
+    }
+
+    /// An optional secret cleared is turned off, and stays off: a plain
+    /// run neither offers it nor asks about it, so turning it off means
+    /// not being asked again; `--all` offers it blank, asking first
+    /// whether to use the keyring's entry again, no by default.
+    #[test]
+    fn an_optional_secret_turned_off_is_only_offered_again_with_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[bugzilla]\nemail = \"me@example.com\"\n").unwrap();
+        let cf = crate::ConfigFile::from_path(path.clone());
+        let store = MemoryStore::default();
+        let nvd = SecretRef::for_url("https://services.nvd.nist.gov", "sandogasa: NVD API key");
+        store.store(&nvd, "nvd-shared").unwrap();
+        // Cleared at a run's prompt.
+        let mut c: Sample = cf.load_user().unwrap();
+        let before = fill(&store, "ebranch", sample_slots(&mut c), false, &never);
+        assert_eq!(c.nvd.api_key, "nvd-shared");
+        c.nvd.api_key.clear();
+        save_with(&cf, &store, "ebranch", &mut c, &before, sample_slots).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("api_key = \"-\"")
+        );
+        assert_eq!(store.lookup(&nvd).unwrap().as_deref(), Some("nvd-shared"));
+
+        let asked = std::cell::RefCell::new(Vec::new());
+        let answer = std::cell::Cell::new(true);
+        let ask = |q: &str, default: bool| {
+            asked.borrow_mut().push((q.to_string(), default));
+            answer.get()
+        };
+        // A plain run: left off, nothing asked, the prompt sees a value.
+        let mut c: Sample = cf.load_user().unwrap();
+        let before = fill(&store, "ebranch", sample_slots(&mut c), false, &ask);
+        assert_eq!(before[1], Before::Off);
+        assert_eq!(c.nvd.api_key, OFF);
+        assert!(!is_set(&c.nvd.api_key), "never checked against NVD");
+        assert!(asked.borrow().is_empty());
+        save_with(&cf, &store, "ebranch", &mut c, &before, sample_slots).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("api_key = \"-\"")
+        );
+
+        // With --all, asked (default no) and told no: offered blank, and
+        // Enter keeps it off.
+        answer.set(false);
+        let mut c: Sample = cf.load_user().unwrap();
+        let before = fill(&store, "ebranch", sample_slots(&mut c), true, &ask);
+        assert_eq!(c.nvd.api_key, "");
+        assert_eq!(
+            asked.borrow().as_slice(),
+            [(
+                "NVD API key: off for ebranch (the keyring has one). Use it again?".to_string(),
+                false
+            )]
+        );
+        save_with(&cf, &store, "ebranch", &mut c, &before, sample_slots).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("api_key = \"-\"")
+        );
+
+        // With --all and a yes: the entry is used again, and the marker
+        // leaves the file, nothing stored anew.
+        answer.set(true);
+        let mut c: Sample = cf.load_user().unwrap();
+        let before = fill(&store, "ebranch", sample_slots(&mut c), true, &ask);
+        assert_eq!(c.nvd.api_key, "nvd-shared");
+        save_with(&cf, &store, "ebranch", &mut c, &before, sample_slots).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("api_key"));
+    }
+
+    /// A required secret turned off is asked about on any run, using the
+    /// keyring's entry again by default, as the tool cannot work without
+    /// it; with no entry it is offered blank, to be asked for.
+    #[test]
+    fn a_required_secret_turned_off_is_asked_about_on_any_run() {
+        let store = MemoryStore::default();
+        let bz = SecretRef::for_url("https://bugzilla.redhat.com", "sandogasa: Bugzilla API key");
+        let mut c = Sample::default();
+        c.bugzilla.api_key = OFF.to_string();
+        let not_asked = |q: &str, _: bool| -> bool { panic!("asked {q}") };
+        let before = fill(
+            &store,
+            "poi-tracker",
+            sample_slots(&mut c),
+            false,
+            &not_asked,
+        );
+        assert_eq!(before[0], Before::Off);
+        assert_eq!(c.bugzilla.api_key, "", "offered blank, to be asked for");
+
+        store.store(&bz, "bz-shared").unwrap();
+        c.bugzilla.api_key = OFF.to_string();
+        let default = std::cell::Cell::new(None);
+        let take_default = |_: &str, d: bool| {
+            default.set(Some(d));
+            d
+        };
+        let before = fill(
+            &store,
+            "poi-tracker",
+            sample_slots(&mut c),
+            false,
+            &take_default,
+        );
+        assert_eq!(default.get(), Some(true), "yes by default");
+        assert_eq!(c.bugzilla.api_key, "bz-shared");
+        assert_eq!(
+            before[0],
+            Before::Set {
+                keyring: Some("bz-shared".into())
+            }
+        );
+    }
+
+    /// A file left holding only secrets is removed once they move, and
+    /// `save_with` says so; a new value goes to the keyring.
+    #[test]
+    fn a_file_of_only_secrets_is_removed_once_they_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[nvd]\napi_key = \"nvd-old\"\n").unwrap();
+        let cf = crate::ConfigFile::from_path(path.clone());
+        let store = MemoryStore::default();
+        let mut c: Sample = cf.load_user().unwrap();
+        let before = fill(&store, "ebranch", sample_slots(&mut c), false, &never);
+        c.nvd.api_key = "nvd-new".into();
+        assert!(!save_with(&cf, &store, "ebranch", &mut c, &before, sample_slots).unwrap());
+        assert!(!path.exists());
+        let nvd = SecretRef::for_url("https://services.nvd.nist.gov", "sandogasa: NVD API key");
+        assert_eq!(store.lookup(&nvd).unwrap().as_deref(), Some("nvd-new"));
     }
 
     /// `-` in a tool's file turns the secret off for it: the keyring's

@@ -8,6 +8,10 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# EnvGuard for the tools' tests; see src/test_support.rs.
+test-support = []
+
 [dependencies]
 dirs = { workspace = true }
 rpassword = { workspace = true }

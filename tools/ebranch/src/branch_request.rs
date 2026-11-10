@@ -2042,7 +2042,8 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
 /// the ticket is not thrown away for want of it (issue #71). `None`
 /// when there is none and none may be asked for, or none was given.
 async fn releng_token(opts: &Options, due: &str) -> Result<Option<String>, String> {
-    if !opts.forge_token.is_empty() {
+    // A token turned off for ebranch is none: never sent.
+    if sandogasa_config::secret::is_set(&opts.forge_token) {
         return Ok(Some(opts.forge_token.clone()));
     }
     if !opts.ask_forge_token {
@@ -4607,6 +4608,9 @@ mod tests {
             Some("configured")
         );
         opts.forge_token = String::new();
+        assert_eq!(releng_token(&opts, "due").await.unwrap(), None);
+        // Turned off is none too, never sent as a token.
+        opts.forge_token = sandogasa_config::secret::OFF.into();
         assert_eq!(releng_token(&opts, "due").await.unwrap(), None);
 
         // Asked already in this run: the answer stands for every later

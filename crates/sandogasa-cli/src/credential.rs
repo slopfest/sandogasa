@@ -97,8 +97,10 @@ fn ask_replacement(label: &str, noun: &str) -> Option<String> {
             return None;
         }
     }
+    // `-` is what turns a secret off in a config file, not a key: never
+    // one to send to the service.
     match sandogasa_config::prompt_field(label, noun, true, None) {
-        Ok(new) if !new.trim().is_empty() => Some(new.trim().to_string()),
+        Ok(new) if sandogasa_config::secret::is_set(new.trim()) => Some(new.trim().to_string()),
         _ => {
             eprintln!("warning: nothing entered; keeping the {label} {noun} as it is.");
             None
@@ -137,6 +139,14 @@ pub async fn validated_key<F>(label: &str, noun: &str, key: String, check: F) ->
 where
     F: Fn(String) -> Pin<Box<dyn Future<Output = KeyVerdict>>>,
 {
+    // Nothing to check: a key not set, or turned off (`-`), is never sent
+    // to the service as one.
+    if !sandogasa_config::secret::is_set(&key) {
+        return Checked {
+            key,
+            accepted: false,
+        };
+    }
     let mut key = key;
     loop {
         announce(label, noun);
@@ -168,6 +178,14 @@ pub fn validated_key_blocking<F>(label: &str, noun: &str, key: String, check: F)
 where
     F: Fn(&str) -> KeyVerdict,
 {
+    // Nothing to check: a key not set, or turned off (`-`), is never sent
+    // to the service as one.
+    if !sandogasa_config::secret::is_set(&key) {
+        return Checked {
+            key,
+            accepted: false,
+        };
+    }
     let mut key = key;
     loop {
         announce(label, noun);
@@ -193,6 +211,26 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key not set, or turned off, is never sent to the service to be
+    /// checked, by either loop.
+    #[test]
+    fn a_key_not_set_or_turned_off_is_never_checked() {
+        for key in ["", "-"] {
+            let checked = validated_key_blocking("Bugzilla", "API key", key.into(), |k| {
+                panic!("{k:?} was sent to be checked")
+            });
+            assert!(!checked.accepted);
+            assert_eq!(checked.key, key);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let checked = rt.block_on(validated_key("NVD", "API key", key.into(), |k| {
+                Box::pin(async move { panic!("{k:?} was sent to be checked") })
+            }));
+            assert!(!checked.accepted);
+        }
+    }
 
     #[test]
     fn only_a_refusal_is_worth_offering_to_fix() {

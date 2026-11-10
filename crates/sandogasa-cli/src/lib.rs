@@ -304,6 +304,24 @@ pub fn confirm(question: &str, default_yes: bool) -> std::io::Result<bool> {
     Ok(parse_confirm(&line, default_yes))
 }
 
+/// What a tool's `config` passes `sandogasa_config::secret::fill` as its
+/// `ask`: whether a secret turned off for the tool is to use the
+/// keyring's entry again. Asked at a terminal, `default_yes` (which
+/// `fill` sets from whether the secret is required) being what Enter
+/// answers; never without one, as nothing changes unasked.
+pub fn ask_to_reenable(question: &str, default_yes: bool) -> bool {
+    ask_when(
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        question,
+        default_yes,
+    )
+}
+
+/// [`ask_to_reenable`], told whether there is a terminal to ask at.
+fn ask_when(interactive: bool, question: &str, default_yes: bool) -> bool {
+    interactive && confirm(question, default_yes).unwrap_or(false)
+}
+
 /// Ask about a list of items the caller has already shown: take all
 /// of them, take none, or decide one at a time.
 ///
@@ -391,6 +409,14 @@ fn parse_list_answer(answer: &str, default_yes: bool) -> ListAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Without a terminal to ask at, a secret turned off stays off,
+    /// whichever the default.
+    #[test]
+    fn nothing_is_turned_back_on_unasked() {
+        assert!(!ask_when(false, "Use it again?", true));
+        assert!(!ask_when(false, "Use it again?", false));
+    }
 
     fn notes(inline: Option<&str>, file: Option<&std::path::Path>) -> NotesArgs {
         NotesArgs {

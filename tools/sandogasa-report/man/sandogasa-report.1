@@ -16,9 +16,12 @@ Print help
 Print version
 .SH COMMANDS
 .SS sandogasa-report config
-\fBsandogasa\-report config\fR [\fB\-c\fR|\fB\-\-config\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-report config\fR [\fB\-\-all\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Interactively set per\-user overrides in `~/.config/sandogasa\-report/config.toml`
+.TP
+\fB\-\-all\fR
+Also go over the instances whose token is turned off ("\-"), offering the keyring\*(Aqs again where it has one
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<PATH>\fR
 Main config file to enumerate domains / forge instances from. Without one, there are no instances to configure

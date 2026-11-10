@@ -3,7 +3,7 @@
 //! Config file (`~/.config/cbspkg/config.toml`) and the GitLab
 //! instance the SIGs' repos are on.
 
-use sandogasa_config::secret::{SecretRef, SecretStore};
+use sandogasa_config::secret::{SecretRef, Slot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -26,14 +26,14 @@ pub struct PackageConfig {
     pub rhel: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GitlabConfig {
     /// Empty when the token is in the keyring (#79).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub access_token: String,
 }
 
-fn config_file() -> sandogasa_config::ConfigFile {
+pub fn config_file() -> sandogasa_config::ConfigFile {
     sandogasa_config::ConfigFile::for_tool("cbspkg")
 }
 
@@ -47,17 +47,6 @@ pub fn load_user() -> Result<Config, Box<dyn std::error::Error>> {
     config_file().load_user()
 }
 
-pub fn save(config: &Config) -> Result<(), Box<dyn std::error::Error>> {
-    config_file().save(config)
-}
-
-/// Take `key` out of `table` in the config file: for a secret now in
-/// the keyring, which `save` would otherwise leave there. Whether the
-/// file, left with nothing in it, was removed.
-pub fn remove(table: &str, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    config_file().remove(table, key)
-}
-
 pub fn config_path() -> std::path::PathBuf {
     config_file().path().to_path_buf()
 }
@@ -68,25 +57,30 @@ pub fn gitlab_base() -> String {
     std::env::var("CBSPKG_GITLAB_BASE").unwrap_or_else(|_| "https://gitlab.com".to_string())
 }
 
-/// The keyring: `secret-tool`, or in this crate's tests one in memory,
-/// so `cargo test` never reads or writes the user's.
-pub fn keyring() -> &'static dyn SecretStore {
-    #[cfg(test)]
-    {
-        static MEMORY: std::sync::OnceLock<sandogasa_config::secret::MemoryStore> =
-            std::sync::OnceLock::new();
-        MEMORY.get_or_init(Default::default)
-    }
-    #[cfg(not(test))]
-    {
-        &sandogasa_config::secret::SecretTool
-    }
-}
+sandogasa_config::keyring_fn!();
 
 /// The GitLab token's keyring entry, for the GitLab instance in use:
 /// the same one every sandogasa tool reads for that host.
 pub fn gitlab_secret() -> SecretRef {
     SecretRef::for_url(&gitlab_base(), "sandogasa: GitLab token")
+}
+
+/// The secrets `config` holds, for [`sandogasa_config::secret::fill`]
+/// and [`sandogasa_config::secret::save_with`]: the GitLab token, when
+/// its table is there.
+pub fn secret_slots(c: &mut Config) -> Vec<Slot<'_>> {
+    c.gitlab
+        .as_mut()
+        .map(|g| Slot {
+            table: "gitlab",
+            key: "access_token",
+            what: "GitLab token",
+            entry: gitlab_secret(),
+            value: &mut g.access_token,
+            required: true,
+        })
+        .into_iter()
+        .collect()
 }
 
 /// The GitLab token: `GITLAB_TOKEN`, else the keyring's, else the
@@ -110,11 +104,8 @@ mod tests {
     /// The env pointing the config and GitLab at a temp dir and `base`.
     fn env(dir: &std::path::Path, base: &str) -> EnvGuard {
         let config = dir.display().to_string();
-        EnvGuard::new(&[
-            ("XDG_CONFIG_HOME", Some(&config)),
-            ("CBSPKG_GITLAB_BASE", Some(base)),
-            ("GITLAB_TOKEN", None),
-        ])
+        EnvGuard::new(&[("XDG_CONFIG_HOME", &config), ("CBSPKG_GITLAB_BASE", base)])
+            .unset(&["GITLAB_TOKEN"])
     }
 
     #[test]
@@ -126,17 +117,18 @@ mod tests {
         // No file yet: an error saying how to make one.
         let err = load_user().unwrap_err().to_string();
         assert!(err.contains("Run 'config'"), "{err}");
-        save(&Config {
-            gitlab: Some(GitlabConfig {
-                access_token: "in-file".into(),
-            }),
-            ..Default::default()
-        })
-        .unwrap();
+        config_file()
+            .save(&Config {
+                gitlab: Some(GitlabConfig {
+                    access_token: "in-file".into(),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
         assert_eq!(load().unwrap().gitlab.unwrap().access_token, "in-file");
         assert_eq!(gitlab_token().as_deref(), Some("in-file"));
         // Nothing left once the token goes: the file is removed.
-        assert!(remove("gitlab", "access_token").unwrap());
+        assert!(config_file().remove("gitlab", "access_token").unwrap());
         assert!(!config_path().exists());
     }
 
@@ -148,16 +140,17 @@ mod tests {
         assert_eq!(gitlab_base(), "http://127.0.0.1:2");
         assert_eq!(gitlab_secret().service(), "127.0.0.1:2");
         assert_eq!(gitlab_token(), None);
-        save(&Config {
-            gitlab: Some(GitlabConfig {
-                access_token: "in-file".into(),
-            }),
-            ..Default::default()
-        })
-        .unwrap();
+        config_file()
+            .save(&Config {
+                gitlab: Some(GitlabConfig {
+                    access_token: "in-file".into(),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
         keyring().store(&gitlab_secret(), "in-keyring").unwrap();
         assert_eq!(gitlab_token().as_deref(), Some("in-keyring"));
-        let _token = EnvGuard::new(&[("GITLAB_TOKEN", Some("in-env"))]);
+        let _token = EnvGuard::new(&[("GITLAB_TOKEN", "in-env")]);
         assert_eq!(gitlab_token().as_deref(), Some("in-env"));
         keyring().clear(&gitlab_secret()).unwrap();
     }
@@ -165,7 +158,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn gitlab_com_is_the_default_instance() {
-        let _env = EnvGuard::new(&[("CBSPKG_GITLAB_BASE", None)]);
+        let _env = EnvGuard::new(&[]).unset(&["CBSPKG_GITLAB_BASE"]);
         assert_eq!(gitlab_base(), "https://gitlab.com");
     }
 

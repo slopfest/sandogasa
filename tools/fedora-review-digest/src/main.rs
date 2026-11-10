@@ -15,6 +15,11 @@ use sandogasa_review::resolve_interactive;
 
 use fedora_review_digest::secrets::BUGZILLA_URL;
 
+// The keyring lives here, not in the library: the library is built
+// without cfg(test) for this binary's tests, so a keyring it chose
+// could be the user's.
+sandogasa_config::keyring_fn!();
+
 #[derive(Parser)]
 #[command(
     about,
@@ -154,14 +159,12 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     // The user file alone, so saving does not copy /etc's values into it.
     let mut cfg: config::Config = cf.load_user().unwrap_or_default();
     // A key kept in the keyring is the saved one (#79).
-    if let Some(key) = sandogasa_config::secret::resolve(
-        fedora_review_digest::secrets::keyring(),
-        None,
-        &fedora_review_digest::secrets::bugzilla(),
-        Some(&cfg.bugzilla.api_key),
-    ) {
-        cfg.bugzilla.api_key = key;
-    }
+    let before = config::fill(
+        keyring(),
+        &mut cfg,
+        args.all,
+        &sandogasa_cli::ask_to_reenable,
+    );
     cfg.bugzilla.api_key = ask(
         &Setting::new("Bugzilla", "API key").sensitive().hint(
             "Create an API key at \
@@ -206,13 +209,13 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
         },
     )
     .key;
-    if config::save(&cf, cfg).map_err(|e| e.to_string())? {
+    if config::save(&cf, keyring(), &mut cfg, &before).map_err(|e| e.to_string())? {
+        eprintln!("Saved to {}", cf.path().display());
+    } else {
         eprintln!(
             "Nothing else to keep in {}; removed it.",
             cf.path().display()
         );
-    } else {
-        eprintln!("Saved to {}", cf.path().display());
     }
     Ok(())
 }
@@ -359,7 +362,7 @@ fn post_to_bugzilla(
 ) -> Result<(), String> {
     let bug_id = bug_id(input, dir)
         .ok_or("couldn't determine the bug id from the input or dir name; pass the bug id")?;
-    let creds = config::credentials().map_err(|e| e.to_string())?;
+    let creds = config::credentials(keyring()).map_err(|e| e.to_string())?;
     let client = BzClient::new(BUGZILLA_URL)
         .with_api_key(creds.api_key)
         .map_err(|e| e.to_string())?;
