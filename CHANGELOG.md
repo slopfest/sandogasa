@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### cbspkg: sig-repo makes the SIG repo open on its newest SIG branch
+
+A SIG repo kept whatever default branch GitLab gave it, so its page
+opened on Stream's content, or worse: rsync's Proposed Updates repo
+opened on `RHEL-169141`, a stray branch the mirror had copied before it
+was narrowed, rather than on its proposal `c10s-proposed-RHEL-303721`.
+GitLab also refuses to delete a default branch, so that stray could not
+be cleaned up either.
+
+Each `sig-repo` run now finds the repo's newest SIG branch (Proposed
+Updates' `c<N>s-proposed-*`; Hyperscale's `c<N>s-hs` and
+`c<N>s-sig-hyperscale`, not its other repositories' branches): the one
+for the newest Stream release, and of several, the branch the run just
+pushed, else the one with the newest head commit. It makes that the
+default when it is not, confirmed at a terminal, so the next proposal
+for a package becomes its default when `sig-repo` pushes it; a dry run
+counts the branch it would push. A repo with no SIG branch yet keeps
+its default. Without the Maintainer role, a terminal or `--yes`, the
+default is left as it is with a note, and the rest of the run stands.
+In sandogasa-cbs, `Sig::own_branch_major` and `Sig::newest_own_branch`
+pick the branch; sandogasa-gitlab's `Branch` gains `commit`
+(`BranchCommit::committed_date`). Resolves #104.
+
 ### cbspkg: build and promote a SIG's centos-release package through Extras
 
 A SIG's release package, `centos-release-<sig>`, is built into Extras'

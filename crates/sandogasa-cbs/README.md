@@ -48,6 +48,12 @@ assert_eq!(
 `Sig::detect` finds the SIG and collection for a branch of any of them.
 Any other branch is an error that names it.
 
+`Sig::own_branch_major` tells a SIG's own branches (Proposed Updates'
+`c<N>s-proposed-<key>`, Hyperscale's `c<N>s-hs` and
+`c<N>s-sig-hyperscale`) from the rest, and `Sig::newest_own_branch`
+picks the one a SIG repo should open on: the newest Stream release's,
+and of several, the one with the newest head commit.
+
 Hyperscale's Facebook branches also build for the RHEL release
 (`hyperscale9-packages-facebook-el9`), for systems that deploy RHEL
 snapshots; `Collection::rhel_variant` names that collection.

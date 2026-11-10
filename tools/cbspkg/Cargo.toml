@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-cbs = { workspace = true }

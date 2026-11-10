@@ -413,6 +413,116 @@ fn check_mirror(
     Ok(())
 }
 
+/// The branch a SIG repo should open on: the one this run pushed
+/// (`pushed`), when it is the SIG's own and of the newest Stream
+/// release among them, as a new proposal is; else the newest of the
+/// SIG's own branches ([`Sig::newest_own_branch`]).
+pub fn default_branch_for<'a, T: Ord>(
+    sig: Sig,
+    branches: &'a [(String, T)],
+    pushed: Option<&'a str>,
+) -> Option<&'a str> {
+    let newest = sig.newest_own_branch(branches);
+    let major = |b: &str| sig.own_branch_major(b);
+    match (pushed, newest) {
+        (Some(p), Some(n)) if major(p).is_some() && major(p) >= major(n) => Some(p),
+        (Some(p), None) if major(p).is_some() => Some(p),
+        (_, n) => n,
+    }
+}
+
+/// Make the SIG's repo open on its newest own branch
+/// ([`default_branch_for`]), asking first: a new proposal's branch
+/// becomes the default once pushed, so each run checks again, and a
+/// dry run counts the branch it would push. Changing the default branch
+/// needs the Maintainer role, so without a token this is skipped; a
+/// repo that cannot be read or changed, or a run with no terminal to
+/// confirm at and no `--yes`, leaves it as it is, saying so.
+fn ensure_default_branch(
+    ui: &Ui,
+    args: &SigRepoArgs,
+    base: &str,
+    token: Option<&str>,
+    sig: Sig,
+    path: &str,
+    pushed: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(token) = token else {
+        return Ok(());
+    };
+    ui.step(&format!(
+        "Find {path}'s newest SIG branch, the one it should open on, through GitLab's API"
+    ));
+    let client = Client::new(base, path, token)?;
+    let read = client
+        .project_status()
+        .and_then(|status| Ok((status.default_branch, client.list_branches()?)));
+    let (current, branches) = match read {
+        Ok(read) => read,
+        Err(e) => {
+            println!(
+                "Cannot read {path}'s branches ({e}); its default branch is left as it is. \
+                 Run sig-repo again to retry."
+            );
+            return Ok(());
+        }
+    };
+    let dated: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = branches
+        .iter()
+        .map(|b| {
+            let at = b
+                .commit
+                .as_ref()
+                .and_then(|c| c.committed_date.as_deref())
+                .and_then(|d| chrono::DateTime::parse_from_rfc3339(d).ok())
+                .map(|d| d.with_timezone(&chrono::Utc));
+            (b.name.clone(), at)
+        })
+        .collect();
+    let Some(newest) = default_branch_for(sig, &dated, pushed) else {
+        println!(
+            "{path} has no SIG branch yet; it opens on {} for now.",
+            current.as_deref().unwrap_or("GitLab's default")
+        );
+        return Ok(());
+    };
+    if current.as_deref() == Some(newest) {
+        println!("{path} opens on {newest} already.");
+        return Ok(());
+    }
+    println!(
+        "{path} opens on {}; its newest SIG branch is {newest}.",
+        current.as_deref().unwrap_or("no branch")
+    );
+    ui.step(&format!(
+        "Make {newest} the default branch (Settings → Repository → Branch defaults)"
+    ));
+    if args.dry_run {
+        return Ok(());
+    }
+    if !args.yes && !std::io::stdin().is_terminal() {
+        println!("No terminal to confirm at, and no --yes: the default branch is left as it is.");
+        return Ok(());
+    }
+    if !confirmed(
+        args,
+        &format!("Make {newest} {path}'s default branch?"),
+        "changing the default branch",
+    )? {
+        return Ok(());
+    }
+    match client.update_project(&sandogasa_gitlab::ProjectUpdate {
+        default_branch: Some(newest.to_string()),
+        ..Default::default()
+    }) {
+        Ok(()) => println!("{path} now opens on {newest}."),
+        // Usually the Maintainer role missing: the rest of the run
+        // still stands.
+        Err(e) => println!("warning: could not make {newest} the default branch: {e}"),
+    }
+    Ok(())
+}
+
 /// Push the merge request's commits to the SIG's repo as its branch.
 fn push_change(
     ui: &Ui,
@@ -560,8 +670,12 @@ pub fn run_with(
     if change.is_none() && in_checkout {
         ensure_sig_remote(&ui, &repo, base, sig, &path)?;
     }
+    if let Some(change) = &change {
+        push_change(&ui, &repo, base, &path, &package, change)?;
+    }
+    let pushed = change.as_ref().map(|c| c.branch.as_str());
+    ensure_default_branch(&ui, args, base, token.as_deref(), sig, &path, pushed)?;
     if let Some(change) = change {
-        push_change(&ui, &repo, base, &path, &package, &change)?;
         // The tracking issue next, unless the SIG has one for it.
         let issues = Client::new(base, &path, token.as_deref().unwrap_or(""))?
             .list_issues("cpu-sig-tracker", Some("opened"))
@@ -703,6 +817,145 @@ mod tests {
         dry.dry_run = true;
         run_with(&dry, &server.url(), None).unwrap();
         writes.assert();
+    }
+
+    /// rsync's SIG repo as it was on 2026-11-10: opening on Stream's
+    /// c10s, with the two proposals and the stray branches it had. The
+    /// newest proposal becomes the default; a dry run, and a repo
+    /// already on it, change nothing.
+    #[test]
+    fn the_repo_is_made_to_open_on_its_newest_sig_branch() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        let project = |default: &str| {
+            format!(
+                r#"{{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "{default}"}}"#
+            )
+        };
+        let get = server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(project("c10s"))
+            .create();
+        let branch = |name: &str, at: &str| serde_json::json!({"name": name, "commit": {"committed_date": at}});
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                serde_json::json!([
+                    branch("RHEL-169141", "2026-11-09T12:00:00.000+00:00"),
+                    branch("c10s", "2026-11-08T12:00:00.000+00:00"),
+                    branch("c10s-proposed-RHEL-303721", "2026-11-05T12:00:00.000+01:00"),
+                    branch("c9s", "2026-11-09T12:00:00.000+00:00"),
+                    branch("c9s-proposed-RHEL-303761", "2026-11-07T12:00:00.000+00:00"),
+                ])
+                .to_string(),
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/mirror/pull").as_str())
+            .with_status(200)
+            .with_body(r#"{"enabled": true, "mirror_branch_regex": "^c[0-9]+s$"}"#)
+            .create();
+        let set = server
+            .mock("PUT", path)
+            .match_body(mockito::Matcher::Json(serde_json::json!({
+                "default_branch": "c10s-proposed-RHEL-303721"
+            })))
+            .with_status(200)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let mut dry = args("rsync", Some(SigName::ProposedUpdates));
+        dry.dry_run = true;
+        run_with(&dry, &server.url(), Some("t".to_string())).unwrap();
+        run_with(
+            &args("rsync", Some(SigName::ProposedUpdates)),
+            &server.url(),
+            Some("t".to_string()),
+        )
+        .unwrap();
+        set.assert();
+        // Already there: nothing to change.
+        get.remove();
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(project("c10s-proposed-RHEL-303721"))
+            .create();
+        run_with(
+            &args("rsync", Some(SigName::ProposedUpdates)),
+            &server.url(),
+            Some("t".to_string()),
+        )
+        .unwrap();
+        set.assert();
+    }
+
+    /// The next rsync CVE: its branch is pushed with a head commit older
+    /// than the existing proposal's, and still becomes the default; one
+    /// for an older release does not.
+    #[test]
+    fn the_branch_just_pushed_becomes_the_default() {
+        let b = |name: &str, at: u32| (name.to_string(), at);
+        let rsync = [
+            b("c10s-proposed-RHEL-303721", 9),
+            b("c9s-proposed-RHEL-303761", 9),
+            b("c10s", 9),
+        ];
+        let pu = Sig::ProposedUpdates;
+        assert_eq!(
+            default_branch_for(pu, &rsync, Some("c10s-proposed-RHEL-400000")),
+            Some("c10s-proposed-RHEL-400000"),
+            "pushed, even before it is listed (a dry run)"
+        );
+        assert_eq!(
+            default_branch_for(pu, &rsync, Some("c9s-proposed-RHEL-400001")),
+            Some("c10s-proposed-RHEL-303721")
+        );
+        assert_eq!(
+            default_branch_for(pu, &rsync, None),
+            Some("c10s-proposed-RHEL-303721")
+        );
+        assert_eq!(
+            default_branch_for(pu, &[b("c10s", 1)], Some("c10s-proposed-RHEL-1")),
+            Some("c10s-proposed-RHEL-1")
+        );
+        assert_eq!(default_branch_for(pu, &[b("c10s", 1)], Some("c10s")), None);
+    }
+
+    /// Without the Maintainer role GitLab refuses the change; the run
+    /// still succeeds, saying so.
+    #[test]
+    fn a_refused_default_branch_change_is_a_warning() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "c10s"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"[{"name": "c10s-proposed-RHEL-303721"}]"#)
+            .create();
+        let refused = server.mock("PUT", path).with_status(403).create();
+        run_with(
+            &args("rsync", Some(SigName::ProposedUpdates)),
+            &server.url(),
+            Some("t".to_string()),
+        )
+        .unwrap();
+        refused.assert();
     }
 
     #[test]

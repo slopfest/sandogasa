@@ -183,6 +183,14 @@ release branches, and offers to set that when it takes more (branches
 it copied already are left for you to delete). Creating or changing
 the repo is confirmed at a terminal; `--yes` skips the question.
 
+Each run also makes the repo open on its newest SIG branch: Proposed
+Updates' `c<N>s-proposed-<RHEL key>`, Hyperscale's `c<N>s-hs` or
+`c<N>s-sig-hyperscale`. That is the one for the newest Stream release,
+and of several for it, the one just pushed, else the one with the newest
+head commit. A repo with no SIG branch yet keeps the default it has.
+Changing it needs the Maintainer role; without it, or without a
+terminal or `--yes`, the default is left as it is, and the run says so.
+
 A checkout's remotes are known by the project they point at, not by
 name: CentOS Stream's repo, a SIG's, or a personal fork
 (`<user>/centos_rpms_<package>`), so `origin` can be any of them. A

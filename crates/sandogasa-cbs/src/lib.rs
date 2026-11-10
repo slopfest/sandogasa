@@ -243,6 +243,34 @@ impl Sig {
         format!("centos-release-{}", self.name())
     }
 
+    /// The CentOS Stream major a branch of the SIG's repo is the SIG's
+    /// own for, as a candidate for the repo's default branch: Proposed
+    /// Updates' `c<N>s-proposed-<key>`, Hyperscale's main repository
+    /// branches `c<N>s-hs` and `c<N>s-sig-hyperscale`. `None` for any
+    /// other branch: Stream's mirrored `c<N>s`, Hyperscale's other
+    /// repositories and older releases kept for emergency builds.
+    pub fn own_branch_major(self, branch: &str) -> Option<u32> {
+        let (major, suffix) = stream_branch(branch)?;
+        let own = match self {
+            Sig::ProposedUpdates => self.collection_for_branch(branch).is_ok(),
+            Sig::Hyperscale => matches!(suffix, "hs" | "sig-hyperscale"),
+        };
+        own.then_some(major)
+    }
+
+    /// The branch a SIG repo should open on: of the SIG's own branches
+    /// ([`Sig::own_branch_major`]), the newest Stream release's, and of
+    /// those the one with the newest head commit. `branches` pairs each
+    /// branch with its head commit's time; `None` when no branch is the
+    /// SIG's own yet.
+    pub fn newest_own_branch<T: Ord>(self, branches: &[(String, T)]) -> Option<&str> {
+        branches
+            .iter()
+            .filter_map(|(name, at)| Some(((self.own_branch_major(name)?, at), name.as_str())))
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, name)| name)
+    }
+
     /// The GitLab group holding the SIG's package repositories, under
     /// `https://gitlab.com/`.
     pub fn gitlab_group(self) -> &'static str {
@@ -473,6 +501,52 @@ mod tests {
         for not_one in ["c9sx", "c+9s", "cs", "9s", "c9"] {
             assert_eq!(stream_major(not_one), None, "{not_one}");
         }
+    }
+
+    /// rsync's SIG repo on 2026-11-10, with the stray branches it had
+    /// then, and a second c10s proposal made up to stand for the next
+    /// CVE.
+    #[test]
+    fn a_sig_repo_opens_on_its_newest_own_branch() {
+        let b = |name: &str, at: u32| (name.to_string(), at);
+        let rsync = [
+            b("RHEL-169141", 9),
+            b("c10s", 8),
+            b("c10s-proposed-RHEL-303721", 5),
+            b("c11s", 9),
+            b("c9s", 9),
+            b("c9s-proposed-RHEL-303761", 7),
+            b("centos_rpms_rsync-automated-package-update-RHEL-174950", 9),
+        ];
+        let pu = Sig::ProposedUpdates;
+        assert_eq!(
+            pu.newest_own_branch(&rsync),
+            Some("c10s-proposed-RHEL-303721")
+        );
+        let mut next_cve = rsync.to_vec();
+        next_cve.push(b("c10s-proposed-RHEL-400000", 6));
+        assert_eq!(
+            pu.newest_own_branch(&next_cve),
+            Some("c10s-proposed-RHEL-400000")
+        );
+        // A newer release wins over a newer commit.
+        next_cve.push(b("c9s-proposed-RHEL-400001", 99));
+        assert_eq!(
+            pu.newest_own_branch(&next_cve),
+            Some("c10s-proposed-RHEL-400000")
+        );
+        assert_eq!(pu.newest_own_branch(&[b("c10s", 1), b("main", 2)]), None);
+        let hs = Sig::Hyperscale;
+        let systemd = [
+            b("c10s", 9),
+            b("c10s-sig-hyperscale-v257", 9),
+            b("c10s-hs+fb", 9),
+            b("c9s-sig-hyperscale", 3),
+            b("c10s-sig-hyperscale", 2),
+        ];
+        assert_eq!(hs.newest_own_branch(&systemd), Some("c10s-sig-hyperscale"));
+        assert_eq!(hs.own_branch_major("c10s-hs"), Some(10));
+        assert_eq!(hs.own_branch_major("c10s-hsx"), None);
     }
 
     #[test]

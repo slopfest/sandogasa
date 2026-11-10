@@ -254,6 +254,19 @@ pub struct Branch {
     pub name: String,
     #[serde(default)]
     pub default: bool,
+    /// The commit at its head.
+    #[serde(default)]
+    pub commit: Option<BranchCommit>,
+}
+
+/// The commit at a branch's head, as the branches endpoint gives it.
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
+pub struct BranchCommit {
+    /// When it was committed, RFC 3339 in the committer's offset:
+    /// `2026-11-05T10:00:00.000+01:00`.
+    #[serde(default)]
+    pub committed_date: Option<String>,
 }
 
 impl ProjectStatus {
