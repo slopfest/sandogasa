@@ -1675,11 +1675,16 @@ up now and the other is only work nobody else has to be chased about:
 
 ```
 1 request(s) now actionable — nobody else is holding these up:
-  simpleini  rhbz#2543942  branched — build it, then close the bug
+  simpleini  rhbz#2543942  branched, nothing built — build it, then close the bug
 
 1 request(s) waiting on dependencies, not on a maintainer:
   et         rhbz#2368920  assigned to you — blocked by simpleini (rhbz#2543942)
 ```
+
+A waiting request whose package is branched already, with nothing
+built, waits on builds rather than on branches, and is shown with what
+to build it after: `assigned to you, branched — build after simpleini
+(rhbz#2543942), in one side tag`.
 
 Two weeks after a ping has gone unanswered, the EPEL policy allows
 one more step, and `escalate` takes it: a releng ticket on
@@ -1705,7 +1710,9 @@ releng ticket(s):
 ```
 
 Once simpleini's branch exists, et "waits on nothing now", and its own
-request is the next step.
+request is the next step. A dependent that is branched already is told
+what to build it after, in one side tag, or to build it now once
+those are built; one built already is said to be.
 
 It asks before filing; `--yes` skips the question, and a run with
 no terminal says what it would file instead of filing it. Without

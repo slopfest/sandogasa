@@ -1781,13 +1781,18 @@ pub(crate) struct RequestBug {
 /// `tickets` maps a ticket to whether it is closed (absent when it
 /// could not be read); `bugs`, every bug the decision needs, the
 /// report's requests and their dependencies, to its status and its own
-/// dependencies. Pure so the wording is tested without a network.
+/// dependencies. `present` maps each request's package built in the
+/// target to its `version-release`, so a dependent that is branched
+/// already is told what to build it after (#108); `None` when the
+/// builds could not be read, and then a branch is all that is claimed.
+/// Pure so the wording is tested without a network.
 pub(crate) fn releng_report(
     report: &ResolveReport,
     branch: &str,
     standings: &BTreeMap<String, BranchStanding>,
     tickets: &BTreeMap<u64, bool>,
     bugs: &BTreeMap<u64, RequestBug>,
+    present: Option<&BTreeMap<String, String>>,
 ) -> Option<String> {
     use std::fmt::Write as _;
     let branched = |pkg: &str| standings.get(pkg).is_some_and(|s| s.branched);
@@ -1802,6 +1807,10 @@ pub(crate) fn releng_report(
         // closed WONTFIX does not make.
         Some(pkg) => branched(pkg),
         None => bugs.get(&dep).is_some_and(|b| b.status == "CLOSED"),
+    };
+    let name = |d: &u64| match by_rhbz.get(d) {
+        Some(p) => format!("{p} (rhbz#{d})"),
+        None => format!("rhbz#{d}"),
     };
     let mut out = String::new();
     for (pkg, req) in &report.branch_requests {
@@ -1837,10 +1846,10 @@ pub(crate) fn releng_report(
             if !dep_bug.depends_on.contains(&req.rhbz) {
                 continue;
             }
-            if branched(dep_pkg) {
+            if let Some(vr) = present.and_then(|p| p.get(dep_pkg)) {
                 let _ = writeln!(
                     out,
-                    "    {dep_pkg} rhbz#{} is branched for {branch} already",
+                    "    {dep_pkg} rhbz#{}: {dep_pkg}-{vr} is in {branch} already",
                     dep_req.rhbz
                 );
                 continue;
@@ -1849,25 +1858,41 @@ pub(crate) fn releng_report(
                 .depends_on
                 .iter()
                 .filter(|d| !cleared(**d))
-                .map(|d| match by_rhbz.get(d) {
-                    Some(p) => format!("{p} (rhbz#{d})"),
-                    None => format!("rhbz#{d}"),
-                })
+                .map(name)
                 .collect();
-            if waiting.is_empty() {
-                let _ = writeln!(
-                    out,
-                    "    {dep_pkg} rhbz#{} waits on nothing now: its own request is next",
-                    dep_req.rhbz
-                );
+            let line = if !waiting.is_empty() {
+                format!("still waits on {}", waiting.join(", "))
+            } else if !branched(dep_pkg) {
+                "waits on nothing now: its own request is next".to_string()
+            } else if let Some(present) = present {
+                // Branched, but not built: every dependency it has is
+                // branched too, so what it waits on now is builds, best
+                // made together in one side tag, in dependency order. A
+                // request whose bug is closed counts as built, as the
+                // waiting list does.
+                let first: Vec<String> = dep_bug
+                    .depends_on
+                    .iter()
+                    .filter(|d| {
+                        by_rhbz.get(*d).is_some_and(|p| {
+                            !present.contains_key(*p)
+                                && !bugs.get(*d).is_some_and(|b| b.status == "CLOSED")
+                        })
+                    })
+                    .map(name)
+                    .collect();
+                if first.is_empty() {
+                    format!("is branched for {branch} already: build it now")
+                } else {
+                    format!(
+                        "is branched for {branch} already: build it after {}, in one side tag",
+                        first.join(", ")
+                    )
+                }
             } else {
-                let _ = writeln!(
-                    out,
-                    "    {dep_pkg} rhbz#{} still waits on {}",
-                    dep_req.rhbz,
-                    waiting.join(", ")
-                );
-            }
+                format!("is branched for {branch} already")
+            };
+            let _ = writeln!(out, "    {dep_pkg} rhbz#{} {line}", dep_req.rhbz);
         }
     }
     (!out.is_empty()).then_some(out)
@@ -1883,6 +1908,7 @@ async fn releng_followup(
     report: &ResolveReport,
     opts: &Options,
     standings: &BTreeMap<String, BranchStanding>,
+    present: Option<&BTreeMap<String, String>>,
 ) {
     let recorded: Vec<u64> = report
         .branch_requests
@@ -1956,7 +1982,7 @@ async fn releng_followup(
                 .collect();
         }
     }
-    if let Some(text) = releng_report(report, &opts.branch, standings, &tickets, &bugs) {
+    if let Some(text) = releng_report(report, &opts.branch, standings, &tickets, &bugs, present) {
         println!("{text}");
     }
 }
@@ -1984,19 +2010,20 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
     // Whether anything was *built* there, which `branched` does not
     // answer: a branch can sit empty for months. Only used to word the
     // skip, so a probe failure is not fatal -- it degrades to the
-    // weaker "branched" claim.
+    // weaker "branched" claim, and nothing is called unbuilt.
     let packages: Vec<String> = report.branch_requests.keys().cloned().collect();
-    let present = target_probe(&FedrqProbe, &opts.branch, &packages).unwrap_or_else(|e| {
-        eprintln!(
-            "warning: could not read {} ({e}); reporting branches, not builds",
-            opts.branch
-        );
-        BTreeMap::new()
-    });
-    let changed = escalate_with(report, opts, &standings, &present).await?;
+    let present = target_probe(&FedrqProbe, &opts.branch, &packages)
+        .inspect_err(|e| {
+            eprintln!(
+                "warning: could not read {} ({e}); reporting branches, not builds",
+                opts.branch
+            );
+        })
+        .ok();
+    let changed = escalate_with(report, opts, &standings, present.as_ref()).await?;
     // The tickets filed on earlier runs: whether releng has acted, and
     // what that frees up (#107).
-    releng_followup(report, opts, &standings).await;
+    releng_followup(report, opts, &standings, present.as_ref()).await;
     Ok(changed)
 }
 
@@ -2110,13 +2137,26 @@ async fn file_releng(
     Ok(Some(issue.number))
 }
 
+/// Whether `pkg` is branched with nothing built from it, so what it
+/// waits on is builds and it is built after them (#108). Never, when
+/// the builds could not be read: an empty branch is the stronger
+/// claim, and wrong about a package that shipped months ago.
+fn unbuilt(
+    standing: &BranchStanding,
+    present: Option<&BTreeMap<String, String>>,
+    pkg: &str,
+) -> bool {
+    present.is_some_and(|p| standing.branched && !p.contains_key(pkg))
+}
+
 /// [`escalate`] with the dist-git answers already in hand.
 pub(crate) async fn escalate_with(
     report: &mut ResolveReport,
     opts: &Options,
     standings: &BTreeMap<String, BranchStanding>,
-    present: &BTreeMap<String, String>,
+    present: Option<&BTreeMap<String, String>>,
 ) -> Result<bool, String> {
+    let built: BTreeMap<String, String> = present.cloned().unwrap_or_default();
     let bz = BzClient::new(&opts.bugzilla_url)
         .with_api_key(opts.api_key.clone())
         .map_err(|e| e.to_string())?;
@@ -2163,6 +2203,7 @@ pub(crate) async fn escalate_with(
             req.pinged = true;
             changed = true;
         }
+        let unbuilt = unbuilt(&standing, present, pkg);
         match ping_decision(
             &bug.status,
             days,
@@ -2175,8 +2216,14 @@ pub(crate) async fn escalate_with(
                 unblocked_by_people.push(Skipped {
                     pkg: pkg.clone(),
                     rhbz: req.rhbz,
-                    why: "assigned to you".to_string(),
+                    why: if unbuilt {
+                        "assigned to you, branched, nothing built — build it, then close the bug"
+                            .to_string()
+                    } else {
+                        "assigned to you".to_string()
+                    },
                     depends_on: bug.depends_on.clone(),
+                    waiting: unbuilt.then(|| "assigned to you, branched".to_string()),
                 });
             }
             PingDecision::NothingOwed { branched } => {
@@ -2184,7 +2231,7 @@ pub(crate) async fn escalate_with(
                 // branch is not a build: saying "build it" about a
                 // package that shipped months ago is how rhbz#2482238
                 // stayed open long enough to be pinged for.
-                let why = match (present.get(pkg), branched) {
+                let why = match (built.get(pkg), branched) {
                     (Some(vr), _) => {
                         format!("{pkg}-{vr} is in {} — ebranch close", opts.branch)
                     }
@@ -2198,6 +2245,7 @@ pub(crate) async fn escalate_with(
                     rhbz: req.rhbz,
                     why,
                     depends_on: bug.depends_on.clone(),
+                    waiting: unbuilt.then(|| "branched, nothing built".to_string()),
                 });
             }
             PingDecision::AlreadyPinged => {
@@ -2315,7 +2363,7 @@ pub(crate) async fn escalate_with(
             dep_ids.iter().map(|id| (*id, String::new())).collect()
         }
     };
-    if let Some(report) = skipped_report(&unblocked_by_people, &still_open) {
+    if let Some(report) = skipped_report(&unblocked_by_people, &still_open, &built) {
         println!("{report}");
     }
     Ok(changed)
@@ -2327,6 +2375,10 @@ struct Skipped {
     rhbz: u64,
     why: String,
     depends_on: Vec<u64>,
+    /// What to say instead of `why` while dependencies are open, for a
+    /// package branched but not built: it is waiting on builds, and is
+    /// built after them (#108).
+    waiting: Option<String>,
 }
 
 /// What an escalate run says about the requests it did not ping.
@@ -2340,8 +2392,15 @@ struct Skipped {
 ///
 /// `still_open` maps each unresolved dependency to its package, so a
 /// blocker is named by the thing that has to happen rather than by a
-/// bug number the reader would have to go and look up.
-fn skipped_report(skipped: &[Skipped], still_open: &BTreeMap<u64, String>) -> Option<String> {
+/// bug number the reader would have to go and look up. `built` maps
+/// the packages built in the target to their `version-release`: a
+/// branched request waiting on builds is not held up by one that is
+/// built, whatever its bug says.
+fn skipped_report(
+    skipped: &[Skipped],
+    still_open: &BTreeMap<u64, String>,
+    built: &BTreeMap<String, String>,
+) -> Option<String> {
     use std::fmt::Write as _;
     if skipped.is_empty() {
         return None;
@@ -2351,6 +2410,7 @@ fn skipped_report(skipped: &[Skipped], still_open: &BTreeMap<u64, String>) -> Op
             .depends_on
             .iter()
             .filter_map(|d| still_open.get(d).map(|pkg| (pkg.clone(), *d)))
+            .filter(|(pkg, _)| s.waiting.is_none() || !built.contains_key(pkg))
             .collect();
         b.sort_unstable();
         b
@@ -2386,14 +2446,23 @@ fn skipped_report(skipped: &[Skipped], still_open: &BTreeMap<u64, String>) -> Op
                     }
                 })
                 .collect();
-            let _ = writeln!(
-                out,
-                "  {:width$}  rhbz#{}  {} — blocked by {}",
-                s.pkg,
-                s.rhbz,
-                s.why,
-                list.join(", ")
-            );
+            let _ = match &s.waiting {
+                Some(why) => writeln!(
+                    out,
+                    "  {:width$}  rhbz#{}  {why} — build after {}, in one side tag",
+                    s.pkg,
+                    s.rhbz,
+                    list.join(", ")
+                ),
+                None => writeln!(
+                    out,
+                    "  {:width$}  rhbz#{}  {} — blocked by {}",
+                    s.pkg,
+                    s.rhbz,
+                    s.why,
+                    list.join(", ")
+                ),
+            };
         }
     }
     (!out.is_empty()).then_some(out)
@@ -2802,6 +2871,7 @@ mod tests {
             rhbz,
             why: why.to_string(),
             depends_on: depends_on.to_vec(),
+            waiting: None,
         }
     }
 
@@ -3022,7 +3092,10 @@ mod tests {
 
     #[test]
     fn the_closing_report_is_silent_when_nothing_was_skipped() {
-        assert_eq!(skipped_report(&[], &BTreeMap::new()), None);
+        assert_eq!(
+            skipped_report(&[], &BTreeMap::new(), &BTreeMap::new()),
+            None
+        );
     }
 
     #[test]
@@ -3037,7 +3110,8 @@ mod tests {
                 &[2531397],
             ),
         ];
-        let out = skipped_report(&rows, &BTreeMap::new()).expect("two rows report");
+        let out =
+            skipped_report(&rows, &BTreeMap::new(), &BTreeMap::new()).expect("two rows report");
         assert!(out.contains("2 request(s) now actionable"), "{out}");
         assert!(!out.contains("waiting on dependencies"), "{out}");
         assert!(out.contains("rhbz#2368920  assigned to you"), "{out}");
@@ -3060,7 +3134,7 @@ mod tests {
             (2543942, "simpleini".to_string()),
             (2531397, "cxxopts".to_string()),
         ]);
-        let out = skipped_report(&rows, &still_open).expect("a split report");
+        let out = skipped_report(&rows, &still_open, &BTreeMap::new()).expect("a split report");
         assert!(out.contains("1 request(s) now actionable"), "{out}");
         assert!(out.contains("simpleini  rhbz#2543942  branched"), "{out}");
         assert!(
@@ -3078,6 +3152,57 @@ mod tests {
             ),
             "{out}"
         );
+    }
+
+    #[test]
+    fn a_branched_request_waiting_on_dependencies_is_built_after_them() {
+        // et has its branch: what it waits on is simpleini's build,
+        // and the two are best built together (#108).
+        let mut et = skipped("et", 2368920, "assigned to you", &[2543942]);
+        et.waiting = Some("assigned to you, branched".to_string());
+        let still_open = BTreeMap::from([(2543942, "simpleini".to_string())]);
+        let out = skipped_report(&[et], &still_open, &BTreeMap::new()).expect("one row");
+        assert!(
+            out.contains(
+                "rhbz#2368920  assigned to you, branched — build after \
+                 simpleini (rhbz#2543942), in one side tag"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("blocked by"), "{out}");
+        // simpleini built, its bug still open: et is not held up.
+        let mut et = skipped("et", 2368920, "assigned to you", &[2543942]);
+        et.waiting = Some("assigned to you, branched".to_string());
+        let built = BTreeMap::from([("simpleini".to_string(), "4.22-1.el10_2".to_string())]);
+        let out = skipped_report(&[et], &still_open, &built).expect("one row");
+        assert!(out.contains("1 request(s) now actionable"), "{out}");
+        // An unbranched request still waits on the bug, built or not.
+        let et = skipped("et", 2368920, "assigned to you", &[2543942]);
+        let out = skipped_report(&[et], &still_open, &built).expect("one row");
+        assert!(out.contains("blocked by simpleini"), "{out}");
+        // Once simpleini's bug is closed, it is just actionable.
+        let mut et = skipped("et", 2368920, "assigned to you", &[2543942]);
+        et.waiting = Some("assigned to you, branched".to_string());
+        let out = skipped_report(&[et], &BTreeMap::new(), &BTreeMap::new()).expect("one row");
+        assert!(out.contains("rhbz#2368920  assigned to you\n"), "{out}");
+    }
+
+    #[test]
+    fn only_a_branch_known_to_be_empty_is_unbuilt() {
+        let branched = BranchStanding {
+            branched: true,
+            ..BranchStanding::default()
+        };
+        let built = BTreeMap::from([("et".to_string(), "6.2.9-1.el10_2".to_string())]);
+        assert!(unbuilt(&branched, Some(&BTreeMap::new()), "et"));
+        assert!(!unbuilt(&branched, Some(&built), "et"));
+        assert!(!unbuilt(
+            &BranchStanding::default(),
+            Some(&BTreeMap::new()),
+            "et"
+        ));
+        // Builds unread: never claimed empty.
+        assert!(!unbuilt(&branched, None, "et"));
     }
 
     #[test]
@@ -3460,7 +3585,8 @@ mod tests {
                 "epel10",
                 &at(standing(false, None)),
                 &open,
-                &et_bugs("CLOSED")
+                &et_bugs("CLOSED"),
+                None
             ),
             None
         );
@@ -3471,6 +3597,7 @@ mod tests {
             &at(standing(false, None)),
             &closed,
             &et_bugs("CLOSED"),
+            None,
         )
         .unwrap();
         assert!(
@@ -3486,6 +3613,7 @@ mod tests {
             &at(standing(false, Some(Commit))),
             &open,
             &et_bugs("CLOSED"),
+            None,
         )
         .unwrap();
         assert!(
@@ -3504,6 +3632,7 @@ mod tests {
             &at(standing(true, Some(Commit))),
             &closed,
             &et_bugs("CLOSED"),
+            None,
         )
         .unwrap();
         assert!(
@@ -3520,6 +3649,7 @@ mod tests {
             &at(standing(true, None)),
             &closed,
             &et_bugs("NEW"),
+            None,
         )
         .unwrap();
         assert!(
@@ -3536,21 +3666,115 @@ mod tests {
             &at(standing(false, Some(Commit))),
             &closed,
             &wontfix,
+            None,
         )
         .unwrap();
         assert!(
             text.contains("et rhbz#2368920 still waits on simpleini"),
             "{text}"
         );
-        // et branched already: said so, not sent to request it.
+        // et branched already, nothing built: built after simpleini.
         let mut both = at(standing(true, None));
         both.insert("et".to_string(), standing(true, None));
-        let text = releng_report(&report, "epel10", &both, &closed, &et_bugs("CLOSED")).unwrap();
+        let nothing_built = BTreeMap::new();
+        let text = releng_report(
+            &report,
+            "epel10",
+            &both,
+            &closed,
+            &et_bugs("CLOSED"),
+            Some(&nothing_built),
+        )
+        .unwrap();
         assert!(
-            text.contains("et rhbz#2368920 is branched for epel10 already"),
+            text.contains(
+                "et rhbz#2368920 is branched for epel10 already: \
+                 build it after simpleini (rhbz#2543942), in one side tag"
+            ),
             "{text}"
         );
         assert!(!text.contains("waits on nothing"), "{text}");
+        // An outside dependency still open: et still waits on it, as
+        // it is not a build to make here.
+        let text = releng_report(
+            &report,
+            "epel10",
+            &both,
+            &closed,
+            &et_bugs("NEW"),
+            Some(&nothing_built),
+        )
+        .unwrap();
+        assert!(
+            text.contains("et rhbz#2368920 still waits on rhbz#2600000"),
+            "{text}"
+        );
+        // simpleini only on the ACL, not branched: et, branched, still
+        // waits on simpleini's branch, not on a build of it.
+        let mut acl = at(standing(false, Some(Commit)));
+        acl.insert("et".to_string(), standing(true, None));
+        let text = releng_report(
+            &report,
+            "epel10",
+            &acl,
+            &closed,
+            &et_bugs("CLOSED"),
+            Some(&nothing_built),
+        )
+        .unwrap();
+        assert!(
+            text.contains("et rhbz#2368920 still waits on simpleini (rhbz#2543942)"),
+            "{text}"
+        );
+        // simpleini built, or its bug closed: et is built now.
+        let built = BTreeMap::from([("simpleini".to_string(), "4.22-1.el10_2".to_string())]);
+        let text = releng_report(
+            &report,
+            "epel10",
+            &both,
+            &closed,
+            &et_bugs("CLOSED"),
+            Some(&built),
+        )
+        .unwrap();
+        assert!(
+            text.contains("et rhbz#2368920 is branched for epel10 already: build it now"),
+            "{text}"
+        );
+        let mut simpleini_closed = et_bugs("CLOSED");
+        simpleini_closed.get_mut(&2543942).unwrap().status = "CLOSED".into();
+        let text = releng_report(
+            &report,
+            "epel10",
+            &both,
+            &closed,
+            &simpleini_closed,
+            Some(&nothing_built),
+        )
+        .unwrap();
+        assert!(text.contains("build it now"), "{text}");
+        // et built already: said so.
+        let built = BTreeMap::from([("et".to_string(), "6.2.9-1.el10_2".to_string())]);
+        let text = releng_report(
+            &report,
+            "epel10",
+            &both,
+            &closed,
+            &et_bugs("CLOSED"),
+            Some(&built),
+        )
+        .unwrap();
+        assert!(
+            text.contains("et rhbz#2368920: et-6.2.9-1.el10_2 is in epel10 already"),
+            "{text}"
+        );
+        // Builds unknown: only the branch is claimed.
+        let text =
+            releng_report(&report, "epel10", &both, &closed, &et_bugs("CLOSED"), None).unwrap();
+        assert!(
+            text.contains("et rhbz#2368920 is branched for epel10 already\n"),
+            "{text}"
+        );
         // No ticket recorded: nothing to follow up.
         assert_eq!(
             releng_report(
@@ -3558,7 +3782,8 @@ mod tests {
                 "epel10",
                 &at(standing(true, None)),
                 &closed,
-                &et_bugs("CLOSED")
+                &et_bugs("CLOSED"),
+                None
             ),
             None
         );
@@ -3602,7 +3827,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
-            &BTreeMap::new(),
+            None,
         )
         .await
         .expect("the ping goes through");
@@ -3646,7 +3871,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
-            &BTreeMap::new(),
+            None,
         )
         .await
         .expect("the run completes without pinging");
@@ -3681,7 +3906,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
-            &BTreeMap::new(),
+            None,
         )
         .await
         .expect("waiting is not an error");
@@ -3718,7 +3943,7 @@ mod tests {
             &mut report,
             &mock_opts(&server.uri(), false),
             &no_standing(),
-            &BTreeMap::new(),
+            None,
         )
         .await
         .expect("following a duplicate is not an error");

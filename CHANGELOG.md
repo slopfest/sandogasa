@@ -20,6 +20,20 @@ branch exists (a bug closed WONTFIX does not make one), any other once
 its bug is closed, and a dependent branched already is said to be.
 Resolves #107.
 
+### ebranch: escalate says to build a branched request after what it waits on
+
+With et-epel10's simpleini branched, `escalate` still listed et as
+"blocked by simpleini", and the releng follow-up said only that et "is
+branched for epel10 already", though et cannot be built until simpleini
+is. A request whose package is branched but not built now says what to
+build it after, in one side tag: `assigned to you, branched — build
+after simpleini (rhbz#2543942), in one side tag`. The releng follow-up
+says the same of a branched dependent, "build it now" once what it waits
+on is built, and names the build of one built already. The builds are
+read with the probe `escalate` already runs for the target branch; when
+that read fails, only the branch is claimed, so a package that shipped
+long ago is never sent to be built again. Resolves #108.
+
 ### Fixes from the release review
 
 A review of everything since v0.27.1 found these:
