@@ -824,7 +824,7 @@ Remove entries unused for more than DAYS, instead of each cache\*(Aqs own age
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS ebranch rebuild-plan
-\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-contacts\fR] [\fB\-\-copr\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-pr\-author\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
+\fBebranch rebuild\-plan\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-s\fR|\fB\-\-side\-tag\fR] [\fB\-\-baseline\-results\fR] [\fB\-\-contacts\fR] [\fB\-\-copr\fR] [\fB\-\-distgit\-dir\fR] [\fB\-\-pr\-author\fR] [\fB\-\-sidetag\-results\fR] [\fB\-\-json\fR] [\fB\-\-mark\-sent\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fILIBRARY\fR>
 .PP
 Plan the rebuilds a library\*(Aqs SONAME bump calls for.
 .PP
@@ -909,6 +909,9 @@ Local mock results built with the side tag: one directory per build, named by NV
 .TP
 \fB\-\-json\fR
 Print the plan as JSON
+.TP
+\fB\-\-mark\-sent\fR
+After sending a status update: mark the last run\*(Aqs plan as the one sent, which the next report compares with (queries nothing)
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr

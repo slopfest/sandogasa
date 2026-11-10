@@ -1302,6 +1302,25 @@ addresses are not listed. The Matrix rooms come from a built-in list
 perl-sig = "#perl:fedoraproject.org"
 ```
 
+Each run's plan is kept, as `--json` prints it, under
+`$XDG_STATE_HOME/ebranch/rebuild-plans/` (one directory per library,
+branch and side tag), and the report opens with what changed since:
+packages built, added to or gone from the plan, and pull requests
+merged or opened. It compares with the plan marked as sent, or, until
+one is, with the previous run; the first run says there is nothing to
+compare with yet. `--json` carries the same as a `changes` object.
+
+After sending a status update, mark the plan it came from:
+
+```sh
+ebranch rebuild-plan libical --side-tag f45-build-side-123 --mark-sent
+```
+
+This queries nothing: it marks the last run's saved plan, the one just
+sent, so the next report says what changed since that update. A saved
+plan over a day old is confirmed at a terminal first, and refused
+without one. Only the latest run and the one sent are kept.
+
 With `--copr <owner>/<project>`, the change owner's COPR, where the
 dependents' rebuilds are often trialled before the side tag exists, is
 read for each package left to rebuild that it has a succeeded build of

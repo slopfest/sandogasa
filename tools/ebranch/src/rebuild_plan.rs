@@ -46,6 +46,9 @@ pub struct Options {
     /// Existing dist-git checkouts, one per package (`DIR/<package>`),
     /// that clones of dist-git borrow objects from. Read only.
     pub distgit_dir: Option<PathBuf>,
+    /// Mark the saved run as the plan sent in a status update, and do
+    /// nothing else (#85).
+    pub mark_sent: bool,
     /// Whether to offer fixes on stderr (a terminal, and not `json`).
     pub interactive: bool,
     pub json: bool,
@@ -365,6 +368,10 @@ pub struct RebuildPlan {
     /// when the side tag opened could not have listed them (#84).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub arrived: BTreeMap<String, ArrivalNote>,
+    /// What changed since the plan sent, or the previous run (#85);
+    /// absent on the first run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<crate::plan_history::Changes>,
 }
 
 /// What a [`Gap`] for a build the SONAME check could not see is
@@ -656,6 +663,7 @@ pub(crate) fn plan(
         incomplete: Vec::new(),
         side_tag_opened: None,
         arrived: BTreeMap::new(),
+        changes: None,
     })
 }
 
@@ -1877,7 +1885,44 @@ fn render_rounds(out: &mut String, plan: &RebuildPlan) {
 }
 
 /// Plan the rebuilds and print the result.
+/// Mark the saved run as the plan sent: no queries, so the plan marked
+/// is the one that was looked at, not a fresh one that may differ.
+fn mark_sent(opts: &Options) -> Result<(), String> {
+    use crate::plan_history::{dir, load, store};
+    let dir = dir(&opts.library, &opts.branch, opts.side_tag.as_deref())?;
+    let latest = load(&dir, "latest").ok_or_else(|| {
+        format!(
+            "no plan for {} on {} saved yet: run `ebranch rebuild-plan` first",
+            opts.library, opts.branch
+        )
+    })?;
+    let when = latest.at.format("%Y-%m-%d %H:%M UTC");
+    if chrono::Utc::now() - latest.at > chrono::Duration::days(1) {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            return Err(format!(
+                "the saved plan is from {when}: run rebuild-plan again, or mark it at a terminal"
+            ));
+        }
+        if !sandogasa_cli::confirm(
+            &format!("The saved plan is from {when}. Mark it as sent anyway?"),
+            false,
+        )
+        .map_err(|e| e.to_string())?
+        {
+            println!("Nothing marked.");
+            return Ok(());
+        }
+    }
+    store(&dir, "sent", &latest)?;
+    println!("Marked the plan from {when} as sent.");
+    Ok(())
+}
+
 pub fn run(opts: &Options) -> Result<(), String> {
+    if opts.mark_sent {
+        return mark_sent(opts);
+    }
     sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
     // Read before the slow part, so a mistyped path costs seconds.
     let read = |dir: &Option<PathBuf>| match dir {
@@ -2024,12 +2069,35 @@ pub fn run(opts: &Options) -> Result<(), String> {
         );
         plan.local_libraries = Some((new_library, old_library));
     }
+    // What changed since the plan sent, else the previous run; then this
+    // run is kept for the next (#85).
+    let history = crate::plan_history::dir(&plan.library, &plan.branch, plan.side_tag.as_deref());
+    match &history {
+        Ok(dir) => {
+            let base = crate::plan_history::load(dir, "sent")
+                .map(|s| (s, true))
+                .or_else(|| crate::plan_history::load(dir, "latest").map(|s| (s, false)));
+            let now = serde_json::to_value(&plan).expect("JSON serialization failed");
+            plan.changes = base.map(|(b, sent)| crate::plan_history::changes(&b, sent, &now));
+            let saved = crate::plan_history::Saved {
+                at: chrono::Utc::now(),
+                plan: now,
+            };
+            if let Err(e) = crate::plan_history::store(dir, "latest", &saved) {
+                eprintln!("warning: {e}; the next run cannot say what changed");
+            }
+        }
+        Err(e) => eprintln!("warning: {e}"),
+    }
     if opts.json {
         println!(
             "{}",
             serde_json::to_string_pretty(&plan).expect("JSON serialization failed")
         );
     } else {
+        if history.is_ok() {
+            print!("{}", crate::plan_history::render(plan.changes.as_ref()));
+        }
         print!("{}", render(&plan));
     }
     if plan.incomplete.is_empty() {

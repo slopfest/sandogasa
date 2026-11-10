@@ -16,6 +16,7 @@ mod dag;
 mod discover;
 mod karma;
 mod local_repo;
+mod plan_history;
 mod prune_cache;
 mod rebuild_plan;
 mod resolve;
@@ -897,6 +898,10 @@ struct RebuildPlanArgs {
     /// Print the plan as JSON.
     #[arg(long, help_heading = "Output")]
     json: bool,
+    /// After sending a status update: mark the last run's plan as the
+    /// one sent, which the next report compares with (queries nothing)
+    #[arg(long, help_heading = "Output")]
+    mark_sent: bool,
 
     /// Print progress to stderr.
     #[arg(short, long, help_heading = "Output")]
@@ -1532,6 +1537,7 @@ fn main() -> ExitCode {
             pr_authors: a.pr_author.clone(),
             contacts: a.contacts,
             copr: a.copr.clone(),
+            mark_sent: a.mark_sent,
             matrix_rooms: if a.contacts {
                 config::matrix_rooms()
             } else {

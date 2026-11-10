@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan says what changed since the last status update
+
+Status updates on the libical 4 rebuild went to the mailing list as
+`rebuild-plan` output, and each one had to say what moved since the
+previous update: ical appearing, packages built, pull requests merged.
+Every run stood alone, so that meant comparing two reports by hand.
+
+`rebuild-plan` now keeps each run's plan under
+`$XDG_STATE_HOME/ebranch/rebuild-plans/`, per library, branch and side
+tag, and opens its report with what changed: packages built, added to
+the plan or gone from it, and pull requests merged or opened. `--json`
+carries the same as `changes`. It compares with the plan marked as
+sent, falling back to the previous run when none is. `rebuild-plan …
+--mark-sent`, run after sending an update, marks the last saved run
+without querying anything, so the plan marked is exactly the one
+looked at. A saved plan over a day old is confirmed first. Only the
+latest run and the sent one are kept. Resolves #85.
+
 ### ebranch: rebuild-plan reads the change owner's COPR for version gaps and carried patches
 
 During the libical 4 rebuild, the change owner had already trialled the
