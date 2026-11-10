@@ -10,6 +10,74 @@ use crate::models::{
 
 const BODHI_API_BASE: &str = "https://bodhi.fedoraproject.org";
 
+/// The form that edits the update `update` (as `GET /updates/<alias>`
+/// answers it, the `update` member) to carry `bugs`, closed on stable
+/// or not as `close_bugs` says, with every other field as it is.
+///
+/// Bodhi edits by re-saving the whole update, so each field the update
+/// has a value for is sent back, as bodhi-client's `updates edit` does:
+/// a field left out is set to its default. A field Bodhi answers as null
+/// is left out, as bodhi-client leaves it out too. A side tag update is
+/// re-sent by its tag, and Bodhi refreshes its builds from the tag when
+/// it saves, so a caller should check first that the tag holds no build
+/// the update does not; any other update is re-sent by its builds.
+pub fn edit_bugs_form(
+    update: &serde_json::Value,
+    bugs: &[u64],
+    close_bugs: bool,
+) -> Result<Vec<(String, String)>, String> {
+    let alias = update["alias"]
+        .as_str()
+        .ok_or("the update has no alias")?
+        .to_string();
+    let mut form = vec![("edited".to_string(), alias)];
+    for field in [
+        "type",
+        "severity",
+        "notes",
+        "display_name",
+        "stable_karma",
+        "unstable_karma",
+        "stable_days",
+        "autokarma",
+        "autotime",
+        "requirements",
+        "suggest",
+        "require_bugs",
+        "require_testcases",
+    ] {
+        let value = match &update[field] {
+            serde_json::Value::Null => continue,
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            other => return Err(format!("the update's {field} is unexpected: {other}")),
+        };
+        form.push((field.to_string(), value));
+    }
+    form.push(("close_bugs".to_string(), close_bugs.to_string()));
+    form.push((
+        "bugs".to_string(),
+        bugs.iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+    ));
+    match update["from_tag"].as_str().filter(|t| !t.is_empty()) {
+        Some(tag) => form.push(("from_tag".to_string(), tag.to_string())),
+        None => {
+            let builds = update["builds"]
+                .as_array()
+                .ok_or("the update lists no builds")?;
+            for build in builds {
+                let nvr = build["nvr"].as_str().ok_or("a build has no NVR")?;
+                form.push(("builds".to_string(), nvr.to_string()));
+            }
+        }
+    }
+    Ok(form)
+}
+
 pub struct BodhiClient {
     base_url: String,
     client: Client,
@@ -430,6 +498,31 @@ impl BodhiClient {
             form.push((format!("bug_feedback.{i}.karma"), fb.karma.to_string()));
         }
         self.post_form("/comments/", form, "posting comment").await
+    }
+
+    /// Change which bugs the update `alias` carries, and whether Bodhi
+    /// closes them when it goes stable, leaving everything else as it
+    /// is: the update is read as Bodhi has it and saved back with only
+    /// those two changed (see [`edit_bugs_form`]). Requires a bearer
+    /// token ([`Self::with_token`]).
+    pub async fn edit_update_bugs(
+        &self,
+        alias: &str,
+        bugs: &[u64],
+        close_bugs: bool,
+    ) -> Result<NewUpdateResponse, Box<dyn std::error::Error>> {
+        let url = format!("{}/updates/{}", self.base_url, alias);
+        let answer: serde_json::Value = self
+            .client
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let form = edit_bugs_form(&answer["update"], bugs, close_bugs)?;
+        self.post_form("/updates/", form, "editing update").await
     }
 
     /// Create an update from a Koji side tag (`POST /updates/` with
@@ -1127,6 +1220,118 @@ mod tests {
             .unwrap();
         assert_eq!(resp.aliases(), ["FEDORA-EPEL-2026-f9eaa11e18"]);
         assert_eq!(resp.caveats.len(), 1);
+    }
+
+    fn an_update(from_tag: Option<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "alias": "FEDORA-2026-0b2e1b3c7d",
+            "type": "enhancement",
+            "severity": "unspecified",
+            "notes": "libical 4.x and reverse dependencies",
+            "display_name": "",
+            "stable_karma": 1,
+            "unstable_karma": -3,
+            "stable_days": 0,
+            "autokarma": true,
+            "autotime": true,
+            "close_bugs": false,
+            "requirements": null,
+            "suggest": "unspecified",
+            "require_bugs": false,
+            "require_testcases": false,
+            "from_tag": from_tag,
+            "bugs": [{"bug_id": 2458837}, {"bug_id": 2567306}],
+            "builds": [{"nvr": "libical-4.0.7-1.fc46"}, {"nvr": "asterisk-24.0.0-3.fc46.1"}]
+        })
+    }
+
+    #[test]
+    fn an_edit_sends_every_field_back_with_only_the_bugs_changed() {
+        let form =
+            edit_bugs_form(&an_update(Some("f46-build-side-158330")), &[2458837], true).unwrap();
+        let get = |k: &str| {
+            form.iter()
+                .filter(|(f, _)| f == k)
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(get("edited"), ["FEDORA-2026-0b2e1b3c7d"]);
+        assert_eq!(get("bugs"), ["2458837"]);
+        assert_eq!(get("close_bugs"), ["true"]);
+        // Everything else as the update has it.
+        assert_eq!(get("type"), ["enhancement"]);
+        assert_eq!(get("notes"), ["libical 4.x and reverse dependencies"]);
+        assert_eq!(get("stable_karma"), ["1"]);
+        assert_eq!(get("unstable_karma"), ["-3"]);
+        assert_eq!(get("autokarma"), ["true"]);
+        assert_eq!(get("autotime"), ["true"]);
+        assert_eq!(get("suggest"), ["unspecified"]);
+        // A side tag update is re-sent by its tag, not its builds.
+        assert_eq!(get("from_tag"), ["f46-build-side-158330"]);
+        assert!(get("builds").is_empty());
+        // A null field is left out, as bodhi-client leaves it out.
+        assert!(get("requirements").is_empty());
+
+        // An update of builds is re-sent build by build, and an empty
+        // bug list clears them.
+        let form = edit_bugs_form(&an_update(None), &[], false).unwrap();
+        let builds: Vec<&str> = form
+            .iter()
+            .filter(|(f, _)| f == "builds")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(builds, ["libical-4.0.7-1.fc46", "asterisk-24.0.0-3.fc46.1"]);
+        assert!(form.contains(&("bugs".to_string(), String::new())));
+        assert!(edit_bugs_form(&serde_json::json!({}), &[], false).is_err());
+    }
+
+    #[tokio::test]
+    async fn edit_update_bugs_reads_the_update_and_saves_it_back() {
+        use wiremock::matchers::{body_string_contains, header, path};
+
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri())
+            .with_token("tok-123".to_string())
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/updates/FEDORA-2026-0b2e1b3c7d"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "update": an_update(Some("f46-build-side-158330"))
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/oidc/login-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "csrf_token": "csrf-abc"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/updates/"))
+            .and(header("authorization", "Bearer tok-123"))
+            .and(body_string_contains("edited=FEDORA-2026-0b2e1b3c7d"))
+            .and(body_string_contains("bugs=2458837&"))
+            .and(body_string_contains("from_tag=f46-build-side-158330"))
+            .and(body_string_contains("csrf_token=csrf-abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "alias": "FEDORA-2026-0b2e1b3c7d",
+                "caveats": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let resp = client
+            .edit_update_bugs("FEDORA-2026-0b2e1b3c7d", &[2458837], false)
+            .await
+            .unwrap();
+        assert_eq!(resp.aliases(), ["FEDORA-2026-0b2e1b3c7d"]);
     }
 
     #[tokio::test]

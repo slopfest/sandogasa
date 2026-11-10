@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### ebranch: update-bugs revisits an update's bugs without a new check, and leaves off bugs an earlier build met
+
+On the libical 4 side tag, `check-update --submit` proposed closing
+asterisk's "asterisk-24.0.0 is available" with the update, though
+asterisk was only rebuilt there: 24.0.0-3 had been built before, and
+its maintainer had not closed the request. Taking the default put that
+bug, and osmo's like it, on FEDORA-2026-c8b6a481c4, and the only way to
+correct the list in ebranch was to run the whole check again, minutes
+of analysis on a side tag that had not changed.
+
+The bug proposal now leaves off an open bug that a build from before
+the update had already met, a version request for a version the target
+already had or a CVE tracker whose fix the old build carried, and lists
+it as "already met before this update (theirs to close)". A bug the new
+changelog entries name, and a package new to the target, are judged as
+before. Resolves #112.
+
+Every `check-update` run now keeps its report under
+`$XDG_STATE_HOME/ebranch/check-update/`, by what it checked and by the
+aliases it submitted or voted on, and the new `update-bugs ALIAS` reads
+it back: it refuses a report about other builds than the update
+carries, proposes the bug list again (the bugs already met offered for
+removal, new ones for adding, at a terminal only), asks whether Bodhi
+closes them, shows the edit and saves it on confirmation. Every other
+field is saved back as Bodhi has it, and a side tag update is not saved
+while its tag holds a build the update does not, as Bodhi would add it.
+Rerunning `--give-karma` from a kept report is left for later.
+Refs #113.
+
+New in sandogasa-bodhi: `BodhiClient::edit_update_bugs`, the
+`edit_bugs_form` it sends, and `Update::close_bugs`.
+
 ### ebranch: check-update --submit reads what a build bundles in seconds, and says it is looking
 
 On the libical 4 side tag, `check-update --submit` went quiet for many

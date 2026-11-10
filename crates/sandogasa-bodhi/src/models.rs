@@ -53,6 +53,9 @@ pub struct Update {
     pub from_tag: Option<String>,
     #[serde(default)]
     pub bugs: Vec<BodhiBug>,
+    /// Whether Bodhi closes the bugs when the update goes stable.
+    #[serde(default)]
+    pub close_bugs: bool,
     #[serde(default)]
     pub release: Option<Release>,
     #[serde(default)]

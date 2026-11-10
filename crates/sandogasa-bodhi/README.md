@@ -11,7 +11,9 @@ used to query Fedora and EPEL updates and releases.
 - Authenticated writes reusing the bodhi CLI's OIDC session (`auth`):
   post comments with karma and per-bug feedback, and create updates
   from a Koji side tag (`new_update_from_tag`, the API behind
-  `bodhi updates new --from-tag`)
+  `bodhi updates new --from-tag`), and change which bugs an update
+  carries and whether they are closed (`edit_update_bugs`, saving every
+  other field back as Bodhi has it, as `bodhi updates edit` does)
 
 ## Usage
 

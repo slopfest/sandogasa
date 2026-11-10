@@ -851,6 +851,17 @@ both come from one verdict:
         not failing to build)
 ```
 
+An open bug the update would close, but that a build from before it
+had already met, is left off and listed apart: a version request for a
+version the target already had, or a CVE tracker whose fix the old
+build already carried. Closing those is the maintainer's, or their own
+update's; a rebuild in someone else's side tag did not deliver them.
+
+```console
+Left off, already met before this update (theirs to close):
+  #2567306 asterisk-24.0.0 is available (asterisk was 24.0.0-3.fc46 already)
+```
+
 Listed bugs are then screened for two ways of not belonging: a bug
 whose package the update builds nothing for, and a bot-filed
 FailsToInstall or FTBFS report for another release, which the package
@@ -1762,6 +1773,48 @@ once for the whole set.
 All four accept `--dry-run` and `--verbose`; `--dry-run`
 previews without contacting Bugzilla (escalate and close still
 read bug state to decide what they would do).
+
+### Revisit an update's bugs
+
+Every `check-update` run keeps its report under
+`~/.local/state/ebranch/check-update/` (`$XDG_STATE_HOME`), by what it
+checked (a side tag, an alias) and by the aliases of the updates it
+submitted or voted on. `update-bugs` reads that report back to change
+which bugs an update carries, without running the analysis again:
+
+```sh
+ebranch update-bugs FEDORA-2026-c8b6a481c4
+```
+
+It refuses a report about other builds than the update now carries,
+naming what changed, since that report cannot say what the update
+closes. From the report it proposes the bug list again, as
+`check-update --submit` does: bugs on the update that a build from
+before it had already met are offered for removal, and bugs it looks
+like it closes for adding, each with its reason and `each` to go
+through them one at a time. Then it asks whether Bodhi should close
+the bugs when the update goes stable (`--close-bugs` and
+`--no-close-bugs` decide outright), shows the edit, and saves it on
+confirmation:
+
+```console
+Edit to FEDORA-2026-c8b6a481c4:
+  bugs: #1856066, #2458837, #2504630
+    was: #1856066, #2458837, #2504630, #2567306
+  closed when stable: no (unchanged)
+Save this edit? [Y/n]:
+```
+
+Every other field of the update is saved back as Bodhi has it. A side
+tag update is saved by its tag, and Bodhi refreshes its builds from the
+tag, so the edit is refused while the tag holds a build the update does
+not: that build would join an update no check judged it in.
+
+`--dry-run` shows the edit and stops. The proposals are only taken at a
+terminal, as attaching a bug closes it on stable: `--yes` lists them,
+takes none, and saves what `--close-bugs`/`--no-close-bugs` ask for
+without the final question. Without a terminal one of the two is
+needed.
 
 ## System-wide configuration
 

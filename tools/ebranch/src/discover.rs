@@ -29,9 +29,10 @@
 //! would score it +1, so what gets attached and what gets voted on
 //! cannot disagree.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use crate::karma::{UpdateFacts, Verdict};
+use crate::karma::{BugFacts, UpdateFacts, Verdict};
 
 /// A bug the update looks like it should close, and how it was found.
 pub struct Candidate {
@@ -39,6 +40,54 @@ pub struct Candidate {
     pub summary: String,
     /// Where it came from, shown so the user can judge the proposal.
     pub source: String,
+}
+
+impl Candidate {
+    /// The candidate as the proposals show it: the bug, then why.
+    pub fn shown(&self) -> String {
+        format!("  #{} {}\n    {}", self.bug_id, self.summary, self.source)
+    }
+}
+
+/// What [`candidates`] found: the bugs to propose, and the open ones
+/// left off because a build from before the update already met them.
+pub struct Proposal {
+    pub candidates: Vec<Candidate>,
+    /// Each with why it is left off, as [`Candidate::source`] says why
+    /// one is proposed.
+    pub already_met: Vec<Candidate>,
+}
+
+/// Why `bug`, open against a package the update builds, was met before
+/// the update: the version the target had already reached the fix a
+/// CVE tracker names, or the version an update request asks for (#112).
+/// Closing it is then the maintainer's, or their own update's: a
+/// rebuild in someone else's side tag did not deliver it. `None` when
+/// the package is new to the target, or the bug says no version.
+fn met_before(bug: &BugFacts, old_versions: &BTreeMap<String, Option<String>>) -> Option<String> {
+    let pkg = bug.component.as_deref()?;
+    let old = old_versions.get(pkg)?.as_deref()?;
+    // The upstream version alone: a request or a fix names one, and the
+    // old build's release would read as more of it (24.0.0-3 is past
+    // 24.0.0.1 compared whole), as an epoch would outrank any version.
+    let evr = old.split_once(':').map_or(old, |(_, vr)| vr);
+    let version = evr.rsplit_once('-').map_or(evr, |(v, _)| v);
+    if let Some(fix) = &bug.cve_fix {
+        return sandogasa_cve::is_fix(version, &fix.fixed, &fix.ranges).then(|| {
+            format!(
+                "{pkg} was {old} already, at or past the {} fix {}",
+                fix.cve_id,
+                fix.fixed_versions()
+            )
+        });
+    }
+    if bug.bundled.is_some() {
+        // What the old build bundled is not known here.
+        return None;
+    }
+    let wanted = sandogasa_bugclass::bugzilla::extract_new_version(&bug.summary, pkg)?;
+    (sandogasa_rpmvercmp::rpmvercmp(version, &wanted) != Ordering::Less)
+        .then(|| format!("{pkg} was {old} already"))
 }
 
 /// Bug references in a changelog body, in the forms packagers
@@ -170,7 +219,9 @@ fn changelog_candidates(
 /// builds, and those named in the changelog entries it introduces.
 ///
 /// Only bugs the vote logic would score +1 are proposed, and only
-/// ones not already attached.
+/// ones not already attached. An open bug a build from before the update
+/// had already met is left off and listed apart (see [`met_before`]);
+/// one the new changelog entries name is the update's by its own word.
 pub async fn candidates(
     bz: &sandogasa_bugzilla::BzClient,
     changelogs: &BTreeMap<String, String>,
@@ -178,7 +229,7 @@ pub async fn candidates(
     update: &UpdateFacts<'_>,
     already_listed: &[u64],
     verbose: bool,
-) -> Vec<Candidate> {
+) -> Proposal {
     let from_changelog = changelog_candidates(changelogs, old_versions);
 
     let open = open_bugs_for_components(bz, update.builds).await;
@@ -195,11 +246,22 @@ pub async fn candidates(
     let mut facts = crate::karma::fetch_bugs(bz, &wanted).await;
     crate::karma::attach_cve_facts(&mut facts, update, verbose).await;
     let mut out = Vec::new();
+    let mut already_met = Vec::new();
     for id in wanted {
         let Some(bug) = facts.get(&id) else { continue };
         let Verdict::Decided { karma: 1, reason } = crate::karma::bug_verdict(bug, update) else {
             continue;
         };
+        if !from_changelog.contains_key(&id)
+            && let Some(why) = met_before(bug, old_versions)
+        {
+            already_met.push(Candidate {
+                bug_id: id,
+                summary: bug.summary.clone(),
+                source: why,
+            });
+            continue;
+        }
         let source = from_changelog.get(&id).cloned().unwrap_or_else(|| {
             match (&bug.cve_fix, &bug.bundled, open.get(&id)) {
                 (Some(fix), _, _) => format!(
@@ -221,7 +283,10 @@ pub async fn candidates(
             source,
         });
     }
-    out
+    Proposal {
+        candidates: out,
+        already_met,
+    }
 }
 
 /// Open bugs against any of the update's packages, as bug ID to the
@@ -287,6 +352,91 @@ mod tests {
 * Tue Feb 10 2026 Fabio Valentini <decathorpe@gmail.com> - 0.4.3-1
 - Update to version 0.4.3
 ";
+
+    fn open_bug(summary: &str, component: &str) -> BugFacts {
+        BugFacts {
+            summary: summary.to_string(),
+            component: Some(component.to_string()),
+            ..BugFacts::default()
+        }
+    }
+
+    fn olds(pairs: &[(&str, Option<&str>)]) -> BTreeMap<String, Option<String>> {
+        pairs
+            .iter()
+            .map(|(p, v)| (p.to_string(), v.map(str::to_string)))
+            .collect()
+    }
+
+    #[test]
+    fn an_update_request_the_old_build_met_is_theirs_to_close() {
+        // #112: asterisk was only rebuilt in the libical 4 side tag,
+        // and 24.0.0-3 had been built before it.
+        let bug = open_bug("asterisk-24.0.0 is available", "asterisk");
+        let rebuilt = olds(&[("asterisk", Some("24.0.0-3.fc46"))]);
+        assert_eq!(
+            met_before(&bug, &rebuilt).as_deref(),
+            Some("asterisk was 24.0.0-3.fc46 already")
+        );
+        // An older build had not: the update is what delivers it.
+        let bumped = olds(&[("asterisk", Some("23.2.0-1.fc46"))]);
+        assert_eq!(met_before(&bug, &bumped), None);
+        // Only the version is compared: 24.0.0-3 is not 24.0.0.1, and
+        // an epoch does not outrank a newer version.
+        let point = open_bug("asterisk-24.0.0.1 is available", "asterisk");
+        assert_eq!(met_before(&point, &rebuilt), None);
+        let epoch = olds(&[("asterisk", Some("2:23.2.0-1.fc46"))]);
+        assert_eq!(met_before(&bug, &epoch), None);
+        // A package new to the target has no old build at all.
+        assert_eq!(met_before(&bug, &olds(&[("asterisk", None)])), None);
+        assert_eq!(met_before(&bug, &olds(&[])), None);
+        // A bug that names no version is not judged here.
+        let ftbfs = open_bug("asterisk: FTBFS in Fedora rawhide/f45", "asterisk");
+        assert_eq!(met_before(&ftbfs, &rebuilt), None);
+    }
+
+    #[test]
+    fn a_cve_tracker_the_old_build_already_fixed_is_theirs_to_close() {
+        let fix = |at: &str| sandogasa_cve::CveFix {
+            cve_id: "CVE-2026-62292".to_string(),
+            fixed: vec![sandogasa_cve::FixedVersion {
+                product: "libheif".to_string(),
+                version: at.to_string(),
+            }],
+            ranges: vec![],
+            source: "GHSA-73p7-m7gg-w2jv".to_string(),
+        };
+        let tracker = |at: &str| BugFacts {
+            cve_fix: Some(fix(at)),
+            ..open_bug(
+                "CVE-2026-62292 libheif: denial of service [fedora-all]",
+                "libheif",
+            )
+        };
+        let old = olds(&[("libheif", Some("1.23.5-1.fc46"))]);
+        let why = met_before(&tracker("1.23.3"), &old).unwrap();
+        assert!(
+            why.contains("libheif was 1.23.5-1.fc46 already") && why.contains("CVE-2026-62292"),
+            "{why}"
+        );
+        assert_eq!(met_before(&tracker("1.23.6"), &old), None);
+        // A copy the build bundles: what the old build bundled is not
+        // known, so it is left to the verdict.
+        let bundled = BugFacts {
+            bundled: Some(crate::karma::BundledCopy {
+                nvr: "libheif-1.23.5-1.fc46".to_string(),
+                library: "libde265".to_string(),
+                version: "1.0.15".to_string(),
+                fixed: true,
+                what: "1.0.16".to_string(),
+            }),
+            ..open_bug(
+                "CVE-2026-1 libheif: overflow in libde265 [fedora-all]",
+                "libheif",
+            )
+        };
+        assert_eq!(met_before(&bundled, &old), None);
+    }
 
     #[test]
     fn changelog_bug_refs_reads_the_forms_packagers_write() {

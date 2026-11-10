@@ -4,4 +4,4 @@ pub mod auth;
 mod client;
 pub mod models;
 
-pub use client::BodhiClient;
+pub use client::{BodhiClient, edit_bugs_form};

@@ -5,12 +5,12 @@
 //! package or a rebuild. A rebuild campaign scoped when the side tag
 //! opened cannot have planned for what arrived later (#83, #84).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// When a package reached the target, relative to the side tag's
 /// creation: what tells a reverse dependency the side tag has to catch
 /// up with from one it can leave as it is (#83).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Arrival {
     /// The package entered the distribution after the side tag was
@@ -25,7 +25,7 @@ pub enum Arrival {
 
 /// A reverse dependency's [`Arrival`], with the day and the build that
 /// show it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArrivalNote {
     pub arrival: Arrival,
     /// The day it arrived (`YYYY-MM-DD`): first listed, or rebuilt.

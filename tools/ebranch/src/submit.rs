@@ -108,7 +108,7 @@ struct Misfiled {
 ///
 /// Under `--yes` this warns and keeps them: silently discarding a
 /// bug the user passed to `--bug` is not something to do unasked.
-async fn screen_bugs(
+pub(crate) async fn screen_bugs(
     bz: &sandogasa_bugzilla::BzClient,
     packages: &[String],
     branch: &str,
@@ -163,19 +163,17 @@ async fn screen_bugs(
         .collect())
 }
 
-/// Propose bugs the update looks like it closes, and return the ones
-/// the user accepts.
-///
-/// Skipped entirely under `--yes`: attaching a bug means closing it
-/// when the update goes stable, which is not something to do without
-/// being asked. Each candidate is shown with how it was found.
-async fn propose_bugs(
+/// The bugs a checked update looks like it closes, and the open ones a
+/// build from before it had already met, from the report of its check:
+/// what [`propose_bugs`] offers, and `update-bugs` revisits (#113).
+/// Asks nothing; bugs in `already_listed` are not proposed again.
+pub(crate) async fn gather_bugs(
     bz: &sandogasa_bugzilla::BzClient,
     report: &crate::check_update::CheckUpdateReport,
     already_listed: &[u64],
     koji_profile: Option<&str>,
     verbose: bool,
-) -> Result<Vec<u64>, String> {
+) -> crate::discover::Proposal {
     // The check knows each package's old and new version-release,
     // which is what says how much of a changelog is new.
     let builds: Vec<(String, String)> = report
@@ -184,7 +182,10 @@ async fn propose_bugs(
         .map(|c| (c.package.clone(), c.new.clone()))
         .collect();
     if builds.is_empty() {
-        return Ok(Vec::new());
+        return crate::discover::Proposal {
+            candidates: Vec::new(),
+            already_met: Vec::new(),
+        };
     }
     // The changelogs, open bugs and CVE fixes take a while on a big
     // side tag, and nothing else is printed until the proposal.
@@ -225,7 +226,7 @@ async fn propose_bugs(
         unsatisfied: &report.installability_issues,
         full_analysis: report.full_analysis,
     };
-    let candidates = crate::discover::candidates(
+    crate::discover::candidates(
         bz,
         &changelogs,
         &old_versions,
@@ -233,7 +234,32 @@ async fn propose_bugs(
         already_listed,
         verbose,
     )
-    .await;
+    .await
+}
+
+/// Propose bugs the update looks like it closes, and return the ones
+/// the user accepts.
+///
+/// Skipped entirely under `--yes`: attaching a bug means closing it
+/// when the update goes stable, which is not something to do without
+/// being asked. Each candidate is shown with how it was found.
+async fn propose_bugs(
+    bz: &sandogasa_bugzilla::BzClient,
+    report: &crate::check_update::CheckUpdateReport,
+    already_listed: &[u64],
+    koji_profile: Option<&str>,
+    verbose: bool,
+) -> Result<Vec<u64>, String> {
+    let crate::discover::Proposal {
+        candidates,
+        already_met,
+    } = gather_bugs(bz, report, already_listed, koji_profile, verbose).await;
+    if !already_met.is_empty() {
+        eprintln!("\nLeft off, already met before this update (theirs to close):");
+        for c in &already_met {
+            eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
+        }
+    }
     if candidates.is_empty() {
         return Ok(Vec::new());
     }

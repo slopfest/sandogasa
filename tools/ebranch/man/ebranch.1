@@ -1041,3 +1041,31 @@ Write a TOML report (package list + dependency edges) for the branch\-request su
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.SS ebranch update-bugs
+\fBebranch update\-bugs\fR [\fB\-\-close\-bugs\fR] [\fB\-\-dry\-run\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-no\-close\-bugs\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIALIAS\fR>
+.PP
+Revisit an update\*(Aqs bugs from its kept check\-update report
+.TP
+\fB\-\-close\-bugs\fR
+Have Bodhi close the bugs when the update goes stable
+.TP
+\fB\-\-dry\-run\fR
+Show the edit, and change nothing
+.TP
+\fB\-\-koji\-profile\fR \fI<KOJI_PROFILE>\fR
+Koji CLI profile for reading build changelogs
+.TP
+\fB\-\-no\-close\-bugs\fR
+Link the bugs but leave them open when the update goes stable
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Name each lookup the bug proposal makes
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Save the edit without asking; proposals need a terminal
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIALIAS\fR>
+The Bodhi update, e.g. FEDORA\-2026\-0b2e1b3c7d

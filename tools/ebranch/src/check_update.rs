@@ -17,7 +17,7 @@ use sandogasa_cli::progress::Progress;
 pub use crate::arrival::{Arrival, ArrivalNote, PackageHistory};
 use crate::arrival::{arrival, day_of};
 use sandogasa_review::Resolution;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // ---- Public types ----
 
@@ -135,7 +135,7 @@ pub struct CheckUpdateOptions {
 }
 
 /// A Provide that changed between old and new versions.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangedProvide {
     /// The old Provide string (e.g. "tor = 0.4.9.5-1.el9").
     pub old: String,
@@ -154,7 +154,7 @@ impl ChangedProvide {
 /// A source package's version change in the update — its stable V-R
 /// (`None` when the package is newly introduced) and the V-R the update
 /// ships. Drives the grouped-by-version-transition summary.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageChange {
     pub package: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,7 +163,7 @@ pub struct PackageChange {
 }
 
 /// How a reverse dependency breaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BreakKind {
     /// A binary subpackage's install-time Requires stops resolving —
@@ -186,7 +186,7 @@ impl BreakKind {
 }
 
 /// A single broken Requires entry.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokenRequires {
     /// The Requires string that would break.
     pub dep: String,
@@ -197,7 +197,7 @@ pub struct BrokenRequires {
 }
 
 /// An unsatisfied Requires in an updated package's subpackages.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnsatisfiedDep {
     /// The source package.
     pub package: String,
@@ -216,7 +216,7 @@ pub struct UnsatisfiedDep {
 /// When present, the provides comparison may have missed changes
 /// from this source, so the report's reverse-dep list is
 /// incomplete. The user-side remedy is `koji regen-repo <side-tag>`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StaleSideTag {
     /// Source package name.
     pub package: String,
@@ -230,7 +230,7 @@ pub struct StaleSideTag {
 /// A build of the update that the target release already has at the
 /// same or a newer version: pushed, it would not be the newest, and the
 /// target's build would stay on top (#78).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotNewest {
     /// The update's build.
     pub nvr: String,
@@ -243,7 +243,7 @@ pub struct NotNewest {
 /// A build of the update that already belongs to another Bodhi update:
 /// Bodhi lets a build be in one update, and refuses a new one carrying
 /// it (#78).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InOtherUpdate {
     pub nvr: String,
     /// The other update's alias.
@@ -253,12 +253,12 @@ pub struct InOtherUpdate {
 }
 
 /// Result of checking a single reverse dependency.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RevDepResult {
     /// "ok" or "broken".
     pub status: String,
     /// Broken Requires, if any.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issues: Vec<BrokenRequires>,
     /// For a broken one, when it reached the target relative to the
     /// side tag (#83); `None` without a side tag, or when Koji could
@@ -271,7 +271,7 @@ pub struct RevDepResult {
 ///
 /// `Clone` so a batch can hold each input's report until the RPM
 /// Fusion bug exists and the review comments can link it.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CheckUpdateReport {
     pub input: String,
     /// The fedrq branch the check ran against (`al9` for an EPEL 9
@@ -294,20 +294,20 @@ pub struct CheckUpdateReport {
     /// Whether full provides comparison was performed.
     pub full_analysis: bool,
     /// Provides that changed (updated version or truly removed).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_provides: Vec<ChangedProvide>,
     /// Requires of updated packages not satisfiable on the target.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub installability_issues: Vec<UnsatisfiedDep>,
     /// Side-tag staleness warnings. When non-empty the
     /// reverse-dep analysis is incomplete.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stale_side_tag: Vec<StaleSideTag>,
     /// Builds the target already has at the same or a newer version.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_newest: Vec<NotNewest>,
     /// Builds already in another Bodhi update.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub in_other_update: Vec<InOtherUpdate>,
     /// The day the side tag was created (`YYYY-MM-DD`), when the update
     /// comes from one and Koji says: what the reverse dependencies'
@@ -338,7 +338,7 @@ impl CheckUpdateReport {
 /// Why a full Provides comparison couldn't be run, so the report can
 /// explain the *actual* gap rather than always blaming a missing side
 /// tag.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SkipReason {
     /// Bodhi has the update in testing (and koji has it tagged), but the

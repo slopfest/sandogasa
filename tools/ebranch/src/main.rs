@@ -26,6 +26,7 @@ mod rpmfusion;
 mod submit;
 #[cfg(test)]
 mod testrepo;
+mod update_bugs;
 mod wip;
 
 use resolve::{
@@ -801,6 +802,51 @@ claims are flagged first.")]
     RebuildPlan(RebuildPlanArgs),
     /// Resolve the full dependency closure for porting.
     Resolve(ResolveArgs),
+    /// Revisit an update's bugs from its kept check-update report.
+    UpdateBugs(UpdateBugsArgs),
+}
+
+/// Revisit the bugs a Bodhi update carries, without running
+/// check-update's analysis again.
+///
+/// Every check-update run keeps its report under
+/// ~/.local/state/ebranch/check-update/, by what it checked and by the
+/// aliases of the updates it submitted or voted on. This reads that
+/// report back for ALIAS, refuses it when the update's builds have
+/// changed since, and proposes the bug list again: bugs on the update
+/// a build from before it had already met (theirs to close) are offered
+/// for removal, and bugs it looks like it closes for adding. The edit is
+/// shown in full and saved on confirmation; every other field of the
+/// update is left as it is.
+#[derive(clap::Args, Clone)]
+struct UpdateBugsArgs {
+    /// The Bodhi update, e.g. FEDORA-2026-0b2e1b3c7d.
+    #[arg(value_name = "ALIAS")]
+    alias: String,
+
+    /// Have Bodhi close the bugs when the update goes stable.
+    #[arg(long, conflicts_with = "no_close_bugs")]
+    close_bugs: bool,
+
+    /// Show the edit, and change nothing.
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Koji CLI profile for reading build changelogs.
+    #[arg(long)]
+    koji_profile: Option<String>,
+
+    /// Link the bugs but leave them open when the update goes stable.
+    #[arg(long)]
+    no_close_bugs: bool,
+
+    /// Name each lookup the bug proposal makes.
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Save the edit without asking; proposals need a terminal.
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 /// A staging COPR holds an update's builds until they land in the
@@ -1477,6 +1523,27 @@ fn handle_branch_request_command(cmd: &Command) -> Option<ExitCode> {
 }
 
 /// Clear the fedrq + libdnf5 repo metadata caches if `--refresh` was passed.
+/// What `--close-bugs` / `--no-close-bugs` say: `None` when neither
+/// was given, so the caller decides.
+fn close_bugs_flag(close: bool, no_close: bool) -> Option<bool> {
+    match (close, no_close) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    }
+}
+
+/// Keep `report` for `update-bugs` under `keys`, warning when it
+/// cannot be: losing it costs a rerun, not this run.
+fn keep_check(report: &check_update::CheckUpdateReport, keys: &[String], verbose: bool) {
+    let kept = update_bugs::KeptCheck::new(report);
+    match update_bugs::kept_dir().and_then(|dir| update_bugs::keep(&dir, keys, &kept)) {
+        Ok(()) if verbose => eprintln!("[check-update] kept the report for update-bugs"),
+        Ok(()) => {}
+        Err(e) => eprintln!("warning: the report was not kept: {e}"),
+    }
+}
+
 fn handle_refresh(refresh: bool, verbose: bool) -> Result<(), ExitCode> {
     if refresh {
         // Drop both the smartcache and libdnf5: the smartcache clear
@@ -1510,6 +1577,28 @@ fn main() -> ExitCode {
             dry_run: a.dry_run,
             json: a.json,
         }));
+    }
+
+    if let Command::UpdateBugs(a) = &cli.command {
+        let opts = update_bugs::Options {
+            alias: a.alias.clone(),
+            close_bugs: close_bugs_flag(a.close_bugs, a.no_close_bugs),
+            dry_run: a.dry_run,
+            yes: a.yes,
+            koji_profile: a.koji_profile.clone(),
+            verbose: a.verbose,
+            interactive: std::io::IsTerminal::is_terminal(&std::io::stdin()),
+            bodhi_url: "https://bodhi.fedoraproject.org".to_string(),
+            bugzilla_url: "https://bugzilla.redhat.com".to_string(),
+            state_dir: None,
+        };
+        return match update_bugs::run(&opts) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
     }
 
     if let Command::CoprPrune(a) = &cli.command {
@@ -1894,6 +1983,11 @@ fn main() -> ExitCode {
                     } else {
                         check_update::print_report(&report, a.detailed);
                     }
+                    // Kept as soon as it exists, so a submit or vote
+                    // that fails below does not lose the analysis
+                    // `update-bugs` reads; kept again at the end, as
+                    // curated and under the aliases it reached (#113).
+                    keep_check(&report, std::slice::from_ref(&report.input), false);
                     // Ask RPM Fusion before anything else is decided, so a
                     // run without --submit still says what it found: the
                     // counterpart is worth knowing when reviewing the
@@ -2002,6 +2096,12 @@ fn main() -> ExitCode {
                             }
                         }
                     }
+                    // Kept for `update-bugs` (#113): under what was
+                    // checked, the update voted on, and any submitted.
+                    let mut kept_keys = vec![report.input.clone()];
+                    if let Some(alias) = &vote_alias {
+                        kept_keys.push(alias.to_string());
+                    }
                     if a.give_karma
                         && let Some(alias) = &vote_alias
                     {
@@ -2060,11 +2160,7 @@ fn main() -> ExitCode {
                             update_type: a.update_type.clone(),
                             severity: a.severity.clone(),
                             bugs: a.bug.clone(),
-                            close_bugs: match (a.close_bugs, a.no_close_bugs) {
-                                (true, _) => Some(true),
-                                (_, true) => Some(false),
-                                _ => None,
-                            },
+                            close_bugs: close_bugs_flag(a.close_bugs, a.no_close_bugs),
                             autokarma: !a.disable_autokarma,
                             stable_karma: a.stable_karma,
                             unstable_karma: a.unstable_karma,
@@ -2081,6 +2177,7 @@ fn main() -> ExitCode {
                                 break 'inputs;
                             }
                         };
+                        kept_keys.extend(aliases.iter().cloned());
                         // Remember what RPM Fusion needs told, but file
                         // after the whole batch: the bug has to link every
                         // update that touched the package, and it only
@@ -2109,6 +2206,7 @@ fn main() -> ExitCode {
                             autopush: Some(rpmfusion_found.is_empty() && !a.disable_autokarma),
                         });
                     }
+                    keep_check(&report, &kept_keys, a.verbose);
                     if report.reverse_deps.values().any(|r| r.status == "broken") {
                         overall = ExitCode::FAILURE;
                     }
@@ -2173,7 +2271,8 @@ fn main() -> ExitCode {
         | Command::FileRequest(_)
         | Command::FileRequests(_)
         | Command::PruneCache(_)
-        | Command::RebuildPlan(_) => unreachable!(),
+        | Command::RebuildPlan(_)
+        | Command::UpdateBugs(_) => unreachable!(),
         Command::FindCycles(a) => (a, Mode::FindCycles),
         Command::Resolve(a) => (a, Mode::Resolve),
     };
