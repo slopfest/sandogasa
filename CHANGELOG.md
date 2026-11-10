@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch: escalate follows up the releng tickets it filed
+
+Once `escalate` had filed a releng ticket for a stalled branch request,
+later runs mentioned it only under `-v`, so nobody was told when releng
+had acted, or what that freed: et-epel10's simpleini (releng #13584)
+blocks et, and a run should say when et waits on nothing.
+
+Each `escalate` run now reads the recorded tickets (anonymously, from
+Fedora's Forgejo) and reports one as processed once the asker is on the
+package's ACL, which is what a stalled-request ticket asks for, or the
+branch exists; a ticket closed with neither is reported for a person to
+read, as releng may have declined it. Under each processed ticket, the
+requests depending on it are listed with what they still wait on: a
+dependency that is a request in the report counts as cleared once its
+branch exists (a bug closed WONTFIX does not make one), any other once
+its bug is closed, and a dependent branched already is said to be.
+Resolves #107.
+
 ### Fixes from the release review
 
 A review of everything since v0.27.1 found these:

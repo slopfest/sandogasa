@@ -1691,6 +1691,22 @@ your FAS and the package's dist-git owner, and its number is
 recorded in the report, so a later run reports the ticket rather
 than filing a second one.
 
+Each later run also follows the recorded tickets up. A ticket is
+processed once you are on the package's ACL, which is what it asked
+for, or once the branch exists; a ticket closed with neither is
+reported for you to read instead. Under each processed ticket, the
+requests that depend on it are listed with whether they still wait on
+anything:
+
+```
+releng ticket(s):
+  simpleini rhbz#2543942: processed, you are on its ACL now (releng#13584 closed): branch epel10 yourself
+    et rhbz#2368920 still waits on simpleini (rhbz#2543942)
+```
+
+Once simpleini's branch exists, et "waits on nothing now", and its own
+request is the next step.
+
 It asks before filing; `--yes` skips the question, and a run with
 no terminal says what it would file instead of filing it. Without
 a `packager.fas` the step is reported, not taken. Without a Forgejo

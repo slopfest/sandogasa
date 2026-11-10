@@ -1760,6 +1760,207 @@ pub fn run_close(report_path: &str, opts: &Options, claim: bool) -> Result<(), S
 
 // ---- escalation ----
 
+/// A branch request's bug, as the releng follow-up reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequestBug {
+    pub status: String,
+    pub depends_on: Vec<u64>,
+}
+
+/// What a run says about the releng tickets the report records (#107):
+/// each one processed -- the asker now on the package's ACL, which is
+/// what a stalled-request ticket asks releng for, or the branch made
+/// -- with the requests that depend on its request, and whether they
+/// still wait on anything. A ticket closed with neither is said to need
+/// a look rather than taken as done: releng may have declined it, or
+/// done something else. A dependency that is a request in the report
+/// stops counting once its branch exists, however its bug was closed;
+/// any other once its bug is closed; one whose state is unknown still
+/// counts. `None` when no ticket is processed.
+///
+/// `tickets` maps a ticket to whether it is closed (absent when it
+/// could not be read); `bugs`, every bug the decision needs, the
+/// report's requests and their dependencies, to its status and its own
+/// dependencies. Pure so the wording is tested without a network.
+pub(crate) fn releng_report(
+    report: &ResolveReport,
+    branch: &str,
+    standings: &BTreeMap<String, BranchStanding>,
+    tickets: &BTreeMap<u64, bool>,
+    bugs: &BTreeMap<u64, RequestBug>,
+) -> Option<String> {
+    use std::fmt::Write as _;
+    let branched = |pkg: &str| standings.get(pkg).is_some_and(|s| s.branched);
+    let on_acl = |pkg: &str| standings.get(pkg).is_some_and(BranchStanding::may_branch);
+    let by_rhbz: BTreeMap<u64, &str> = report
+        .branch_requests
+        .iter()
+        .map(|(pkg, r)| (r.rhbz, pkg.as_str()))
+        .collect();
+    let cleared = |dep: u64| match by_rhbz.get(&dep) {
+        // A request here: what matters is the branch, which a bug
+        // closed WONTFIX does not make.
+        Some(pkg) => branched(pkg),
+        None => bugs.get(&dep).is_some_and(|b| b.status == "CLOSED"),
+    };
+    let mut out = String::new();
+    for (pkg, req) in &report.branch_requests {
+        let Some(ticket) = req.releng else { continue };
+        let closed = tickets.get(&ticket).copied().unwrap_or(false);
+        let made = branched(pkg);
+        let access = on_acl(pkg);
+        if !closed && !made && !access {
+            continue;
+        }
+        if out.is_empty() {
+            out.push_str("\nreleng ticket(s):\n");
+        }
+        let state = if closed { "closed" } else { "still open" };
+        let how = match (made, access) {
+            (true, _) => format!("processed, {branch} branched (releng#{ticket} {state})"),
+            (false, true) => format!(
+                "processed, you are on its ACL now (releng#{ticket} {state}): branch {branch} yourself"
+            ),
+            (false, false) => format!(
+                "releng#{ticket} closed, but dist-git shows no access you could branch with, \
+                 and {branch} is not branched: read the ticket"
+            ),
+        };
+        let _ = writeln!(out, "  {pkg} rhbz#{}: {how}", req.rhbz);
+        if !made && !access {
+            continue;
+        }
+        for (dep_pkg, dep_req) in &report.branch_requests {
+            let Some(dep_bug) = bugs.get(&dep_req.rhbz) else {
+                continue;
+            };
+            if !dep_bug.depends_on.contains(&req.rhbz) {
+                continue;
+            }
+            if branched(dep_pkg) {
+                let _ = writeln!(
+                    out,
+                    "    {dep_pkg} rhbz#{} is branched for {branch} already",
+                    dep_req.rhbz
+                );
+                continue;
+            }
+            let waiting: Vec<String> = dep_bug
+                .depends_on
+                .iter()
+                .filter(|d| !cleared(**d))
+                .map(|d| match by_rhbz.get(d) {
+                    Some(p) => format!("{p} (rhbz#{d})"),
+                    None => format!("rhbz#{d}"),
+                })
+                .collect();
+            if waiting.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "    {dep_pkg} rhbz#{} waits on nothing now: its own request is next",
+                    dep_req.rhbz
+                );
+            } else {
+                let _ = writeln!(
+                    out,
+                    "    {dep_pkg} rhbz#{} still waits on {}",
+                    dep_req.rhbz,
+                    waiting.join(", ")
+                );
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Read what [`releng_report`] needs and print it: each recorded
+/// ticket's state from Fedora's Forgejo (anonymously, as the tracker is
+/// public), and the requests' bugs and their dependencies from
+/// Bugzilla. A read that fails is a warning: the rest of the run
+/// stands, and a ticket that cannot be read is judged by the branch
+/// alone.
+async fn releng_followup(
+    report: &ResolveReport,
+    opts: &Options,
+    standings: &BTreeMap<String, BranchStanding>,
+) {
+    let recorded: Vec<u64> = report
+        .branch_requests
+        .values()
+        .filter_map(|r| r.releng)
+        .collect();
+    if recorded.is_empty() {
+        return;
+    }
+    let url = opts.forge_url.clone();
+    let (owner, repo) = RELENG_REPO;
+    let read = tokio::task::spawn_blocking(move || -> Result<BTreeMap<u64, bool>, String> {
+        let c = sandogasa_forgejo::Client::anonymous(&url).map_err(|e| e.to_string())?;
+        let mut states = BTreeMap::new();
+        for n in recorded {
+            match c.issue(owner, repo, n) {
+                Ok(issue) => {
+                    states.insert(n, issue.state == "closed");
+                }
+                Err(e) => eprintln!("warning: could not read {owner}/{repo}#{n}: {e}"),
+            }
+        }
+        Ok(states)
+    })
+    .await;
+    let tickets = read
+        .map_err(|e| e.to_string())
+        .and_then(|r| r)
+        .unwrap_or_else(|e| {
+            eprintln!("warning: could not read the releng tickets: {e}");
+            BTreeMap::new()
+        });
+    let bz = match BzClient::new(&opts.bugzilla_url).with_api_key(opts.api_key.clone()) {
+        Ok(bz) => bz,
+        Err(e) => {
+            eprintln!("warning: {e}; not following up the releng tickets");
+            return;
+        }
+    };
+    let mut bugs: BTreeMap<u64, RequestBug> = BTreeMap::new();
+    let mut ids: Vec<u64> = report.branch_requests.values().map(|r| r.rhbz).collect();
+    for round in 0..2 {
+        match bz.bugs(&ids).await {
+            Ok(read) => {
+                for b in read {
+                    bugs.insert(
+                        b.id,
+                        RequestBug {
+                            status: b.status,
+                            depends_on: b.depends_on,
+                        },
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: could not read the requests' bugs ({e}); not judging dependents"
+                );
+                break;
+            }
+        }
+        if round == 0 {
+            // Then the dependencies the requests' bugs name that are
+            // not requests here themselves.
+            ids = bugs
+                .values()
+                .flat_map(|b| b.depends_on.iter().copied())
+                .filter(|d| !bugs.contains_key(d))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+        }
+    }
+    if let Some(text) = releng_report(report, &opts.branch, standings, &tickets, &bugs) {
+        println!("{text}");
+    }
+}
+
 /// Escalate stale requests recorded in `report`. Pings each NEW
 /// request older than [`PING_MIN_DAYS`] that hasn't been pinged,
 /// marking it pinged. Returns whether the report changed.
@@ -1792,7 +1993,11 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
         );
         BTreeMap::new()
     });
-    escalate_with(report, opts, &standings, &present).await
+    let changed = escalate_with(report, opts, &standings, &present).await?;
+    // The tickets filed on earlier runs: whether releng has acted, and
+    // what that frees up (#107).
+    releng_followup(report, opts, &standings).await;
+    Ok(changed)
 }
 
 /// The Forgejo token to file a releng ticket with: the configured one,
@@ -3200,6 +3405,163 @@ mod tests {
             overrides: BTreeSet::new(),
             local: BTreeSet::new(),
         }
+    }
+
+    /// et-epel10 on 2026-11-10: simpleini (rhbz#2543942) escalated as
+    /// releng#13584, et (rhbz#2368920) depending on it and on a bug
+    /// outside the report.
+    fn et_epel10(simpleini_releng: Option<u64>) -> ResolveReport {
+        let mut report = report_with("et", 2368920, true);
+        report.branch_requests.insert(
+            "simpleini".to_string(),
+            BranchRequest {
+                rhbz: 2543942,
+                pinged: true,
+                releng: simpleini_releng,
+            },
+        );
+        report
+    }
+
+    fn et_bugs(outside: &str) -> BTreeMap<u64, RequestBug> {
+        let bug = |status: &str, deps: &[u64]| RequestBug {
+            status: status.to_string(),
+            depends_on: deps.to_vec(),
+        };
+        BTreeMap::from([
+            (2368920, bug("NEW", &[2543942, 2600000])),
+            (2543942, bug("NEW", &[])),
+            (2600000, bug(outside, &[])),
+        ])
+    }
+
+    fn standing(branched: bool, access: Option<sandogasa_distgit::AccessLevel>) -> BranchStanding {
+        BranchStanding {
+            branched,
+            access,
+            ..BranchStanding::default()
+        }
+    }
+
+    /// A closed ticket is not enough: releng was asked to put the
+    /// asker on the ACL, so that, or the branch, is what says done.
+    #[test]
+    fn a_releng_ticket_is_processed_by_the_acl_or_the_branch() {
+        use sandogasa_distgit::AccessLevel::Commit;
+        let report = et_epel10(Some(13584));
+        let closed = BTreeMap::from([(13584, true)]);
+        let open = BTreeMap::from([(13584, false)]);
+        let at = |s: BranchStanding| BTreeMap::from([("simpleini".to_string(), s)]);
+
+        // Open, no access, no branch: nothing to say.
+        assert_eq!(
+            releng_report(
+                &report,
+                "epel10",
+                &at(standing(false, None)),
+                &open,
+                &et_bugs("CLOSED")
+            ),
+            None
+        );
+        // Closed without the access asked for: read it, nobody freed.
+        let text = releng_report(
+            &report,
+            "epel10",
+            &at(standing(false, None)),
+            &closed,
+            &et_bugs("CLOSED"),
+        )
+        .unwrap();
+        assert!(
+            text.contains("no access you could branch with") && text.contains("read the ticket"),
+            "{text}"
+        );
+        assert!(!text.contains("et rhbz#"), "{text}");
+        // On the ACL: processed, branch it yourself; et still waits
+        // on simpleini's branch.
+        let text = releng_report(
+            &report,
+            "epel10",
+            &at(standing(false, Some(Commit))),
+            &open,
+            &et_bugs("CLOSED"),
+        )
+        .unwrap();
+        assert!(
+            text.contains("you are on its ACL now") && text.contains("branch epel10 yourself"),
+            "{text}"
+        );
+        assert!(
+            text.contains("et rhbz#2368920 still waits on simpleini (rhbz#2543942)"),
+            "{text}"
+        );
+        // Branched: et waits on nothing, unless a bug outside the
+        // report is still open.
+        let text = releng_report(
+            &report,
+            "epel10",
+            &at(standing(true, Some(Commit))),
+            &closed,
+            &et_bugs("CLOSED"),
+        )
+        .unwrap();
+        assert!(
+            text.contains("processed, epel10 branched (releng#13584 closed)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("et rhbz#2368920 waits on nothing now"),
+            "{text}"
+        );
+        let text = releng_report(
+            &report,
+            "epel10",
+            &at(standing(true, None)),
+            &closed,
+            &et_bugs("NEW"),
+        )
+        .unwrap();
+        assert!(
+            text.contains("et rhbz#2368920 still waits on rhbz#2600000"),
+            "{text}"
+        );
+        // simpleini's bug closed WONTFIX with no branch: et still
+        // waits on it, since the branch is what it needs.
+        let mut wontfix = et_bugs("CLOSED");
+        wontfix.get_mut(&2543942).unwrap().status = "CLOSED".into();
+        let text = releng_report(
+            &report,
+            "epel10",
+            &at(standing(false, Some(Commit))),
+            &closed,
+            &wontfix,
+        )
+        .unwrap();
+        assert!(
+            text.contains("et rhbz#2368920 still waits on simpleini"),
+            "{text}"
+        );
+        // et branched already: said so, not sent to request it.
+        let mut both = at(standing(true, None));
+        both.insert("et".to_string(), standing(true, None));
+        let text = releng_report(&report, "epel10", &both, &closed, &et_bugs("CLOSED")).unwrap();
+        assert!(
+            text.contains("et rhbz#2368920 is branched for epel10 already"),
+            "{text}"
+        );
+        assert!(!text.contains("waits on nothing"), "{text}");
+        // No ticket recorded: nothing to follow up.
+        assert_eq!(
+            releng_report(
+                &et_epel10(None),
+                "epel10",
+                &at(standing(true, None)),
+                &closed,
+                &et_bugs("CLOSED")
+            ),
+            None
+        );
     }
 
     #[tokio::test]
