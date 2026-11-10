@@ -126,6 +126,9 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Which build, where it is, and what promoting it takes, per
     // collection. Reading changes nothing, so a dry run does it too.
     let mut steps: Vec<(String, Stage, Vec<Vec<String>>)> = Vec::new();
+    // The collections a named build turned out not to be in: fine for
+    // some, as a build is made for one variant, but not for all.
+    let mut lacking: Vec<String> = Vec::new();
     for collection in &checkout.collections {
         let candidate = collection.tag(Stage::Candidate);
         ui.step(&format!(
@@ -152,6 +155,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         let tags = tags_of(&nvr)?;
         let Some(at) = furthest_stage(collection, &tags) else {
             if args.nvr.is_some() && checkout.collections.len() > 1 {
+                lacking.push(collection.prefix());
                 continue;
             }
             return Err(format!("{nvr} is in none of {}'s tags", collection.prefix()).into());
@@ -166,6 +170,11 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         };
         steps.push((nvr.clone(), to, promote_argvs(collection, &nvr, to, &tags)));
+    }
+    if let Some(nvr) = &args.nvr
+        && lacking.len() == checkout.collections.len()
+    {
+        return Err(format!("{nvr} is in none of {}'s tags", lacking.join(", ")).into());
     }
     if steps.is_empty() {
         return Ok(());
@@ -324,6 +333,18 @@ mod tests {
             ],
         );
         run_inner(&dry_run(Some("perf-6.1-1.hs.el9"), None, &f)).unwrap();
+        // In none of them: an error naming each, not a silent success.
+        f.fake("koji", &[("--help", ""), ("list-tags", "")]);
+        let err = run_inner(&dry_run(Some("perf-6.1-1.hs.el9"), None, &f))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "perf-6.1-1.hs.el9 is in none of hyperscale9s-packages-facebook, \
+                 hyperscale9-packages-facebook's tags"
+            ),
+            "{err}"
+        );
     }
 
     #[test]
