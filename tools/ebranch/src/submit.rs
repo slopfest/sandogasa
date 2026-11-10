@@ -163,6 +163,97 @@ pub(crate) async fn screen_bugs(
         .collect())
 }
 
+/// A build's Koji NVR: Koji's NVRs carry no epoch.
+fn koji_nvr(pkg: &str, evr: &str) -> String {
+    let vr = evr.split_once(':').map_or(evr, |(_, vr)| vr);
+    format!("{pkg}-{vr}")
+}
+
+/// The builds whose changelogs the bug proposal reads, as
+/// `(package, Koji NVR)`: only those of packages the target already
+/// has, as a package new to it brings a history whose bugs were closed
+/// elsewhere (see `discover::changelog_candidates`).
+fn changelog_nvrs(
+    builds: &[(String, String)],
+    old_versions: &std::collections::BTreeMap<String, Option<String>>,
+) -> Vec<(String, String)> {
+    builds
+        .iter()
+        .filter(|(pkg, _)| old_versions.get(pkg).is_some_and(Option::is_some))
+        .map(|(pkg, evr)| (pkg.clone(), koji_nvr(pkg, evr)))
+        .collect()
+}
+
+/// How many builds' changelogs one `multiCall` asks for: each comes
+/// whole, and a kernel's or a glibc's runs to thousands of entries.
+const CHANGELOG_CHUNK: usize = 25;
+
+/// The changelogs of `nvrs` from the Koji hub at `hub_url`, one result
+/// per chunk of [`CHANGELOG_CHUNK`] builds: each a changelog per build
+/// (`None` for one the hub does not know), or why the chunk could not
+/// be read, so a failure costs only its own chunk. Blocks.
+fn changelogs_from_hub(hub_url: &str, nvrs: &[String]) -> Vec<Result<Vec<Option<String>>, String>> {
+    let hub = sandogasa_kojihub::HubClient::new(hub_url);
+    nvrs.chunks(CHANGELOG_CHUNK)
+        .map(|chunk| {
+            sandogasa_kojihub::retry(2, || hub.builds_changelogs(chunk))
+                .map(|answers| answers.into_iter().map(Result::ok).collect())
+                .map_err(|e| e.to_string())
+        })
+        .collect()
+}
+
+/// The changelogs of `builds` (`(package, NVR)`), by package: from the
+/// hub the Koji profile names, in batches, or through the `koji` CLI one
+/// build at a time for a batch the hub could not give, or all of them
+/// when no hub is configured. Falling back is said, as the CLI takes
+/// about a second a build.
+async fn read_changelogs(
+    builds: &[(String, String)],
+    koji_profile: Option<&str>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    if builds.is_empty() {
+        return out;
+    }
+    let cli = |chunk: &[(String, String)], out: &mut std::collections::BTreeMap<String, String>| {
+        for (pkg, nvr) in chunk {
+            if let Ok(text) = sandogasa_koji::build_info_with_changelog(nvr, koji_profile) {
+                out.insert(pkg.clone(), text);
+            }
+        }
+    };
+    let Some(hub) = sandogasa_kojihub::config::hub_url(koji_profile.unwrap_or("koji")) else {
+        cli(builds, &mut out);
+        return out;
+    };
+    // The hub client blocks, so it runs where blocking is allowed.
+    let nvrs: Vec<String> = builds.iter().map(|(_, nvr)| nvr.clone()).collect();
+    let chunks = tokio::task::spawn_blocking(move || changelogs_from_hub(&hub, &nvrs))
+        .await
+        .unwrap_or_else(|e| vec![Err(e.to_string()); builds.len().div_ceil(CHANGELOG_CHUNK)]);
+    for (chunk, result) in builds.chunks(CHANGELOG_CHUNK).zip(chunks) {
+        match result {
+            Ok(texts) => {
+                for ((pkg, _), text) in chunk.iter().zip(texts) {
+                    if let Some(text) = text {
+                        out.insert(pkg.clone(), text);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "warning: the Koji hub could not give {} changelog(s) ({e}); \
+                     asking the koji CLI, one build at a time",
+                    chunk.len()
+                );
+                cli(chunk, &mut out);
+            }
+        }
+    }
+    out
+}
+
 /// The bugs a checked update looks like it closes, and the open ones a
 /// build from before it had already met, from the report of its check:
 /// what [`propose_bugs`] offers, and `update-bugs` revisits (#113).
@@ -198,26 +289,28 @@ pub(crate) async fn gather_bugs(
         .iter()
         .map(|c| (c.package.clone(), c.old.clone()))
         .collect();
-    let changelogs = builds
-        .iter()
-        .filter_map(|(pkg, evr)| {
-            let nvr = format!("{pkg}-{evr}");
-            sandogasa_koji::build_info_with_changelog(&nvr, koji_profile)
-                .ok()
-                .map(|text| (pkg.clone(), text))
-        })
-        .collect();
+    let started = std::time::Instant::now();
+    let changelogs = read_changelogs(&changelog_nvrs(&builds, &old_versions), koji_profile).await;
+    if verbose {
+        eprintln!(
+            "[bugs] read {} changelog(s) from Koji in {:.1}s",
+            changelogs.len(),
+            started.elapsed().as_secs_f64()
+        );
+    }
 
+    let started = std::time::Instant::now();
     let trackers =
         sandogasa_bugclass::bugzilla::lookup_branch_trackers(bz, report.dist_branch()).await;
+    if verbose {
+        eprintln!(
+            "[bugs] read {}'s FTBFS and FTI trackers from Bugzilla in {:.1}s",
+            report.dist_branch(),
+            started.elapsed().as_secs_f64()
+        );
+    }
     // Koji's NVRs carry no epoch.
-    let nvrs: Vec<String> = builds
-        .iter()
-        .map(|(pkg, evr)| {
-            let vr = evr.split_once(':').map_or(evr.as_str(), |(_, vr)| vr);
-            format!("{pkg}-{vr}")
-        })
-        .collect();
+    let nvrs: Vec<String> = builds.iter().map(|(pkg, evr)| koji_nvr(pkg, evr)).collect();
     let facts = crate::karma::UpdateFacts {
         builds: &builds,
         nvrs: &nvrs,
@@ -678,6 +771,80 @@ mod tests {
             rpmfusion: vec![],
             verbose: false,
         }
+    }
+
+    #[test]
+    fn only_packages_the_target_has_have_their_changelogs_read() {
+        let builds = vec![
+            ("libical".to_string(), "4.0.7-1.fc46".to_string()),
+            ("perl-Foo".to_string(), "1:2.0-1.fc46".to_string()),
+            ("brand-new".to_string(), "1.0-1.fc46".to_string()),
+        ];
+        let old: std::collections::BTreeMap<String, Option<String>> = [
+            ("libical".to_string(), Some("3.0.20-11.fc46".to_string())),
+            ("perl-Foo".to_string(), Some("1:1.9-1.fc46".to_string())),
+            ("brand-new".to_string(), None),
+        ]
+        .into();
+        assert_eq!(
+            changelog_nvrs(&builds, &old),
+            [
+                ("libical".to_string(), "libical-4.0.7-1.fc46".to_string()),
+                // Koji knows the build without its epoch.
+                ("perl-Foo".to_string(), "perl-Foo-2.0-1.fc46".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn changelogs_are_read_from_the_hub_in_one_batch() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let entry = "<value><struct>\
+             <member><name>date</name><value><string>2026-11-02 12:00:00</string></value></member>\
+             <member><name>author</name><value><string>Milan Crha &lt;mcrha@redhat.com&gt; - 4.0.7-1</string></value></member>\
+             <member><name>text</name><value><string>- Resolves: rhbz#2458837</string></value></member>\
+             </struct></value>";
+        let fault = "<value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>No such build</string></value></member>\
+             </struct></value>";
+        Mock::given(method("POST"))
+            .and(body_string_contains("getChangelogEntries"))
+            .and(body_string_contains("libical-4.0.7-1.fc46"))
+            .and(body_string_contains("nope-1-1.fc46"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+                "<?xml version=\"1.0\"?><methodResponse><params><param><value><array><data>\
+                 <value><array><data><value><array><data>{entry}</data></array></value></data></array></value>\
+                 {fault}</data></array></value></param></params></methodResponse>"
+            )))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let nvrs = [
+            "libical-4.0.7-1.fc46".to_string(),
+            "nope-1-1.fc46".to_string(),
+        ];
+        let uri = server.uri();
+        let mut chunks = tokio::task::spawn_blocking(move || changelogs_from_hub(&uri, &nvrs))
+            .await
+            .unwrap();
+        assert_eq!(chunks.len(), 1, "two builds are one chunk");
+        let got = chunks.remove(0).unwrap();
+        assert_eq!(got.len(), 2);
+        let text = got[0].as_deref().unwrap();
+        // The header the changelog parser reads the version from.
+        assert!(
+            text.starts_with("* 2026-11-02 12:00:00 Milan Crha <mcrha@redhat.com> - 4.0.7-1\n"),
+            "{text}"
+        );
+        assert_eq!(
+            crate::discover::new_entry_bug_refs(text, Some("3.0.20-11.fc46")),
+            [2458837]
+        );
+        assert_eq!(got[1], None);
     }
 
     #[test]

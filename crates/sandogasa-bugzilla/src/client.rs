@@ -4,6 +4,7 @@ use reqwest::Client;
 
 use crate::models::{Bug, BugSearchResponse, Comment, CommentResponse, CreateBugResponse};
 
+#[derive(Clone)]
 pub struct BzClient {
     base_url: String,
     client: Client,
@@ -336,38 +337,131 @@ impl BzClient {
     /// Paginates through all results up to `max_results`. Pass 0 for no limit.
     pub async fn search(&self, query: &str, max_results: u64) -> Result<Vec<Bug>, reqwest::Error> {
         const PAGE_SIZE: u64 = 1000;
-        let mut all_bugs = Vec::new();
-        let mut offset: u64 = 0;
+        let want = if max_results > 0 {
+            PAGE_SIZE.min(max_results)
+        } else {
+            PAGE_SIZE
+        };
+        let first = self.search_page(query, want, 0).await?;
+        let total = first.total_matches.unwrap_or(first.bugs.len() as u64);
+        // The server may cap a page below what was asked: Red Hat's
+        // answers 20 at a time whatever the limit. The rest of the pages
+        // are then known, and asked for a few at a time rather than one
+        // after another: 452 bugs were 23 requests in a row, a minute.
+        let page = first.bugs.len() as u64;
+        let target = if max_results > 0 {
+            total.min(max_results)
+        } else {
+            total
+        };
+        let mut all_bugs = first.bugs;
+        if page == 0 || page >= target {
+            if max_results > 0 {
+                all_bugs.truncate(max_results as usize);
+            }
+            return Ok(all_bugs);
+        }
+        let offsets: Vec<u64> = (page..target).step_by(page as usize).collect();
+        for wave in offsets.chunks(Self::PARALLEL_PAGES) {
+            let mut set = tokio::task::JoinSet::new();
+            let mut asked = std::collections::HashMap::new();
+            for &offset in wave {
+                let client = self.clone();
+                let query = query.to_string();
+                let limit = page.min(target - offset);
+                let task =
+                    set.spawn(async move { client.search_page(&query, limit, offset).await });
+                asked.insert(task.id(), (offset, limit));
+            }
+            let mut pages = Vec::with_capacity(wave.len());
+            while let Some(done) = set.join_next_with_id().await {
+                let (offset, limit, resp) = match done {
+                    Ok((id, resp)) => {
+                        let (offset, limit) = asked[&id];
+                        (offset, limit, resp?)
+                    }
+                    // A task that did not finish: its page asked again
+                    // here, rather than failing the whole search.
+                    Err(e) => {
+                        let (offset, limit) = asked[&e.id()];
+                        (offset, limit, self.search_page(query, limit, offset).await?)
+                    }
+                };
+                // A page shorter than asked, before the last, means the
+                // offsets worked out from the first page no longer hold
+                // (the cap changed, bugs went private): read it page by
+                // page from the bugs actually returned instead.
+                if (resp.bugs.len() as u64) < limit && offset + limit < target {
+                    return self.search_sequential(query, max_results).await;
+                }
+                pages.push((offset, resp.bugs));
+            }
+            pages.sort_by_key(|(offset, _)| *offset);
+            for (_, bugs) in pages {
+                all_bugs.extend(bugs);
+            }
+        }
+        // A bug that moved in the results between pages can come twice.
+        let mut seen = std::collections::HashSet::new();
+        all_bugs.retain(|b| seen.insert(b.id));
+        if max_results > 0 {
+            all_bugs.truncate(max_results as usize);
+        }
+        Ok(all_bugs)
+    }
 
+    /// [`Self::search`] one page after another, each from the number of
+    /// bugs already returned: slower, but sound when the pages are not
+    /// the size the first one said.
+    async fn search_sequential(
+        &self,
+        query: &str,
+        max_results: u64,
+    ) -> Result<Vec<Bug>, reqwest::Error> {
+        const PAGE_SIZE: u64 = 1000;
+        let mut all_bugs: Vec<Bug> = Vec::new();
         loop {
+            let offset = all_bugs.len() as u64;
             let limit = if max_results > 0 {
                 PAGE_SIZE.min(max_results - offset)
             } else {
                 PAGE_SIZE
             };
-
-            let resp: BugSearchResponse = self
-                .request(&format!(
-                    "bug?{query}&limit={limit}&offset={offset}&include_fields={}",
-                    Self::FIELDS
-                ))
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-
+            let resp = self.search_page(query, limit, offset).await?;
             let total = resp.total_matches.unwrap_or(resp.bugs.len() as u64);
             let page = resp.bugs.len() as u64;
             all_bugs.extend(resp.bugs);
-
-            offset = all_bugs.len() as u64;
+            let offset = all_bugs.len() as u64;
             if page == 0 || offset >= total || (max_results > 0 && offset >= max_results) {
                 break;
             }
         }
-
+        let mut seen = std::collections::HashSet::new();
+        all_bugs.retain(|b| seen.insert(b.id));
         Ok(all_bugs)
+    }
+
+    /// How many search pages are asked for at once: enough to stop a
+    /// long search being a minute of requests in a row, few enough not
+    /// to lean on a shared service.
+    const PARALLEL_PAGES: usize = 4;
+
+    /// One page of a search: `limit` bugs from `offset`.
+    async fn search_page(
+        &self,
+        query: &str,
+        limit: u64,
+        offset: u64,
+    ) -> Result<BugSearchResponse, reqwest::Error> {
+        self.request(&format!(
+            "bug?{query}&limit={limit}&offset={offset}&include_fields={}",
+            Self::FIELDS
+        ))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await
     }
 
     /// Fetch comments for a bug.
@@ -1406,6 +1500,88 @@ mod tests {
         assert_eq!(bugs.len(), 2);
         assert_eq!(bugs[0].id, 1);
         assert_eq!(bugs[1].id, 2);
+    }
+
+    /// A server that answers fewer bugs a page than asked for (Red
+    /// Hat's caps at 20) is read page by page to the total, the pages
+    /// after the first asked for together, and the bugs kept in order.
+    #[tokio::test]
+    async fn search_reads_every_page_of_a_capped_server_in_order() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+        let bug = |id: u64| {
+            serde_json::json!({
+                "id": id, "summary": format!("Bug {id}"), "status": "NEW",
+                "resolution": "", "product": "Fedora", "component": ["kernel"],
+                "severity": "medium", "priority": "unspecified",
+                "assigned_to": "nobody@fedoraproject.org", "creator": "r@example.com",
+                "creation_time": "2025-01-01T00:00:00Z",
+                "last_change_time": "2025-01-01T00:00:00Z"
+            })
+        };
+        // 7 bugs, 3 a page whatever the limit.
+        for (offset, ids) in [(0u64, vec![1, 2, 3]), (3, vec![4, 5, 6]), (6, vec![7])] {
+            Mock::given(method("GET"))
+                .and(path("/rest/bug"))
+                .and(query_param("offset", offset.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "bugs": ids.into_iter().map(bug).collect::<Vec<_>>(),
+                    "total_matches": 7,
+                    "limit": "3"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let bugs = client.search("component=kernel", 0).await.unwrap();
+        let ids: Vec<u64> = bugs.iter().map(|b| b.id).collect();
+        assert_eq!(ids, [1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    /// A page shorter than the first said, before the last, means the
+    /// offsets no longer hold, so the search is read again page by page
+    /// from what came back, and nothing between is lost.
+    #[tokio::test]
+    async fn a_short_page_has_the_search_read_page_by_page() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+        let bug = |id: u64| {
+            serde_json::json!({
+                "id": id, "summary": format!("Bug {id}"), "status": "NEW",
+                "resolution": "", "product": "Fedora", "component": ["kernel"],
+                "severity": "medium", "priority": "unspecified",
+                "assigned_to": "nobody@fedoraproject.org", "creator": "r@example.com",
+                "creation_time": "2025-01-01T00:00:00Z",
+                "last_change_time": "2025-01-01T00:00:00Z"
+            })
+        };
+        let page = |ids: Vec<u64>| {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": ids.into_iter().map(bug).collect::<Vec<_>>(),
+                "total_matches": 7
+            }))
+        };
+        // Offset 0 answers 3; offset 3 answers only 2, so the pages at 3
+        // and 6 cannot be trusted to meet. Read again: 0 gives 3, 3 gives
+        // 2, 5 gives the last 2.
+        for (offset, ids) in [
+            (0u64, vec![1, 2, 3]),
+            (3, vec![4, 5]),
+            (6, vec![7]),
+            (5, vec![6, 7]),
+        ] {
+            Mock::given(method("GET"))
+                .and(path("/rest/bug"))
+                .and(query_param("offset", offset.to_string()))
+                .respond_with(page(ids))
+                .mount(&server)
+                .await;
+        }
+        let bugs = client.search("component=kernel", 0).await.unwrap();
+        let ids: Vec<u64> = bugs.iter().map(|b| b.id).collect();
+        assert_eq!(ids, [1, 2, 3, 4, 5, 6, 7]);
     }
 
     #[tokio::test]

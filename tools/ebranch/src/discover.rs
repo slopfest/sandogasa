@@ -232,7 +232,20 @@ pub async fn candidates(
 ) -> Proposal {
     let from_changelog = changelog_candidates(changelogs, old_versions);
 
-    let open = open_bugs_for_components(bz, update.builds).await;
+    let started = std::time::Instant::now();
+    let open_bugs = open_bugs_for_components(bz, update.builds).await;
+    if verbose {
+        eprintln!(
+            "[bugs] {} open bug(s) on the update's {} package(s), from Bugzilla in {:.1}s",
+            open_bugs.len(),
+            update.builds.len(),
+            started.elapsed().as_secs_f64()
+        );
+    }
+    let open: BTreeMap<u64, String> = open_bugs
+        .iter()
+        .filter_map(|b| Some((b.id, b.component.first()?.clone())))
+        .collect();
     let mut wanted: Vec<u64> = open.keys().copied().collect();
     wanted.extend(from_changelog.keys().copied());
     wanted.retain(|id| !already_listed.contains(id));
@@ -243,7 +256,27 @@ pub async fn candidates(
     // proposed bug is one the update would vote +1 on. CVE trackers
     // need the fix looked up first; the verdict cannot read it off
     // the title.
-    let mut facts = crate::karma::fetch_bugs(bz, &wanted).await;
+    // The open bugs came with the search; only the ones the changelogs
+    // name besides are read, rather than all of them a second time.
+    let mut facts = crate::karma::facts_of(open_bugs);
+    facts.retain(|id, _| wanted.contains(id));
+    let missing: Vec<u64> = wanted
+        .iter()
+        .filter(|id| !facts.contains_key(id))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        let started = std::time::Instant::now();
+        let fetched = crate::karma::fetch_bugs(bz, &missing).await;
+        if verbose {
+            eprintln!(
+                "[bugs] read {} bug(s) the changelogs name from Bugzilla in {:.1}s",
+                fetched.len(),
+                started.elapsed().as_secs_f64()
+            );
+        }
+        facts.extend(fetched);
+    }
     crate::karma::attach_cve_facts(&mut facts, update, verbose).await;
     let mut out = Vec::new();
     let mut already_met = Vec::new();
@@ -289,17 +322,17 @@ pub async fn candidates(
     }
 }
 
-/// Open bugs against any of the update's packages, as bug ID to the
-/// component it is filed against.
+/// Open bugs against any of the update's packages, as Bugzilla
+/// answers them: the bugs themselves, so they are not read twice.
 ///
 /// Deliberately not scoped to the update's release: an EPEL update's
 /// update requests and package reviews are filed against Fedora.
 async fn open_bugs_for_components(
     bz: &sandogasa_bugzilla::BzClient,
     builds: &[(String, String)],
-) -> BTreeMap<u64, String> {
+) -> Vec<sandogasa_bugzilla::models::Bug> {
     if builds.is_empty() {
-        return BTreeMap::new();
+        return Vec::new();
     }
     let mut query: Vec<String> = builds
         .iter()
@@ -307,15 +340,12 @@ async fn open_bugs_for_components(
         .collect();
     query.push("bug_status=__open__".to_string());
     match bz.search(&query.join("&"), 0).await {
-        Ok(bugs) => bugs
-            .into_iter()
-            .filter_map(|b| Some((b.id, b.component.first()?.clone())))
-            .collect(),
+        Ok(bugs) => bugs,
         Err(e) => {
             eprintln!(
                 "warning: could not search Bugzilla for open bugs ({e}); proposing only what the changelogs name"
             );
-            BTreeMap::new()
+            Vec::new()
         }
     }
 }
@@ -366,6 +396,79 @@ mod tests {
             .iter()
             .map(|(p, v)| (p.to_string(), v.map(str::to_string)))
             .collect()
+    }
+
+    /// The libical 4 side tag, end to end through Bugzilla: an update
+    /// request a rebuild did not deliver is left off as already met, one
+    /// the update does deliver is proposed, and the open bugs the search
+    /// returned are not read again.
+    #[tokio::test]
+    async fn candidates_propose_what_the_update_delivers_and_leave_off_what_it_met() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let bug = |id: u64, summary: &str, component: &str| {
+            serde_json::json!({
+                "id": id, "summary": summary, "status": "NEW", "resolution": "",
+                "product": "Fedora", "component": [component], "version": ["rawhide"],
+                "severity": "unspecified", "priority": "unspecified",
+                "assigned_to": "nobody@fedoraproject.org", "creator": "r@example.com",
+                "creation_time": "2026-01-01T00:00:00Z",
+                "last_change_time": "2026-01-01T00:00:00Z"
+            })
+        };
+        // The open-bug search, by component: once a call (two below),
+        // and no read by id follows it, which this mock would also match.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("bug_status", "__open__"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [
+                    bug(2567306, "asterisk-24.0.0 is available", "asterisk"),
+                    bug(2458837, "libical-4.0.7 is available", "libical"),
+                ],
+                "total_matches": 2
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        let builds = vec![
+            ("asterisk".to_string(), "24.0.0-3.fc46.1".to_string()),
+            ("libical".to_string(), "4.0.7-1.fc46".to_string()),
+        ];
+        let nvrs = vec![
+            "asterisk-24.0.0-3.fc46.1".to_string(),
+            "libical-4.0.7-1.fc46".to_string(),
+        ];
+        let trackers = sandogasa_bugclass::bugzilla::BranchTrackers::default();
+        let update = UpdateFacts {
+            builds: &builds,
+            nvrs: &nvrs,
+            trackers: &trackers,
+            branch: "rawhide",
+            unsatisfied: &[],
+            full_analysis: true,
+        };
+        let old = olds(&[
+            ("asterisk", Some("24.0.0-3.fc46")),
+            ("libical", Some("3.0.20-11.fc46")),
+        ]);
+        let proposal = candidates(&bz, &BTreeMap::new(), &old, &update, &[], true).await;
+        let ids = |cs: &[Candidate]| cs.iter().map(|c| c.bug_id).collect::<Vec<_>>();
+        assert_eq!(ids(&proposal.candidates), [2458837]);
+        assert_eq!(ids(&proposal.already_met), [2567306]);
+        assert!(
+            proposal.already_met[0]
+                .shown()
+                .contains("asterisk was 24.0.0-3.fc46 already"),
+            "{}",
+            proposal.already_met[0].shown()
+        );
+        // A bug already on the update is not proposed again.
+        let again = candidates(&bz, &BTreeMap::new(), &old, &update, &[2458837], false).await;
+        assert!(again.candidates.is_empty());
     }
 
     #[test]

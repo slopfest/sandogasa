@@ -163,6 +163,24 @@ impl HubClient {
             .collect())
     }
 
+    /// Each build's changelog, as `koji buildinfo --changelog` lays it
+    /// out: an entry per `* <date> <author> - <version-release>` header
+    /// line, newest first, its text below. Asked in one `multiCall` of
+    /// `getChangelogEntries`; one result per NVR, in order, and a build
+    /// the hub does not know is a fault in its own slot.
+    pub fn builds_changelogs(&self, nvrs: &[String]) -> Result<Vec<Result<String, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = nvrs
+            .iter()
+            .map(|nvr| ("getChangelogEntries", vec![Value::String(nvr.clone())]))
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| r.map(|v| changelog_text(&v)))
+            .collect())
+    }
+
     /// The dependencies of type `dep_type` (0 requires, 1 provides,
     /// 2 obsoletes, 3 conflicts, as `koji call getRPMDeps` numbers them)
     /// of each binary RPM in `nvras` (`name-version-release.arch`), as
@@ -654,6 +672,24 @@ fn rpm_nvras(answer: &Value) -> Vec<String> {
         .collect()
 }
 
+/// A `getChangelogEntries` answer as changelog text: the entry's date
+/// as the hub gives it (`2026-11-02 12:00:00`), its author, which RPM
+/// stores with the version-release (`Milan Crha <…> - 4.0.7-1`), and
+/// the text below.
+fn changelog_text(answer: &Value) -> String {
+    let mut text = String::new();
+    for entry in answer.as_array().unwrap_or_default() {
+        let field = |k: &str| entry.get(k).and_then(Value::as_str).unwrap_or("");
+        text.push_str(&format!(
+            "* {} {}\n{}\n\n",
+            field("date"),
+            field("author"),
+            field("text").trim_end()
+        ));
+    }
+    text
+}
+
 /// A `getRPMDeps` answer as `(name, version)` pairs of `dep_type`,
 /// with an empty version as `None`. The type is checked again here, as
 /// the CLI parser does, rather than trusting the hub's filter.
@@ -764,6 +800,58 @@ mod tests {
         let got = hub.builds_rpm_nvras(&nvrs).unwrap();
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].as_ref().unwrap(), &["libical-4.0.7-1.fc46.x86_64"]);
+        assert!(matches!(got[1], Err(Error::Fault { code: 1000, .. })));
+    }
+
+    #[test]
+    fn changelogs_come_back_per_build_from_one_multicall() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let entry = |date: &str, author: &str, text: &str| {
+            format!(
+                "<value><struct>\
+                 <member><name>date</name><value><string>{date}</string></value></member>\
+                 <member><name>author</name><value><string>{author}</string></value></member>\
+                 <member><name>text</name><value><string>{text}</string></value></member>\
+                 </struct></value>"
+            )
+        };
+        let server = block_on(MockServer::start());
+        let body = response(&format!(
+            "<value><array><data><value><array><data>{}{}</data></array></value></data></array></value>\
+             <value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>No such build</string></value></member>\
+             </struct></value>",
+            entry(
+                "2026-11-02 12:00:00",
+                "Milan Crha &lt;mcrha@redhat.com&gt; - 4.0.7-1",
+                "- Update to 4.0.7"
+            ),
+            entry(
+                "2026-10-20 12:00:00",
+                "Milan Crha &lt;mcrha@redhat.com&gt; - 3.0.20-11",
+                "- Resolves: #2553981\n"
+            ),
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("<methodName>multiCall</methodName>"))
+                .and(body_string_contains("getChangelogEntries"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        let nvrs = ["libical-4.0.7-1.fc46", "nope-1-1"].map(String::from);
+        let got = hub.builds_changelogs(&nvrs).unwrap();
+        assert_eq!(
+            got[0].as_ref().unwrap(),
+            "* 2026-11-02 12:00:00 Milan Crha <mcrha@redhat.com> - 4.0.7-1\n- Update to 4.0.7\n\n\
+             * 2026-10-20 12:00:00 Milan Crha <mcrha@redhat.com> - 3.0.20-11\n- Resolves: #2553981\n\n"
+        );
         assert!(matches!(got[1], Err(Error::Fault { code: 1000, .. })));
     }
 

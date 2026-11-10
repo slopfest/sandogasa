@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### ebranch: the bug proposal reads Koji and Bugzilla in batches, in half a minute rather than four
+
+`update-bugs` on the libical 4 update's 39 builds took 4 minutes, and
+`check-update --submit`'s bug proposal the same, nearly all of it
+before anything was printed, `-v` included. Three things were slow:
+each build's changelog was read with its own `koji buildinfo
+--changelog`, about two minutes; the open bugs on the update's
+packages, 452 of them, were searched for in 23 requests one after
+another, as Red Hat's Bugzilla answers 20 bugs a page whatever is
+asked, about a minute; and then the same 452 bugs were read again by
+ID, another minute. Resolves #114.
+
+The changelogs are now read from the Koji hub, 25 builds to a
+`multiCall`, and only for packages the target already has, the only
+ones whose changelogs are used; a batch the hub cannot give falls back
+to the CLI on its own, saying so. A build with an epoch is asked for
+by its Koji NVR, without it, so its changelog is no longer skipped.
+The open bugs the search returns are used as they are, and only the
+bugs the changelogs name besides are read. `-v` times each step. On
+the same update it now takes 29 seconds, the same answer.
+
+`sandogasa-bugzilla`'s `search` now asks for the pages after the first
+four at a time once the first says how many there are and how many a
+page holds, and every tool searching Bugzilla gains from it. A page
+shorter than the first said has the search read page by page again
+from what came back, so a capped or shifting result loses nothing, and
+a bug returned twice is kept once. New in sandogasa-kojihub:
+`HubClient::builds_changelogs`. `BzClient` is now `Clone`.
+
 ### sandogasa-kojihub and koji-lag: text from Koji keeps its `<`, `>` and `&`
 
 Every string the Koji hub sent with an escaped character lost it, and

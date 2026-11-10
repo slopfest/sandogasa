@@ -786,33 +786,37 @@ async fn backfill_bug_titles(
     fetched
 }
 
-/// Fetch `ids` from Bugzilla in one batch, as
-/// `id -> (summary, component)`. Best-effort: a failure warns and
-/// yields nothing, leaving callers to fall back on asking the user.
+/// What the verdicts need from bugs Bugzilla answered, by bug ID.
+pub(crate) fn facts_of(bugs: Vec<sandogasa_bugzilla::models::Bug>) -> BugMap {
+    bugs.into_iter()
+        .map(|bug| {
+            (
+                bug.id,
+                BugFacts {
+                    summary: bug.summary,
+                    component: bug.component.first().cloned(),
+                    blocks: bug.blocks,
+                    product: Some(bug.product),
+                    version: bug.version,
+                    keywords: bug.keywords,
+                    severity: bug.severity,
+                    cve_fix: None,
+                    bundled: None,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Fetch `ids` from Bugzilla in one search, as [`facts_of`] gives them.
+/// Best-effort: a failure warns and yields nothing, leaving callers to
+/// fall back on asking the user.
 pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -> BugMap {
     if ids.is_empty() {
         return BugMap::new();
     }
     match bz.bugs(ids).await {
-        Ok(fetched) => fetched
-            .into_iter()
-            .map(|bug| {
-                (
-                    bug.id,
-                    BugFacts {
-                        summary: bug.summary,
-                        component: bug.component.first().cloned(),
-                        blocks: bug.blocks,
-                        product: Some(bug.product),
-                        version: bug.version,
-                        keywords: bug.keywords,
-                        severity: bug.severity,
-                        cve_fix: None,
-                        bundled: None,
-                    },
-                )
-            })
-            .collect(),
+        Ok(fetched) => facts_of(fetched),
         Err(e) => {
             eprintln!(
                 "warning: could not fetch bugs from Bugzilla ({e}); \
