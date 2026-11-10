@@ -141,8 +141,11 @@ pub(crate) async fn screen_bugs(
         eprintln!("{bug}");
     }
     if assume_yes {
+        // `assume_yes` is --yes, or a run with no terminal to ask at;
+        // name both, as either can be why nothing was asked.
         eprintln!(
-            "keeping them under --yes; they would be closed by an update that does not fix them"
+            "kept, as nothing is dropped without asking (--yes, or no terminal); \
+             an update that does not fix them could close them"
         );
         return Ok(bugs.to_vec());
     }
