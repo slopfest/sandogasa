@@ -11,13 +11,16 @@
 //! and reruns only the bug proposal: what the update looks like it
 //! closes, and the bugs on it a build from before it had already met
 //! (#112). The edit is previewed in full and saved on confirmation.
+//!
+//! `check-update --kept` reads the same report back in place of a new
+//! analysis, to vote or submit from it while the builds are unchanged.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::check_update::CheckUpdateReport;
+use crate::check_update::{CheckUpdateReport, Finding};
 
 /// The format a kept check is written in, so a later ebranch can tell a
 /// file it does not understand from a damaged one.
@@ -30,17 +33,84 @@ pub struct KeptCheck {
     /// The builds the report judged, as Koji NVRs, sorted: what an
     /// update must still carry for the report to speak for it.
     pub nvrs: Vec<String>,
+    /// The report as the analysis left it, before the reviewer's
+    /// decisions: so a later run can take a decision back.
     pub report: CheckUpdateReport,
+    /// What the reviewer decided about the findings they did not keep.
+    /// Absent from a check kept before `--kept` existed.
+    #[serde(default)]
+    pub decisions: Vec<(Finding, Decision)>,
+    /// When the analysis ran, which a `--kept` run carries over rather
+    /// than resetting. Absent from a check kept before `--kept`.
+    #[serde(default)]
+    pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// A reviewer's decision about a finding they did not keep, as kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Decision {
+    /// Accepted, with why: posted in "addressed by the reviewer".
+    Explained(String),
+    /// A false positive, dropped.
+    Removed,
+}
+
+impl Decision {
+    /// The decision as `sandogasa_review` resolves it, to apply again.
+    pub fn resolution(&self) -> sandogasa_review::Resolution {
+        match self {
+            Decision::Explained(why) => sandogasa_review::Resolution::Explained(why.clone()),
+            Decision::Removed => sandogasa_review::Resolution::Removed,
+        }
+    }
+
+    /// A reviewer's resolution as kept; `None` for one they kept, which
+    /// leaves the report as it was.
+    pub fn of(resolution: &sandogasa_review::Resolution) -> Option<Self> {
+        match resolution {
+            sandogasa_review::Resolution::Keep => None,
+            sandogasa_review::Resolution::Explained(why) => Some(Decision::Explained(why.clone())),
+            sandogasa_review::Resolution::Removed => Some(Decision::Removed),
+        }
+    }
 }
 
 impl KeptCheck {
-    pub fn new(report: &CheckUpdateReport) -> Self {
+    /// The report with the reviewer's decisions applied to it.
+    pub fn curated(&self) -> CheckUpdateReport {
+        let resolutions = self
+            .decisions
+            .iter()
+            .map(|(f, d)| (f.clone(), d.resolution()))
+            .collect();
+        crate::check_update::apply_resolutions(self.report.clone(), resolutions).0
+    }
+
+    pub fn new(
+        report: &CheckUpdateReport,
+        decisions: &[(Finding, Decision)],
+        checked_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
         KeptCheck {
             format: KEPT_FORMAT,
             nvrs: report_nvrs(report),
             report: report.clone(),
+            decisions: decisions.to_vec(),
+            checked_at: Some(checked_at),
         }
     }
+}
+
+/// What the reviewer decided, one line each, for showing.
+pub fn decisions_text(decisions: &[(Finding, Decision)]) -> String {
+    decisions
+        .iter()
+        .map(|(f, d)| match d {
+            Decision::Explained(why) => format!("  explained: {} ({why})\n", f.summary()),
+            Decision::Removed => format!("  removed: {}\n", f.summary()),
+        })
+        .collect()
 }
 
 /// Where kept checks live: `$XDG_STATE_HOME/ebranch/check-update/`.
@@ -102,10 +172,15 @@ pub fn keep(dir: &Path, keys: &[String], check: &KeptCheck) -> Result<(), String
 }
 
 /// The check kept under `key` in `dir`: `None` when there is none, an
-/// error when the file cannot be read as one.
+/// error when the file cannot be read as one. A check kept before the
+/// time was kept gets the file's, so it keeps it when written again.
 pub fn load(dir: &Path, key: &str) -> Option<Result<KeptCheck, String>> {
     let file = kept_file(dir, key);
     let text = std::fs::read_to_string(&file).ok()?;
+    let written = std::fs::metadata(&file)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(chrono::DateTime::<chrono::Utc>::from);
     Some(
         serde_json::from_str::<KeptCheck>(&text)
             .map_err(|e| format!("{} is not a check ebranch can read: {e}", file.display()))
@@ -119,6 +194,10 @@ pub fn load(dir: &Path, key: &str) -> Option<Result<KeptCheck, String>> {
                         k.format
                     ))
                 }
+            })
+            .map(|mut k| {
+                k.checked_at = k.checked_at.or(written);
+                k
             }),
     )
 }
@@ -144,23 +223,28 @@ pub fn builds_changed(judged: &[String], now: &[String]) -> Option<String> {
     Some(parts.join("; "))
 }
 
-/// The check kept under one of `keys` in `dir` that judged the builds
-/// `now`: every key is tried, as a check kept under an update's alias
-/// can be older than a later one of its side tag. The error says what
-/// was found instead, when no kept check fits.
+/// The newest check kept under one of `keys` in `dir` that judged the
+/// builds `now`: every key is tried, as a check kept under an update's
+/// alias can be older than a later one of its side tag, or stale while
+/// the tag's is not. The error says what was found instead, when no
+/// kept check fits.
 fn pick_kept(dir: &Path, keys: &[&str], now: &[String]) -> Result<KeptCheck, String> {
     let mut found = Vec::new();
+    let mut fits: Vec<KeptCheck> = Vec::new();
     for key in keys {
         match load(dir, key) {
             None => {}
             Some(Ok(kept)) => match builds_changed(&kept.nvrs, now) {
-                None => return Ok(kept),
+                None => fits.push(kept),
                 Some(what) => found.push(format!(
                     "the check kept as {key} is out of date: the update {what}"
                 )),
             },
             Some(Err(e)) => found.push(e),
         }
+    }
+    if let Some(newest) = fits.into_iter().max_by_key(|k| k.checked_at) {
+        return Ok(newest);
     }
     if found.is_empty() {
         Err(format!(
@@ -171,6 +255,48 @@ fn pick_kept(dir: &Path, keys: &[&str], now: &[String]) -> Result<KeptCheck, Str
     } else {
         Err(found.join("; "))
     }
+}
+
+/// How long ago a check was kept, roughly: "12 min", "3 h", "2 days".
+pub fn age_text(age: std::time::Duration) -> String {
+    let min = age.as_secs() / 60;
+    match min {
+        0 => "under a minute".to_string(),
+        1..60 => format!("{min} min"),
+        60..2880 => format!("{} h", min / 60),
+        _ => format!("{} days", min / 1440),
+    }
+}
+
+/// The check `check-update --kept` uses in place of a new analysis: the
+/// newest one kept under one of `keys` in `dir` that judged the builds
+/// `now`, with how long ago the analysis ran. The error says what was
+/// found instead and how to get a fresh one.
+pub fn reuse(
+    dir: &Path,
+    keys: &[&str],
+    now: &[String],
+) -> Result<(KeptCheck, Option<std::time::Duration>), String> {
+    let kept = pick_kept(dir, keys, now)
+        .map_err(|e| format!("{e}: run it again without --kept for a fresh analysis"))?;
+    let age = kept
+        .checked_at
+        .and_then(|at| (chrono::Utc::now() - at).to_std().ok());
+    Ok((kept, age))
+}
+
+/// What a kept check of `update` is looked for under, and the builds it
+/// must have judged: the update's alias and its side tag, and its NVRs,
+/// sorted.
+pub fn update_keys_and_builds(
+    update: &sandogasa_bodhi::models::Update,
+) -> (Vec<String>, Vec<String>) {
+    let keys = std::iter::once(update.alias.clone())
+        .chain(update.from_tag.clone())
+        .collect();
+    let mut now: Vec<String> = update.builds.iter().map(|b| b.nvr.clone()).collect();
+    now.sort();
+    (keys, now)
 }
 
 /// The edit as it will be saved: the bug list and whether Bodhi closes
@@ -254,11 +380,8 @@ pub fn run(opts: &Options) -> Result<(), String> {
         Some(dir) => dir.clone(),
         None => kept_dir()?,
     };
-    let mut now: Vec<String> = update.builds.iter().map(|b| b.nvr.clone()).collect();
-    now.sort();
-    let keys: Vec<&str> = std::iter::once(update.alias.as_str())
-        .chain(update.from_tag.as_deref())
-        .collect();
+    let (keys, now) = update_keys_and_builds(&update);
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
     let kept = pick_kept(&dir, &keys, &now).map_err(|e| {
         format!(
             "{e}: run `ebranch check-update {}`",
@@ -268,7 +391,8 @@ pub fn run(opts: &Options) -> Result<(), String> {
 
     let current: Vec<u64> = update.bugs.iter().map(|b| b.bug_id).collect();
     let bz = sandogasa_bugzilla::BzClient::new(&opts.bugzilla_url);
-    let report = &kept.report;
+    // With the reviewer's decisions applied, as check-update voted on it.
+    let report = &kept.curated();
     let proposal = rt.block_on(crate::submit::gather_bugs(
         &bz,
         report,
@@ -470,7 +594,7 @@ mod tests {
             ("asterisk", Some("24.0.0-3.fc46"), "24.0.0-3.fc46.1"),
             ("perl-Foo", None, "1:2.0-1.fc46"),
         ]);
-        let check = KeptCheck::new(&report);
+        let check = KeptCheck::new(&report, &[], chrono::Utc::now());
         // Koji's NVRs carry no epoch, and are kept sorted.
         assert_eq!(
             check.nvrs,
@@ -519,7 +643,7 @@ mod tests {
         let err = load(dir.path(), "FEDORA-2026-x").unwrap().unwrap_err();
         assert!(err.contains("is not a check ebranch can read"), "{err}");
 
-        let mut check = KeptCheck::new(&report_of(&[]));
+        let mut check = KeptCheck::new(&report_of(&[]), &[], chrono::Utc::now());
         check.format = KEPT_FORMAT + 1;
         keep(dir.path(), &["FEDORA-2026-y".to_string()], &check).unwrap();
         let err = load(dir.path(), "FEDORA-2026-y").unwrap().unwrap_err();
@@ -581,7 +705,7 @@ mod tests {
     /// A check of the side tag kept in `dir`, judging no package
     /// changes, so the proposal asks nothing of Koji or Bugzilla.
     fn keep_side_tag_check(dir: &Path, nvrs: &[&str]) {
-        let mut check = KeptCheck::new(&report_of(&[]));
+        let mut check = KeptCheck::new(&report_of(&[]), &[], chrono::Utc::now());
         check.nvrs = nvrs.iter().map(|n| n.to_string()).collect();
         keep(dir, &["f46-build-side-158330".to_string()], &check).unwrap();
     }
@@ -592,10 +716,10 @@ mod tests {
         let now = vec!["libical-4.0.7-2.fc46".to_string()];
         // Kept at submit under the alias, then the side tag was checked
         // again after a rebuild: the alias's is stale, the tag's fits.
-        let mut stale = KeptCheck::new(&report_of(&[]));
+        let mut stale = KeptCheck::new(&report_of(&[]), &[], chrono::Utc::now());
         stale.nvrs = vec!["libical-4.0.7-1.fc46".to_string()];
         keep(dir.path(), &["FEDORA-2026-c8b6a481c4".to_string()], &stale).unwrap();
-        let mut fresh = KeptCheck::new(&report_of(&[]));
+        let mut fresh = KeptCheck::new(&report_of(&[]), &[], chrono::Utc::now());
         fresh.nvrs = now.clone();
         keep(dir.path(), &["f46-build-side-158330".to_string()], &fresh).unwrap();
         let keys = ["FEDORA-2026-c8b6a481c4", "f46-build-side-158330"];
@@ -724,5 +848,134 @@ mod tests {
         assert!(text.contains("bugs: #1 (unchanged)"), "{text}");
         assert!(text.contains("closed when stable: yes (was no)"), "{text}");
         assert!(plan_text("A", &[1], &[], true, true).contains("bugs: none"));
+    }
+
+    /// `check-update --kept` takes a check only for the builds it
+    /// judged, and gets back what the reviewer explained with it.
+    #[test]
+    fn a_kept_check_is_reused_with_its_explanations_for_the_same_builds() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = report_of(&[("libical", Some("3.0.20-1.fc46"), "4.0.7-1.fc46")]);
+        let finding = Finding::NotNewest(crate::check_update::NotNewest {
+            nvr: "libical-4.0.7-1.fc46".into(),
+            target_nvr: "libical-4.0.7-1.fc46".into(),
+            tag: "f46-updates-candidate".into(),
+        });
+        let decisions = vec![(finding, Decision::Explained("tagged by hand".into()))];
+        // Checked two days ago: the age says so, however recently the
+        // file was written.
+        let at = chrono::Utc::now() - chrono::Duration::hours(49);
+        let check = KeptCheck::new(&report, &decisions, at);
+        keep(dir.path(), &["f46-build-side-158330".to_string()], &check).unwrap();
+
+        let now = vec!["libical-4.0.7-1.fc46".to_string()];
+        let (back, age) = reuse(dir.path(), &["f46-build-side-158330"], &now).unwrap();
+        assert_eq!(back.decisions, decisions);
+        assert_eq!(age_text(age.unwrap()), "2 days");
+        assert!(
+            decisions_text(&back.decisions)
+                .contains("explained: `libical-4.0.7-1.fc46` is not newer")
+                && decisions_text(&back.decisions).contains("(tagged by hand)"),
+            "{}",
+            decisions_text(&back.decisions)
+        );
+
+        let err = reuse(
+            dir.path(),
+            &["f46-build-side-158330"],
+            &["libical-4.0.7-2.fc46".to_string()],
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("now also carries libical-4.0.7-2.fc46")
+                && err.contains("run it again without --kept"),
+            "{err}"
+        );
+    }
+
+    /// A check kept before decisions and times were kept reads, with no
+    /// decisions, and its age is the file's.
+    #[test]
+    fn a_check_kept_without_decisions_or_time_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut old =
+            serde_json::to_value(KeptCheck::new(&report_of(&[]), &[], chrono::Utc::now())).unwrap();
+        old.as_object_mut().unwrap().remove("decisions");
+        old.as_object_mut().unwrap().remove("checked_at");
+        std::fs::write(dir.path().join("FEDORA-2026-x.json"), old.to_string()).unwrap();
+        let (back, age) = reuse(dir.path(), &["FEDORA-2026-x"], &[]).unwrap();
+        assert!(back.decisions.is_empty());
+        // The file's time, which a rewrite then keeps.
+        assert!(back.checked_at.is_some());
+        assert!(age.is_some_and(|a| a.as_secs() < 600), "{age:?}");
+    }
+
+    #[test]
+    fn a_decision_is_kept_as_the_resolution_it_was() {
+        use sandogasa_review::Resolution;
+        assert_eq!(Decision::of(&Resolution::Keep), None);
+        for r in [Resolution::Explained("why".into()), Resolution::Removed] {
+            assert_eq!(Decision::of(&r).unwrap().resolution(), r);
+        }
+    }
+
+    #[test]
+    fn a_checks_age_reads_in_the_unit_that_fits() {
+        use std::time::Duration;
+        assert_eq!(age_text(Duration::from_secs(30)), "under a minute");
+        assert_eq!(age_text(Duration::from_secs(12 * 60)), "12 min");
+        assert_eq!(age_text(Duration::from_secs(3 * 3600 + 59)), "3 h");
+        assert_eq!(age_text(Duration::from_secs(47 * 3600)), "47 h");
+        assert_eq!(age_text(Duration::from_secs(3 * 86400)), "3 days");
+    }
+
+    /// Two kept checks of the same builds: the newer analysis is used,
+    /// whichever key it is under.
+    #[test]
+    fn the_newest_check_of_the_same_builds_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = report_of(&[("libical", None, "4.0.7-1.fc46")]);
+        let old = KeptCheck::new(&report, &[], chrono::Utc::now() - chrono::Duration::days(3));
+        keep(dir.path(), &["FEDORA-2026-c8b6a481c4".to_string()], &old).unwrap();
+        let new = KeptCheck::new(
+            &report,
+            &[(
+                Finding::NotNewest(crate::check_update::NotNewest {
+                    nvr: "a".into(),
+                    target_nvr: "a".into(),
+                    tag: "t".into(),
+                }),
+                Decision::Removed,
+            )],
+            chrono::Utc::now(),
+        );
+        keep(dir.path(), &["f46-build-side-158330".to_string()], &new).unwrap();
+        let (kept, age) = reuse(
+            dir.path(),
+            &["FEDORA-2026-c8b6a481c4", "f46-build-side-158330"],
+            &["libical-4.0.7-1.fc46".to_string()],
+        )
+        .unwrap();
+        assert_eq!(kept.decisions.len(), 1);
+        assert_eq!(age_text(age.unwrap()), "under a minute");
+    }
+
+    /// What update-bugs reads is the report as check-update voted on it.
+    #[test]
+    fn the_curated_report_has_the_decisions_applied() {
+        let mut report = report_of(&[("libical", None, "4.0.7-1.fc46")]);
+        let nn = crate::check_update::NotNewest {
+            nvr: "libical-4.0.7-1.fc46".into(),
+            target_nvr: "libical-4.0.7-1.fc46".into(),
+            tag: "f46".into(),
+        };
+        report.not_newest = vec![nn.clone()];
+        let kept = KeptCheck::new(
+            &report,
+            &[(Finding::NotNewest(nn), Decision::Removed)],
+            chrono::Utc::now(),
+        );
+        assert_eq!(kept.report.not_newest.len(), 1, "kept raw");
+        assert!(kept.curated().not_newest.is_empty());
     }
 }

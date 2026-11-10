@@ -358,7 +358,7 @@ pub enum SkipReason {
 /// downvote: installability problems and reverse-dependency breakage
 /// (the latter grouped by the changed Provide that causes it, so one
 /// decision covers every package broken by that Provide).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Finding {
     /// An unsatisfied Requires in an updated package's subpackages.
     Installability(UnsatisfiedDep),

@@ -1816,6 +1816,32 @@ takes none, and saves what `--close-bugs`/`--no-close-bugs` ask for
 without the final question. Without a terminal one of the two is
 needed.
 
+### Vote or submit again from a kept check
+
+`check-update --kept` uses the same kept report in place of a new
+analysis, so `--give-karma` or `--submit` can be run again from it,
+after one that failed or was answered wrongly:
+
+```sh
+ebranch check-update FEDORA-2026-c8b6a481c4 --kept --give-karma
+```
+
+The builds have to be the ones the report judged: the update's for an
+alias, the side tag's latest for a tag, or the NVRs given. Otherwise it
+stops, naming what changed. It says how long ago the analysis ran,
+since the reverse dependencies it judged against can have moved since
+then, and it is reused against the branch it ran on, so `-b`, `-r`,
+`--testing-branch` and `--refresh` are refused with it.
+
+The report is kept as the analysis left it, with the reviewer's
+decisions beside it, saved before any vote or submit. `--kept` lists
+those decisions and, at a terminal, asks whether to apply them again;
+answering no curates every finding afresh, so one removed by mistake
+can be kept this time. Under `--yes`, or without a terminal, they are
+applied as they were. Explained findings are posted again in the
+comment's "addressed by the reviewer" section. COPR input is not kept,
+and `--kept` refuses it.
+
 ## System-wide configuration
 
 Settings are read from `/etc/ebranch/config.toml` first, then overridden

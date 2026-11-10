@@ -130,7 +130,7 @@ Print help
 <\fITOML\fR>
 Path to TOML analysis file from check\-crate \-\-toml
 .SS ebranch check-update
-\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-refresh\fR] [\fB\-\-comment\fR] [\fB\-\-give\-karma\fR] [\fB\-\-submit\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-bug\fR] [\fB\-\-close\-bugs\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-no\-close\-bugs\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-severity\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-type\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-rpmfusion\-dry\-run\fR] [\fB\-\-rpmfusion\-file\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-\-detailed\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR>
+\fBebranch check\-update\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-testing\-branch\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-kept\fR] [\fB\-\-koji\-profile\fR] [\fB\-\-refresh\fR] [\fB\-\-comment\fR] [\fB\-\-give\-karma\fR] [\fB\-\-submit\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-bug\fR] [\fB\-\-close\-bugs\fR] [\fB\-\-disable\-autokarma\fR] [\fB\-\-no\-close\-bugs\fR] [\fB\-\-notes\fR] [\fB\-\-notes\-file\fR] [\fB\-\-severity\fR] [\fB\-\-stable\-karma\fR] [\fB\-\-type\fR] [\fB\-\-unstable\-karma\fR] [\fB\-\-rpmfusion\-dry\-run\fR] [\fB\-\-rpmfusion\-file\fR] [\fB\-\-rpmfusion\-inventory\fR] [\fB\-\-rpmfusion\-renames\fR] [\fB\-\-detailed\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIINPUT\fR>
 .PP
 Check if an update would break reverse dependencies
 .TP
@@ -198,6 +198,26 @@ defaults to \-\-branch.
 .TP
 \fB\-j\fR, \fB\-\-jobs\fR \fI<JOBS>\fR
 Parallel fedrq queries (0 = CPUs)
+.TP
+\fB\-\-kept\fR
+Use the check kept from an earlier run instead
+of analysing again, so \-\-give\-karma or \-\-submit
+can be rerun from it, e.g. after one failed.
+Every check is kept under what it checked and
+the updates it voted on or submitted, in
+$XDG_STATE_HOME/ebranch/check\-update/, and is
+reused against the branch it was judged on.
+
+The builds must still be the ones it judged:
+the update\*(Aqs for a Bodhi alias, the side tag\*(Aqs
+latest, or the NVRs given. Otherwise the run
+stops and names what changed. The reviewer\*(Aqs
+decisions on the findings are kept with it and
+applied again (at a terminal, unless you would
+rather decide afresh); any findings left are
+offered as usual. Says how old the check is, as
+the reverse dependencies can have moved since.
+Not for COPR input.
 .TP
 \fB\-\-koji\-profile\fR \fI<KOJI_PROFILE>\fR
 Koji CLI profile (e.g. cbs for CentOS)

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### ebranch check-update votes or submits again from a kept check
+
+A vote or submit that went wrong after `check-update` had finished its
+analysis could only be redone by running the whole check again,
+minutes on a big side tag, though nothing in it had changed. The new
+`--kept` uses the report kept from the earlier run instead, once the
+builds are confirmed to be the ones it judged: the update's for a
+Bodhi alias, the side tag's latest, or the NVRs given. A changed build
+stops the run and is named. It says how long ago the analysis ran, as
+the reverse dependencies it was judged against can have moved since,
+and refuses `-b`, `-r`, `--testing-branch` and `--refresh`, which ask
+for a different analysis. Auto-push is read from the update as it is
+now.
+
+The kept report used to be the curated one, written only once the run
+was over: a finding the reviewer removed was gone from it for good,
+and a submit that failed lost every decision. The report is now kept
+as the analysis left it, with the reviewer's decisions and the time it
+ran beside it, and saved again before any vote or submit. `--kept`
+lists the decisions and asks whether to apply them again; answering no
+curates afresh. A file kept before reads as having no decisions, and
+its age is the file's. Resolves #113.
+
 ### ebranch's bug proposal asks Bugzilla for only the fields it reads
 
 After #114, `ebranch update-bugs` on the libical 4 update took 30
@@ -214,7 +237,6 @@ removal, new ones for adding, at a terminal only), asks whether Bodhi
 closes them, shows the edit and saves it on confirmation. Every other
 field is saved back as Bodhi has it, and a side tag update is not saved
 while its tag holds a build the update does not, as Bodhi would add it.
-Rerunning `--give-karma` from a kept report is left for later.
 Refs #113.
 
 New in sandogasa-bodhi: `BodhiClient::edit_update_bugs`, the

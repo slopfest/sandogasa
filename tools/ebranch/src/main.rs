@@ -327,6 +327,33 @@ defaults to --branch."
     )]
     jobs: usize,
 
+    /// Reuse the kept check of these builds; no analysis.
+    #[arg(
+        long,
+        help_heading = "Check",
+        conflicts_with_all = ["branch", "refresh", "repo", "testing_branch"],
+        long_help = "\
+Use the check kept from an earlier run instead
+of analysing again, so --give-karma or --submit
+can be rerun from it, e.g. after one failed.
+Every check is kept under what it checked and
+the updates it voted on or submitted, in
+$XDG_STATE_HOME/ebranch/check-update/, and is
+reused against the branch it was judged on.
+
+The builds must still be the ones it judged:
+the update's for a Bodhi alias, the side tag's
+latest, or the NVRs given. Otherwise the run
+stops and names what changed. The reviewer's
+decisions on the findings are kept with it and
+applied again (at a terminal, unless you would
+rather decide afresh); any findings left are
+offered as usual. Says how old the check is, as
+the reverse dependencies can have moved since.
+Not for COPR input."
+    )]
+    kept: bool,
+
     /// Koji CLI profile (e.g. cbs for CentOS).
     #[arg(long, help_heading = "Check")]
     koji_profile: Option<String>,
@@ -1534,15 +1561,75 @@ fn close_bugs_flag(close: bool, no_close: bool) -> Option<bool> {
     }
 }
 
-/// Keep `report` for `update-bugs` under `keys`, warning when it
-/// cannot be: losing it costs a rerun, not this run.
-fn keep_check(report: &check_update::CheckUpdateReport, keys: &[String], verbose: bool) {
-    let kept = update_bugs::KeptCheck::new(report);
+/// Where updates are read: `update-bugs` and `check-update --kept`.
+const BODHI_URL: &str = "https://bodhi.fedoraproject.org";
+
+/// Keep the analysis's report, as it left it, with the reviewer's
+/// `decisions` and when it ran, under each of `keys` (#113), warning
+/// when it cannot be: losing it costs a rerun, not this run.
+fn keep_check(
+    raw: &check_update::CheckUpdateReport,
+    decisions: &[(check_update::Finding, update_bugs::Decision)],
+    checked_at: chrono::DateTime<chrono::Utc>,
+    keys: &[String],
+    verbose: bool,
+) {
+    let kept = update_bugs::KeptCheck::new(raw, decisions, checked_at);
     match update_bugs::kept_dir().and_then(|dir| update_bugs::keep(&dir, keys, &kept)) {
         Ok(()) if verbose => eprintln!("[check-update] kept the report for update-bugs"),
         Ok(()) => {}
         Err(e) => eprintln!("warning: the report was not kept: {e}"),
     }
+}
+
+/// The check kept for `input` that `check-update --kept` uses: the one
+/// that judged the builds it holds now, the update's for an alias (read
+/// from the Bodhi at `bodhi_url`), the side tag's latest, or the NVRs
+/// given. COPR input is refused before this is reached.
+fn kept_check_for(
+    input: &str,
+    vote_alias: Option<&str>,
+    source: Option<&UpdateSource>,
+    koji_profile: Option<&str>,
+    bodhi_url: &str,
+) -> Result<update_bugs::KeptCheck, String> {
+    let mut keys = vec![input.to_string()];
+    // The update's auto-push as it is now, not as it was when kept: it
+    // decides the RPM Fusion warning and what the comment says.
+    let mut autokarma = None;
+    let mut now = match (vote_alias, source) {
+        (Some(alias), _) => {
+            let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+            let bodhi = sandogasa_bodhi::BodhiClient::with_base_url(bodhi_url);
+            let update = rt
+                .block_on(bodhi.update_by_alias(alias))
+                .map_err(|e| format!("could not read {alias} from Bodhi: {e}"))?;
+            let (update_keys, now) = update_bugs::update_keys_and_builds(&update);
+            keys.extend(update_keys);
+            autokarma = Some(update.autokarma);
+            now
+        }
+        (None, Some(UpdateSource::FromTag(tag))) => {
+            check_update::koji_list_tagged(tag, koji_profile)?
+        }
+        (None, Some(UpdateSource::Builds(nvrs))) => nvrs.clone(),
+        (None, None) => unreachable!("--kept refuses COPR input when the inputs are planned"),
+    };
+    now.sort();
+    let dir = update_bugs::kept_dir()?;
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let (mut kept, age) = update_bugs::reuse(&dir, &keys, &now)?;
+    if autokarma.is_some() {
+        kept.report.autokarma = autokarma;
+    }
+    match age {
+        Some(age) => eprintln!(
+            "Using the check of {input} kept {} ago; its builds are unchanged.",
+            update_bugs::age_text(age)
+        ),
+        None => eprintln!("Using the kept check of {input}; its builds are unchanged."),
+    }
+    Ok(kept)
 }
 
 fn handle_refresh(refresh: bool, verbose: bool) -> Result<(), ExitCode> {
@@ -1589,7 +1676,7 @@ fn main() -> ExitCode {
             koji_profile: a.koji_profile.clone(),
             verbose: a.verbose,
             interactive: std::io::IsTerminal::is_terminal(&std::io::stdin()),
-            bodhi_url: "https://bodhi.fedoraproject.org".to_string(),
+            bodhi_url: BODHI_URL.to_string(),
             bugzilla_url: "https://bugzilla.redhat.com".to_string(),
             state_dir: None,
         };
@@ -1851,6 +1938,10 @@ fn main() -> ExitCode {
                 // to vote on or submit.
                 check_update::InputKind::Copr { .. } => (None, None),
             };
+            if a.kept && vote_alias.is_none() && source.is_none() {
+                eprintln!("error: --kept does not take COPR input ({input})");
+                return ExitCode::FAILURE;
+            }
             if a.give_karma && vote_alias.is_none() {
                 eprintln!(
                     "error: --give-karma requires a Bodhi update alias or URL as input ({input})"
@@ -1977,8 +2068,24 @@ fn main() -> ExitCode {
             if planned.len() > 1 {
                 eprintln!("── {input} ──");
             }
-            match check_update::check_update(input, &opts) {
-                Ok(report) => {
+            let checked = if a.kept {
+                kept_check_for(
+                    input,
+                    vote_alias.as_deref(),
+                    source.as_ref(),
+                    a.koji_profile.as_deref(),
+                    BODHI_URL,
+                )
+                .map(|k| {
+                    let at = k.checked_at.unwrap_or_else(chrono::Utc::now);
+                    (k.report, k.decisions, at)
+                })
+            } else {
+                check_update::check_update(input, &opts)
+                    .map(|r| (r, Vec::new(), chrono::Utc::now()))
+            };
+            match checked {
+                Ok((report, mut decisions, checked_at)) => {
                     if a.json {
                         print_json(&report);
                     } else {
@@ -1988,7 +2095,13 @@ fn main() -> ExitCode {
                     // that fails below does not lose the analysis
                     // `update-bugs` reads; kept again at the end, as
                     // curated and under the aliases it reached (#113).
-                    keep_check(&report, std::slice::from_ref(&report.input), false);
+                    keep_check(
+                        &report,
+                        &decisions,
+                        checked_at,
+                        std::slice::from_ref(&report.input),
+                        false,
+                    );
                     // Ask RPM Fusion before anything else is decided, so a
                     // run without --submit still says what it found: the
                     // counterpart is worth knowing when reviewing the
@@ -2066,15 +2179,50 @@ fn main() -> ExitCode {
                         );
                         counterparts_seen.get_or_insert_with(|| counterparts.clone());
                     }
+                    let raw = report.clone();
                     let mut report = report;
+                    let mut addressed = Vec::new();
+                    let curating = (a.give_karma || a.submit) && !a.yes && opts.interactive;
+                    // What the reviewer decided on a kept check, applied
+                    // again unless they would rather decide afresh: a
+                    // finding removed by mistake comes back that way.
+                    if !decisions.is_empty() {
+                        eprintln!(
+                            "The reviewer's decisions on this check:\n{}",
+                            update_bugs::decisions_text(&decisions)
+                        );
+                        let again = if curating {
+                            match sandogasa_cli::confirm("Apply them again?", true) {
+                                Ok(again) => again,
+                                Err(e) => {
+                                    eprintln!("error: {e}");
+                                    overall = ExitCode::FAILURE;
+                                    break 'inputs;
+                                }
+                            }
+                        } else {
+                            true
+                        };
+                        if again {
+                            let resolutions = decisions
+                                .iter()
+                                .map(|(f, d)| (f.clone(), d.resolution()))
+                                .collect();
+                            let (curated, expl) =
+                                check_update::apply_resolutions(report, resolutions);
+                            report = curated;
+                            addressed = expl;
+                        } else {
+                            decisions.clear();
+                        }
+                    }
                     // Let the reviewer curate the blocking findings
                     // (keep/explain/remove) before karma is derived / the
                     // pass gate is applied. Skipped under --yes or
                     // non-interactively, where every finding is kept
                     // (today's behavior). The curated report drives the
                     // karma, the posted comment, and the submit gate.
-                    let mut addressed = Vec::new();
-                    if (a.give_karma || a.submit) && !a.yes && opts.interactive {
+                    if curating {
                         let findings = check_update::blocking_findings(&report);
                         if !findings.is_empty() {
                             eprintln!("── address findings ──");
@@ -2083,11 +2231,14 @@ fn main() -> ExitCode {
                              (e)xplain accepts it / (r)emove drops it\n"
                             );
                             match sandogasa_review::resolve_interactive(findings, |f| f.summary()) {
-                                Ok(decisions) => {
+                                Ok(resolved) => {
+                                    decisions.extend(resolved.iter().filter_map(|(f, r)| {
+                                        Some((f.clone(), update_bugs::Decision::of(r)?))
+                                    }));
                                     let (curated, expl) =
-                                        check_update::apply_resolutions(report, decisions);
+                                        check_update::apply_resolutions(report, resolved);
                                     report = curated;
-                                    addressed = expl;
+                                    addressed.extend(expl);
                                 }
                                 Err(e) => {
                                     eprintln!("error: {e}");
@@ -2103,6 +2254,10 @@ fn main() -> ExitCode {
                     if let Some(alias) = &vote_alias {
                         kept_keys.push(alias.to_string());
                     }
+                    // Kept now, before a vote or submit that can fail,
+                    // so a `--kept` rerun finds these decisions, and not
+                    // ones the reviewer declined to apply again.
+                    keep_check(&raw, &decisions, checked_at, &kept_keys, false);
                     if a.give_karma
                         && let Some(alias) = &vote_alias
                     {
@@ -2207,7 +2362,7 @@ fn main() -> ExitCode {
                             autopush: Some(rpmfusion_found.is_empty() && !a.disable_autokarma),
                         });
                     }
-                    keep_check(&report, &kept_keys, a.verbose);
+                    keep_check(&raw, &decisions, checked_at, &kept_keys, a.verbose);
                     if report.reverse_deps.values().any(|r| r.status == "broken") {
                         overall = ExitCode::FAILURE;
                     }
@@ -2820,6 +2975,132 @@ fn print_cycles(cycles: &[dag::Cycle], closure: &resolve::Closure) {
 mod tests {
     use super::input_identity;
     use crate::check_update::detect_input_type;
+
+    /// `--kept` reads the check kept for the NVRs given from the state
+    /// directory, and refuses COPR input, which keeps none.
+    #[test]
+    #[serial_test::serial]
+    fn kept_reads_the_check_kept_for_the_builds_given() {
+        use sandogasa_bodhi::models::UpdateSource;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[(
+            "XDG_STATE_HOME",
+            &dir.path().to_string_lossy(),
+        )]);
+        let input = "libical-4.0.7-1.fc46";
+        let report: crate::check_update::CheckUpdateReport =
+            serde_json::from_value(serde_json::json!({
+                "input": input, "branch": "rawhide", "updated_packages": [],
+                "full_analysis": true, "reverse_deps": {},
+                "changes": [{"package": "libical", "old": null, "new": "4.0.7-1.fc46"}]
+            }))
+            .unwrap();
+        super::keep_check(
+            &report,
+            &[],
+            chrono::Utc::now(),
+            &[input.to_string()],
+            false,
+        );
+        let kept = super::kept_check_for(
+            input,
+            None,
+            Some(&UpdateSource::Builds(vec![input.to_string()])),
+            None,
+            "http://127.0.0.1:9",
+        )
+        .unwrap();
+        assert_eq!(kept.nvrs, [input]);
+        let err = super::kept_check_for(
+            input,
+            None,
+            Some(&UpdateSource::Builds(vec!["libical-4.0.7-2.fc46".into()])),
+            None,
+            "http://127.0.0.1:9",
+        )
+        .unwrap_err();
+        assert!(err.contains("out of date"), "{err}");
+    }
+
+    /// For an alias, the update's builds and side tag come from Bodhi,
+    /// and a check kept under the tag is found by it.
+    #[test]
+    #[serial_test::serial]
+    fn kept_reads_an_updates_builds_and_tag_from_bodhi() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let dir = tempfile::tempdir().unwrap();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[(
+            "XDG_STATE_HOME",
+            &dir.path().to_string_lossy(),
+        )]);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path("/updates/FEDORA-2026-c8b6a481c4"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "update": {
+                        "alias": "FEDORA-2026-c8b6a481c4", "status": "testing",
+                        "from_tag": "f46-build-side-158330", "close_bugs": false,
+                        "autokarma": false,
+                        "builds": [{"nvr": "libical-4.0.7-1.fc46"}], "bugs": []
+                    }
+                })))
+                .mount(&server),
+        );
+        let report: crate::check_update::CheckUpdateReport =
+            serde_json::from_value(serde_json::json!({
+                "input": "f46-build-side-158330", "branch": "rawhide",
+                "updated_packages": [], "full_analysis": true, "reverse_deps": {},
+                "autokarma": true,
+                "changes": [{"package": "libical", "old": null, "new": "4.0.7-1.fc46"}]
+            }))
+            .unwrap();
+        super::keep_check(
+            &report,
+            &[],
+            chrono::Utc::now(),
+            &["f46-build-side-158330".to_string()],
+            false,
+        );
+        let kept = super::kept_check_for(
+            "https://bodhi.fedoraproject.org/updates/FEDORA-2026-c8b6a481c4",
+            Some("FEDORA-2026-c8b6a481c4"),
+            None,
+            None,
+            &server.uri(),
+        )
+        .unwrap();
+        assert_eq!(kept.report.input, "f46-build-side-158330");
+        // Auto-push as the update has it now, though kept as on.
+        assert_eq!(kept.report.autokarma, Some(false));
+    }
+
+    #[test]
+    fn kept_refuses_flags_that_would_change_the_check() {
+        use clap::Parser;
+        let err = super::Cli::try_parse_from([
+            "ebranch",
+            "check-update",
+            "f45-build-side-1",
+            "--kept",
+            "--refresh",
+        ])
+        .err()
+        .expect("refused");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+        for flag in [["-b", "f44"], ["-r", "@epel"], ["--testing-branch", "f44"]] {
+            let mut args = vec!["ebranch", "check-update", "f45-build-side-1", "--kept"];
+            args.extend_from_slice(&flag);
+            let err = super::Cli::try_parse_from(args).err().expect("refused");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{flag:?}"
+            );
+        }
+    }
 
     #[test]
     fn update_notes_are_accepted_only_with_submit() {
