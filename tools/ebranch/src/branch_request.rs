@@ -1963,9 +1963,19 @@ async fn releng_followup(
                     );
                 }
             }
-            Err(e) => {
+            Err(e) if round == 0 => {
                 eprintln!(
                     "warning: could not read the requests' bugs ({e}); not judging dependents"
+                );
+                break;
+            }
+            Err(e) => {
+                // The requests' own bugs are in hand; only the outside
+                // dependencies are unknown, and `releng_report` counts
+                // an unknown one as still open.
+                eprintln!(
+                    "warning: could not read the requests' dependencies ({e}); \
+                     counting those outside the report as open"
                 );
                 break;
             }
