@@ -786,6 +786,12 @@ async fn backfill_bug_titles(
     fetched
 }
 
+/// The fields [`facts_of`] reads beyond those every bug comes with
+/// ([`sandogasa_bugzilla::BzClient::REQUIRED_FIELDS`]): all a search for
+/// it has to ask for. A field read here and missing from this list
+/// silently reads empty (#116).
+pub(crate) const FACT_FIELDS: &[&str] = &["blocks", "keywords", "version"];
+
 /// What the verdicts need from bugs Bugzilla answered, by bug ID.
 pub(crate) fn facts_of(bugs: Vec<sandogasa_bugzilla::models::Bug>) -> BugMap {
     bugs.into_iter()
@@ -815,7 +821,7 @@ pub(crate) async fn fetch_bugs(bz: &sandogasa_bugzilla::BzClient, ids: &[u64]) -
     if ids.is_empty() {
         return BugMap::new();
     }
-    match bz.bugs(ids).await {
+    match bz.bugs_with(ids, FACT_FIELDS).await {
         Ok(fetched) => facts_of(fetched),
         Err(e) => {
             eprintln!(

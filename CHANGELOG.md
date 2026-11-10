@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ebranch's bug proposal asks Bugzilla for only the fields it reads
+
+After #114, `ebranch update-bugs` on the libical 4 update took 30
+seconds, 24 of them the search for the 452 open bugs on its 39
+packages: every page asked for Bugzilla's whole default set of fields,
+each bug's CC list included, though the verdicts read only a handful.
+It now asks for those, and the search takes 13 seconds, the dry run
+19, with the same answer. Resolves #116.
+
+The bugs a changelog names but the search did not find are fetched
+the same way.
+
+New in sandogasa-bugzilla: `BzClient::search_with` and `bugs_with`,
+which name the fields their caller reads on top of `REQUIRED_FIELDS`,
+the ones every `Bug` needs. A field left out reads as its default, so
+a caller names every one it uses, and a name that is not a plain field
+(`_default`, or anything with `&` in it) panics. `search` and `bugs`
+still ask for everything.
+
 ### Every tool saves its secrets through one shared helper
 
 Moving the secrets to the keyring (#79) left ten copies of the same

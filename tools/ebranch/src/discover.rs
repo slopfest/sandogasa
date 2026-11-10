@@ -339,7 +339,13 @@ async fn open_bugs_for_components(
         .map(|(pkg, _)| format!("component={}", urlencode(pkg)))
         .collect();
     query.push("bug_status=__open__".to_string());
-    match bz.search(&query.join("&"), 0).await {
+    // Only the fields the verdicts read: the whole default set, CC
+    // lists and all, takes twice as long a page, and a big update's
+    // packages are hundreds of bugs (#116).
+    match bz
+        .search_with(&query.join("&"), 0, crate::karma::FACT_FIELDS)
+        .await
+    {
         Ok(bugs) => bugs,
         Err(e) => {
             eprintln!(

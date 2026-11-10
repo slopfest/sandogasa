@@ -298,6 +298,11 @@ impl BzClient {
     /// has, so adding a field here cannot take one away.
     const FIELDS: &'static str = "_default,flags";
 
+    /// The fields every [`Bug`] needs to be read at all: what a search
+    /// asks for when its caller names only the extra ones it uses.
+    pub const REQUIRED_FIELDS: &'static str = "id,summary,status,resolution,product,component,\
+         severity,priority,assigned_to,creator,creation_time,last_change_time";
+
     /// Fetch a single bug by numeric ID.
     pub async fn bug(&self, id: u64) -> Result<Bug, reqwest::Error> {
         self.bug_by_id(&id.to_string()).await
@@ -333,16 +338,71 @@ impl BzClient {
         self.search(&id_params.join("&"), 0).await
     }
 
+    /// [`Self::bugs`] asking for only [`Self::REQUIRED_FIELDS`] and
+    /// `extra_fields`, as [`Self::search_with`] does.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::search_with`].
+    pub async fn bugs_with(
+        &self,
+        ids: &[u64],
+        extra_fields: &[&str],
+    ) -> Result<Vec<Bug>, reqwest::Error> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let id_params: Vec<String> = ids.iter().map(|id| format!("id={id}")).collect();
+        self.search_with(&id_params.join("&"), 0, extra_fields)
+            .await
+    }
+
     /// Search bugs with a query string (e.g. "product=Fedora&component=kernel&status=NEW").
     /// Paginates through all results up to `max_results`. Pass 0 for no limit.
     pub async fn search(&self, query: &str, max_results: u64) -> Result<Vec<Bug>, reqwest::Error> {
+        self.search_fields(query, max_results, Self::FIELDS).await
+    }
+
+    /// [`Self::search`] asking Bugzilla for only [`Self::REQUIRED_FIELDS`]
+    /// and `extra_fields`, rather than every field of the default set:
+    /// a page of bugs then comes back in about half the time, which a
+    /// search over many components spends many pages on. Fields left out
+    /// read as their defaults (`flags` empty, for one), so ask for every
+    /// field the caller reads.
+    ///
+    /// # Panics
+    ///
+    /// If a field name is not a plain one (lowercase letters, digits,
+    /// `_` and `.`): they are written into the URL as they are, and
+    /// `_default` or `_all` would bring back the fields this leaves out.
+    pub async fn search_with(
+        &self,
+        query: &str,
+        max_results: u64,
+        extra_fields: &[&str],
+    ) -> Result<Vec<Bug>, reqwest::Error> {
+        let mut fields = Self::REQUIRED_FIELDS.to_string();
+        for f in extra_fields {
+            assert!(is_plain_field(f), "not a plain Bugzilla field name: {f:?}");
+            fields.push(',');
+            fields.push_str(f);
+        }
+        self.search_fields(query, max_results, &fields).await
+    }
+
+    async fn search_fields(
+        &self,
+        query: &str,
+        max_results: u64,
+        fields: &str,
+    ) -> Result<Vec<Bug>, reqwest::Error> {
         const PAGE_SIZE: u64 = 1000;
         let want = if max_results > 0 {
             PAGE_SIZE.min(max_results)
         } else {
             PAGE_SIZE
         };
-        let first = self.search_page(query, want, 0).await?;
+        let first = self.search_page(query, want, 0, fields).await?;
         let total = first.total_matches.unwrap_or(first.bugs.len() as u64);
         // The server may cap a page below what was asked: Red Hat's
         // answers 20 at a time whatever the limit. The rest of the pages
@@ -368,9 +428,10 @@ impl BzClient {
             for &offset in wave {
                 let client = self.clone();
                 let query = query.to_string();
+                let fields = fields.to_string();
                 let limit = page.min(target - offset);
-                let task =
-                    set.spawn(async move { client.search_page(&query, limit, offset).await });
+                let task = set
+                    .spawn(async move { client.search_page(&query, limit, offset, &fields).await });
                 asked.insert(task.id(), (offset, limit));
             }
             let mut pages = Vec::with_capacity(wave.len());
@@ -384,7 +445,11 @@ impl BzClient {
                     // here, rather than failing the whole search.
                     Err(e) => {
                         let (offset, limit) = asked[&e.id()];
-                        (offset, limit, self.search_page(query, limit, offset).await?)
+                        (
+                            offset,
+                            limit,
+                            self.search_page(query, limit, offset, fields).await?,
+                        )
                     }
                 };
                 // A page shorter than asked, before the last, means the
@@ -392,7 +457,7 @@ impl BzClient {
                 // (the cap changed, bugs went private): read it page by
                 // page from the bugs actually returned instead.
                 if (resp.bugs.len() as u64) < limit && offset + limit < target {
-                    return self.search_sequential(query, max_results).await;
+                    return self.search_sequential(query, max_results, fields).await;
                 }
                 pages.push((offset, resp.bugs));
             }
@@ -417,6 +482,7 @@ impl BzClient {
         &self,
         query: &str,
         max_results: u64,
+        fields: &str,
     ) -> Result<Vec<Bug>, reqwest::Error> {
         const PAGE_SIZE: u64 = 1000;
         let mut all_bugs: Vec<Bug> = Vec::new();
@@ -427,7 +493,7 @@ impl BzClient {
             } else {
                 PAGE_SIZE
             };
-            let resp = self.search_page(query, limit, offset).await?;
+            let resp = self.search_page(query, limit, offset, fields).await?;
             let total = resp.total_matches.unwrap_or(resp.bugs.len() as u64);
             let page = resp.bugs.len() as u64;
             all_bugs.extend(resp.bugs);
@@ -452,10 +518,10 @@ impl BzClient {
         query: &str,
         limit: u64,
         offset: u64,
+        fields: &str,
     ) -> Result<BugSearchResponse, reqwest::Error> {
         self.request(&format!(
-            "bug?{query}&limit={limit}&offset={offset}&include_fields={}",
-            Self::FIELDS
+            "bug?{query}&limit={limit}&offset={offset}&include_fields={fields}"
         ))
         .send()
         .await?
@@ -674,6 +740,15 @@ fn build_http_client() -> Client {
     ))
     .build()
     .expect("build reqwest client")
+}
+
+/// A field name [`BzClient::search_with`] can put in a URL as it is, and
+/// not one of Bugzilla's `_`-led sets.
+fn is_plain_field(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.')
 }
 
 #[cfg(test)]
@@ -1582,6 +1657,113 @@ mod tests {
         let bugs = client.search("component=kernel", 0).await.unwrap();
         let ids: Vec<u64> = bugs.iter().map(|b| b.id).collect();
         assert_eq!(ids, [1, 2, 3, 4, 5, 6, 7]);
+    }
+
+    /// A search naming the fields it reads asks for those and the ones
+    /// every bug needs, and a bug answered with only them reads.
+    #[tokio::test]
+    async fn search_with_asks_for_only_the_fields_named() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+        let wanted = format!("{},blocks,keywords,version", BzClient::REQUIRED_FIELDS);
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("include_fields", wanted.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [{
+                    "id": 2567306, "summary": "asterisk-24.0.0 is available",
+                    "status": "NEW", "resolution": "", "product": "Fedora",
+                    "component": ["asterisk"], "severity": "unspecified",
+                    "priority": "unspecified", "assigned_to": "a@example.com",
+                    "creator": "upstream-release-monitoring@fedoraproject.org",
+                    "creation_time": "2026-01-01T00:00:00Z",
+                    "last_change_time": "2026-01-01T00:00:00Z",
+                    "blocks": [], "keywords": ["FutureFeature"], "version": ["rawhide"]
+                }],
+                "total_matches": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let bugs = client
+            .search_with(
+                "component=asterisk&bug_status=__open__",
+                0,
+                &["blocks", "keywords", "version"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(bugs.len(), 1);
+        assert_eq!(bugs[0].keywords, ["FutureFeature"]);
+        assert!(bugs[0].flags.is_empty(), "not asked for, so empty");
+    }
+
+    /// A bug answered with only the required fields reads: were [`Bug`]
+    /// to gain a field it cannot do without, every narrow search would
+    /// fail to parse.
+    #[test]
+    fn a_bug_with_only_the_required_fields_reads() {
+        let mut bug = serde_json::Map::new();
+        for f in BzClient::REQUIRED_FIELDS.split(',') {
+            let v = match f {
+                "id" => serde_json::json!(1),
+                "component" => serde_json::json!(["x"]),
+                "creation_time" | "last_change_time" => {
+                    serde_json::json!("2026-01-01T00:00:00Z")
+                }
+                _ => serde_json::json!(""),
+            };
+            bug.insert(f.to_string(), v);
+        }
+        let bug: Bug = serde_json::from_value(bug.into()).unwrap();
+        assert_eq!(bug.id, 1);
+    }
+
+    #[test]
+    fn only_plain_field_names_are_taken() {
+        for f in ["blocks", "cf_fixed_in", "flags.name", "x2"] {
+            assert!(is_plain_field(f), "{f}");
+        }
+        for f in ["", "_default", "_all", "a&b", "a b", "Blocks", "2x"] {
+            assert!(!is_plain_field(f), "{f}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "not a plain Bugzilla field name")]
+    fn a_field_set_is_refused() {
+        let client = BzClient::new("http://127.0.0.1:9");
+        let _ = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(client.search_with("id=1", 0, &["_default"]));
+    }
+
+    /// Bugs by ID ask for the named fields too, and no IDs ask nothing.
+    #[tokio::test]
+    async fn bugs_with_asks_for_only_the_fields_named() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        let client = BzClient::new(&server.uri());
+        let wanted = format!("{},blocks", BzClient::REQUIRED_FIELDS);
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("id", "7"))
+            .and(query_param("include_fields", wanted.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [], "total_matches": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(client.bugs_with(&[], &["blocks"]).await.unwrap().is_empty());
+        assert!(
+            client
+                .bugs_with(&[7], &["blocks"])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

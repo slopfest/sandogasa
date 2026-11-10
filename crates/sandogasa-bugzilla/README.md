@@ -10,6 +10,12 @@ either way, though a stock instance serves one string).
 - Search bugs with arbitrary query parameters, with automatic pagination
 - Fetch individual bugs by numeric ID or alias, or a batch by ID (paged
   like a search)
+- Ask for only the fields a caller reads: `search_with` and `bugs_with`
+  take the fields wanted beyond `BzClient::REQUIRED_FIELDS`, which
+  every `Bug` needs, and a page then comes back about twice as fast as
+  with the full default set. A field not asked for reads as its
+  default (an empty `flags` list, for one), so name every field the
+  caller reads
 - Fetch comments on a bug
 - Update single or multiple bugs in one request (requires API key)
 - Bearer token authentication
