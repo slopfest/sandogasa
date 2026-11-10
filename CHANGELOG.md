@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### ebranch: rebuild-plan --contacts counts a package's pushes by people with access
+
+When a package left to rebuild had not been touched by its maintainers
+for years (osmo's recent rawhide history was all mass rebuilds and
+provenpackager fixes), nothing in the plan said so, short of a high
+release number, so how long to wait for a reply to a ping was guesswork.
+
+`--contacts` now adds a line under each package: of its last 20 pushes
+to the branch in the past two years, how many were by an account with
+push access to the branch (directly or through a group; a
+collaborator only where their branch scope covers it, and ticket
+access not at all), the latest such push's date, and how many were mass rebuilds; `--json` carries it as
+`history`. dist-git has no commit log API, and a commit names an author
+rather than a Fedora account, so this reads the dist-git push messages
+datagrepper keeps (`pagure.git.receive`), which name the account that
+pushed or merged and the access lists as they were. Pushes to forks
+and new branches are left out. datagrepper answers one bounded,
+newest-first search per package in seconds, and times out on anything
+wider, so that is all that is asked. Only counts and dates are shown,
+never names. Resolves #60.
+
 ### ebranch: rebuild-plan says what changed since the last status update
 
 Status updates on the libical 4 rebuild went to the mailing list as

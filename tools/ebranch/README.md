@@ -1292,8 +1292,21 @@ blocked, or unable to be rebuilt) is listed with who to contact: its
 with access to it, group members included; the groups with commit or
 admin access, with their Matrix rooms where known; and its
 version-release on the branch, whose release number shows how many
-builds there have been since the last version update. Groups' own email
-addresses are not listed. The Matrix rooms come from a built-in list
+builds there have been since the last version update. Under each
+package, a line counts its last 20 pushes to the branch at most, from
+the past two years: how many were by an account with access to push
+to it at the time (as owner, admin or committer, or as a collaborator
+whose branch scope covers the branch, directly or as a member of such
+a group; ticket access does not count), with
+the latest such push's date, and how many were release engineering's
+mass rebuilds. The date the line starts from is how far back the count
+goes: the oldest of 20 pushes, or the oldest message read when the
+search stopped early. Few pushes by people with access suggest not waiting long
+for a reply. The pushes come from the dist-git push messages Fedora's
+message bus keeps (`org.fedoraproject.prod.pagure.git.receive`, read
+through datagrepper), which name the account that pushed or merged; only
+counts and dates are shown, never names. Groups' own email addresses
+are not listed. The Matrix rooms come from a built-in list
 (`data/matrix-rooms.toml`), which a `[matrix-rooms]` table in
 `~/.config/ebranch/config.toml` adds to or overrides:
 

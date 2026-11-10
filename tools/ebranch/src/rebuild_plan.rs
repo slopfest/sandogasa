@@ -189,6 +189,10 @@ pub struct Contact {
     /// The source package's version-release on the branch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version_release: Option<String>,
+    /// How much of its recent history on the branch comes from people
+    /// with access to it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::push_history::History>,
 }
 
 /// One local mock build.
@@ -487,6 +491,20 @@ pub(crate) trait ContactQuery {
 
     /// Source package → its version-release on the branch.
     fn source_vrs(&self, packages: &[String]) -> Result<BTreeMap<String, String>, String>;
+
+    /// The latest pushes to a package's branch, newest first.
+    fn pushes(&self, package: &str, branch: &str) -> Result<crate::push_history::Pushes, String>;
+
+    /// A group's members.
+    fn group_members(&self, group: &str) -> Result<Vec<String>, String>;
+
+    /// The users and groups that are collaborators on a package with a
+    /// branch scope covering `branch`, as they are now.
+    fn branch_collaborators(
+        &self,
+        package: &str,
+        branch: &str,
+    ) -> Result<(Vec<String>, Vec<String>), String>;
 }
 
 /// Work out the plan for `library` on the branch `q` reads, with the
@@ -805,9 +823,10 @@ pub(crate) fn pull_requests(
 }
 
 /// Who to contact about each package left to rebuild: those in the
-/// build rounds, the blocked and the unbuildable. A package whose
-/// access cannot be read is listed with its alias alone; the failure
-/// is reported on stderr and recorded in `gaps`.
+/// build rounds, the blocked and the unbuildable, with how many of its
+/// recent pushes came from people with access. A package whose access
+/// or pushes cannot be read is listed without them; the failure is
+/// reported on stderr and recorded in `gaps`.
 pub(crate) fn contacts(
     plan: &RebuildPlan,
     rooms: &BTreeMap<String, String>,
@@ -830,6 +849,9 @@ pub(crate) fn contacts(
         gaps.push(Gap::new(None, "the packages' versions, for contacts", e));
         BTreeMap::new()
     });
+    let window_start =
+        chrono::Utc::now() - chrono::Duration::days(crate::push_history::WINDOW_DAYS);
+    let mut members: BTreeMap<String, Vec<String>> = BTreeMap::new();
     packages
         .iter()
         .map(|pkg| {
@@ -841,6 +863,52 @@ pub(crate) fn contacts(
                 gaps.push(Gap::new(Some(pkg), "who has access", e));
                 Vec::new()
             });
+            if verbose {
+                eprintln!("[rebuild-plan] pushes to {pkg}'s {}", plan.branch);
+            }
+            let history = match q.pushes(pkg, &plan.branch) {
+                Ok(mut pushes) => {
+                    // Push messages name collaborators without their
+                    // branches, so they are taken from dist-git, as now.
+                    match q.branch_collaborators(pkg, &plan.branch) {
+                        Ok((users, groups)) => {
+                            for p in &mut pushes.list {
+                                p.users.extend(users.iter().cloned());
+                                p.groups.extend(groups.iter().cloned());
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("warning: could not read {pkg}'s collaborators: {e}");
+                            gaps.push(Gap::new(Some(pkg), "its collaborators", e));
+                        }
+                    }
+                    for g in crate::push_history::groups(&pushes.list) {
+                        if members.contains_key(&g) {
+                            continue;
+                        }
+                        if verbose {
+                            eprintln!("[rebuild-plan] members of {g}");
+                        }
+                        let m = q.group_members(&g).unwrap_or_else(|e| {
+                            eprintln!("warning: could not read the members of {g}: {e}");
+                            gaps.push(Gap::new(Some(pkg), format!("the members of {g}"), e));
+                            Vec::new()
+                        });
+                        members.insert(g, m);
+                    }
+                    Some(crate::push_history::summarize(
+                        &pushes,
+                        &plan.branch,
+                        &members,
+                        window_start,
+                    ))
+                }
+                Err(e) => {
+                    eprintln!("warning: could not read the pushes to {pkg}: {e}");
+                    gaps.push(Gap::new(Some(pkg), "its recent pushes", e));
+                    None
+                }
+            };
             Contact {
                 package: pkg.clone(),
                 email: format!("{pkg}-maintainers@fedoraproject.org"),
@@ -852,6 +920,7 @@ pub(crate) fn contacts(
                     })
                     .collect(),
                 version_release: vrs.get(pkg).cloned(),
+                history,
             }
         })
         .collect()
@@ -1773,9 +1842,13 @@ fn render_contacts(out: &mut String, plan: &RebuildPlan) {
         out,
         "Each package's `-maintainers` alias reaches everyone with access to it, group \
          members included; groups with commit access are named, with their Matrix room \
-         where one is known. The version-release is {}'s: a high release number means many \
-         builds since the last version update.\n",
-        plan.branch
+         where one is known. The version-release is {0}'s: a high release number means many \
+         builds since the last version update. Then, of the package's last {1} pushes to {0} \
+         at most (in the past two years, back to the date given), how many were by people with \
+         access to push to it, and how many were mass rebuilds: few by people with access suggests not waiting long for \
+         a reply.\n",
+        plan.branch,
+        crate::push_history::MAX_PUSHES
     );
     for c in &plan.contacts {
         let _ = write!(out, "- {}", c.package);
@@ -1794,6 +1867,22 @@ fn render_contacts(out: &mut String, plan: &RebuildPlan) {
             }
         }
         out.push('\n');
+        if let Some(h) = &c.history {
+            let _ = write!(
+                out,
+                "  - pushes to {} since {}: {}, {} by people with access",
+                h.branch, h.since, h.pushes, h.by_access
+            );
+            if let Some(d) = &h.latest_by_access {
+                let _ = write!(out, " (latest {d})");
+            }
+            let _ = writeln!(
+                out,
+                ", {} mass rebuild{}",
+                h.mass_rebuilds,
+                if h.mass_rebuilds == 1 { "" } else { "s" }
+            );
+        }
     }
     out.push('\n');
 }
@@ -2152,6 +2241,7 @@ impl PlanQuery for sandogasa_fedrq::Fedrq {
 struct DistGitLookup {
     rt: tokio::runtime::Runtime,
     client: sandogasa_distgit::DistGitClient,
+    http: reqwest::Client,
     branch: String,
 }
 
@@ -2161,6 +2251,9 @@ impl DistGitLookup {
             rt: tokio::runtime::Runtime::new()
                 .map_err(|e| format!("failed to create async runtime: {e}"))?,
             client: sandogasa_distgit::DistGitClient::new(),
+            http: sandogasa_cli::http::builder("sandogasa-ebranch")
+                .build()
+                .map_err(|e| format!("failed to create HTTP client: {e}"))?,
             branch: branch.to_string(),
         })
     }
@@ -2187,6 +2280,43 @@ impl ContactQuery for DistGitLookup {
         let nvrs = fedrq.src_nvrs(packages).map_err(|e| e.to_string())?;
         Ok(crate::branch_request::match_nvrs_to_packages(
             &nvrs, packages,
+        ))
+    }
+
+    fn pushes(&self, package: &str, branch: &str) -> Result<crate::push_history::Pushes, String> {
+        self.rt.block_on(crate::push_history::fetch(
+            &self.http,
+            crate::push_history::DATAGREPPER_BASE,
+            package,
+            branch,
+        ))
+    }
+
+    fn group_members(&self, group: &str) -> Result<Vec<String>, String> {
+        self.rt
+            .block_on(self.client.get_group_members(group))
+            .map_err(|e| e.to_string())
+    }
+
+    fn branch_collaborators(
+        &self,
+        package: &str,
+        branch: &str,
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        let c = self
+            .rt
+            .block_on(self.client.get_contributors(package))
+            .map_err(|e| e.to_string())?;
+        let scoped = |list: &[sandogasa_distgit::Collaborator]| {
+            let pairs: Vec<(String, Option<String>)> = list
+                .iter()
+                .map(|c| (c.name().to_string(), c.branches().map(str::to_string)))
+                .collect();
+            crate::push_history::collaborators_on(&pairs, branch)
+        };
+        Ok((
+            scoped(&c.users.collaborators),
+            scoped(&c.groups.collaborators),
         ))
     }
 }
@@ -4278,6 +4408,7 @@ mod tests {
     struct RecordedContacts {
         groups: BTreeMap<String, Vec<String>>,
         vrs: BTreeMap<String, String>,
+        pushes: BTreeMap<String, crate::push_history::Pushes>,
     }
 
     impl ContactQuery for RecordedContacts {
@@ -4295,6 +4426,59 @@ mod tests {
                 .map(|(p, v)| (p.clone(), v.clone()))
                 .collect())
         }
+        fn pushes(
+            &self,
+            package: &str,
+            _branch: &str,
+        ) -> Result<crate::push_history::Pushes, String> {
+            match package {
+                "kdepimlibs" => Err("datagrepper answered HTTP 502".to_string()),
+                _ => Ok(self.pushes.get(package).cloned().unwrap_or_default()),
+            }
+        }
+        fn group_members(&self, group: &str) -> Result<Vec<String>, String> {
+            Ok(match group {
+                "voip-sig" => vec!["jsmith".to_string()],
+                _ => Vec::new(),
+            })
+        }
+        fn branch_collaborators(
+            &self,
+            package: &str,
+            _branch: &str,
+        ) -> Result<(Vec<String>, Vec<String>), String> {
+            Ok(match package {
+                // A collaborator on rawhide, whose push counts.
+                "asterisk" => (vec!["someone".to_string()], Vec::new()),
+                _ => (Vec::new(), Vec::new()),
+            })
+        }
+    }
+
+    /// asterisk's three latest pushes: a member of voip-sig, which has
+    /// access, a mass rebuild, and a collaborator on rawhide.
+    fn asterisk_pushes() -> crate::push_history::Pushes {
+        let push = |at: &str, agent: &str| crate::push_history::Push {
+            at: chrono::DateTime::parse_from_rfc3339(at)
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            agent: agent.to_string(),
+            users: BTreeSet::from(["owner".to_string()]),
+            groups: BTreeSet::from(["voip-sig".to_string()]),
+        };
+        crate::push_history::Pushes {
+            list: vec![
+                push("2026-10-01T00:00:00Z", "jsmith"),
+                push("2026-07-16T00:00:00Z", "releng"),
+                push("2026-03-02T00:00:00Z", "someone"),
+            ],
+            // The search stopped at its page limit, back to here.
+            read_back_to: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-02-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            ),
+        }
     }
 
     fn libical_plan_with_contacts() -> RebuildPlan {
@@ -4302,6 +4486,7 @@ mod tests {
         let q = RecordedContacts {
             groups: BTreeMap::from([("asterisk".to_string(), strs(&["kde-sig", "voip-sig"]))]),
             vrs: BTreeMap::from([("asterisk".to_string(), "22.5.2-3.fc46".to_string())]),
+            pushes: BTreeMap::from([("asterisk".to_string(), asterisk_pushes())]),
         };
         let rooms = BTreeMap::from([("kde-sig".to_string(), "#kde:fedoraproject.org".to_string())]);
         p.contacts = contacts(&p, &rooms, &q, &mut Vec::new(), false);
@@ -4353,6 +4538,38 @@ mod tests {
             "{out}"
         );
         assert!(!render(&libical_plan()).contains("## Who to contact"));
+    }
+
+    /// Counts and dates of recent pushes, never names; a package whose
+    /// pushes cannot be read is listed without them, as a gap.
+    #[test]
+    fn contacts_say_how_much_recent_history_comes_from_people_with_access() {
+        let p = libical_plan_with_contacts();
+        let asterisk = p.contacts.iter().find(|c| c.package == "asterisk").unwrap();
+        let h = asterisk.history.as_ref().unwrap();
+        assert_eq!((h.pushes, h.by_access, h.mass_rebuilds), (3, 2, 1));
+        let out = render(&p);
+        assert!(
+            out.contains(
+                "  - pushes to rawhide since 2026-02-01: 3, 2 by people with access \
+                 (latest 2026-10-01), 1 mass rebuild\n"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("jsmith"), "{out}");
+        let kde = p
+            .contacts
+            .iter()
+            .find(|c| c.package == "kdepimlibs")
+            .unwrap();
+        assert!(kde.history.is_none());
+        let mut gaps = Vec::new();
+        let q = RecordedContacts::default();
+        contacts(&libical_plan(), &BTreeMap::new(), &q, &mut gaps, false);
+        assert!(
+            gaps.iter().any(|g| g.what == "its recent pushes"),
+            "{gaps:?}"
+        );
     }
 
     /// The end of asterisk-23.5.0-5's root.log (2026-11-04): it built,

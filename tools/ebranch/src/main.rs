@@ -18,6 +18,7 @@ mod karma;
 mod local_repo;
 mod plan_history;
 mod prune_cache;
+mod push_history;
 mod rebuild_plan;
 mod resolve;
 mod review_deps;
@@ -781,8 +782,11 @@ in the side tag, open (with the CI results on the head commit), merged
 and built, and packages still to rebuild with none. With --contacts,
 each package left to rebuild is listed with its -maintainers alias,
 the groups with commit access to it (with their Matrix rooms, from a
-built-in list that a [matrix-rooms] table in the config extends), and
-its version-release on the branch.
+built-in list that a [matrix-rooms] table in the config extends), its
+version-release on the branch, and how many of its last 20 pushes to
+the branch in the past two years were by people with access to it, and
+how many were mass rebuilds (from the dist-git push messages
+datagrepper keeps; counts and dates only).
 
 With --sidetag-results and --baseline-results, local mock results are
 read (never built): each package's newest build with the side tag is
@@ -872,7 +876,8 @@ struct RebuildPlanArgs {
 
     /// For each package left to rebuild, who to contact: its
     /// -maintainers alias, groups with commit access and their Matrix
-    /// rooms, and its version-release.
+    /// rooms, its version-release, and how many recent pushes came from
+    /// people with access.
     #[arg(long, help_heading = "Plan")]
     contacts: bool,
 
