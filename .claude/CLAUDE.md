@@ -212,6 +212,19 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
 - Routine `cargo update` (semver-compatible bumps) should be a separate commit from feature work so it is easy to revert if something regresses
 - After any dependency change, run `cargo clippy --workspace && cargo cov` to verify nothing broke
 
+## Performance
+- **Batch or parallelise remote work from the first version, not after it proves slow.** Before writing a loop that calls a remote service or spawns a CLI once per item (build, RPM, bug, package, CVE), look for a batch form and use it:
+  - Koji's `multiCall` through `sandogasa-kojihub`, with existing batched calls such as `builds_rpm_nvras`, `rpms_deps` and `latest_builds`; add another the same way;
+  - Bugzilla's id list (`BzClient::bugs`);
+  - Bodhi's multi-build queries (`updates_for_builds`);
+  - one fedrq query over many names.
+
+  Where no batch form exists, run the calls concurrently with a bound. A `koji` subprocess costs about a second of Python startup before it asks anything, so one per item is the slowest way to get an answer
+- **Reusing a helper reuses its cost.** Before calling existing code from a new loop or over a bigger input, check whether it does one remote call per item; if it does, batch it as part of the change
+- **Anything slow enough to notice says what it is doing**, in one line without `-v` and per request with it, so a long step never reads as a hang
+- The per-issue `/code-review` looks for these, the same as for correctness: a per-item remote call in a loop is a finding
+- Background, 2026-11-10: #111 found check-update reading a build's provides with one `koji` subprocess per subpackage (59 s for asterisk, 1.8 s batched). The same afternoon, `update-bugs` shipped reading 39 changelogs one `koji buildinfo --changelog` at a time (4 minutes, #114), through a helper it reused without checking its cost
+
 ## Testing
 - Always write corresponding tests when adding or modifying features
 - **Tests must not reach the external network.** `cargo test` has to pass in a distro packaging sandbox (Koji, Debian buildds) where *external* network is blocked but **loopback is up**. So a test that calls a real remote service makes the crate unpackageable, but **localhost is fine**. Two established patterns here, both packaging-safe:
