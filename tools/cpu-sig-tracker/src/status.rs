@@ -1930,6 +1930,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn refreshed_body_with_jira_and_lead() {
         let original = "\
             Legacy context paragraph.\n\

@@ -209,6 +209,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn one_jira_line_is_written_per_issue() {
         let lines = format_jira_lines(&[
             ("RHEL-1", Some("New"), None),

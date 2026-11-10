@@ -748,6 +748,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn format_body_full() {
         let body = format_body(&BodyFields {
             release: "c10s",
@@ -808,6 +809,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn format_body_with_resolved_jira_shows_resolution() {
         let body = format_body(&BodyFields {
             release: "c10s",
@@ -892,6 +894,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn format_body_with_jira_key_but_no_summary() {
         let body = format_body(&BodyFields {
             release: "c10s",
