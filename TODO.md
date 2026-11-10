@@ -1378,6 +1378,26 @@ requirements routinely, so Debian could carry this relaxation as a
 downstream patch instead. Doing it upstream only saves the packager —
 us — from carrying that patch.
 
+## rusqlite range: RUSTSEC-2026-0459 (2026-11-10)
+
+`rusqlite = ">=0.38, <0.42"` in the workspace `Cargo.toml` takes
+koji-lag past RUSTSEC-2026-0459 (C SQLite CVE-2026-119375, in the
+SQLite `libsqlite3-sys` bundles before 0.39.0) while Fedora still
+ships rusqlite 0.38.0 / libsqlite3-sys 0.36.0 on rawhide, f44, f43,
+epel10 and epel9. We are not exposed: koji-lag does not enable
+`bundled`, so it links the system SQLite, and it only opens its own
+cache database, never a database and `-wal` someone else wrote. The
+lock pins 0.41.1 (libsqlite3-sys 0.39.1), so `cargo audit` is clean
+without an ignore.
+
+Both ends tested on 2026-11-10: koji-lag's tests pass at 0.38.0
+(`cargo update -p rusqlite --precise 0.38.0`) and at 0.41.1.
+Re-test both at each release while the range stands, and tighten to
+`"0.41"` once Fedora ships rust-rusqlite 0.41 on every branch above.
+Debian is unchecked (no Debian box at hand): koji-lag is not headed
+for Debian, but check `rmadison -s unstable rust-rusqlite` before
+tightening.
+
 ## dbranch
 
 - (2026-09-17) Exercise the one step of the upstream-git flow no
