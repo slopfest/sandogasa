@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.28.0
 
 ### ebranch: escalate follows up the releng tickets it filed
 
@@ -34,6 +34,22 @@ read with the probe `escalate` already runs for the target branch; when
 that read fails, only the branch is claimed, so a package that shipped
 long ago is never sent to be built again. Resolves #108.
 
+### Security: koji-lag's rusqlite allows the release with SQLite's page-cache fix
+
+`cargo audit` reported
+[RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459)
+(SQLite CVE-2026-119375) against the libsqlite3-sys that koji-lag's
+rusqlite 0.38 pulled in: the SQLite it bundles before 0.39.0 can return
+uninitialized page-cache memory for a crafted database and `-wal` pair.
+
+koji-lag is not exposed: it does not enable rusqlite's `bundled`
+feature, so it links the system SQLite, and it opens only its own cache
+database. Fedora ships rusqlite 0.38.0 on every branch, so the
+requirement becomes the range `>=0.38, <0.42` rather than a bump. The
+lockfile, and so a `cargo install`, gets 0.41.1 (libsqlite3-sys
+0.39.1), while Fedora builds still resolve 0.38. TODO.md records when to
+tighten the range.
+
 ### Fixes from the release review
 
 A review of everything since v0.27.1 found these:
@@ -64,6 +80,10 @@ A review of everything since v0.27.1 found these:
   left out.
 - sandogasa-gitlab's `list_branches`, `tree` and `merge_request_diffs`
   page through the shared helper rather than three copies of it.
+- `cbspkg promote` given a build that is in none of a Hyperscale
+  branch's collections promoted nothing, said nothing and exited
+  successfully; it names the collections searched and fails, as it
+  already did for a branch with one collection.
 
 ### cbspkg: build a Hyperscale package for several variants, Stream or RHEL, in one run
 
