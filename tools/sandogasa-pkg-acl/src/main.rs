@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 mod config;
+mod secrets;
+#[cfg(test)]
+mod test_support;
 
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
@@ -180,15 +183,22 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+/// The dist-git API token: `PAGURE_API_TOKEN`, else the keyring's,
+/// else the config file's.
 fn resolve_token() -> Result<String, Box<dyn std::error::Error>> {
-    if let Ok(token) = std::env::var("PAGURE_API_TOKEN")
-        && !token.is_empty()
-    {
-        return Ok(token);
-    }
-    let cf = ConfigFile::for_tool(TOOL_NAME);
-    let config: AppConfig = cf.load()?;
-    Ok(config.dist_git.api_token)
+    let file = ConfigFile::for_tool(TOOL_NAME)
+        .load::<AppConfig>()
+        .map(|c| c.dist_git.api_token)
+        .unwrap_or_default();
+    sandogasa_config::secret::resolve(
+        secrets::keyring(),
+        Some("PAGURE_API_TOKEN"),
+        &secrets::distgit(),
+        Some(&file),
+    )
+    .ok_or_else(|| {
+        format!("no dist-git API token: run `{TOOL_NAME} config`, or set PAGURE_API_TOKEN").into()
+    })
 }
 
 /// Return the cached username from the config file, if available.
@@ -213,12 +223,32 @@ fn resolve_target(
     }
 }
 
+/// Save `username` and the API token to `cf`, the token in the keyring
+/// when there is one and then out of the file, since `save` never
+/// removes a key. Whether the file, left with nothing in it, was
+/// removed.
+fn save_keeping_token(
+    cf: &ConfigFile,
+    token: String,
+    username: String,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let api_token = secrets::keep_for_file("dist-git API token", &secrets::distgit(), token);
+    let in_keyring = api_token.is_empty();
+    cf.save(&AppConfig {
+        dist_git: DistGitConfig {
+            api_token,
+            username,
+        },
+    })?;
+    Ok(in_keyring && cf.remove("dist-git", "api_token")?)
+}
+
 /// Ask for the API token when there is none (with `all`, offering the
 /// saved one as the default), verify it, and save it with the account
 /// it belongs to. A token dist-git refuses can be replaced on the spot.
 async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let cf = ConfigFile::for_tool(TOOL_NAME);
-    let mut token = match cf.load_user::<AppConfig>() {
+    let file_token = match cf.load_user::<AppConfig>() {
         Ok(config) => {
             println!("Found config at {}", cf.path().display());
             config.dist_git.api_token
@@ -228,6 +258,15 @@ async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
             String::new()
         }
     };
+    // A token kept in the keyring is the saved one when the file has
+    // none (#79).
+    let mut token = sandogasa_config::secret::resolve(
+        secrets::keyring(),
+        None,
+        &secrets::distgit(),
+        Some(&file_token),
+    )
+    .unwrap_or_default();
     let mut review = args.all;
     loop {
         token = sandogasa_config::ask(
@@ -241,14 +280,14 @@ async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
         match client.verify_token().await {
             Ok(username) => {
                 println!("OK (authenticated as {username})");
-                let config = AppConfig {
-                    dist_git: DistGitConfig {
-                        api_token: token,
-                        username,
-                    },
-                };
-                cf.save(&config)?;
-                println!("Saved to {}", cf.path().display());
+                if save_keeping_token(&cf, token, username)? {
+                    println!(
+                        "Nothing else to keep in {}; removed it.",
+                        cf.path().display()
+                    );
+                } else {
+                    println!("Saved to {}", cf.path().display());
+                }
                 return Ok(());
             }
             Err(e) => {
@@ -1088,6 +1127,59 @@ mod tests {
     }
 
     use super::*;
+    use crate::test_support::EnvGuard;
+
+    /// A config directory of its own, with no token exported.
+    fn isolated(dir: &tempfile::TempDir) -> EnvGuard {
+        EnvGuard::new(&[("XDG_CONFIG_HOME", &dir.path().to_string_lossy())])
+            .unset(&["PAGURE_API_TOKEN"])
+    }
+
+    /// A token `config` keeps in the keyring is what the tool then
+    /// uses, the file is left without it, and the environment still
+    /// wins.
+    #[test]
+    #[serial_test::serial]
+    fn a_token_kept_in_the_keyring_is_the_one_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let cf = ConfigFile::for_tool(TOOL_NAME);
+        std::fs::create_dir_all(cf.path().parent().unwrap()).unwrap();
+        std::fs::write(
+            cf.path(),
+            "[dist-git]\napi_token = \"pagure-from-file\"\nusername = \"old\"\n",
+        )
+        .unwrap();
+        // An existing setup keeps working.
+        assert_eq!(resolve_token().unwrap(), "pagure-from-file");
+
+        let removed =
+            save_keeping_token(&cf, "pagure-from-keyring".into(), "salimma".into()).unwrap();
+        assert!(!removed, "the username is still in the file");
+        let text = std::fs::read_to_string(cf.path()).unwrap();
+        assert!(!text.contains("api_token"), "the file is left without it");
+        assert!(!text.contains("pagure-"));
+        assert_eq!(resolve_token().unwrap(), "pagure-from-keyring");
+        assert_eq!(resolve_username().as_deref(), Some("salimma"));
+        // Caching the username keeps the token out of the file.
+        cache_username("other");
+        let text = std::fs::read_to_string(cf.path()).unwrap();
+        assert!(!text.contains("api_token"), "{text}");
+        // The environment still wins.
+        let _env2 = EnvGuard::new(&[("PAGURE_API_TOKEN", "pagure-from-env")]);
+        assert_eq!(resolve_token().unwrap(), "pagure-from-env");
+        secrets::keyring().clear(&secrets::distgit()).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn no_token_anywhere_says_how_to_set_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let err = resolve_token().unwrap_err().to_string();
+        assert!(err.contains("sandogasa-pkg-acl config"), "{err}");
+        assert!(err.contains("PAGURE_API_TOKEN"), "{err}");
+    }
 
     #[test]
     fn acl_change_set_serializes_with_level() {

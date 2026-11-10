@@ -49,10 +49,15 @@ $ sandogasa-pkg-acl config
 No config found at /home/user/.config/sandogasa-pkg-acl/config.toml
 Enter dist-git API token: 
 Verifying token... OK (authenticated as salimma)
+dist-git API token: kept in the keyring, not the config file (check it with `secret-tool lookup application sandogasa service src.fedoraproject.org`).
 Saved to /home/user/.config/sandogasa-pkg-acl/config.toml
 ```
 
-The token can also be passed via the `PAGURE_API_TOKEN` environment variable.
+The token goes in the desktop keyring, as an entry shared with
+poi-tracker, and the config file keeps only the username it belongs
+to; without a keyring the token is kept in the config file. The token
+can also be passed via the `PAGURE_API_TOKEN` environment variable,
+which wins over both.
 
 ### Give package ownership
 
@@ -169,9 +174,9 @@ value is not valid. `--all` asks for every setting again, with the saved
 value as the default: Enter keeps it, a new value replaces it, and `-`
 clears an optional one. A saved secret is never shown.
 
-Credentials belong in the per-user file, which is 600, or in an
-environment variable — a token under `/etc` is readable by every local
-user. For an unattended machine, give the job its own user and its own
+Credentials belong in the desktop keyring, the per-user file (600)
+where there is no keyring, or an environment variable — a token under
+`/etc` is readable by every local user. For an unattended machine, give the job its own user and its own
 600 config.
 
 ## License

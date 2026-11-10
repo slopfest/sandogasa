@@ -23,6 +23,7 @@ use crate::forge::{self, TokenSpec, date_in_range, stat, stat_across};
 
 const TOKEN_SPEC: TokenSpec = TokenSpec {
     service: "GitHub",
+    label: "sandogasa: GitHub token",
     generic_env: "GITHUB_TOKEN",
     host_separators: &['.'],
     hint: "",
@@ -807,11 +808,21 @@ fn repo_in_org(slug: &str, org: Option<&str>) -> bool {
     }
 }
 
+/// The keyring entry for `instance`'s token, which `config` keeps
+/// it in.
+pub(crate) fn secret(instance: &str) -> sandogasa_config::secret::SecretRef {
+    forge::secret(instance, &TOKEN_SPEC)
+}
+
 /// Look up the GitHub API token for an instance.
 ///
-/// Order: instance-specific env var → generic env var →
-/// `github_tokens.<hostname>` from the user overlay → error.
-fn find_token(instance: &str, tokens: &BTreeMap<String, String>) -> Result<String, String> {
+/// Order: instance-specific env var → generic env var → the
+/// keyring's entry for the instance → `github_tokens.<hostname>` from the user
+/// overlay → error.
+pub(crate) fn find_token(
+    instance: &str,
+    tokens: &BTreeMap<String, String>,
+) -> Result<String, String> {
     forge::find_token(instance, tokens, &TOKEN_SPEC)
 }
 
@@ -865,6 +876,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn find_token_errors_when_nothing_set() {
         let tokens = BTreeMap::new();
         let err = find_token("https://nonexistent.example.test", &tokens).unwrap_err();
@@ -872,6 +884,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn find_token_falls_back_to_config() {
         let mut tokens = BTreeMap::new();
         tokens.insert(

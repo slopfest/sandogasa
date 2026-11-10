@@ -217,10 +217,17 @@ prints the report machine-readably.
 poi-tracker config
 ```
 
-Prompts for a Bugzilla API key, checks that Bugzilla accepts it,
-and saves it to `~/.config/poi-tracker/config.toml`.
+Prompts for a Bugzilla API key (and optionally a Bugzilla email
+and a dist-git API token), checks that Bugzilla accepts the key,
+and saves the settings to `~/.config/poi-tracker/config.toml`.
+The key and the token go in the desktop keyring instead when
+there is one, as entries shared with other sandogasa tools that
+use the same service (`secret-tool lookup application sandogasa
+service bugzilla.redhat.com`, `… service src.fedoraproject.org`);
+without a keyring they stay in the config file.
 Lookup order at runtime: `--api-key` flag → `BUGZILLA_API_KEY`
-env var → config file.
+env var → keyring → config file (for the dist-git token:
+`--api-token` → `PAGURE_API_TOKEN` → keyring → config file).
 
 Generate an API key at
 <https://bugzilla.redhat.com/userprefs.cgi?tab=apikey>.

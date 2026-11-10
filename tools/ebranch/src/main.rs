@@ -23,6 +23,7 @@ mod rebuild_plan;
 mod resolve;
 mod review_deps;
 mod rpmfusion;
+mod secrets;
 mod submit;
 #[cfg(test)]
 mod testrepo;
@@ -1459,9 +1460,9 @@ fn fas_to_offer(flag: Option<&str>, configured: Option<String>) -> Option<String
 }
 
 /// Build branch-request `Options` from the shared flags,
-/// resolving the API key (CLI flag → env → config file).
+/// resolving the API key (CLI flag → env → keyring → config file).
 fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Options, String> {
-    let api_key = config::resolve_api_key(c.api_key.as_deref())?;
+    let api_key = config::resolve_api_key(c.api_key.as_deref(), &c.bugzilla_url)?;
     let forge = config::forgejo();
     Ok(branch_request::Options {
         bugzilla_url: c.bugzilla_url.clone(),
@@ -1667,7 +1668,7 @@ fn main() -> ExitCode {
     }
 
     if let Command::CheckPkgReviews(a) = &cli.command {
-        let api_key = match config::resolve_api_key(a.api_key.as_deref()) {
+        let api_key = match config::resolve_api_key(a.api_key.as_deref(), &a.bugzilla_url) {
             Ok(k) => k,
             Err(e) => {
                 eprintln!("error: {e}");

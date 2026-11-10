@@ -913,7 +913,7 @@ pub(crate) async fn attach_cve_facts(bugs: &mut BugMap, update: &UpdateFacts<'_>
         false,
     );
     let http = http_client();
-    let token = std::env::var("GITHUB_TOKEN").ok();
+    let token = crate::secrets::github_token();
     if verbose {
         eprintln!(
             "[bugs] looking up the fix for {} CVE tracker(s) on NVD",

@@ -27,6 +27,12 @@ use std::process::{Command, Stdio};
 /// The `application` attribute every entry carries.
 pub const APPLICATION: &str = "sandogasa";
 
+/// A secret's value in a tool's config file that turns it off for that
+/// tool: [`resolve`] then takes only an environment variable, never the
+/// keyring, whose entry other tools may still use. What a `config`
+/// prompt writes when a secret is cleared.
+pub const OFF: &str = "-";
+
 /// One secret in the keyring: the service it unlocks, and the account
 /// when the service needs one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,6 +122,18 @@ impl SecretRef {
         &self.service
     }
 
+    /// The label the entry is shown with, which names the kind of
+    /// secret (`sandogasa: GitLab token`) whatever the instance.
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// `secret-tool clear …` for this entry, to remove it by hand.
+    pub fn clear_command(&self) -> String {
+        self.lookup_command()
+            .replacen("secret-tool lookup", "secret-tool clear", 1)
+    }
+
     /// The attributes that identify the entry, in order.
     pub fn attributes(&self) -> Vec<(&'static str, &str)> {
         let mut attrs = vec![("application", APPLICATION), ("service", &self.service)];
@@ -155,9 +173,38 @@ impl SecretRef {
     }
 }
 
+/// [`SecretTool`] with the program to run named, so the tests can run a
+/// stand-in for `secret-tool` rather than reach the user's keyring.
+struct SecretToolAt<'a> {
+    program: &'a std::ffi::OsStr,
+}
+
 impl SecretTool {
+    /// The `secret-tool` on PATH.
+    fn at() -> SecretToolAt<'static> {
+        SecretToolAt {
+            program: std::ffi::OsStr::new("secret-tool"),
+        }
+    }
+}
+
+impl SecretStore for SecretTool {
+    fn lookup(&self, secret: &SecretRef) -> Result<Option<String>, SecretError> {
+        Self::at().lookup(secret)
+    }
+
+    fn store(&self, secret: &SecretRef, value: &str) -> Result<(), SecretError> {
+        Self::at().store(secret, value)
+    }
+
+    fn clear(&self, secret: &SecretRef) -> Result<(), SecretError> {
+        Self::at().clear(secret)
+    }
+}
+
+impl SecretToolAt<'_> {
     fn run(&self, verb: &str, secret: &SecretRef, label: bool) -> Command {
-        let mut cmd = Command::new("secret-tool");
+        let mut cmd = Command::new(self.program);
         cmd.arg(verb);
         if label {
             cmd.arg(format!("--label={}", secret.label));
@@ -169,7 +216,7 @@ impl SecretTool {
     }
 }
 
-impl SecretStore for SecretTool {
+impl SecretStore for SecretToolAt<'_> {
     fn lookup(&self, secret: &SecretRef) -> Result<Option<String>, SecretError> {
         if secret.is_local() {
             return Ok(None);
@@ -194,18 +241,23 @@ impl SecretStore for SecretTool {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| SecretError::Unavailable(format!("cannot run secret-tool: {e}")))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(value.as_bytes()).map_err(|e| {
-                SecretError::Failed(format!("cannot hand secret-tool the secret: {e}"))
-            })?;
-        }
+        // A secret-tool that cannot reach a Secret Service may quit before
+        // reading the secret, so the write fails; what it said on exit is
+        // then the reason, not the broken pipe.
+        let wrote = child
+            .stdin
+            .take()
+            .map(|mut stdin| stdin.write_all(value.as_bytes()));
         let out = child
             .wait_with_output()
             .map_err(|e| SecretError::Failed(e.to_string()))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(unavailable_or_failed(&String::from_utf8_lossy(&out.stderr)))
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        match wrote {
+            Some(Err(e)) if stderr.trim().is_empty() => Err(SecretError::Failed(format!(
+                "cannot hand secret-tool the secret: {e}"
+            ))),
+            _ if out.status.success() => Ok(()),
+            _ => Err(unavailable_or_failed(&stderr)),
         }
     }
 
@@ -281,6 +333,10 @@ pub fn resolve(
     {
         return Some(v);
     }
+    // Turned off for this tool: the shared entry is not its to read.
+    if from_file == Some(OFF) {
+        return None;
+    }
     if let Ok(Some(v)) = store.lookup(secret) {
         return Some(v);
     }
@@ -306,6 +362,11 @@ pub fn keep_for_file(
     secret: &SecretRef,
     value: String,
 ) -> String {
+    // Off for this tool: the marker stays in its file, and the keyring
+    // entry, which is the service's, is left as it is.
+    if value == OFF {
+        return value;
+    }
     match keep(store, secret, &value) {
         Kept::Keyring => {
             eprintln!(
@@ -360,9 +421,338 @@ fn quote(arg: &str) -> String {
     }
 }
 
+/// The tools that keep a secret under each label, so a tool clearing
+/// one can say which others it would break: entries are shared by
+/// service, and removing one is removing it for all of them. Sorted by
+/// label, each list by tool.
+///
+/// Kept in step with the tools by a test that reads each tool's sources
+/// for the labels it uses; see DEVELOPMENT.md, "Secrets go in the
+/// keyring, one entry per service".
+pub const USERS: &[(&str, &[&str])] = &[
+    (
+        "sandogasa: Bugzilla API key",
+        &[
+            "ebranch",
+            "fedora-cve-triage",
+            "fedora-review-digest",
+            "poi-tracker",
+        ],
+    ),
+    (
+        "sandogasa: Forgejo token",
+        &["ebranch", "fesco-chair", "sandogasa-report"],
+    ),
+    (
+        "sandogasa: GitHub token",
+        &["ebranch", "fedora-cve-triage", "sandogasa-report"],
+    ),
+    (
+        "sandogasa: GitLab token",
+        &["cbspkg", "cpu-sig-tracker", "hs-relmon", "sandogasa-report"],
+    ),
+    ("sandogasa: Jira API token", &["cpu-sig-tracker"]),
+    ("sandogasa: NVD API key", &["ebranch", "fedora-cve-triage"]),
+    (
+        "sandogasa: Pagure token",
+        &["poi-tracker", "sandogasa-pkg-acl"],
+    ),
+    ("sandogasa: SourceHut token", &["sandogasa-report"]),
+];
+
+/// The tools other than `tool` that keep a secret labelled `label` and
+/// are set up on this machine: those with a config file under
+/// `config_home` (`$XDG_CONFIG_HOME`).
+fn other_users_in(config_home: &std::path::Path, tool: &str, label: &str) -> Vec<&'static str> {
+    USERS
+        .iter()
+        .filter(|(l, _)| *l == label)
+        .flat_map(|(_, tools)| tools.iter().copied())
+        .filter(|t| *t != tool && config_home.join(t).join("config.toml").exists())
+        .collect()
+}
+
+/// The tools other than `tool` that keep a secret labelled `label` and
+/// are set up on this machine. None when no config directory can be
+/// found: this only ever feeds a note.
+pub fn other_users_here(tool: &str, label: &str) -> Vec<&'static str> {
+    dirs::config_dir()
+        .map(|home| other_users_in(&home, tool, label))
+        .unwrap_or_default()
+}
+
+/// What `tool`'s `config` says when `what` is turned off for it (its file
+/// now holds [`OFF`]) while the keyring still holds `secret`: the entry
+/// is kept, which other tools set up here keep that kind of secret, and
+/// how to remove it by hand. The entry is never removed for the person,
+/// as other tools may use it. `None` when the keyring holds no entry.
+pub fn kept_on_clear(
+    store: &dyn SecretStore,
+    tool: &str,
+    what: &str,
+    secret: &SecretRef,
+) -> Option<String> {
+    let others = other_users_here(tool, secret.label());
+    kept_note(store, tool, what, secret, &others)
+}
+
+/// [`kept_on_clear`] with the other tools already found.
+fn kept_note(
+    store: &dyn SecretStore,
+    tool: &str,
+    what: &str,
+    secret: &SecretRef,
+    others: &[&str],
+) -> Option<String> {
+    store.lookup(secret).ok().flatten()?;
+    let who = if others.is_empty() {
+        String::new()
+    } else {
+        format!(", as {} here may use it", others.join(", "))
+    };
+    Some(format!(
+        "{what}: off for {tool}; the keyring entry is kept{who}; to remove it: {}",
+        secret.clear_command()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every label each tool writes in its sources, `"sandogasa: …"`
+    /// literals, which are the entries it keeps.
+    fn labels_in(dir: &std::path::Path, out: &mut std::collections::BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                labels_in(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                let mut rest = text.as_str();
+                while let Some(at) = rest.find("\"sandogasa: ") {
+                    let tail = &rest[at + 1..];
+                    let end = tail.find('"').unwrap();
+                    out.insert(tail[..end].to_string());
+                    rest = &tail[end..];
+                }
+            }
+        }
+    }
+
+    /// The table says exactly which tools keep which secrets: read from
+    /// the tools' own sources, so a tool that starts or stops keeping
+    /// one fails here until the table says so. Skipped outside a
+    /// checkout (a packaged crate has no `tools/` beside it).
+    #[test]
+    fn the_users_table_matches_what_the_tools_keep() {
+        let tools = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools");
+        if !tools.is_dir() {
+            return;
+        }
+        let mut found: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+        for entry in std::fs::read_dir(&tools).unwrap() {
+            let dir = entry.unwrap().path();
+            let src = dir.join("src");
+            if !src.is_dir() {
+                continue;
+            }
+            let tool = dir.file_name().unwrap().to_string_lossy().into_owned();
+            let mut labels = Default::default();
+            labels_in(&src, &mut labels);
+            for label in labels {
+                found.entry(label).or_default().push(tool.clone());
+            }
+        }
+        for tools in found.values_mut() {
+            tools.sort();
+        }
+        let table: std::collections::BTreeMap<String, Vec<String>> = USERS
+            .iter()
+            .map(|(l, ts)| (l.to_string(), ts.iter().map(|t| t.to_string()).collect()))
+            .collect();
+        assert_eq!(
+            table, found,
+            "secret::USERS is out of step with the tools; update it to what they keep"
+        );
+    }
+
+    #[test]
+    fn the_users_table_is_sorted() {
+        let labels: Vec<&str> = USERS.iter().map(|(l, _)| *l).collect();
+        assert!(labels.is_sorted(), "{labels:?}");
+        for (label, tools) in USERS {
+            assert!(tools.is_sorted(), "{label}: {tools:?}");
+        }
+    }
+
+    /// Clearing names the entry, the other tools set up here that keep
+    /// that kind of secret (not the one clearing), and how to remove it.
+    #[test]
+    fn a_cleared_secret_names_who_else_here_keeps_one() {
+        let home = tempfile::tempdir().unwrap();
+        for tool in ["ebranch", "poi-tracker", "fesco-chair"] {
+            std::fs::create_dir_all(home.path().join(tool)).unwrap();
+            std::fs::write(home.path().join(tool).join("config.toml"), "").unwrap();
+        }
+        let label = "sandogasa: Bugzilla API key";
+        // ebranch and poi-tracker are set up here and keep one;
+        // fedora-review-digest keeps one but is not set up; fesco-chair
+        // is set up but keeps none; the tool asking is never listed.
+        assert_eq!(
+            other_users_in(home.path(), "fedora-cve-triage", label),
+            ["ebranch", "poi-tracker"]
+        );
+        assert_eq!(
+            other_users_in(home.path(), "ebranch", label),
+            ["poi-tracker"]
+        );
+
+        let store = MemoryStore::default();
+        let bz = SecretRef::for_url("https://bugzilla.redhat.com", label);
+        let others = other_users_in(home.path(), "fedora-cve-triage", label);
+        // No entry: nothing to say.
+        assert_eq!(
+            kept_note(
+                &store,
+                "fedora-cve-triage",
+                "Bugzilla API key",
+                &bz,
+                &others
+            ),
+            None
+        );
+        store.store(&bz, "s3cr3t-bz-key").unwrap();
+        let note = kept_note(
+            &store,
+            "fedora-cve-triage",
+            "Bugzilla API key",
+            &bz,
+            &others,
+        )
+        .unwrap();
+        assert_eq!(
+            note,
+            "Bugzilla API key: off for fedora-cve-triage; the keyring entry is kept, as \
+             ebranch, poi-tracker here may use it; to remove it: secret-tool clear \
+             application sandogasa service bugzilla.redhat.com"
+        );
+        assert!(!note.contains("s3cr3t"), "the secret is never in the note");
+    }
+
+    /// A stand-in for `secret-tool` in `dir`, keeping entries as files
+    /// there: `store` reads the secret from stdin, `lookup` prints it
+    /// (nothing, and success, when there is none, as the real one does),
+    /// `clear` removes it. With `broken`, every call fails as one with
+    /// no Secret Service reachable does.
+    fn fake_secret_tool(dir: &std::path::Path, broken: bool) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = if broken {
+            "#!/bin/sh\necho 'Cannot autolaunch D-Bus without X11 $DISPLAY' >&2\nexit 1\n"
+                .to_string()
+        } else {
+            format!(
+                "#!/bin/sh\nverb=$1; shift\ncase $1 in --label=*) shift;; esac\n\
+                 key=$(echo \"$*\" | tr ' /' '__')\nf='{db}'/$key\n\
+                 case $verb in\n\
+                 store) cat > \"$f\";;\n\
+                 lookup) [ -f \"$f\" ] && cat \"$f\"; exit 0;;\n\
+                 clear) rm -f \"$f\";;\n\
+                 esac\n",
+                db = dir.display()
+            )
+        };
+        let path = dir.join("secret-tool");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// What every tool's keyring goes through: a secret stored is the
+    /// one looked up, under its own entry, and gone once cleared; a
+    /// service on this machine is never asked about.
+    #[test]
+    fn secret_tool_stores_looks_up_and_clears_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_secret_tool(dir.path(), false);
+        let tool = SecretToolAt {
+            program: program.as_os_str(),
+        };
+        let gitlab = SecretRef::for_url("https://gitlab.com", "sandogasa: GitLab token");
+        let other = SecretRef::for_url("https://gitlab.example.org", "sandogasa: GitLab token");
+        assert_eq!(tool.lookup(&gitlab).unwrap(), None);
+        tool.store(&gitlab, "glpat-1").unwrap();
+        assert_eq!(tool.lookup(&gitlab).unwrap().as_deref(), Some("glpat-1"));
+        assert_eq!(
+            tool.lookup(&other).unwrap(),
+            None,
+            "another service's entry"
+        );
+        tool.clear(&gitlab).unwrap();
+        assert_eq!(tool.lookup(&gitlab).unwrap(), None);
+        // Clearing what is not there is not a failure.
+        tool.clear(&gitlab).unwrap();
+        // A test server's entry is never looked up.
+        let local = SecretRef::for_url("http://127.0.0.1:8080", "sandogasa: GitLab token");
+        assert_eq!(tool.lookup(&local).unwrap(), None);
+    }
+
+    /// With no Secret Service, every call says the keyring is
+    /// unavailable, and a secret kept then goes to the file, as before.
+    #[test]
+    fn without_a_secret_service_the_keyring_is_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_secret_tool(dir.path(), true);
+        let tool = SecretToolAt {
+            program: program.as_os_str(),
+        };
+        let gitlab = SecretRef::for_url("https://gitlab.com", "sandogasa: GitLab token");
+        assert!(matches!(
+            tool.lookup(&gitlab),
+            Err(SecretError::Unavailable(_))
+        ));
+        assert!(matches!(
+            tool.store(&gitlab, "t"),
+            Err(SecretError::Unavailable(_))
+        ));
+        assert!(matches!(
+            tool.clear(&gitlab),
+            Err(SecretError::Unavailable(_))
+        ));
+        assert_eq!(
+            keep_for_file(&tool, "GitLab token", &gitlab, "glpat-1".into()),
+            "glpat-1",
+            "kept in the file"
+        );
+        // No secret-tool at all is unavailable too.
+        let missing = SecretToolAt {
+            program: std::ffi::OsStr::new("/nonexistent/secret-tool"),
+        };
+        assert!(matches!(
+            missing.lookup(&gitlab),
+            Err(SecretError::Unavailable(_))
+        ));
+    }
+
+    /// `-` in a tool's file turns the secret off for it: the keyring's
+    /// entry is not read, an environment variable still is, and keeping
+    /// it leaves the marker in the file and the entry alone.
+    #[test]
+    fn a_secret_turned_off_is_not_read_from_the_keyring() {
+        let store = MemoryStore::default();
+        let nvd = SecretRef::for_url("https://services.nvd.nist.gov", "sandogasa: NVD API key");
+        store.store(&nvd, "shared").unwrap();
+        assert_eq!(
+            resolve(&store, None, &nvd, Some("")).as_deref(),
+            Some("shared")
+        );
+        assert_eq!(resolve(&store, None, &nvd, Some(OFF)), None);
+        assert_eq!(
+            keep_for_file(&store, "NVD API key", &nvd, OFF.to_string()),
+            OFF
+        );
+        assert_eq!(store.lookup(&nvd).unwrap().as_deref(), Some("shared"));
+    }
 
     #[test]
     fn an_entry_is_named_by_its_service_and_found_by_hand_the_same_way() {

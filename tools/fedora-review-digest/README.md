@@ -40,8 +40,13 @@ For `--post` (writing the review back to Bugzilla) you also need a
 Bugzilla API key and your Bugzilla email (the login the bug is claimed
 for): set `BUGZILLA_API_KEY` / `BUGZILLA_EMAIL`, run `fedora-review-digest
 config` to set them up and verify them, or let `--post` prompt and save
-them to `~/.config/fedora-review-digest/config.toml` (`[bugzilla]
-api_key`, `email`) on first use.
+them on first use. The key is kept in the desktop keyring (through
+`secret-tool`), as the bugzilla.redhat.com entry every sandogasa tool
+reads (`secret-tool lookup application sandogasa service
+bugzilla.redhat.com`); the email, and the key when there is no keyring
+to use, go to `~/.config/fedora-review-digest/config.toml`
+(`[bugzilla] email`, `api_key`). A key found in that file is moved to
+the keyring the next time `config` runs.
 
 ## Usage
 
@@ -288,10 +293,10 @@ value is not valid. `--all` asks for every setting again, with the saved
 value as the default: Enter keeps it, a new value replaces it, and `-`
 clears an optional one. A saved secret is never shown.
 
-Credentials belong in the per-user file, which is 600, or in an
-environment variable — a token under `/etc` is readable by every local
-user. For an unattended machine, give the job its own user and its own
-600 config.
+Credentials belong in the keyring, the per-user file, which is 600, or
+an environment variable — a token under `/etc` is readable by every
+local user. For an unattended machine, give the job its own user and
+its own 600 config.
 
 ## License
 

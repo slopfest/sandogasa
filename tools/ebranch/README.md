@@ -761,8 +761,8 @@ release's tag holds one of the fix commits OSV records. The copy is
 the one the tracker's title or NVD's product names. A tracker for
 another release, or a CVE nothing can judge, is left to you. NVD answers are paced to its limit — one request
 per 6 s without a key — and cached a day under `~/.cache/ebranch`; an
-API key in the config's `[nvd]` table (`ebranch config` asks for one,
-optional) lifts the pace tenfold. A plain bug report gets no
+NVD API key (`ebranch config` asks for one, optional) lifts the pace
+tenfold. A plain bug report gets no
 suggestion either way.
 
 Review requests (`Review Request: <pkg> - ...`) are auto-voted `+1`
@@ -1013,7 +1013,7 @@ counterpart is named in a way none of those reach — `vlc` is
 After the updates are submitted, one bug per package is filed with RPM
 Fusion's own Bugzilla, carrying what they ship for each release,
 whether their dist-git is branched, and every update to follow. This
-needs a key in `[rpmfusion-bugzilla]`, which `ebranch config` asks for
+needs an RPM Fusion Bugzilla API key, which `ebranch config` asks for
 (RPM Fusion's Bugzilla is a separate instance with a separate
 account); without one the run says so and files nothing, leaving the
 held auto-push in place. Because RPM Fusion
@@ -1731,7 +1731,7 @@ It asks before filing; `--yes` skips the question, and a run with
 no terminal says what it would file instead of filing it. Without
 a `packager.fas` the step is reported, not taken. Without a Forgejo
 token, a run at a terminal asks for one when the first ticket is due,
-saves it to your config and goes on to file; with `--yes`, `--dry-run`
+keeps it as `ebranch config` would and goes on to file; with `--yes`, `--dry-run`
 or no terminal the step is reported instead. A `needinfo?` that has been answered or cleared is never
 escalated automatically — it is printed for you to read, because
 the policy counts some replies as no action and some as action,
@@ -1839,19 +1839,19 @@ to a build request, as above. `ebranch config` asks for the FAS, then
 looks the name up in dist-git's copy of the provenpackager group and
 offers what it found as the answer to confirm.
 
-A `[forgejo]` table holds the token `escalate` files a releng ticket
-with, on Fedora's Forgejo. `ebranch config` asks for it; create it at
+A `[forgejo]` table says which Forgejo `escalate` files a releng
+ticket on, Fedora's by default. `ebranch config` asks for the token to
+file with; create it at
 https://forge.fedoraproject.org/user/settings/applications with the
 issue scope at Read and Write, to search and file tickets, and the
 organization scope at Read, since some of the labels a ticket is
 filed with belong to the releng organisation. A new token is checked
 for all of it against the releng tracker, without writing anything
 there; a kept one only for still working. A token Forgejo refuses, or
-one missing a scope, is offered for replacement:
+one missing a scope, is offered for replacement.
 
 ```toml
 [forgejo]
-token = "..."
 url = "https://forge.fedoraproject.org"
 ```
 
@@ -1908,12 +1908,28 @@ normally shipped `root:root 0644`.
 `ebranch config` asks only for settings that are missing, or whose saved
 value is not valid. `--all` asks for every setting again, with the saved
 value as the default: Enter keeps it, a new value replaces it, and `-`
-clears an optional one. A saved secret is never shown.
+clears an optional one. A saved secret is never shown. A secret cleared
+is turned off for ebranch (`api_key = "-"` in its file), so a cleared
+RPM Fusion key leaves ebranch reading RPM Fusion only; the keyring
+entry stays for the other tools, and `config` says which are set up
+here and how to remove it (`secret-tool clear …`).
 
-Credentials belong in the per-user file, which is 600, or in an
-environment variable — a token under `/etc` is readable by every local
-user. For an unattended machine, give the job its own user and its own
-600 config.
+`ebranch config` keeps the credentials — the Bugzilla, NVD and RPM
+Fusion Bugzilla API keys and the Forgejo token — in the desktop
+keyring (through `secret-tool`), as entries shared with the other
+sandogasa tools that use the same service, e.g. `secret-tool lookup
+application sandogasa service bugzilla.redhat.com`. Without a keyring
+to use (no `secret-tool`, no Secret Service) they go to the per-user
+file as `api_key` or `token` in their table, and one found there is
+moved to the keyring the next time `config` runs. `BUGZILLA_API_KEY`
+overrides both for the Bugzilla key, and `--api-key` overrides that. A
+`GITHUB_TOKEN`, or a GitHub token another tool kept in the keyring,
+lifts GitHub's rate limit when a CVE tracker's fix is looked up.
+
+Credentials belong in the keyring, the per-user file, which is 600, or
+an environment variable — a token under `/etc` is readable by every
+local user. For an unattended machine, give the job its own user and
+its own 600 config.
 
 ## License
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Configuration for fesco-chair — the Forgejo API token, stored at
+//! Configuration for fesco-chair — the Forgejo API token, kept in the
+//! desktop keyring when there is one (#79), else in
 //! `~/.config/fesco-chair/config.toml` with restricted permissions
 //! (dir 700, file 600, via sandogasa-config).
 
@@ -18,12 +19,14 @@ pub struct Config {
 /// Forgejo configuration.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ForgejoConfig {
-    /// API token for forge.fedoraproject.org.
-    #[serde(default)]
+    /// API token for forge.fedoraproject.org; empty when it is in the
+    /// keyring (#79).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
 }
 
-/// The stored Forgejo token, if any.
+/// The Forgejo token in the config file, if any. The keyring's comes
+/// first; see [`crate::sources::forge_token`].
 pub fn stored_token() -> Option<String> {
     let config: Config = sandogasa_config::ConfigFile::for_tool("fesco-chair")
         .load()
@@ -31,11 +34,43 @@ pub fn stored_token() -> Option<String> {
     (!config.forgejo.token.is_empty()).then_some(config.forgejo.token)
 }
 
+/// Save `config` to `cf`, the token in the keyring when there is one:
+/// `save` lays the struct over the file and never removes a key, so a
+/// token moved to the keyring is taken out of the file here. Whether
+/// the file, left with nothing in it, was removed.
+pub fn save(
+    cf: &sandogasa_config::ConfigFile,
+    mut config: Config,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if !config.forgejo.token.is_empty() {
+        config.forgejo.token = crate::secrets::keep_for_file(
+            "Forgejo token",
+            &crate::secrets::forgejo(),
+            std::mem::take(&mut config.forgejo.token),
+        );
+    }
+    let in_keyring = config.forgejo.token.is_empty();
+    cf.save(&config)?;
+    if in_keyring {
+        return cf.remove("forgejo", "token");
+    }
+    Ok(false)
+}
+
 /// Interactive config setup: prompt for the Forgejo token (again,
 /// with `all`), validate it against the instance, and save.
 pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     let cf = sandogasa_config::ConfigFile::for_tool("fesco-chair");
     let mut config: Config = cf.load_user().unwrap_or_default();
+    // A token kept in the keyring is the saved one (#79).
+    if let Some(token) = sandogasa_config::secret::resolve(
+        crate::secrets::keyring(),
+        None,
+        &crate::secrets::forgejo(),
+        Some(&config.forgejo.token),
+    ) {
+        config.forgejo.token = token;
+    }
 
     println!("fesco-chair configuration\n");
     println!("Config file: {}\n", cf.path().display());
@@ -78,9 +113,15 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     )
     .key;
 
-    cf.save(&config)
-        .map_err(|e| format!("failed to save config: {e}"))?;
-    println!("\nConfig saved to {}", cf.path().display());
+    let removed = save(&cf, config).map_err(|e| format!("failed to save config: {e}"))?;
+    if removed {
+        println!(
+            "\nNothing else to keep in {}; removed it.",
+            cf.path().display()
+        );
+    } else {
+        println!("\nConfig saved to {}", cf.path().display());
+    }
     Ok(())
 }
 

@@ -2,9 +2,11 @@
 
 //! Configuration management for ebranch.
 //!
-//! Stores the Bugzilla API key at `~/.config/ebranch/config.toml`
-//! with restricted permissions (dir 700, file 600), and carries
-//! standing preferences such as the crates `check-crate` ignores.
+//! Keeps the Bugzilla, NVD, Forgejo and RPM Fusion credentials in the
+//! desktop keyring when there is one (see [`crate::secrets`]), else in
+//! `~/.config/ebranch/config.toml` with restricted permissions (dir
+//! 700, file 600), and carries standing preferences such as the crates
+//! `check-crate` ignores.
 
 use serde::{Deserialize, Serialize};
 
@@ -102,10 +104,11 @@ impl Default for RpmfusionBugzillaConfig {
 /// means "do not file", which is how an unconfigured run stays
 /// read-only rather than failing.
 pub fn rpmfusion_bugzilla() -> Option<RpmfusionBugzillaConfig> {
-    let cfg = sandogasa_config::ConfigFile::for_tool("ebranch")
+    let mut cfg = sandogasa_config::ConfigFile::for_tool("ebranch")
         .load::<EbranchConfig>()
-        .ok()?
+        .unwrap_or_default()
         .rpmfusion_bugzilla;
+    cfg.api_key = crate::secrets::resolve(None, &crate::secrets::bugzilla(&cfg.url), &cfg.api_key);
     (!cfg.api_key.is_empty()).then_some(cfg)
 }
 
@@ -139,13 +142,14 @@ pub struct NvdConfig {
     pub api_key: String,
 }
 
-/// The configured NVD API key, empty when there is none — the layered
-/// config, so a key shipped system-wide counts.
+/// The NVD API key, empty when there is none: the keyring's, else the
+/// layered config's, so a key shipped system-wide counts.
 pub fn nvd_api_key() -> String {
-    sandogasa_config::ConfigFile::for_tool("ebranch")
+    let file = sandogasa_config::ConfigFile::for_tool("ebranch")
         .load::<EbranchConfig>()
         .map(|c| c.nvd.api_key)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    crate::secrets::resolve(None, &crate::secrets::nvd(), &file)
 }
 
 /// Standing `check-crate` preferences.
@@ -273,10 +277,12 @@ pub struct BugzillaConfig {
 /// last step of the escalation, and `escalate` reports that step
 /// rather than failing when it cannot take it.
 pub fn forgejo() -> ForgejoConfig {
-    sandogasa_config::ConfigFile::for_tool("ebranch")
+    let mut forge = sandogasa_config::ConfigFile::for_tool("ebranch")
         .load::<EbranchConfig>()
         .map(|c| c.forgejo)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    forge.token = crate::secrets::resolve(None, &crate::secrets::forgejo(&forge.url), &forge.token);
+    forge
 }
 
 /// Everything `escalate` needs of a new Forgejo token, asked of the
@@ -380,10 +386,11 @@ pub async fn ask_forgejo_token(forge: &mut ForgejoConfig, review: bool) -> Resul
     Ok(())
 }
 
-/// Ask for the Forgejo token now and save it to the user's config
-/// file, for `escalate` finding a releng ticket due and no token to
-/// file it with. `url` is the Forgejo the run is using. The token, or
-/// `None` when none was given.
+/// Ask for the Forgejo token now and keep it, in the keyring when
+/// there is one and else in the user's config file, for `escalate`
+/// finding a releng ticket due and no token to file it with. `url` is
+/// the Forgejo the run is using. The token, or `None` when none was
+/// given.
 pub async fn ask_and_save_forgejo_token(url: &str) -> Result<Option<String>, String> {
     let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
     let mut config: EbranchConfig = cf.load_user().unwrap_or_default();
@@ -391,14 +398,22 @@ pub async fn ask_and_save_forgejo_token(url: &str) -> Result<Option<String>, Str
     // the system-wide file; that URL is not copied into the user's.
     let own_url = std::mem::replace(&mut config.forgejo.url, url.to_string());
     ask_forgejo_token(&mut config.forgejo, false).await?;
-    config.forgejo.url = own_url;
-    if config.forgejo.token.is_empty() {
+    let token = std::mem::take(&mut config.forgejo.token);
+    if token.is_empty() {
         return Ok(None);
     }
-    cf.save(&config)
-        .map_err(|e| format!("failed to save config: {e}"))?;
-    println!("Saved the token to {}", cf.path().display());
-    Ok(Some(config.forgejo.token))
+    // Kept for the Forgejo it was checked against.
+    config.forgejo.token = crate::secrets::keep_for_file(
+        "Forgejo token",
+        &crate::secrets::forgejo(url),
+        token.clone(),
+    );
+    config.forgejo.url = own_url;
+    save_with_secrets(&cf, &mut config, &["forgejo"])?;
+    if !config.forgejo.token.is_empty() {
+        println!("Saved the token to {}", cf.path().display());
+    }
+    Ok(Some(token))
 }
 
 /// The Bugzilla account to claim bookkeeping requests as, if set.
@@ -455,29 +470,32 @@ async fn looks_like_provenpackager(fas: &str) -> Option<bool> {
         .map(|members| members.iter().any(|m| m == fas))
 }
 
-/// Load the Bugzilla API key, checking (in order):
+/// Load the API key for the Bugzilla at `bugzilla_url`, checking (in
+/// order):
 /// 1. `--api-key` CLI flag
 /// 2. `BUGZILLA_API_KEY` environment variable
-/// 3. `~/.config/ebranch/config.toml`
+/// 3. the keyring's entry for that Bugzilla
+/// 4. `~/.config/ebranch/config.toml`
 ///
 /// Returns an error with setup instructions if none found.
-pub fn resolve_api_key(cli_key: Option<&str>) -> Result<String, String> {
+pub fn resolve_api_key(cli_key: Option<&str>, bugzilla_url: &str) -> Result<String, String> {
     if let Some(key) = cli_key
         && !key.is_empty()
     {
         return Ok(key.to_string());
     }
 
-    if let Ok(key) = std::env::var("BUGZILLA_API_KEY")
-        && !key.is_empty()
-    {
+    let file = sandogasa_config::ConfigFile::for_tool("ebranch")
+        .load::<EbranchConfig>()
+        .map(|c| c.bugzilla.api_key)
+        .unwrap_or_default();
+    let key = crate::secrets::resolve(
+        Some("BUGZILLA_API_KEY"),
+        &crate::secrets::bugzilla(bugzilla_url),
+        &file,
+    );
+    if !key.is_empty() {
         return Ok(key);
-    }
-
-    if let Ok(config) = sandogasa_config::ConfigFile::for_tool("ebranch").load::<EbranchConfig>()
-        && !config.bugzilla.api_key.is_empty()
-    {
-        return Ok(config.bugzilla.api_key);
     }
 
     Err("Bugzilla API key not found.\n\
@@ -502,6 +520,8 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         config.bugzilla.url = "https://bugzilla.redhat.com".to_string();
     }
     println!("Bugzilla URL: {}", config.bugzilla.url);
+    // Secrets kept in the keyring are the saved ones (#79).
+    let had = secrets_from_keyring(&mut config);
 
     // API key.
     config.bugzilla.api_key = ask(
@@ -733,11 +753,130 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         .key;
     }
 
-    cf.save(&config)
-        .map_err(|e| format!("failed to save config: {e}"))?;
-    println!("\nConfig saved to {}", cf.path().display());
+    // Into the keyring when there is one, out of the file then.
+    secrets_to_keyring(&mut config, &had);
+    if save_with_secrets(&cf, &mut config, &ALL_TABLES)? {
+        println!("\nConfig saved to {}", cf.path().display());
+    } else {
+        println!(
+            "\nNothing else to keep in {}; removed it.",
+            cf.path().display()
+        );
+    }
 
     Ok(())
+}
+
+/// The tables of [`secret_fields`], all of them.
+const ALL_TABLES: [&str; 4] = ["bugzilla", "nvd", "forgejo", "rpmfusion-bugzilla"];
+
+/// One secret the config file can hold: its table and key there, what
+/// to call it, its keyring entry, and its value.
+struct SecretField<'a> {
+    table: &'static str,
+    key: &'static str,
+    what: &'static str,
+    entry: sandogasa_config::secret::SecretRef,
+    value: &'a mut String,
+}
+
+/// Every secret the config file can hold, each with the entry for the
+/// service its table points at.
+fn secret_fields(config: &mut EbranchConfig) -> [SecretField<'_>; 4] {
+    use crate::secrets;
+    [
+        SecretField {
+            table: "bugzilla",
+            key: "api_key",
+            what: "Bugzilla API key",
+            entry: secrets::bugzilla(&config.bugzilla.url),
+            value: &mut config.bugzilla.api_key,
+        },
+        SecretField {
+            table: "nvd",
+            key: "api_key",
+            what: "NVD API key",
+            entry: secrets::nvd(),
+            value: &mut config.nvd.api_key,
+        },
+        SecretField {
+            table: "forgejo",
+            key: "token",
+            what: "Forgejo token",
+            entry: secrets::forgejo(&config.forgejo.url),
+            value: &mut config.forgejo.token,
+        },
+        SecretField {
+            table: "rpmfusion-bugzilla",
+            key: "api_key",
+            what: "RPM Fusion Bugzilla API key",
+            entry: secrets::bugzilla(&config.rpmfusion_bugzilla.url),
+            value: &mut config.rpmfusion_bugzilla.api_key,
+        },
+    ]
+}
+
+/// Fill each secret from the keyring, which wins over the file's
+/// value: the saved values `config` offers as defaults. A secret turned
+/// off for ebranch ([`sandogasa_config::secret::OFF`]) stays off, so
+/// keeping the default keeps it off. Which secrets had a value, so
+/// [`secrets_to_keyring`] can tell one cleared from one never set.
+fn secrets_from_keyring(config: &mut EbranchConfig) -> Vec<bool> {
+    secret_fields(config)
+        .into_iter()
+        .map(|f| {
+            if f.value != sandogasa_config::secret::OFF {
+                *f.value = crate::secrets::resolve(None, &f.entry, f.value);
+            }
+            !f.value.is_empty()
+        })
+        .collect()
+}
+
+/// Keep each secret in the keyring when there is one, leaving the
+/// file's value empty then. One that had a value (`had`, from
+/// [`secrets_from_keyring`]) and was cleared is turned off for ebranch:
+/// the file says [`sandogasa_config::secret::OFF`], and the shared
+/// keyring entry is kept for the tools that use it.
+fn secrets_to_keyring(config: &mut EbranchConfig, had: &[bool]) {
+    for (f, had) in secret_fields(config).into_iter().zip(had) {
+        if f.value.is_empty() && *had {
+            if let Some(note) = sandogasa_config::secret::kept_on_clear(
+                crate::secrets::keyring(),
+                env!("CARGO_PKG_NAME"),
+                f.what,
+                &f.entry,
+            ) {
+                eprintln!("{note}");
+            }
+            *f.value = sandogasa_config::secret::OFF.to_string();
+            continue;
+        }
+        *f.value = crate::secrets::keep_for_file(f.what, &f.entry, std::mem::take(f.value));
+    }
+}
+
+/// Save `config` to the user file, then take out of it every secret
+/// of the `tables` named that is empty: kept in the keyring, or
+/// cleared. `save` lays the struct over the file and never removes a
+/// key, so a token moved to the keyring would otherwise stay there in
+/// plain text. Whether the file is still there.
+fn save_with_secrets(
+    cf: &sandogasa_config::ConfigFile,
+    config: &mut EbranchConfig,
+    tables: &[&str],
+) -> Result<bool, String> {
+    cf.save(&*config)
+        .map_err(|e| format!("failed to save config: {e}"))?;
+    let mut gone = false;
+    for f in secret_fields(config) {
+        if f.value.is_empty() && tables.contains(&f.table) {
+            gone |= cf
+                .remove(f.table, f.key)
+                .map_err(|e| format!("failed to update config: {e}"))?;
+        }
+    }
+    Ok(!gone)
 }
 
 /// The built-in rooms with `configured` laid over them.
@@ -873,6 +1012,172 @@ mod tests {
         // which would leave filing unconfigured with no sign why.
         let dashed = toml::to_string(&other).unwrap();
         assert!(dashed.contains("[rpmfusion-bugzilla]"), "{dashed}");
+    }
+
+    /// A user config file in a fresh `$XDG_CONFIG_HOME`, holding every
+    /// secret for test hosts no other test uses.
+    fn config_with_secrets(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("ebranch/config.toml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+            [bugzilla]
+            api_key = "bz-from-file"
+            url = "https://bugzilla.keyring.test"
+            [nvd]
+            api_key = "nvd-from-file"
+            [forgejo]
+            token = "forge-from-file"
+            url = "https://forge.keyring.test"
+            [rpmfusion-bugzilla]
+            api_key = "rpmfusion-from-file"
+            url = "https://bugzilla.rpmfusion.keyring.test"
+            [packager]
+            fas = "someone"
+            "#,
+        )
+        .unwrap();
+        path
+    }
+
+    /// Clearing the RPM Fusion key at the prompt turns it off for
+    /// ebranch, which goes back to reading RPM Fusion only, though the
+    /// shared keyring entry stays for the tools that use it; and the
+    /// next `config` run keeps it off.
+    #[test]
+    #[serial_test::serial]
+    fn a_secret_cleared_at_the_prompt_is_turned_off_for_ebranch() {
+        use crate::secrets::test_support::EnvGuard;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::new(&[("XDG_CONFIG_HOME", &dir.path().to_string_lossy())]);
+        let path = config_with_secrets(dir.path());
+        let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
+        // A first run moves the RPM Fusion key into the keyring.
+        let mut config: EbranchConfig = cf.load_user().unwrap();
+        let had = secrets_from_keyring(&mut config);
+        secrets_to_keyring(&mut config, &had);
+        save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap();
+        assert_eq!(rpmfusion_bugzilla().unwrap().api_key, "rpmfusion-from-file");
+
+        // Cleared at the next run's prompt.
+        let mut config: EbranchConfig = cf.load_user().unwrap();
+        let had = secrets_from_keyring(&mut config);
+        config.rpmfusion_bugzilla.api_key.clear();
+        secrets_to_keyring(&mut config, &had);
+        save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("api_key = \"-\""), "{text}");
+        assert!(rpmfusion_bugzilla().is_none(), "read-only again");
+        let entry = crate::secrets::bugzilla("https://bugzilla.rpmfusion.keyring.test");
+        assert_eq!(
+            crate::secrets::keyring().lookup(&entry).unwrap().as_deref(),
+            Some("rpmfusion-from-file"),
+            "the shared entry is kept"
+        );
+
+        // Kept as the default at a later run, it stays off.
+        let mut config: EbranchConfig = cf.load_user().unwrap();
+        let had = secrets_from_keyring(&mut config);
+        assert_eq!(
+            config.rpmfusion_bugzilla.api_key,
+            sandogasa_config::secret::OFF
+        );
+        secrets_to_keyring(&mut config, &had);
+        save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap();
+        assert!(rpmfusion_bugzilla().is_none());
+        for e in [
+            crate::secrets::bugzilla("https://bugzilla.keyring.test"),
+            crate::secrets::nvd(),
+            crate::secrets::forgejo("https://forge.keyring.test"),
+            entry,
+        ] {
+            crate::secrets::keyring().clear(&e).unwrap();
+        }
+    }
+
+    /// Secrets `config` keeps in the keyring are the ones the tool then
+    /// uses, the file is left without them, and the environment still
+    /// wins.
+    #[test]
+    #[serial_test::serial]
+    fn secrets_kept_in_the_keyring_are_the_ones_used() {
+        use crate::secrets::test_support::EnvGuard;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::new(&[
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+            // Empty is unset, to resolve().
+            ("BUGZILLA_API_KEY", ""),
+        ]);
+        let path = config_with_secrets(dir.path());
+        let bz = "https://bugzilla.keyring.test";
+        // Before: the file's, as ever.
+        assert_eq!(resolve_api_key(None, bz).unwrap(), "bz-from-file");
+        assert_eq!(nvd_api_key(), "nvd-from-file");
+        assert_eq!(forgejo().token, "forge-from-file");
+        assert_eq!(rpmfusion_bugzilla().unwrap().api_key, "rpmfusion-from-file");
+
+        // What `config` does once it has the answers.
+        let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
+        let mut config: EbranchConfig = cf.load_user().unwrap();
+        config.bugzilla.api_key = "bz-new".into();
+        config.nvd.api_key = "nvd-new".into();
+        config.forgejo.token = "forge-new".into();
+        config.rpmfusion_bugzilla.api_key = "rpmfusion-new".into();
+        // Nothing cleared: each was replaced.
+        secrets_to_keyring(&mut config, &[true; 4]);
+        assert!(save_with_secrets(&cf, &mut config, &ALL_TABLES).unwrap());
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        for gone in ["api_key", "token", "-new", "-from-file", "[nvd]"] {
+            assert!(!text.contains(gone), "{gone} left in:\n{text}");
+        }
+        // What is not a secret stays.
+        assert!(text.contains("https://forge.keyring.test"), "{text}");
+        assert!(text.contains("fas = \"someone\""), "{text}");
+
+        assert_eq!(resolve_api_key(None, bz).unwrap(), "bz-new");
+        assert_eq!(nvd_api_key(), "nvd-new");
+        assert_eq!(forgejo().token, "forge-new");
+        assert_eq!(rpmfusion_bugzilla().unwrap().api_key, "rpmfusion-new");
+        // And `config` offers them as the saved values.
+        let mut again: EbranchConfig = cf.load_user().unwrap();
+        secrets_from_keyring(&mut again);
+        assert_eq!(again.bugzilla.api_key, "bz-new");
+        assert_eq!(again.rpmfusion_bugzilla.api_key, "rpmfusion-new");
+
+        // The environment still wins, and the flag over that.
+        let _env2 = EnvGuard::new(&[("BUGZILLA_API_KEY", "bz-from-env")]);
+        assert_eq!(resolve_api_key(None, bz).unwrap(), "bz-from-env");
+        assert_eq!(resolve_api_key(Some("bz-flag"), bz).unwrap(), "bz-flag");
+
+        for f in secret_fields(&mut again) {
+            crate::secrets::keyring().clear(&f.entry).unwrap();
+        }
+    }
+
+    /// The keyring entry is the one for the Bugzilla the run talks to,
+    /// so a key kept for another one is not sent there.
+    #[test]
+    #[serial_test::serial]
+    fn a_bugzilla_key_is_read_for_the_bugzilla_in_use() {
+        use crate::secrets::test_support::EnvGuard;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvGuard::new(&[
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+            ("BUGZILLA_API_KEY", ""),
+        ]);
+        let entry = crate::secrets::bugzilla("https://bugzilla.one.test");
+        crate::secrets::keyring().store(&entry, "one").unwrap();
+        assert_eq!(
+            resolve_api_key(None, "https://bugzilla.one.test").unwrap(),
+            "one"
+        );
+        let err = resolve_api_key(None, "https://bugzilla.two.test").unwrap_err();
+        assert!(err.contains("ebranch config"), "{err}");
+        // No key anywhere: RPM Fusion stays read-only.
+        assert!(rpmfusion_bugzilla().is_none());
+        crate::secrets::keyring().clear(&entry).unwrap();
     }
 
     #[test]

@@ -729,19 +729,22 @@ pub fn fetch_docs_items(
 
 /// Forgejo API token lookup: the env vars first (matching
 /// sandogasa-report's convention — instance-specific, then generic),
-/// then the token stored by `fesco-chair config`. A token is required —
-/// the chair workflow uses an authenticated client (future versions
-/// will also update tickets).
+/// then the token `fesco-chair config` stored, in the keyring or else
+/// the config file. A token is required — the chair workflow uses an
+/// authenticated client (future versions will also update tickets).
 pub fn forge_token() -> Result<String, String> {
     const HOST_VAR: &str = "FORGEJO_TOKEN_FORGE_FEDORAPROJECT_ORG";
-    for var in [HOST_VAR, "FORGEJO_TOKEN"] {
-        if let Ok(token) = std::env::var(var)
-            && !token.is_empty()
-        {
-            return Ok(token);
-        }
+    if let Ok(token) = std::env::var(HOST_VAR)
+        && !token.is_empty()
+    {
+        return Ok(token);
     }
-    if let Some(token) = crate::config::stored_token() {
+    if let Some(token) = sandogasa_config::secret::resolve(
+        crate::secrets::keyring(),
+        Some("FORGEJO_TOKEN"),
+        &crate::secrets::forgejo(),
+        crate::config::stored_token().as_deref(),
+    ) {
         return Ok(token);
     }
     Err(format!(

@@ -14,3 +14,4 @@ pub mod cratesio;
 pub mod hackage;
 pub mod review;
 pub mod runner;
+pub mod secrets;

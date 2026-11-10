@@ -743,7 +743,7 @@ pub fn file_bugs(
     let client = match crate::config::rpmfusion_bugzilla() {
         None => {
             eprintln!(
-                "note: no [rpmfusion-bugzilla] api_key configured — showing what \
+                "note: no RPM Fusion Bugzilla API key configured — showing what \
                  would be filed, and filing nothing. `ebranch config` sets one. \
                  Any held auto-push stays held."
             );

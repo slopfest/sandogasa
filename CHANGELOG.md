@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Every tool keeps its secrets in the desktop keyring
+
+ebranch, fedora-cve-triage, fedora-review-digest, fesco-chair,
+poi-tracker, sandogasa-pkg-acl and sandogasa-report kept their API keys
+and tokens in plain text in `~/.config/<tool>/config.toml`, readable by
+anything running as the user and carried into backups and dotfile
+syncs. cpu-sig-tracker, cbspkg and hs-relmon had already moved theirs.
+Now every tool keeps them in the desktop keyring through `secret-tool`,
+one entry per service the secret unlocks (`application sandogasa
+service bugzilla.redhat.com`), so tools that talk to the same service
+share one entry: a Bugzilla API key, a Forgejo token, GitLab, GitHub,
+NVD, Pagure and SourceHut tokens, and a Jira token per Atlassian
+account. sandogasa-report keeps one per instance it reports on.
+Resolves #79.
+
+Reads go environment variable, then keyring, then the file, so an
+existing setup keeps working, and the next `config` run moves its
+secrets out of the file. Where no keyring can be used, the file is
+kept, as before. Clearing a secret at a `config` prompt turns it off
+for that tool: its file says `"-"`, and the tool reads the secret from
+neither the keyring nor the file, so a cleared RPM Fusion key leaves
+ebranch read-only there again. The keyring entry, which other tools may
+use, is never removed: the tool names the tools set up on this machine
+that keep that kind of secret, and gives the `secret-tool clear`
+command to remove it by hand. Where a tool offered the file's old value
+before the keyring's, it offers the keyring's, as reading does, so a
+stale secret left in a file is not saved back over the shared entry.
+
+New in sandogasa-config: `secret::OFF`, `secret::kept_on_clear`, the `secret::USERS`
+table of which tools keep which kind of secret (checked against the
+tools' sources by a test), and `SecretRef::label` and
+`SecretRef::clear_command`.
+
 ### cpu-sig-tracker jira refuses a malformed --cve, and cbspkg add-pkg checks its tools first
 
 `cpu-sig-tracker jira --cve CVE-2026-1` dropped the id without a word,

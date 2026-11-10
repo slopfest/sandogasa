@@ -238,8 +238,13 @@ fesco-chair config
 
 Interactive setup: prompts for the Forgejo API token (hidden input;
 `--all` to replace a saved one), validates it against
-forge.fedoraproject.org, and stores it at
-`~/.config/fesco-chair/config.toml` (directory 700, file 600).
+forge.fedoraproject.org, and keeps it in the desktop keyring (through
+`secret-tool`) as the forge.fedoraproject.org entry every sandogasa
+tool reads (`secret-tool lookup application sandogasa service
+forge.fedoraproject.org`), so a token another tool stored there is
+used as it is. Without a keyring to use it goes to
+`~/.config/fesco-chair/config.toml` (directory 700, file 600); a token
+found there is moved to the keyring the next time `config` runs.
 
 ### `script`
 
@@ -412,10 +417,10 @@ value is not valid. `--all` asks for every setting again, with the saved
 value as the default: Enter keeps it, a new value replaces it, and `-`
 clears an optional one. A saved secret is never shown.
 
-Credentials belong in the per-user file, which is 600, or in an
-environment variable — a token under `/etc` is readable by every local
-user. For an unattended machine, give the job its own user and its own
-600 config.
+Credentials belong in the keyring, the per-user file, which is 600, or
+an environment variable — a token under `/etc` is readable by every
+local user. For an unattended machine, give the job its own user and
+its own 600 config.
 
 ## License
 

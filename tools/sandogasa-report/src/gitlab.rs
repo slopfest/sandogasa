@@ -23,6 +23,7 @@ use crate::forge::{stat, stat_across};
 
 const TOKEN_SPEC: TokenSpec = TokenSpec {
     service: "GitLab",
+    label: "sandogasa: GitLab token",
     generic_env: "GITLAB_TOKEN",
     host_separators: &['.'],
     hint: "",
@@ -724,14 +725,21 @@ fn write_mr_list(out: &mut String, mrs: &[MrRef], instance: &str) {
     out.push('\n');
 }
 
+/// The keyring entry for `instance`'s token, which `config` keeps
+/// it in.
+pub(crate) fn secret(instance: &str) -> sandogasa_config::secret::SecretRef {
+    forge::secret(instance, &TOKEN_SPEC)
+}
+
 /// Look up the GitLab API token for an instance.
 ///
-/// Order: instance-specific env var → generic env var →
-/// `gitlab_tokens.<hostname>` from the user overlay → error.
+/// Order: instance-specific env var → generic env var → the
+/// keyring's entry for the instance → `gitlab_tokens.<hostname>` from the user
+/// overlay → error.
 /// Env vars win over config so a shell override (`GITLAB_TOKEN=…
 /// sandogasa-report report …`) works even with a persisted
 /// token.
-fn find_token(
+pub(crate) fn find_token(
     instance: &str,
     tokens: &std::collections::BTreeMap<String, String>,
 ) -> Result<String, String> {
@@ -979,6 +987,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn find_token_errors_when_nothing_set() {
         // Safe: the hostname we use is clearly not a real
         // GITLAB_TOKEN_ env var anyone would set, and we pass an
@@ -990,6 +999,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn find_token_falls_back_to_config() {
         // SAFETY: only matters when no env vars are set. The
         // hostname is scoped to avoid clashing with production

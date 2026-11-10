@@ -420,6 +420,31 @@ no keyring can be used.
   skips lookups for loopback hosts, which only test servers are.
 - **Never print a secret.** Errors and messages name the entry
   (`SecretRef::lookup_command`), never its value.
+- **Clearing a secret turns it off for that tool, and never removes its
+  entry.** When a `config` prompt clears a secret that had a value, write
+  `secret::OFF` (`"-"`) in that tool's file: `resolve` then takes only an
+  environment variable and never asks the keyring, so the tool really
+  stops using it, while the entry, the service's, stays for the tools
+  that read it. Say so with `secret::kept_on_clear`, which names the
+  tools set up on the machine that keep that kind of secret and the
+  `secret-tool clear` command to remove it by hand. A secret never set
+  stays absent, not off: tell the two apart by whether it had a value
+  before the prompts.
+- **Offer the keyring's value first at a prompt**, as `resolve` reads
+  it: offering a stale value left in the file would save it back over
+  the shared entry, and break every other tool that uses it. Keep `OFF`
+  as the default when the file says it, so Enter keeps it off.
+- **Labels name the kind of secret, and are shared:** reuse the ones in
+  `secret::USERS` (`sandogasa: Bugzilla API key`, `sandogasa: GitLab
+  token`, …) so the same service reads as the same entry in every tool.
+- **When a tool starts or stops keeping a secret, update
+  `secret::USERS`**, the table of which tools keep which label, sorted
+  by label and each list by tool. `kept_on_clear` reads it to say who
+  else uses an entry. `the_users_table_matches_what_the_tools_keep`
+  reads every tool's sources for its `"sandogasa: …"` labels and fails
+  until the table says the same, so a tool cannot drift from it
+  unnoticed. A crate dependency is not the signal: hs-meetings depends
+  on sandogasa-gitlab and reads GitLab anonymously.
 
 `secret-tool` is shelled out to rather than linked: the `keyring` crate
 is not packaged in Fedora, `secret-service` is missing from EPEL 9, and

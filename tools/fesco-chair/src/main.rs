@@ -14,6 +14,7 @@ mod announce;
 mod changes;
 mod config;
 mod script;
+mod secrets;
 mod sources;
 mod state;
 mod summary;

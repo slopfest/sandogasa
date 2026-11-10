@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! `config` subcommand — interactively populate user profiles
-//! and forge tokens (GitLab + GitHub) in the overlay at
-//! `~/.config/sandogasa-report/config.toml`. A profile binds a
+//! in the overlay at `~/.config/sandogasa-report/config.toml`,
+//! and forge tokens (GitLab, GitHub, Forgejo, Sourcehut) in the
+//! desktop keyring, one entry per instance (the overlay when no
+//! keyring can be used). A profile binds a
 //! single logical person to their per-service identities (FAS
 //! login, Bugzilla email, per-instance GitLab/GitHub usernames)
 //! so a single `--user <profile>` CLI flag can drive a
@@ -125,71 +127,70 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // Token section: one prompt per unique instance, per forge.
     // Existing tokens are validated first so re-runs don't force
-    // re-entry unless they've been revoked.
-    if !gitlab_instances.is_empty() {
-        eprintln!("\nGitLab API tokens (per instance):");
-    }
-    for instance in &gitlab_instances {
-        let host = crate::gitlab::instance_host(instance);
-        let existing = overlay_get_str(&overlay, &["gitlab_tokens", &host]);
-        match prompt_gitlab_token(instance, existing.as_deref())? {
-            TokenChoice::Saved(t) => {
-                overlay_set_str(&mut overlay, &["gitlab_tokens", &host], &t);
-                changed = true;
-            }
-            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
+    // re-entry unless they've been revoked. Each goes in the keyring
+    // when there is one, as its own entry (#79).
+    let forges = [
+        (
+            &gitlab_instances,
+            "GitLab API tokens (per instance):",
+            GITLAB,
+        ),
+        (
+            &github_instances,
+            "GitHub API tokens (per instance):",
+            GITHUB,
+        ),
+        (
+            &forgejo_instances,
+            "Forgejo API tokens (per instance):",
+            FORGEJO,
+        ),
+        (
+            &sourcehut_instances,
+            "Sourcehut personal access tokens (per instance):",
+            SOURCEHUT,
+        ),
+    ];
+    let mut stored = false;
+    let mut out_of_file: Vec<(&str, String)> = Vec::new();
+    for (instances, heading, kind) in forges {
+        if !instances.is_empty() {
+            eprintln!("\n{heading}");
         }
-    }
-    if !github_instances.is_empty() {
-        eprintln!("\nGitHub API tokens (per instance):");
-    }
-    for instance in &github_instances {
-        let host = crate::github::instance_host(instance);
-        let existing = overlay_get_str(&overlay, &["github_tokens", &host]);
-        match prompt_github_token(instance, existing.as_deref())? {
-            TokenChoice::Saved(t) => {
-                overlay_set_str(&mut overlay, &["github_tokens", &host], &t);
-                changed = true;
+        for instance in instances {
+            let host = (kind.host)(instance);
+            let outcome = keep_token(&mut overlay, &kind, instance, &host, |existing| {
+                (kind.prompt)(instance, existing)
+            })?;
+            match outcome {
+                TokenOutcome::Unchanged => {}
+                TokenOutcome::InOverlay => changed = true,
+                TokenOutcome::InKeyring { was_in_file } => {
+                    stored = true;
+                    if was_in_file {
+                        out_of_file.push((kind.table, host));
+                        changed = true;
+                    }
+                }
             }
-            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
-        }
-    }
-    if !forgejo_instances.is_empty() {
-        eprintln!("\nForgejo API tokens (per instance):");
-    }
-    for instance in &forgejo_instances {
-        let host = crate::forgejo::instance_host(instance);
-        let existing = overlay_get_str(&overlay, &["forgejo_tokens", &host]);
-        match prompt_forgejo_token(instance, existing.as_deref())? {
-            TokenChoice::Saved(t) => {
-                overlay_set_str(&mut overlay, &["forgejo_tokens", &host], &t);
-                changed = true;
-            }
-            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
-        }
-    }
-    if !sourcehut_instances.is_empty() {
-        eprintln!("\nSourcehut personal access tokens (per instance):");
-    }
-    for instance in &sourcehut_instances {
-        let host = crate::sourcehut::instance_host(instance);
-        let existing = overlay_get_str(&overlay, &["sourcehut_tokens", &host]);
-        match prompt_sourcehut_token(instance, existing.as_deref())? {
-            TokenChoice::Saved(t) => {
-                overlay_set_str(&mut overlay, &["sourcehut_tokens", &host], &t);
-                changed = true;
-            }
-            TokenChoice::KeepExisting | TokenChoice::Skipped => {}
         }
     }
 
     if !changed {
-        eprintln!("\nNo changes.");
+        if !stored {
+            eprintln!("\nNo changes.");
+        }
         return Ok(());
     }
 
-    overlay_cf.save(&overlay)?;
-    eprintln!("\nSaved overlay to {}", overlay_path.display());
+    if write_overlay(&overlay_cf, &overlay, &out_of_file)? {
+        eprintln!(
+            "\nNothing else to keep in {}; removed it.",
+            overlay_path.display()
+        );
+    } else {
+        eprintln!("\nSaved overlay to {}", overlay_path.display());
+    }
     Ok(())
 }
 
@@ -364,6 +365,32 @@ enum TokenChoice {
     Skipped,
 }
 
+/// Where [`keep_token`] left a token.
+#[derive(Debug, PartialEq)]
+enum TokenOutcome {
+    /// Nothing to do: skipped, or kept where it already was.
+    Unchanged,
+    /// In the overlay, because no keyring could be used.
+    InOverlay,
+    /// In the keyring; `was_in_file` when the overlay had it too, and
+    /// the file has to be rid of it.
+    InKeyring { was_in_file: bool },
+}
+
+/// One forge's tokens: the overlay table that held them, what to call
+/// one, and how to name an instance's host and keyring entry and
+/// prompt for its token.
+struct TokenKind {
+    table: &'static str,
+    what: &'static str,
+    host: fn(&str) -> String,
+    secret: fn(&str) -> sandogasa_config::secret::SecretRef,
+    prompt: PromptFn,
+}
+
+/// How a forge asks for an instance's token, given the saved one.
+type PromptFn = fn(&str, Option<&str>) -> Result<TokenChoice, Box<dyn std::error::Error>>;
+
 /// Every forge's `validate_token` has this shape: `Ok(true)` valid,
 /// `Ok(false)` rejected, `Err` couldn't reach the API.
 type ValidateFn = fn(&str, &str) -> Result<bool, Box<dyn std::error::Error>>;
@@ -508,6 +535,95 @@ fn prompt_sourcehut_token(
     )
 }
 
+const GITLAB: TokenKind = TokenKind {
+    table: "gitlab_tokens",
+    what: "GitLab token",
+    host: crate::gitlab::instance_host,
+    secret: crate::gitlab::secret,
+    prompt: prompt_gitlab_token,
+};
+
+const GITHUB: TokenKind = TokenKind {
+    table: "github_tokens",
+    what: "GitHub token",
+    host: crate::github::instance_host,
+    secret: crate::github::secret,
+    prompt: prompt_github_token,
+};
+
+const FORGEJO: TokenKind = TokenKind {
+    table: "forgejo_tokens",
+    what: "Forgejo token",
+    host: crate::forgejo::instance_host,
+    secret: crate::forgejo::secret,
+    prompt: prompt_forgejo_token,
+};
+
+const SOURCEHUT: TokenKind = TokenKind {
+    table: "sourcehut_tokens",
+    what: "Sourcehut token",
+    host: crate::sourcehut::instance_host,
+    secret: crate::sourcehut::secret,
+    prompt: prompt_sourcehut_token,
+};
+
+/// Ask `choose` for `instance`'s token, offering the one saved (the
+/// keyring's, else the overlay's at `[<table>] <host>`), and keep the
+/// answer in the keyring when there is one, taking it out of the
+/// overlay; otherwise in the overlay, as before. A token kept as it
+/// was but found only in the overlay moves to the keyring too.
+fn keep_token(
+    overlay: &mut toml::Value,
+    kind: &TokenKind,
+    instance: &str,
+    host: &str,
+    choose: impl FnOnce(Option<&str>) -> Result<TokenChoice, Box<dyn std::error::Error>>,
+) -> Result<TokenOutcome, Box<dyn std::error::Error>> {
+    let path = [kind.table, host];
+    let secret = (kind.secret)(instance);
+    let file = overlay_get_str(overlay, &path);
+    let existing = sandogasa_config::secret::resolve(
+        crate::secrets::keyring(),
+        None,
+        &secret,
+        file.as_deref(),
+    );
+    let token = match (choose(existing.as_deref())?, existing) {
+        (TokenChoice::Saved(t), _) => t,
+        (TokenChoice::KeepExisting, Some(t)) if file.is_some() => t,
+        _ => return Ok(TokenOutcome::Unchanged),
+    };
+    let what = format!("{} for {host}", kind.what);
+    let kept = crate::secrets::keep_for_file(&what, &secret, token);
+    if kept.is_empty() {
+        Ok(TokenOutcome::InKeyring {
+            was_in_file: overlay_remove(overlay, &path),
+        })
+    } else if file.as_deref() == Some(kept.as_str()) {
+        Ok(TokenOutcome::Unchanged)
+    } else {
+        overlay_set_str(overlay, &path, &kept);
+        Ok(TokenOutcome::InOverlay)
+    }
+}
+
+/// Save `overlay` to `cf`, then take out the `(table, key)` tokens now
+/// in the keyring, which `save` (laying the overlay over the file)
+/// would leave there. Whether the file, left with nothing in it, was
+/// removed.
+fn write_overlay(
+    cf: &sandogasa_config::ConfigFile,
+    overlay: &toml::Value,
+    out_of_file: &[(&str, String)],
+) -> Result<bool, Box<dyn std::error::Error>> {
+    cf.save(overlay)?;
+    let mut removed = false;
+    for (table, key) in out_of_file {
+        removed |= cf.remove(table, key)?;
+    }
+    Ok(removed)
+}
+
 /// Parse an overlay file's text as a TOML *document*. Deliberately uses
 /// `toml::from_str`, not `str::parse::<toml::Value>()`: in toml 1.x the
 /// `FromStr` impl parses a value *expression*, so a real config that
@@ -616,6 +732,210 @@ fn overlay_set_str(value: &mut toml::Value, path: &[&str], v: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::EnvGuard;
+
+    const GITLAB_I: &str = "https://gitlab.keyring.test";
+    const GITHUB_I: &str = "https://api.github.keyring.test";
+    const FORGEJO_I: &str = "https://forgejo.keyring.test";
+    const SOURCEHUT_I: &str = "sr.keyring.test";
+
+    /// A config directory of its own, with no token exported that
+    /// would answer before the keyring.
+    fn isolated(dir: &tempfile::TempDir) -> EnvGuard {
+        EnvGuard::new(&[("XDG_CONFIG_HOME", &dir.path().to_string_lossy())]).unset(&[
+            "FORGEJO_TOKEN",
+            "GITHUB_TOKEN",
+            "GITLAB_TOKEN",
+            "SOURCEHUT_TOKEN",
+        ])
+    }
+
+    fn write_user_overlay(text: &str) -> sandogasa_config::ConfigFile {
+        let cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
+        std::fs::create_dir_all(cf.path().parent().unwrap()).unwrap();
+        std::fs::write(cf.path(), text).unwrap();
+        cf
+    }
+
+    /// Each forge's token for its test instance, as a report finds it.
+    fn tokens_found() -> [String; 4] {
+        let cfg = config::load_config(None).unwrap();
+        [
+            crate::gitlab::find_token(GITLAB_I, &cfg.gitlab_tokens).unwrap(),
+            crate::github::find_token(GITHUB_I, &cfg.github_tokens).unwrap(),
+            crate::forgejo::find_token(FORGEJO_I, &cfg.forgejo_tokens).unwrap(),
+            crate::sourcehut::find_token(SOURCEHUT_I, &cfg.sourcehut_tokens).unwrap(),
+        ]
+    }
+
+    /// The tokens `config` keeps in the keyring are what a report then
+    /// uses, the overlay is left without them, and the environment
+    /// still wins.
+    #[test]
+    #[serial_test::serial]
+    fn tokens_kept_in_the_keyring_are_the_ones_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let text = "[users.me]\nfas = \"me\"\n\n\
+            [gitlab_tokens]\n\"gitlab.keyring.test\" = \"glpat-saved\"\n\n\
+            [github_tokens]\n\"api.github.keyring.test\" = \"ghp-saved\"\n\n\
+            [forgejo_tokens]\n\"forgejo.keyring.test\" = \"fj-saved\"\n\n\
+            [sourcehut_tokens]\n\"sr.keyring.test\" = \"sh-saved\"\n";
+        let cf = write_user_overlay(text);
+        let saved = ["glpat-saved", "ghp-saved", "fj-saved", "sh-saved"];
+        // An existing setup keeps working.
+        assert_eq!(tokens_found(), saved);
+
+        // `config` run again, every token kept as it was: each moves
+        // to the keyring.
+        let mut overlay = parse_overlay(text).unwrap();
+        let mut out_of_file = Vec::new();
+        for (kind, instance, token) in [
+            (GITLAB, GITLAB_I, saved[0]),
+            (GITHUB, GITHUB_I, saved[1]),
+            (FORGEJO, FORGEJO_I, saved[2]),
+            (SOURCEHUT, SOURCEHUT_I, saved[3]),
+        ] {
+            let host = (kind.host)(instance);
+            let outcome = keep_token(&mut overlay, &kind, instance, &host, |existing| {
+                assert_eq!(existing, Some(token));
+                Ok(TokenChoice::KeepExisting)
+            })
+            .unwrap();
+            assert_eq!(outcome, TokenOutcome::InKeyring { was_in_file: true });
+            out_of_file.push((kind.table, host));
+        }
+        assert!(!write_overlay(&cf, &overlay, &out_of_file).unwrap());
+        let left = std::fs::read_to_string(cf.path()).unwrap();
+        assert!(
+            !left.contains("saved"),
+            "the file is left without them: {left}"
+        );
+        assert!(!left.contains("_tokens"), "{left}");
+        assert!(left.contains("fas = \"me\""), "{left}");
+
+        // From the keyring now: the overlay no longer has them.
+        assert_eq!(tokens_found(), saved);
+        // Run again, nothing is left to move.
+        let outcome = keep_token(
+            &mut overlay,
+            &GITLAB,
+            GITLAB_I,
+            "gitlab.keyring.test",
+            |e| {
+                assert_eq!(e, Some("glpat-saved"));
+                Ok(TokenChoice::KeepExisting)
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome, TokenOutcome::Unchanged);
+
+        // The environment still wins, instance-specific or generic.
+        let _env2 = EnvGuard::new(&[
+            ("GITLAB_TOKEN_GITLAB_KEYRING_TEST", "glpat-env"),
+            ("GITHUB_TOKEN", "ghp-env"),
+        ]);
+        let found = tokens_found();
+        assert_eq!(found[0], "glpat-env");
+        assert_eq!(found[1], "ghp-env");
+        assert_eq!(found[2], "fj-saved");
+
+        let keyring = crate::secrets::keyring();
+        keyring.clear(&crate::gitlab::secret(GITLAB_I)).unwrap();
+        keyring.clear(&crate::github::secret(GITHUB_I)).unwrap();
+        keyring.clear(&crate::forgejo::secret(FORGEJO_I)).unwrap();
+        keyring
+            .clear(&crate::sourcehut::secret(SOURCEHUT_I))
+            .unwrap();
+    }
+
+    /// Two instances of one forge are two services, so two entries.
+    #[test]
+    #[serial_test::serial]
+    fn two_instances_of_a_forge_keep_separate_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let one = "https://gitlab.one.test";
+        let two = "https://salsa.two.test/";
+        let mut overlay = toml::Value::Table(Default::default());
+        for (instance, token) in [(one, "glpat-one"), (two, "glpat-two")] {
+            let host = crate::gitlab::instance_host(instance);
+            let outcome = keep_token(&mut overlay, &GITLAB, instance, &host, |existing| {
+                assert_eq!(existing, None);
+                Ok(TokenChoice::Saved(token.to_string()))
+            })
+            .unwrap();
+            assert_eq!(outcome, TokenOutcome::InKeyring { was_in_file: false });
+        }
+        assert_eq!(overlay, toml::Value::Table(Default::default()));
+        assert_ne!(crate::gitlab::secret(one), crate::gitlab::secret(two));
+        let none = std::collections::BTreeMap::new();
+        assert_eq!(crate::gitlab::find_token(one, &none).unwrap(), "glpat-one");
+        assert_eq!(crate::gitlab::find_token(two, &none).unwrap(), "glpat-two");
+        // A forge skipped at the prompt keeps nothing.
+        let outcome = keep_token(
+            &mut overlay,
+            &FORGEJO,
+            FORGEJO_I,
+            "forgejo.keyring.test",
+            |_| Ok(TokenChoice::Skipped),
+        )
+        .unwrap();
+        assert_eq!(outcome, TokenOutcome::Unchanged);
+        assert!(crate::forgejo::find_token(FORGEJO_I, &none).is_err());
+
+        let keyring = crate::secrets::keyring();
+        keyring.clear(&crate::gitlab::secret(one)).unwrap();
+        keyring.clear(&crate::gitlab::secret(two)).unwrap();
+    }
+
+    /// The entries are the ones every sandogasa tool reads for the
+    /// same service.
+    #[test]
+    fn entries_are_named_for_the_instance_host() {
+        let service = |r: sandogasa_config::secret::SecretRef| r.service().to_string();
+        // cpu-sig-tracker, cbspkg and hs-relmon read this one too.
+        assert_eq!(
+            service(crate::gitlab::secret("https://gitlab.com")),
+            "gitlab.com"
+        );
+        assert_eq!(
+            service(crate::github::secret("https://api.github.com")),
+            "api.github.com"
+        );
+        // A GitHub Enterprise API base: its host.
+        assert_eq!(
+            service(crate::github::secret("https://ghe.example.test/api/v3")),
+            "ghe.example.test"
+        );
+        assert_eq!(
+            service(crate::forgejo::secret("https://codeberg.org/")),
+            "codeberg.org"
+        );
+        assert_eq!(service(crate::sourcehut::secret("sr.ht")), "sr.ht");
+    }
+
+    /// With every token moved to the keyring, an overlay that held only
+    /// tokens is removed rather than left empty.
+    #[test]
+    #[serial_test::serial]
+    fn an_overlay_of_only_tokens_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let text = "[gitlab_tokens]\n\"gitlab.keyring.test\" = \"glpat-saved\"\n";
+        let cf = write_user_overlay(text);
+        let mut overlay = parse_overlay(text).unwrap();
+        let host = "gitlab.keyring.test";
+        keep_token(&mut overlay, &GITLAB, GITLAB_I, host, |_| {
+            Ok(TokenChoice::KeepExisting)
+        })
+        .unwrap();
+        assert!(write_overlay(&cf, &overlay, &[("gitlab_tokens", host.to_string())]).unwrap());
+        assert!(!cf.path().exists());
+        crate::secrets::keyring()
+            .clear(&crate::gitlab::secret(GITLAB_I))
+            .unwrap();
+    }
 
     #[test]
     fn parse_overlay_reads_document_with_leading_table_header() {

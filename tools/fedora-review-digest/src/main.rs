@@ -13,7 +13,7 @@ use fedora_review_digest::{bugzilla, config, cratesio, hackage, runner};
 use sandogasa_bugzilla::BzClient;
 use sandogasa_review::resolve_interactive;
 
-const BUGZILLA_URL: &str = "https://bugzilla.redhat.com";
+use fedora_review_digest::secrets::BUGZILLA_URL;
 
 #[derive(Parser)]
 #[command(
@@ -145,13 +145,23 @@ fn main() -> ExitCode {
     }
 }
 
-/// Set up / verify the Bugzilla API key (and email, for validation)
-/// stored at `~/.config/fedora-review-digest/config.toml`.
+/// Set up / verify the Bugzilla API key (and email, for validation):
+/// the key in the desktop keyring when there is one, the rest at
+/// `~/.config/fedora-review-digest/config.toml`.
 fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     use sandogasa_config::{Setting, ask};
     let cf = ConfigFile::for_tool("fedora-review-digest");
     // The user file alone, so saving does not copy /etc's values into it.
     let mut cfg: config::Config = cf.load_user().unwrap_or_default();
+    // A key kept in the keyring is the saved one (#79).
+    if let Some(key) = sandogasa_config::secret::resolve(
+        fedora_review_digest::secrets::keyring(),
+        None,
+        &fedora_review_digest::secrets::bugzilla(),
+        Some(&cfg.bugzilla.api_key),
+    ) {
+        cfg.bugzilla.api_key = key;
+    }
     cfg.bugzilla.api_key = ask(
         &Setting::new("Bugzilla", "API key").sensitive().hint(
             "Create an API key at \
@@ -196,8 +206,14 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
         },
     )
     .key;
-    cf.save(&cfg).map_err(|e| e.to_string())?;
-    eprintln!("Saved to {}", cf.path().display());
+    if config::save(&cf, cfg).map_err(|e| e.to_string())? {
+        eprintln!(
+            "Nothing else to keep in {}; removed it.",
+            cf.path().display()
+        );
+    } else {
+        eprintln!("Saved to {}", cf.path().display());
+    }
     Ok(())
 }
 

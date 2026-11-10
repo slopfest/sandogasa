@@ -34,5 +34,6 @@ sandogasa-build = { workspace = true }
 
 [dev-dependencies]
 sandogasa-cli = { workspace = true, features = ["man"] }
+serial_test = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }

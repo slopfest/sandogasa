@@ -59,21 +59,24 @@ impl AclConfig {
 }
 
 /// Persistent app config stored at
-/// `~/.config/sandogasa-pkg-acl/config.toml`.
+/// `~/.config/sandogasa-pkg-acl/config.toml`. The API token is in
+/// the desktop keyring when there is one (#79), and in the file
+/// only where no keyring can be used.
 ///
 /// ```toml
 /// [dist-git]
-/// api_token = "..."
 /// username = "salimma"
 /// ```
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct AppConfig {
-    #[serde(rename = "dist-git")]
+    #[serde(rename = "dist-git", default)]
     pub dist_git: DistGitConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct DistGitConfig {
+    /// Empty when the token is in the keyring (#79).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_token: String,
     #[serde(default)]
     pub username: String,
@@ -301,6 +304,24 @@ ngompa = "admin"
         let config: AppConfig = cf.load().unwrap();
         assert_eq!(config.dist_git.api_token, "tok-456");
         assert_eq!(config.dist_git.username, "");
+    }
+
+    /// With the token in the keyring the file holds only the
+    /// username, and writes none back.
+    #[test]
+    fn app_config_without_a_token() {
+        use sandogasa_config::ConfigFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cf = ConfigFile::from_path(dir.path().join("config.toml"));
+        std::fs::write(cf.path(), "[dist-git]\nusername = \"salimma\"\n").unwrap();
+        let config: AppConfig = cf.load().unwrap();
+        assert_eq!(config.dist_git.api_token, "");
+        cf.save(&config).unwrap();
+        let text = std::fs::read_to_string(cf.path()).unwrap();
+        assert!(!text.contains("api_token"), "{text}");
+        let empty: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(empty.dist_git.username, "");
     }
 
     #[test]

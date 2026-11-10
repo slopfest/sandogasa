@@ -84,7 +84,10 @@ Two subcommands:
   domain in the config, one run sets you up for **any** `report -d`
   combination drawn from that config. Existing values show as
   defaults on re-runs, so only missing credentials need typing.
-  Token input is hidden and needs a real terminal.
+  Token input is hidden and needs a real terminal. Tokens go in the
+  desktop keyring, one entry per instance (see
+  [GitLab authentication](#gitlab-authentication)); the overlay holds
+  them only where no keyring can be used.
 
 ```sh
 # One-time interactive setup: asks for every credential the
@@ -285,8 +288,9 @@ bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 [users.michel.forgejo]
 "codeberg.org" = "michelin"
 
-# Persisted API tokens — populated by `sandogasa-report config`.
-# Env vars still win if set.
+# API tokens, only where no keyring can be used — otherwise
+# `sandogasa-report config` keeps them in the keyring. Env vars
+# and the keyring still win if set.
 [gitlab_tokens]
 "gitlab.com" = "glpat-..."
 "salsa.debian.org" = "glpat-..."
@@ -361,11 +365,16 @@ token from, in order:
    `GITLAB_TOKEN_SALSA_DEBIAN_ORG`.
 2. `GITLAB_TOKEN` — the generic fallback shared with other
    sandogasa tools.
-3. `gitlab_tokens.<hostname>` in the overlay — persisted by
-   `sandogasa-report config`, so tokens survive across shell
-   sessions without re-exporting env vars.
+3. The desktop keyring's entry for the instance — where
+   `sandogasa-report config` keeps the token, so it survives across
+   shell sessions without re-exporting env vars. The entry is named
+   for the instance's host and shared with every sandogasa tool
+   talking to it; check it with
+   `secret-tool lookup application sandogasa service gitlab.com`.
+4. `gitlab_tokens.<hostname>` in the overlay — where `config` keeps
+   the token when no keyring can be used.
 
-Env vars win over config, so a one-off shell override still
+Env vars win over the rest, so a one-off shell override still
 works even with a persisted token. The overlay file is kept at
 `~/.config/sandogasa-report/config.toml` with 0600 permissions.
 
@@ -398,8 +407,10 @@ its allowed scopes, so `read_api` already covers them.
 Same lookup shape as GitLab. The instance-specific env var is
 `GITHUB_TOKEN_<HOSTNAME>` (for `api.github.com` →
 `GITHUB_TOKEN_API_GITHUB_COM`); the generic `GITHUB_TOKEN`
-matches the convention the `gh` CLI already uses. The overlay's
-`[github_tokens]` table is the third fallback.
+matches the convention the `gh` CLI already uses. Then the
+keyring's entry for the API host (`service api.github.com`, or a
+GitHub Enterprise server's host), then the overlay's
+`[github_tokens]` table.
 
 **Where to create a token.** GitHub's settings tree buries
 this; the direct URLs are easier:
@@ -427,7 +438,8 @@ this; the direct URLs are easier:
 Same lookup shape as the other forges. The instance-specific env
 var is `FORGEJO_TOKEN_<HOSTNAME>` (for `codeberg.org` →
 `FORGEJO_TOKEN_CODEBERG_ORG`); the generic `FORGEJO_TOKEN` is the
-fallback; the overlay's `[forgejo_tokens]` table is the third.
+fallback; then the keyring's entry for the instance, then the
+overlay's `[forgejo_tokens]` table.
 
 Because the report queries "PRs *I* created", the token's owner is
 who the report is about — use your own token. Create one at your
