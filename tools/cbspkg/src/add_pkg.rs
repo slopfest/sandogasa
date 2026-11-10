@@ -404,17 +404,19 @@ fn run_inner(args: &AddPkgArgs) -> Result<(), Box<dyn std::error::Error>> {
         quiet: false,
     };
     let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    // The tools first, as build and promote check them: a missing one is
+    // what to fix before anything about the checkout matters.
+    let mut tools = vec![("koji", "sudo dnf install koji", Some("--help"))];
+    if !args.dry_run {
+        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
+    }
+    sandogasa_cli::require_tools(&tools)?;
     let checkout = resolve(
         &repo,
         args.branch.as_deref(),
         args.package.as_deref(),
         Some(&args.variants),
     )?;
-    let mut tools = vec![("koji", "sudo dnf install koji", Some("--help"))];
-    if !args.dry_run {
-        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
-    }
-    sandogasa_cli::require_tools(&tools)?;
     list_missing(
         &ui,
         &repo,
@@ -630,6 +632,22 @@ mod tests {
             ..dry_run(None, &f)
         };
         assert_eq!(run(&args), ExitCode::FAILURE);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_tool_is_reported_before_a_bad_branch() {
+        // #110: build and promote check their tools first; add-pkg read
+        // the checkout first, so a bad branch hid the missing cbs.
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake("cbs", &[]);
+        let args = AddPkgArgs {
+            dry_run: false,
+            branch: Some("no-such-branch".to_string()),
+            ..dry_run(None, &f)
+        };
+        let err = run_inner(&args).unwrap_err().to_string();
+        assert!(err.contains("cbs (install"), "{err}");
     }
 
     #[test]

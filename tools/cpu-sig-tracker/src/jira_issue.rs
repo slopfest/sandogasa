@@ -46,6 +46,7 @@ pub struct JiraArgs {
         long,
         value_name = "CVE-ID",
         value_delimiter = ',',
+        value_parser = cve_id,
         help_heading = "Issue"
     )]
     pub cve: Vec<String>,
@@ -282,6 +283,19 @@ pub fn empty_search_notes(
         });
     }
     notes
+}
+
+/// One `--cve` value: a single CVE id, upper-cased. Anything else is
+/// refused, naming it: a mistyped id dropped quietly ran the search as
+/// if no CVE had been given.
+fn cve_id(value: &str) -> Result<String, String> {
+    let wanted = value.trim().to_ascii_uppercase();
+    match crate::sync_updates::cve_ids(&wanted).as_slice() {
+        [id] if *id == wanted => Ok(wanted),
+        _ => Err(format!(
+            "'{value}' is not a CVE id (CVE-YYYY-NNNN, 4 or more digits)"
+        )),
+    }
 }
 
 /// Every CVE id in `texts`, upper-cased, each once, in order.
@@ -1426,6 +1440,18 @@ mod tests {
         assert!(extract_cves(&["CVE-26-1 and none", "no id here"]).is_empty());
     }
 
+    #[test]
+    fn a_cve_flag_takes_one_well_formed_id_or_refuses_it() {
+        assert_eq!(cve_id("cve-2026-119741").as_deref(), Ok("CVE-2026-119741"));
+        assert_eq!(cve_id(" CVE-2025-27363 ").as_deref(), Ok("CVE-2025-27363"));
+        // #110: too few digits used to be dropped without a word.
+        let err = cve_id("CVE-2026-1").unwrap_err();
+        assert!(err.contains("'CVE-2026-1' is not a CVE id"), "{err}");
+        assert!(cve_id("2026-119741").is_err());
+        assert!(cve_id("CVE-2026-119741 CVE-2026-119742").is_err());
+        assert!(cve_id("RHEL-12345").is_err());
+    }
+
     fn rating(level: Level, source: &str, detail: &str) -> Rating {
         Rating {
             level,
@@ -1697,15 +1723,28 @@ mod tests {
             #[command(flatten)]
             a: JiraArgs,
         }
+        // Comma-separated and repeated, each value checked on its own
+        // after the split, and upper-cased.
         let p = <P as clap::Parser>::parse_from([
             "jira",
             "rsync",
             "--cve",
-            "CVE-1,CVE-2",
+            "CVE-2026-1111,cve-2026-2222",
             "--cve",
-            "CVE-3",
+            "CVE-2026-3333",
         ]);
-        assert_eq!(p.a.cve, ["CVE-1", "CVE-2", "CVE-3"]);
+        assert_eq!(p.a.cve, ["CVE-2026-1111", "CVE-2026-2222", "CVE-2026-3333"]);
+        // One malformed id in a list refuses the run, naming it.
+        let err = match <P as clap::Parser>::try_parse_from([
+            "jira",
+            "rsync",
+            "--cve",
+            "CVE-2026-1111,CVE-2026-1",
+        ]) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("a malformed id in the list was accepted"),
+        };
+        assert!(err.contains("'CVE-2026-1' is not a CVE id"), "{err}");
     }
 
     #[test]

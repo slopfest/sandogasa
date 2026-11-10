@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### cpu-sig-tracker jira refuses a malformed --cve, and cbspkg add-pkg checks its tools first
+
+`cpu-sig-tracker jira --cve CVE-2026-1` dropped the id without a word,
+since a CVE id needs at least four digits after the year, and searched
+as if no CVE had been given. Each `--cve` value, comma-separated or
+repeated, must now be one CVE id, and anything else stops the run,
+naming it.
+
+`cbspkg add-pkg` read the checkout before checking that `koji` and
+`cbs` were installed, so with a bad branch as well it reported the
+branch and hid the missing tool. It checks its tools first now, as
+`build` and `promote` do. Fixes #110.
+
 ### ebranch: the bug proposal reads Koji and Bugzilla in batches, in half a minute rather than four
 
 `update-bugs` on the libical 4 update's 39 builds took 4 minutes, and
