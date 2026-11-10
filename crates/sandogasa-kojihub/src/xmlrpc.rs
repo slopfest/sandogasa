@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use quick_xml::Reader;
-use quick_xml::events::{BytesText, Event};
+use quick_xml::events::{BytesRef, Event};
 
 /// An XML-RPC value.
 #[derive(Debug, Clone)]
@@ -363,8 +363,11 @@ fn write_value(xml: &mut String, value: &Value) {
 // --- Response parsing ---
 
 pub fn parse_response(xml: &str) -> Result<Value, Error> {
+    // Text is not trimmed: a string's own spaces are part of it, and
+    // quick-xml splits text at each entity (`Crha &lt;mcrha@…&gt;`), so
+    // trimming each piece ate the spaces beside one. The parsers skip
+    // the whitespace between elements themselves.
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     loop {
         match reader.read_event() {
@@ -427,6 +430,9 @@ fn parse_fault(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
 
 /// Parse the content inside a `<value>` tag (opening `<value>` already consumed).
 fn parse_value_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
+    // Text outside a type tag: whitespace before one, or a bare string,
+    // which may be split at entities like any other text.
+    let mut bare = String::new();
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
@@ -434,6 +440,7 @@ fn parse_value_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
                 match tag.as_str() {
                     "int" | "i4" | "i8" => {
                         let text = read_text_content(reader)?;
+                        let text = text.trim();
                         skip_to_end(reader, "value")?;
                         return Ok(Value::Int(text.parse::<i64>().map_err(|e| {
                             Error::Parse(format!("invalid int '{text}': {e}"))
@@ -446,11 +453,13 @@ fn parse_value_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
                     }
                     "boolean" => {
                         let text = read_text_content(reader)?;
+                        let text = text.trim();
                         skip_to_end(reader, "value")?;
                         return Ok(Value::Boolean(text == "1" || text == "true"));
                     }
                     "double" => {
                         let text = read_text_content(reader)?;
+                        let text = text.trim();
                         skip_to_end(reader, "value")?;
                         return Ok(Value::Double(text.parse::<f64>().map_err(|e| {
                             Error::Parse(format!("invalid double '{text}': {e}"))
@@ -467,10 +476,12 @@ fn parse_value_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
                         return Ok(a);
                     }
                     _ => {
-                        // Unknown type tag — treat content as string.
+                        // Unknown type tag (`base64`, `dateTime.iso8601`)
+                        // — treat content as string. Python writes base64
+                        // across lines, so its whitespace is not data.
                         let text = read_text_content(reader)?;
                         skip_to_end(reader, "value")?;
-                        return Ok(Value::String(text));
+                        return Ok(Value::String(text.trim().to_string()));
                     }
                 }
             }
@@ -478,17 +489,15 @@ fn parse_value_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
                 skip_to_end(reader, "value")?;
                 return Ok(Value::Nil);
             }
-            Ok(Event::Text(t)) => {
-                let text = decode_text(&t)?;
-                if !text.trim().is_empty() {
-                    // Bare text in <value> is implicitly a string.
-                    skip_to_end(reader, "value")?;
-                    return Ok(Value::String(text));
-                }
-            }
+            // Bare text in <value> is implicitly a string; whitespace
+            // alone is the indentation of an empty one.
             Ok(Event::End(e)) if e.name().as_ref() == "value" => {
-                return Ok(Value::String(String::new()));
+                if bare.trim().is_empty() {
+                    bare.clear();
+                }
+                return Ok(Value::String(bare));
             }
+            Ok(ev) if push_text(&mut bare, &ev)? => {}
             Ok(Event::Eof) => {
                 return Err(Error::Parse("unexpected EOF in value".into()));
             }
@@ -525,7 +534,7 @@ fn parse_member(reader: &mut Reader<&[u8]>) -> Result<(String, Value), Error> {
         match reader.read_event() {
             Ok(Event::Start(e)) => match e.name().as_ref() {
                 "name" => {
-                    name = read_text_content(reader)?;
+                    name = read_text_content(reader)?.trim().to_string();
                 }
                 "value" => {
                     value = parse_value_content(reader)?;
@@ -577,31 +586,48 @@ fn parse_array_content(reader: &mut Reader<&[u8]>) -> Result<Value, Error> {
     }
 }
 
-/// Read text content until the matching end tag.
-/// Decode and unescape a quick-xml text node to an owned String.
-///
-/// quick-xml 0.40 dropped `BytesText::unescape`, and 0.42 made the
-/// reader `str`-based throughout, so the decode step went with it:
-/// what is left is the entity-unescaping.
-fn decode_text(t: &BytesText) -> Result<String, Error> {
-    Ok(quick_xml::escape::unescape(t)
+/// What an entity or character reference stands for: `&lt;` is `<`,
+/// `&#233;` is `é`.
+fn resolve_ref(r: &BytesRef) -> Result<String, Error> {
+    if let Some(c) = r
+        .resolve_char_ref()
         .map_err(|e| Error::Xml(e.to_string()))?
-        .into_owned())
+    {
+        return Ok(c.to_string());
+    }
+    quick_xml::escape::resolve_predefined_entity(r)
+        .map(str::to_string)
+        .ok_or_else(|| Error::Parse(format!("unknown entity &{};", &**r)))
 }
 
+/// Append to `buf` the text `event` carries, if it carries any, and say
+/// whether it did. quick-xml 0.42 splits text at every reference, which
+/// arrives as an event of its own (`Crha &lt;mcrha@…&gt;` is a text, a
+/// reference, a text, …), and CDATA is another; a reader collecting an
+/// element's text has to take all three, and trim only the whole.
+pub fn push_text(buf: &mut String, event: &Event) -> Result<bool, Error> {
+    match event {
+        Event::Text(t) => buf.push_str(t),
+        Event::CData(c) => buf.push_str(c),
+        Event::GeneralRef(r) => buf.push_str(&resolve_ref(r)?),
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Read text content until the matching end tag.
 fn read_text_content(reader: &mut Reader<&[u8]>) -> Result<String, Error> {
     let mut text = String::new();
     loop {
         match reader.read_event() {
-            Ok(Event::Text(t)) => {
-                text.push_str(&decode_text(&t)?);
-            }
             Ok(Event::End(_)) => return Ok(text),
             Ok(Event::Eof) => {
                 return Err(Error::Parse("unexpected EOF reading text".into()));
             }
+            Ok(ev) => {
+                push_text(&mut text, &ev)?;
+            }
             Err(e) => return Err(e.into()),
-            _ => {}
         }
     }
 }
@@ -757,6 +783,76 @@ mod tests {
             }
             _ => panic!("expected Fault error, got: {err}"),
         }
+    }
+
+    /// Koji escapes `<`, `>` and `&` in every string, and quick-xml
+    /// reports each reference as an event of its own: a changelog
+    /// author came back as `Milan Crhamcrha@redhat.com- 4.0.7-1`,
+    /// references dropped and the spaces beside them trimmed away.
+    #[test]
+    fn a_string_keeps_its_escaped_characters_and_the_spaces_beside_them() {
+        let xml = r#"<?xml version="1.0"?>
+            <methodResponse><params><param>
+            <value><string>Milan Crha &lt;mcrha@redhat.com&gt; - 4.0.7-1</string></value>
+            </param></params></methodResponse>"#;
+        let v = parse_response(xml).unwrap();
+        assert_eq!(v.as_str(), Some("Milan Crha <mcrha@redhat.com> - 4.0.7-1"));
+
+        let xml = r#"<?xml version="1.0"?>
+            <methodResponse><params><param>
+            <value><string> a &amp; b &#233;&#x2014;&quot;c&apos; </string></value>
+            </param></params></methodResponse>"#;
+        let v = parse_response(xml).unwrap();
+        assert_eq!(v.as_str(), Some(" a & b é—\"c' "));
+
+        // Bare text is a string too, split at references the same way.
+        let xml = r#"<?xml version="1.0"?>
+            <methodResponse><params><param>
+            <value>x &lt; y</value>
+            </param></params></methodResponse>"#;
+        assert_eq!(parse_response(xml).unwrap().as_str(), Some("x < y"));
+
+        // Numbers and booleans read through surrounding whitespace.
+        let xml = r#"<?xml version="1.0"?>
+            <methodResponse><params><param>
+            <value><array><data>
+              <value><int> 42 </int></value>
+              <value><boolean> 1 </boolean></value>
+              <value><double> 2.5 </double></value>
+            </data></array></value>
+            </param></params></methodResponse>"#;
+        let v = parse_response(xml).unwrap();
+        let a = v.as_array().unwrap();
+        assert_eq!(a[0].as_int(), Some(42));
+        assert!(matches!(a[1], Value::Boolean(true)));
+        assert!(matches!(a[2], Value::Double(d) if d == 2.5));
+
+        // CDATA is text too; a member name and a base64 value are read
+        // through whitespace; an empty value's indentation is not text.
+        let xml = r#"<?xml version="1.0"?>
+            <methodResponse><params><param>
+            <value><struct>
+              <member><name>
+                a
+              </name><value><string>x<![CDATA[<b>]]>y</string></value></member>
+              <member><name>b</name><value><base64>
+                QUJD
+              </base64></value></member>
+              <member><name>c</name><value>
+              </value></member>
+            </struct></value>
+            </param></params></methodResponse>"#;
+        let v = parse_response(xml).unwrap();
+        assert_eq!(v.get("a").and_then(Value::as_str), Some("x<b>y"));
+        assert_eq!(v.get("b").and_then(Value::as_str), Some("QUJD"));
+        assert_eq!(v.get("c").and_then(Value::as_str), Some(""));
+
+        // An entity XML does not define is an error, not dropped text.
+        let xml = r#"<?xml version="1.0"?>
+            <methodResponse><params><param>
+            <value><string>&nbsp;</string></value>
+            </param></params></methodResponse>"#;
+        assert!(parse_response(xml).is_err());
     }
 
     #[test]

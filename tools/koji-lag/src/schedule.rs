@@ -150,52 +150,49 @@ fn classify(name: &str) -> Option<Kind> {
 /// Every `<Task>` with a usable name and dates, as `(name, start, end)`.
 fn tasks(xml: &str) -> Result<Vec<(String, NaiveDate, NaiveDate)>, String> {
     use quick_xml::events::Event as Xml;
+    // A field's text is collected whole and trimmed once at its end tag:
+    // quick-xml splits text at every entity (`Mass Rebuild &amp; Branch`
+    // is a text, a reference, a text), so taking one piece, or trimming
+    // each, lost most of a name.
     let mut reader = quick_xml::Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
     let mut out = Vec::new();
-    let (mut in_task, mut field, mut name, mut start, mut end) =
+    let (mut in_task, mut text, mut name, mut start, mut end) =
         (false, String::new(), String::new(), None, None);
     loop {
         match reader.read_event() {
             Ok(Xml::Start(e)) => {
                 // The element names are namespaced in the file itself, so
                 // compare on the local name only.
-                let local = e.local_name().as_ref().to_string();
-                if local == "Task" {
+                if e.local_name().as_ref() == "Task" {
                     in_task = true;
                     (name, start, end) = (String::new(), None, None);
                 }
-                field = local;
-            }
-            Ok(Xml::Text(t)) if in_task => {
-                // quick-xml 0.40 made decoding and entity-unescaping
-                // explicit for text nodes; 0.42 made the reader
-                // `str`-based, so only the unescaping is left.
-                let text = quick_xml::escape::unescape(&t)
-                    .map_err(|e| e.to_string())?
-                    .into_owned();
-                match field.as_str() {
-                    "Name" => name = text,
-                    // "2026-07-15T08:00:00" — the time of day is the
-                    // schedule's working-hours convention, not a fact.
-                    "Start" => start = parse_date(&text),
-                    "Finish" => end = parse_date(&text),
-                    _ => {}
-                }
+                text.clear();
             }
             Ok(Xml::End(e)) => {
-                if e.local_name().as_ref() == "Task" {
-                    if let (Some(s), Some(f)) = (start, end)
-                        && !name.is_empty()
-                    {
-                        out.push((std::mem::take(&mut name), s, f));
+                let local = e.local_name();
+                match local.as_ref() {
+                    "Task" => {
+                        if let (Some(s), Some(f)) = (start, end)
+                            && !name.is_empty()
+                        {
+                            out.push((std::mem::take(&mut name), s, f));
+                        }
+                        in_task = false;
                     }
-                    in_task = false;
+                    "Name" if in_task => name = text.trim().to_string(),
+                    // "2026-07-15T08:00:00" — the time of day is the
+                    // schedule's working-hours convention, not a fact.
+                    "Start" if in_task => start = parse_date(text.trim()),
+                    "Finish" if in_task => end = parse_date(text.trim()),
+                    _ => {}
                 }
-                field.clear();
+                text.clear();
             }
             Ok(Xml::Eof) => break,
-            Ok(_) => {}
+            Ok(ev) => {
+                sandogasa_kojihub::xmlrpc::push_text(&mut text, &ev).map_err(|e| e.to_string())?;
+            }
             Err(e) => return Err(format!("schedule XML: {e}")),
         }
     }
@@ -236,6 +233,28 @@ mod tests {
       <Start>2026-09-01T08:00:00</Start><Finish>2026-09-08T17:00:00</Finish></Task>
   </Tasks>
 </Project>"#;
+
+    #[test]
+    fn a_task_name_keeps_its_escaped_characters() {
+        // quick-xml splits text at each entity; a name read one piece at
+        // a time came back as its last piece, "Branch", and was missed.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Project xmlns="http://schemas.microsoft.com/project">
+  <Tasks>
+    <Task><Name>Mass Rebuild &amp; Branch &lt;RPMs&gt;</Name>
+      <Start>2026-07-15T08:00:00</Start><Finish>2026-08-11T17:00:00</Finish></Task>
+  </Tasks>
+</Project>"#;
+        let found = tasks(xml).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "Mass Rebuild & Branch <RPMs>");
+        assert_eq!(found[0].1, day(2026, 7, 15));
+        assert_eq!(
+            events_in(xml, 45).unwrap()[0].kind,
+            Kind::MassRebuild,
+            "classified by the whole name"
+        );
+    }
 
     #[test]
     fn the_range_wins_over_a_milestone_that_disagrees_with_it() {

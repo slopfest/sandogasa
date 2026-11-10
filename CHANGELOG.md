@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### sandogasa-kojihub and koji-lag: text from Koji keeps its `<`, `>` and `&`
+
+Every string the Koji hub sent with an escaped character lost it, and
+the spaces beside it: a changelog author `Milan Crha
+<mcrha@redhat.com> - 4.0.7-1` read as `Milan Crhamcrha@redhat.com-
+4.0.7-1`. Koji escapes `<`, `>` and `&` in all its strings. Since
+quick-xml 0.38, the XML reader reports each `&lt;` as an event of its
+own, which the parser skipped, and the reader trimmed each piece of
+text, which took the spaces. This affected every tool reading Koji
+through sandogasa-kojihub (koji-lag, koji-diff, cpu-sig-tracker,
+hs-relmon, ebranch, cbspkg) since v0.14.0, which moved to quick-xml
+0.40. koji-lag's own reader of the Fedora schedule had the same flaw,
+and kept only the last piece of a task name: "Mass Rebuild &amp;
+Branch" was read as "Branch", and missed as a mass rebuild.
+
+Both now collect an element's text whole, entity and character
+references and CDATA included, through sandogasa-kojihub's new
+`xmlrpc::push_text`, and trim it once where whitespace is not data: a
+string keeps its own spaces, while numbers, booleans, struct member
+names and `base64` or `dateTime` values read through it, and an empty
+value's indentation is not taken for text. An entity XML does not
+define is an error rather than dropped text.
+
 ### ebranch: update-bugs revisits an update's bugs without a new check, and leaves off bugs an earlier build met
 
 On the libical 4 side tag, `check-update --submit` proposed closing
