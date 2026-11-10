@@ -456,6 +456,188 @@ mod tests {
         );
     }
 
+    use crate::test_support::Fixture;
+
+    fn dry_run(branch: Option<&str>, repo: &Fixture) -> BuildArgs {
+        BuildArgs {
+            branch: branch.map(str::to_string),
+            repo: Some(repo.repo.clone()),
+            variants: Default::default(),
+            background: false,
+            nowait: false,
+            owner: None,
+            scratch: false,
+            dry_run: true,
+            explain: false,
+        }
+    }
+
+    /// koji answering for a package listed in every tag.
+    const LISTED: &[(&str, &str)] = &[
+        ("--help", ""),
+        (
+            "list-pkgs",
+            "rsync  proposed_updates10s-packages-main-candidate  salimma",
+        ),
+    ];
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_scratch_build_shows_the_build_without_listing_or_running_it() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        // koji only answers --help: a scratch build asks it nothing else.
+        let args = BuildArgs {
+            scratch: true,
+            background: true,
+            ..dry_run(None, &f)
+        };
+        run_inner(&args).unwrap();
+        assert_eq!(run(&args), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_build_checks_the_tags_list_the_package() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake("koji", LISTED);
+        run_inner(&dry_run(None, &f)).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_build_of_an_unlisted_package_lists_it_for_the_cbs_user() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake(
+            "koji",
+            &[
+                ("--help", ""),
+                ("list-pkgs", "!(no matching packages)"),
+                ("moshimoshi", "what's up, tester!"),
+            ],
+        );
+        run_inner(&dry_run(None, &f)).unwrap();
+        // An owner given is used as it is, the CBS user not asked.
+        f.fake(
+            "koji",
+            &[("--help", ""), ("list-pkgs", "!(no matching packages)")],
+        );
+        let args = BuildArgs {
+            owner: Some("someone".into()),
+            ..dry_run(None, &f)
+        };
+        run_inner(&args).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_failed_listing_check_stops_the_build() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake(
+            "koji",
+            &[("--help", ""), ("list-pkgs", "!GenericError: no such tag")],
+        );
+        let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
+        assert!(err.contains("no such tag"), "{err}");
+    }
+
+    /// perf on c9s-hs+fb builds for Stream and RHEL at once: started
+    /// with --nowait and waited on together.
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_build_into_several_collections_waits_on_them_together() {
+        let f = Fixture::hyperscale("perf", "c9s-hs+fb");
+        let args = BuildArgs {
+            scratch: true,
+            ..dry_run(None, &f)
+        };
+        run_inner(&args).unwrap();
+        let args = BuildArgs {
+            nowait: true,
+            ..args
+        };
+        run_inner(&args).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_commit_the_sigs_repo_lacks_is_to_be_pushed_first() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        std::fs::write(f.repo.join("rsync.spec"), "Name: y\n").unwrap();
+        f.git(&["commit", "--quiet", "-am", "unpushed"]);
+        let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
+        assert!(
+            err.contains("does not have yet") && err.contains("git push sig c10s-proposed-RHEL-1"),
+            "{err}"
+        );
+    }
+
+    /// After sig-repo pushed a branch without making a local one.
+    #[test]
+    #[serial_test::serial]
+    fn a_branch_only_on_the_sigs_remote_is_built_from_there() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.git(&[
+            "push",
+            "--quiet",
+            "sig",
+            "HEAD:refs/heads/c10s-proposed-RHEL-2",
+        ]);
+        let checkout =
+            crate::add_pkg::resolve(&f.repo, Some("c10s-proposed-RHEL-2"), None, None).unwrap();
+        let located = locate(&checkout, &f.repo).unwrap();
+        assert_eq!(located.remote, "sig");
+        assert_eq!(located.sig_path, "CentOS/proposed_updates/rpms/rsync");
+        assert_eq!(located.commit, f.git(&["rev-parse", "HEAD"]));
+        let args = BuildArgs {
+            scratch: true,
+            ..dry_run(Some("c10s-proposed-RHEL-2"), &f)
+        };
+        run_inner(&args).unwrap();
+        let err = run_inner(&dry_run(Some("c10s-proposed-RHEL-3"), &f))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("neither c10s-proposed-RHEL-3 nor sig/c10s-proposed-RHEL-3"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_checkout_without_the_sigs_repo_says_how_to_add_it() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.git(&["remote", "remove", "sig"]);
+        f.git(&[
+            "remote",
+            "add",
+            "origin",
+            "git@gitlab.com:redhat/centos-stream/rpms/rsync.git",
+        ]);
+        let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
+        assert!(
+            err.contains("no remote points at the SIG's repo")
+                && err.contains("git remote add proposed_updates"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_build_needs_koji_and_cbs() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake("koji", &[]);
+        assert_eq!(run(&dry_run(None, &f)), ExitCode::FAILURE);
+        // A real build needs cbs as well, checked before anything else.
+        f.fake("koji", &[("--help", "")]);
+        f.fake("cbs", &[]);
+        let args = BuildArgs {
+            dry_run: false,
+            ..dry_run(None, &f)
+        };
+        let err = run_inner(&args).unwrap_err().to_string();
+        assert!(err.contains("cbs (install"), "{err}");
+    }
+
     /// What `cbs build --nowait` printed for perf on 2026-11-10's
     /// pattern, and the command that then waits for both builds.
     #[test]

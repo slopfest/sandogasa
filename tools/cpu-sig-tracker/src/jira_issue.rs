@@ -1727,4 +1727,386 @@ mod tests {
         );
         assert!(shown.contains("    line one\n\n    line two\n"), "{shown}");
     }
+
+    // ---- run_inner against a mock Jira (and GitLab) ----
+
+    use crate::test_support::EnvGuard;
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The arguments for `target` with every option at its default.
+    fn args(target: &str) -> JiraArgs {
+        JiraArgs {
+            target: target.to_string(),
+            branch: None,
+            cve: vec![],
+            description: None,
+            description_file: None,
+            priority: None,
+            summary: None,
+            issue_type: None,
+            upstream: vec![],
+            file: false,
+            yes: false,
+            json: false,
+            verbose: false,
+        }
+    }
+
+    /// An issue as the mock's search answers it.
+    fn found(key: &str, version: &str) -> serde_json::Value {
+        json!({
+            "key": key,
+            "fields": {
+                "summary": format!("{key} summary"),
+                "status": {"name": "New"},
+                "versions": [{"name": version}],
+            }
+        })
+    }
+
+    /// Answer every search with `issues`.
+    async fn mount_search(server: &MockServer, issues: Vec<serde_json::Value>) {
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/search/jql"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"issues": issues, "isLast": true})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// Fail the test if anything is filed.
+    async fn mount_no_filing(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/rest/api/2/issue"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(server)
+            .await;
+    }
+
+    /// Point the tool at `server`, with no developer config or
+    /// credentials leaking in: anonymous unless `token` is given.
+    fn guard(server: &MockServer, home: &std::path::Path, token: Option<&str>) -> EnvGuard {
+        let home = home.to_string_lossy().to_string();
+        let mut vars = vec![
+            ("CPU_SIG_TRACKER_JIRA_BASE", server.uri()),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", server.uri()),
+            ("XDG_CONFIG_HOME", home.clone()),
+            ("XDG_CACHE_HOME", home),
+            ("GITLAB_TOKEN", "test-token".to_string()),
+        ];
+        let mut unset = vec!["JIRA_EMAIL"];
+        match token {
+            Some(t) => vars.push(("JIRA_TOKEN", t.to_string())),
+            None => unset.push("JIRA_TOKEN"),
+        }
+        let refs: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        EnvGuard::new(&refs).unset(&unset)
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_package_without_a_cve_gets_a_draft_checked_against_jira_s_metadata() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            mount_search(
+                &server,
+                vec![
+                    found("RHEL-1", "CentOS Stream 9"),
+                    found("RHEL-2", "rhel-10.1"),
+                ],
+            )
+            .await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/issue/createmeta/RHEL/issuetypes"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "issueTypes": [{"id": "2", "name": "Bug"}], "total": 1,
+                })))
+                .expect(2)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/issue/createmeta/RHEL/issuetypes/2"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "fields": [
+                        {"fieldId": "summary", "name": "Summary", "required": true},
+                        {"fieldId": "customfield_1", "name": "Team", "required": true},
+                        {"fieldId": "versions", "name": "Affects Versions", "required": true,
+                         "allowedValues": [{"name": "rhel-9.8"}]},
+                    ],
+                    "total": 3,
+                })))
+                .expect(2)
+                .mount(&server)
+                .await;
+            mount_no_filing(&server).await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _g = guard(&server, home.path(), Some("test-token"));
+
+        let mut a = args("rsync");
+        a.branch = Some("c9s".into());
+        a.summary = Some("rsync: fix a crash".into());
+        a.priority = Some("Major".into());
+        a.description = Some("Backport of the upstream fix.".into());
+        a.upstream = vec!["https://github.com/RsyncProject/rsync/commit/abc".into()];
+        a.verbose = true;
+        run_inner(&a).expect("drafts without filing");
+        // And the same draft as JSON.
+        a.json = true;
+        run_inner(&a).expect("drafts as JSON");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn filing_with_yes_posts_the_draft_as_shown() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            mount_search(&server, vec![]).await;
+            // Anonymously the create metadata is not readable.
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/issue/createmeta/RHEL/issuetypes"))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/rest/api/2/issue"))
+                .and(body_partial_json(json!({"fields": {
+                    "project": {"key": "RHEL"},
+                    "issuetype": {"name": "Bug"},
+                    "summary": "rsync: fix a crash",
+                    "components": [{"name": "rsync"}],
+                    "versions": [{"name": "rhel-8.10"}],
+                    "priority": {"name": "Minor"},
+                    "description": "From a file.",
+                }})))
+                .respond_with(
+                    ResponseTemplate::new(201)
+                        .set_body_json(json!({"id": "1", "key": "RHEL-300001"})),
+                )
+                .expect(2)
+                .mount(&server)
+                .await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let text = home.path().join("description.txt");
+        std::fs::write(&text, "From a file.").unwrap();
+        let _g = guard(&server, home.path(), None);
+
+        let mut a = args("rsync");
+        a.branch = Some("c8s".into());
+        a.summary = Some("rsync: fix a crash".into());
+        a.priority = Some("Minor".into());
+        a.description_file = Some(text);
+        a.file = true;
+        a.yes = true;
+        run_inner(&a).expect("files and prints the issue");
+        a.json = true;
+        run_inner(&a).expect("files and answers JSON");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_description_file_stops_before_anything_is_filed() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            mount_search(&server, vec![]).await;
+            mount_no_filing(&server).await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _g = guard(&server, home.path(), None);
+
+        let mut a = args("rsync");
+        a.branch = Some("c9s".into());
+        a.summary = Some("s".into());
+        a.description_file = Some(home.path().join("missing.txt"));
+        a.file = true;
+        a.yes = true;
+        let err = run_inner(&a).unwrap_err().to_string();
+        assert!(err.contains("cannot read --description-file"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_cve_with_an_issue_on_the_branch_is_reported_not_drafted() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/search/jql"))
+                .and(query_param(
+                    "jql",
+                    search_jql("rsync", Some("CVE-2026-12345")),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "issues": [found("RHEL-5", "rhel-9.8"), found("RHEL-6", "rhel-10.2")],
+                    "isLast": true,
+                })))
+                .expect(2)
+                .mount(&server)
+                .await;
+            // Nothing is drafted, so the metadata is not read either.
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/issue/createmeta/RHEL/issuetypes"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+            mount_no_filing(&server).await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _g = guard(&server, home.path(), None);
+
+        let mut a = args("rsync");
+        a.branch = Some("c9s".into());
+        a.cve = vec!["CVE-2026-12345".into()];
+        a.file = true;
+        a.verbose = true;
+        run_inner(&a).expect("reports the issue found");
+        a.json = true;
+        run_inner(&a).expect("reports it as JSON");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_merge_request_names_the_package_branch_and_summary() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests/7",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "iid": 7,
+                    "title": "Speed up the delta transfer",
+                    "description": "Backports upstream's change.",
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/7",
+                    "source_branch": "speed",
+                    "target_branch": "c10s",
+                })))
+                .mount(&server)
+                .await;
+            mount_search(&server, vec![found("RHEL-9", "CentOS Stream 10")]).await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/issue/createmeta/RHEL/issuetypes"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "issueTypes": [{"id": "1", "name": "Story"}], "total": 1,
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/rest/api/2/issue"))
+                .and(body_partial_json(json!({"fields": {
+                    "summary": "RFE: Speed up the delta transfer",
+                    "components": [{"name": "rsync"}],
+                    "versions": [{"name": "CentOS Stream 10"}],
+                }})))
+                .respond_with(
+                    ResponseTemplate::new(201)
+                        .set_body_json(json!({"id": "1", "key": "RHEL-300002"})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _g = guard(&server, home.path(), None);
+
+        let mut a =
+            args("https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/7");
+        a.issue_type = Some(IssueType::Enhancement);
+        a.verbose = true;
+        // Not filed without --file.
+        run_inner(&a).expect("drafts from the MR");
+        a.file = true;
+        a.yes = true;
+        run_inner(&a).expect("files from the MR");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn without_a_summary_there_is_no_draft_and_filing_is_refused() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            mount_search(&server, vec![found("RHEL-1", "CentOS Stream 9")]).await;
+            mount_no_filing(&server).await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _g = guard(&server, home.path(), None);
+
+        let mut a = args("rsync");
+        a.branch = Some("c9s".into());
+        run_inner(&a).expect("says why there is no draft");
+        a.json = true;
+        run_inner(&a).expect("says it as JSON");
+        a.json = false;
+        a.file = true;
+        let err = run_inner(&a).unwrap_err().to_string();
+        assert!(err.contains("no draft: pass --summary"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_package_needs_a_stream_branch() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let _g = guard(&server, home.path(), None);
+        let err = run_inner(&args("rsync")).unwrap_err().to_string();
+        assert!(err.contains("needs --branch"), "{err}");
+        assert_eq!(run(&args("rsync")), ExitCode::FAILURE);
+        let mut a = args("rsync");
+        a.branch = Some("f45".into());
+        assert!(run_inner(&a).is_err());
+    }
+
+    #[test]
+    fn an_agreeing_or_lone_priority_flag_is_as_given() {
+        let r = rating(Level::High, "Red Hat", "Important");
+        assert_eq!(
+            settle_priority(Some("Major"), Some(("CVE-1", &r)), false).unwrap(),
+            (Some("Major".into()), Some("as given".into()))
+        );
+        assert_eq!(
+            settle_priority(Some("Minor"), None, false).unwrap(),
+            (Some("Minor".into()), Some("as given".into()))
+        );
+        assert_eq!(settle_priority(None, None, false).unwrap(), (None, None));
+        let (p, why) = settle_priority(None, Some(("CVE-1", &r)), false).unwrap();
+        assert_eq!(p.as_deref(), Some("Major"));
+        assert!(why.unwrap().contains("CVE-1"));
+    }
+
+    #[test]
+    fn found_issues_are_shown_and_keyed_once() {
+        let lookups = [
+            lookup(Some("CVE-1"), vec![issue("RHEL-1", &["rhel-9.8"])], vec![]),
+            lookup(Some("CVE-2"), vec![issue("RHEL-1", &["rhel-9.8"])], vec![]),
+            lookup(None, vec![issue("RHEL-3", &[])], vec![]),
+        ];
+        assert_eq!(found_keys(&lookups), ["RHEL-1"]);
+        let j = lookups_json(&lookups);
+        assert_eq!(j[0]["found"][0]["key"], "RHEL-1");
+        assert_eq!(j[2]["found"][0]["versions"], json!([]));
+        assert_eq!(versions_of(&issue("RHEL-3", &[])), "no version");
+        assert_eq!(
+            state_word(&RhelState::Fixed("RHSA-1".into())),
+            "Fixed (RHSA-1)"
+        );
+        assert_eq!(
+            state_word(&RhelState::Listed("Affected".into())),
+            "Affected"
+        );
+        print_resolves(&[], None);
+        print_resolves(&["RHEL-1".into()], Some("RHEL-2"));
+    }
 }

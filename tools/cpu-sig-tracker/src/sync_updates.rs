@@ -583,4 +583,236 @@ mod tests {
         assert_eq!(diff, "  a\n- b\n  c\n+ d\n");
         assert_eq!(line_diff("", "x\n"), "+ x\n");
     }
+
+    // ---- gather and run_inner against mock GitLab, Jira, Red Hat and
+    // NVD, with a fake koji ----
+
+    use crate::test_support::{EnvGuard, install_fake_bin};
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// A tracking issue as GitLab's group listing returns it.
+    fn tracking(pkg: &str, labels: &[&str], title: &str, body: &str) -> serde_json::Value {
+        json!({
+            "iid": 1, "title": title, "description": body, "state": "opened",
+            "web_url": format!("https://gitlab.com/CentOS/proposed_updates/rpms/{pkg}/-/issues/1"),
+            "labels": labels, "confidential": false,
+        })
+    }
+
+    fn mr_line(pkg: &str, iid: u64) -> String {
+        format!(
+            "- **MR**: [fix](https://gitlab.com/redhat/centos-stream/rpms/{pkg}/-/merge_requests/{iid}) — opened"
+        )
+    }
+
+    /// `koji list-tagged` output listing `nvrs` in `tag`.
+    fn listed(tag: &str, nvrs: &[&str]) -> String {
+        let mut o = "Build Tag Built by\n---- --- --------\n".to_string();
+        for n in nvrs {
+            o.push_str(&format!("{n} {tag} someone\n"));
+        }
+        o
+    }
+
+    /// Mount the SIG's state: what is open, built, disclosed and public.
+    async fn mount_state(server: &MockServer) {
+        let openssl = format!(
+            "{}\n- **JIRA**: [RHEL-1](https://redhat.atlassian.net/browse/RHEL-1)\n\
+             - **JIRA**: [RHEL-2](https://redhat.atlassian.net/browse/RHEL-2)",
+            mr_line("openssl", 5)
+        );
+        let issues = json!([
+            // Public: CVE disclosed, MR readable, one of two Jira issues
+            // readable.
+            tracking(
+                "openssl",
+                &["c10s", "cpu-sig-tracker", "security"],
+                "openssl: CVE-2026-11111",
+                &openssl
+            ),
+            // Its CVE is not disclosed yet.
+            tracking(
+                "zlib",
+                &["c10s", "cpu-sig-tracker"],
+                "zlib: CVE-2026-22222",
+                ""
+            ),
+            // Its merge request is not public.
+            tracking("curl", &["c9s", "bugfix"], "curl: fix", &mr_line("curl", 6)),
+            // Nothing to check: listed from its -testing build.
+            tracking(
+                "xz",
+                &["c9s", "cpu-sig-tracker", "enhancement"],
+                "xz: speed",
+                ""
+            ),
+            // No build yet.
+            tracking("bash", &["c8s"], "bash: fix", ""),
+        ]);
+        Mock::given(method("GET"))
+            .and(path(
+                "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(issues))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/hydra/rest/securitydata/cve/CVE-2026-11111.json"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"public_date": "2026-01-02T00:00:00Z"})),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/hydra/rest/securitydata/cve/CVE-2026-22222.json"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/json/cves/2.0"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Fopenssl/merge_requests/5",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "iid": 5, "title": "fix", "state": "opened",
+                "web_url": "https://gitlab.com/redhat/centos-stream/rpms/openssl/-/merge_requests/5",
+                "source_branch": "fix", "target_branch": "c10s",
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Fcurl/merge_requests/6",
+            ))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/issue/RHEL-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "key": "RHEL-1",
+                "fields": {"summary": "s", "status": {"name": "New"}},
+            })))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/2/issue/RHEL-2"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(server)
+            .await;
+    }
+
+    /// Fake koji, and every base pointed at `server`.
+    fn sig_env(server: &MockServer, bin: &std::path::Path) -> EnvGuard {
+        let rel10 = "proposed_updates10s-packages-main-release";
+        let test9 = "proposed_updates9s-packages-main-testing";
+        let rel9 = "proposed_updates9s-packages-main-release";
+        install_fake_bin(
+            bin,
+            "koji",
+            &[
+                (
+                    &format!("-- {rel10}"),
+                    &listed(
+                        rel10,
+                        &["openssl-3.5.1-1~proposed.el10", "zlib-1.3-1~proposed.el10"],
+                    ),
+                ),
+                (&format!("-- {rel9}"), &listed(rel9, &[])),
+                (
+                    &format!("-- {test9}"),
+                    &listed(test9, &["xz-5.8-1~proposed.el9", "curl-8.0-1~proposed.el9"]),
+                ),
+                // c10s's -testing tag and c8s's tags cannot be read:
+                // warned about, nothing from them.
+            ],
+        );
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let uri = server.uri();
+        EnvGuard::new(&[
+            ("PATH", &path),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &uri),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &uri),
+            ("CPU_SIG_TRACKER_REDHAT_BASE", &uri),
+            ("CPU_SIG_TRACKER_NVD_BASE", &uri),
+        ])
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn only_public_updates_with_a_build_are_listed() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(mount_state(&server));
+        let dir = tempfile::tempdir().unwrap();
+        let _g = sig_env(&server, dir.path());
+
+        let sections = gather(true).unwrap();
+        let names: Vec<&str> = sections.iter().map(|(r, _)| r.as_str()).collect();
+        assert_eq!(names, ["c10s", "c9s", "c8s"]);
+        let c10s = &sections[0].1;
+        assert_eq!(c10s.len(), 1, "{c10s:?}");
+        assert_eq!(c10s[0].package, "openssl");
+        assert_eq!(c10s[0].stage, Stage::Released);
+        assert_eq!(c10s[0].kind.as_deref(), Some("security"));
+        assert_eq!(c10s[0].cves, ["CVE-2026-11111"]);
+        assert_eq!(c10s[0].mr.as_ref().map(|m| m.0), Some(5));
+        // RHEL-2 cannot be read, so it is not linked.
+        assert_eq!(c10s[0].jira, ["RHEL-1"]);
+        let c9s = &sections[1].1;
+        assert_eq!(
+            c9s.iter().map(|u| u.package.as_str()).collect::<Vec<_>>(),
+            ["xz"]
+        );
+        assert_eq!(c9s[0].stage, Stage::Testing);
+        assert!(sections[2].1.is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_file_is_shown_written_then_left_alone() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(mount_state(&server));
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let _g = sig_env(&server, &bin);
+        let file = dir.path().join("updates-list.md");
+        let mut args = SyncUpdatesArgs {
+            dry_run: true,
+            file: file.clone(),
+            verbose: false,
+        };
+
+        run_inner(&args).unwrap();
+        assert!(!file.exists(), "a dry run writes nothing");
+        args.dry_run = false;
+        assert_eq!(run(&args), ExitCode::SUCCESS);
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.starts_with(HEADER), "{written}");
+        assert!(
+            written.contains("`openssl-3.5.1-1~proposed.el10`"),
+            "{written}"
+        );
+        assert!(!written.contains("zlib"), "{written}");
+        // Nothing changed: the file stays as it is.
+        run_inner(&args).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), written);
+
+        // A file that cannot be written is an error.
+        args.file = dir.path().join("missing").join("updates-list.md");
+        assert!(run_inner(&args).is_err());
+    }
 }

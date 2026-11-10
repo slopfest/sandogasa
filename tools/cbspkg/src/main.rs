@@ -10,6 +10,8 @@ mod config;
 mod configure;
 mod promote;
 mod sig_repo;
+#[cfg(test)]
+mod test_support;
 mod upload_sources;
 
 use add_pkg::AddPkgArgs;

@@ -89,3 +89,97 @@ fn report_saved(removed: bool, path: &std::path::Path) {
         eprintln!("Saved to {}", path.display());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::EnvGuard;
+
+    /// A GitLab answering `status` for the token check, and the env
+    /// pointing the tool and its config at it and a temp dir.
+    fn gitlab(
+        dir: &std::path::Path,
+        status: usize,
+    ) -> (mockito::ServerGuard, mockito::Mock, EnvGuard) {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/user")
+            .with_status(status)
+            .create();
+        let config = dir.display().to_string();
+        let env = EnvGuard::new(&[
+            ("XDG_CONFIG_HOME", Some(&config)),
+            ("CBSPKG_GITLAB_BASE", Some(&server.url())),
+            ("GITLAB_TOKEN", None),
+        ]);
+        (server, mock, env)
+    }
+
+    /// The token saved in the file before the keyring (#79) moves to
+    /// the keyring, and the file keeps the rest.
+    #[test]
+    #[serial_test::serial]
+    fn a_saved_token_is_checked_and_moved_to_the_keyring() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_server, mock, _env) = gitlab(tmp.path(), 200);
+        std::fs::create_dir_all(tmp.path().join("cbspkg")).unwrap();
+        std::fs::write(
+            config::config_path(),
+            "[gitlab]\naccess_token = \"glpat-x\"\n\n[packages.perf]\nrhel = [\"facebook\"]\n",
+        )
+        .unwrap();
+        // ConfigArgs is non-exhaustive: made the way the CLI makes it.
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let cli = <Cli as clap::Parser>::parse_from(["cbspkg"]);
+        assert_eq!(run(&cli.config), ExitCode::SUCCESS);
+        mock.assert();
+        assert_eq!(
+            config::keyring()
+                .lookup(&config::gitlab_secret())
+                .unwrap()
+                .as_deref(),
+            Some("glpat-x")
+        );
+        let left = config::load_user().unwrap();
+        assert!(left.gitlab.is_none());
+        assert_eq!(left.packages["perf"].rhel, ["facebook"]);
+        config::keyring().clear(&config::gitlab_secret()).unwrap();
+    }
+
+    /// The keyring's token, kept when GitLab cannot be asked; a file
+    /// with nothing else in it is removed.
+    #[test]
+    #[serial_test::serial]
+    fn a_token_that_cannot_be_checked_is_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_server, _mock, _env) = gitlab(tmp.path(), 200);
+        // Nobody listening: the check cannot be made.
+        let _down = EnvGuard::new(&[("CBSPKG_GITLAB_BASE", Some("http://127.0.0.1:9"))]);
+        config::keyring()
+            .store(&config::gitlab_secret(), "glpat-y")
+            .unwrap();
+        std::fs::create_dir_all(tmp.path().join("cbspkg")).unwrap();
+        std::fs::write(config::config_path(), "[gitlab]\naccess_token = \"old\"\n").unwrap();
+        run_inner(false).unwrap();
+        assert!(!config::config_path().exists());
+        assert_eq!(
+            config::keyring()
+                .lookup(&config::gitlab_secret())
+                .unwrap()
+                .as_deref(),
+            Some("glpat-y")
+        );
+        config::keyring().clear(&config::gitlab_secret()).unwrap();
+    }
+
+    #[test]
+    fn where_the_settings_went_is_reported_either_way() {
+        let path = std::path::Path::new("/nonexistent/cbspkg/config.toml");
+        report_saved(true, path);
+        report_saved(false, path);
+    }
+}

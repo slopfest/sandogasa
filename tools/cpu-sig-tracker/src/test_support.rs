@@ -62,6 +62,21 @@ impl EnvGuard {
         }
         Self { originals }
     }
+
+    /// Also unset `vars` for the guard's lifetime, restoring them on
+    /// drop: for credentials a developer may have exported (e.g.
+    /// `JIRA_TOKEN`), which must not reach a test.
+    pub fn unset(mut self, vars: &[&str]) -> Self {
+        for k in vars {
+            self.originals
+                .push(((*k).to_string(), std::env::var(k).ok()));
+            // SAFETY: callers serialize with #[serial_test::serial].
+            unsafe {
+                std::env::remove_var(k);
+            }
+        }
+        self
+    }
 }
 
 impl Drop for EnvGuard {

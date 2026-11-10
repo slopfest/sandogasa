@@ -556,6 +556,178 @@ mod tests {
         );
     }
 
+    use crate::test_support::Fixture;
+
+    fn dry_run(package: Option<&str>, f: &Fixture) -> AddPkgArgs {
+        AddPkgArgs {
+            package: package.map(str::to_string),
+            branch: None,
+            repo: Some(f.repo.clone()),
+            variants: Default::default(),
+            dry_run: true,
+            owner: None,
+            explain: false,
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_package_listed_everywhere_is_left_as_it_is() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake(
+            "koji",
+            &[
+                ("--help", ""),
+                (
+                    "list-pkgs",
+                    "rsync  proposed_updates10s-packages-main-candidate  salimma",
+                ),
+            ],
+        );
+        let args = dry_run(None, &f);
+        run_inner(&args).unwrap();
+        assert_eq!(run(&args), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_lists_the_package_where_it_is_missing() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        // Listed in -candidate only.
+        f.fake(
+            "koji",
+            &[
+                ("--help", ""),
+                (
+                    "candidate --package",
+                    "xz  proposed_updates10s-packages-main-candidate  a",
+                ),
+                ("list-pkgs", "!(no matching packages)"),
+                ("moshimoshi", "what's up, tester!"),
+            ],
+        );
+        run_inner(&dry_run(Some("xz"), &f)).unwrap();
+        // A dry run without a CBS login shows a placeholder owner.
+        f.fake(
+            "koji",
+            &[("--help", ""), ("list-pkgs", "!(no matching packages)")],
+        );
+        run_inner(&dry_run(None, &f)).unwrap();
+        let args = AddPkgArgs {
+            owner: Some("someone".into()),
+            ..dry_run(None, &f)
+        };
+        run_inner(&args).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn listing_for_real_needs_cbs() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake("cbs", &[]);
+        let args = AddPkgArgs {
+            dry_run: false,
+            ..dry_run(None, &f)
+        };
+        assert_eq!(run(&args), ExitCode::FAILURE);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_checkout_names_its_branch_and_package() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        let c = resolve(&f.repo, None, None, None).unwrap();
+        assert_eq!(
+            (c.branch.as_str(), c.package.as_str(), c.sig),
+            ("c10s-proposed-RHEL-1", "rsync", Sig::ProposedUpdates)
+        );
+        assert_eq!(
+            c.collections
+                .iter()
+                .map(Collection::prefix)
+                .collect::<Vec<_>>(),
+            ["proposed_updates10s-packages-main"]
+        );
+        // The package and branch can be given instead.
+        let c = resolve(&f.repo, Some("c9s-proposed-RHEL-2"), Some("xz"), None).unwrap();
+        assert_eq!(
+            (c.branch.as_str(), c.package.as_str()),
+            ("c9s-proposed-RHEL-2", "xz")
+        );
+        // Without a remote that names it, the package has to be given.
+        f.git(&["remote", "remove", "sig"]);
+        let err = resolve(&f.repo, None, None, None)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("name the package"), "{err}");
+        // A branch no SIG builds from is the error, package or not.
+        let err = resolve(&f.repo, Some("main"), Some("xz"), None)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("main is not"), "{err}");
+    }
+
+    /// perf's `[packages.perf]`, as the README gives it, steers its
+    /// c9s-hs checkout; a broken config is warned about and ignored.
+    #[test]
+    #[serial_test::serial]
+    fn a_hyperscale_checkout_takes_its_variants_from_the_config() {
+        let f = Fixture::hyperscale("perf", "c9s-hs");
+        let prefixes = |c: &Checkout| {
+            c.collections
+                .iter()
+                .map(Collection::prefix)
+                .collect::<Vec<_>>()
+        };
+        let none = VariantArgs::default();
+        let c = resolve(&f.repo, None, None, Some(&none)).unwrap();
+        assert_eq!(prefixes(&c), ["hyperscale9s-packages-main"]);
+        f.config("[packages.perf]\nvariants = [\"main\"]\nrhel = [\"facebook\"]\n");
+        let c = resolve(&f.repo, None, None, Some(&none)).unwrap();
+        assert_eq!(
+            prefixes(&c),
+            [
+                "hyperscale9s-packages-main",
+                "hyperscale9-packages-facebook"
+            ]
+        );
+        // Variants given win over the config.
+        let given = variants(&["hs+fb"], &[]);
+        let c = resolve(&f.repo, None, None, Some(&given)).unwrap();
+        assert_eq!(prefixes(&c), ["hyperscale9s-packages-facebook"]);
+        // A deprecated variant is noted, and still used.
+        let c = resolve(&f.repo, None, None, Some(&variants(&["gnome"], &[]))).unwrap();
+        assert_eq!(prefixes(&c), ["hyperscale9s-packages-gnome"]);
+        f.config("[packages.perf]\nvariant = [\"main\"]\n");
+        let c = resolve(&f.repo, None, None, Some(&none)).unwrap();
+        assert_eq!(prefixes(&c), ["hyperscale9s-packages-main"]);
+    }
+
+    /// A Proposed Updates checkout of perf ignores perf's Hyperscale
+    /// table.
+    #[test]
+    #[serial_test::serial]
+    fn the_config_is_about_hyperscale_checkouts_only() {
+        let f = Fixture::new(
+            "perf",
+            "c9s-proposed-RHEL-1",
+            "CentOS/proposed_updates/rpms",
+            "sig",
+            &[],
+        );
+        f.config("[packages.perf]\nvariants = [\"main\"]\nrhel = [\"facebook\"]\n");
+        let c = resolve(&f.repo, None, None, Some(&VariantArgs::default())).unwrap();
+        assert_eq!(
+            c.collections
+                .iter()
+                .map(Collection::prefix)
+                .collect::<Vec<_>>(),
+            ["proposed_updates9s-packages-main"]
+        );
+    }
+
     fn variants(variant: &[&str], rhel: &[&str]) -> VariantArgs {
         VariantArgs {
             variant: variant.iter().map(|s| s.to_string()).collect(),

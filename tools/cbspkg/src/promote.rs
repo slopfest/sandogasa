@@ -215,6 +215,130 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
+    use crate::test_support::Fixture;
+
+    const NVR: &str = "rsync-3.2.7-5~proposed.el10";
+    const CANDIDATE: &str = "proposed_updates10s-packages-main-candidate";
+    const TESTING: &str = "proposed_updates10s-packages-main-testing";
+    const RELEASE: &str = "proposed_updates10s-packages-main-release";
+
+    fn dry_run(nvr: Option<&str>, to: Option<To>, f: &Fixture) -> PromoteArgs {
+        PromoteArgs {
+            nvr: nvr.map(str::to_string),
+            branch: None,
+            repo: Some(f.repo.clone()),
+            variants: Default::default(),
+            to,
+            dry_run: true,
+            explain: false,
+        }
+    }
+
+    /// koji, with the newest build in -candidate in `tags`.
+    fn koji(f: &Fixture, tags: &str) {
+        f.fake(
+            "koji",
+            &[
+                ("--help", ""),
+                ("list-tagged", &format!("{NVR}  {CANDIDATE}  salimma")),
+                ("list-tags", tags),
+            ],
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_promotes_the_newest_candidate_to_testing() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        koji(&f, CANDIDATE);
+        let args = dry_run(None, None, &f);
+        run_inner(&args).unwrap();
+        assert_eq!(run(&args), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_releases_a_tested_build_and_untags_it_from_testing() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        koji(&f, &format!("{CANDIDATE}\n{TESTING}"));
+        run_inner(&dry_run(Some(NVR), None, &f)).unwrap();
+        // Straight from -candidate when asked.
+        koji(&f, CANDIDATE);
+        run_inner(&dry_run(Some(NVR), Some(To::Release), &f)).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_package_without_a_build_or_with_nowhere_to_go_is_left_alone() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake("koji", &[("--help", ""), ("list-tagged", "")]);
+        run_inner(&dry_run(None, None, &f)).unwrap();
+        // Released already: said, and nothing done.
+        koji(&f, &format!("{CANDIDATE}\n{RELEASE}"));
+        run_inner(&dry_run(None, None, &f)).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn promoting_to_a_stage_the_build_is_past_is_an_error() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        koji(&f, &format!("{CANDIDATE}\n{RELEASE}"));
+        let err = run_inner(&dry_run(None, Some(To::Testing), &f))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("in -release already"), "{err}");
+        assert_eq!(
+            run(&dry_run(None, Some(To::Testing), &f)),
+            ExitCode::FAILURE
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_build_in_none_of_the_collections_tags_is_an_error() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        koji(&f, "some-other-tag");
+        let err = run_inner(&dry_run(Some(NVR), None, &f))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("is in none of"), "{err}");
+        // koji failing to answer is an error too.
+        f.fake("koji", &[("--help", ""), ("list-tags", "!no such build")]);
+        let err = run_inner(&dry_run(Some(NVR), None, &f))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no such build"), "{err}");
+    }
+
+    /// perf on c9s-hs+fb promotes in both of its collections; a build
+    /// named for one of them is skipped in the other.
+    #[test]
+    #[serial_test::serial]
+    fn a_named_build_is_promoted_in_whichever_collection_has_it() {
+        let f = Fixture::hyperscale("perf", "c9s-hs+fb");
+        f.fake(
+            "koji",
+            &[
+                ("--help", ""),
+                ("list-tags", "hyperscale9-packages-facebook-candidate"),
+            ],
+        );
+        run_inner(&dry_run(Some("perf-6.1-1.hs.el9"), None, &f)).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_promotion_needs_koji_and_for_real_cbs() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        f.fake("cbs", &[]);
+        let args = PromoteArgs {
+            dry_run: false,
+            ..dry_run(None, None, &f)
+        };
+        let err = run_inner(&args).unwrap_err().to_string();
+        assert!(err.contains("cbs (install"), "{err}");
+    }
+
     #[test]
     fn a_build_goes_to_the_next_stage_unless_told_otherwise() {
         let n = "rsync-3.2.7-5~proposed.el9";

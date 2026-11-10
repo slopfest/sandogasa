@@ -326,6 +326,130 @@ fn run_inner(args: &UploadSourcesArgs) -> Result<(), Box<dyn std::error::Error>>
 mod tests {
     use super::*;
 
+    use crate::test_support::{EnvGuard, Fixture};
+
+    const FILE: &str = "rsync-3.2.7.tar.gz";
+    /// `printf 'data\n' | sha512sum`
+    const SUM: &str = "73651d654c5ba73dd4b687f9dbbbdfc00884bf3dc1674e4cdcf762ff31778b29\
+                       11e61e02b2a97c4055523eed2c4e6051b9902b0f91b4ca5b95e4c53cdf940b3d";
+    const BRANCH: &str = "c10s-proposed-RHEL-1";
+
+    fn sources() -> String {
+        format!("SHA512 ({FILE}) = {SUM}\n")
+    }
+
+    fn dry_run(branch: Option<&str>, f: &Fixture) -> UploadSourcesArgs {
+        UploadSourcesArgs {
+            branch: branch.map(str::to_string),
+            dry_run: true,
+            explain: false,
+            repo: Some(f.repo.clone()),
+        }
+    }
+
+    /// A lookaside answering `status` for the file, and the env that
+    /// points the tool at it.
+    fn lookaside(status: usize) -> (mockito::ServerGuard, mockito::Mock, EnvGuard) {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock(
+                "HEAD",
+                format!("/sources/rsync/{FILE}/sha512/{SUM}/{FILE}").as_str(),
+            )
+            .with_status(status)
+            .expect(1)
+            .create();
+        let env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", Some(&server.url()))]);
+        (server, mock, env)
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_branch_without_a_sources_file_has_nothing_to_upload() {
+        let f = Fixture::proposed(BRANCH, &[]);
+        let args = dry_run(None, &f);
+        run_inner(&args).unwrap();
+        assert_eq!(run(&args), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn sources_the_lookaside_has_are_not_uploaded() {
+        let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
+        let (_server, mock, _env) = lookaside(200);
+        run_inner(&dry_run(None, &f)).unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_source_the_checkout_has_is_uploaded() {
+        let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
+        std::fs::write(f.repo.join(FILE), "data\n").unwrap();
+        let (_server, mock, _env) = lookaside(404);
+        // centpkg is not needed: the file is there, with its sum.
+        f.fake("centpkg", &[]);
+        run_inner(&dry_run(None, &f)).unwrap();
+        mock.assert();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_source_the_checkout_lacks_is_fetched_with_centpkg_first() {
+        let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
+        // A file with the wrong contents is fetched again too.
+        std::fs::write(f.repo.join(FILE), "other\n").unwrap();
+        let (_server, _mock, _env) = lookaside(404);
+        run_inner(&dry_run(None, &f)).unwrap();
+        // Without centpkg it cannot be.
+        f.fake("centpkg", &[]);
+        let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
+        assert!(err.contains("centpkg (install"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_branch_is_checked_out_for_centpkg_unless_the_checkout_is_dirty() {
+        let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
+        f.git(&["checkout", "--quiet", "-b", "other"]);
+        std::fs::write(f.repo.join("rsync.spec"), "Name: y\n").unwrap();
+        f.git(&["commit", "--quiet", "-am", "elsewhere"]);
+        let (_server, _mock, _env) = lookaside(404);
+        run_inner(&dry_run(Some(BRANCH), &f)).unwrap();
+        std::fs::write(f.repo.join("rsync.spec"), "Name: z\n").unwrap();
+        let err = run_inner(&dry_run(Some(BRANCH), &f))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("uncommitted changes"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_source_listed_with_another_hash_is_refused() {
+        let f = Fixture::proposed(BRANCH, &[("sources", "MD5 (a.tar.gz) = 0123\n")]);
+        let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
+        assert!(err.contains("takes sha512 sums"), "{err}");
+        assert_eq!(run(&dry_run(None, &f)), ExitCode::FAILURE);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_lookaside_error_is_not_taken_for_a_missing_file() {
+        let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
+        let (_server, _mock, _env) = lookaside(500);
+        let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
+        assert!(err.contains("answered HTTP 500"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_lookaside_can_be_pointed_elsewhere() {
+        let _env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", None)]);
+        assert_eq!(lookaside_base(), SIG_LOOKASIDE);
+        let _env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", Some("http://127.0.0.1:1"))]);
+        assert_eq!(lookaside_base(), "http://127.0.0.1:1");
+    }
+
     #[test]
     fn a_sha512sum_line_gives_the_sum() {
         let sum = "c2afba11a352fd88133f9e96e19d6df80eb864450c83eced13a7faa23df947bccf2ef093f2101df6\

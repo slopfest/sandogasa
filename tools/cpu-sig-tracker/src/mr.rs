@@ -893,4 +893,380 @@ mod tests {
         assert_eq!(fork_copy(Some("started")), ForkCopy::Copying);
         assert_eq!(fork_copy(Some("failed")), ForkCopy::Failed);
     }
+
+    // ---- run_inner on a local fixture checkout, against a mock GitLab ----
+
+    use crate::test_support::{EnvGuard, install_fake_bin};
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const STREAM: &str = "https://gitlab.com/redhat/centos-stream/rpms/rsync.git";
+    const BRANCH: &str = "c9s-CVE-2026-12345";
+
+    /// Run git in `cwd` for a fixture, its output trimmed.
+    fn fixture_git(cwd: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(["-c", "user.name=T", "-c", "user.email=t@example.org"])
+            .args(["-c", "commit.gpgsign=false", "-c", "init.defaultBranch=c9s"])
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A dist-git checkout of rsync with `remote` as the Stream remote,
+    /// `c9s` at `remote/c9s`, and a branch with one commit per message
+    /// beyond it, left checked out on `c9s`.
+    fn checkout(dir: &Path, remote: (&str, &str), messages: &[&str]) -> PathBuf {
+        let repo = dir.join("rsync");
+        fixture_git(dir, &["init", "--quiet", "rsync"]);
+        std::fs::write(repo.join("rsync.spec"), "Name: rsync\n").unwrap();
+        fixture_git(&repo, &["add", "rsync.spec"]);
+        fixture_git(&repo, &["commit", "--quiet", "-m", "base"]);
+        fixture_git(&repo, &["remote", "add", remote.0, remote.1]);
+        let tracking = format!("refs/remotes/{}/c9s", remote.0);
+        fixture_git(&repo, &["update-ref", &tracking, "HEAD"]);
+        fixture_git(&repo, &["checkout", "--quiet", "-b", BRANCH]);
+        for (i, m) in messages.iter().enumerate() {
+            std::fs::write(repo.join("rsync.spec"), format!("Name: rsync\n# {i}\n")).unwrap();
+            fixture_git(&repo, &["commit", "--quiet", "-am", m]);
+        }
+        fixture_git(&repo, &["checkout", "--quiet", "c9s"]);
+        repo
+    }
+
+    const FIX: &str = "Fix a crash (CVE-2026-12345)\n\nBackport upstream's fix.\n\n\
+                       Resolves: RHEL-100\n\nAssisted-by: Claude Code:claude-opus-5-5";
+
+    fn args(repo: &Path) -> MrArgs {
+        MrArgs {
+            branch: Some(BRANCH.to_string()),
+            repo: Some(repo.to_path_buf()),
+            notes: sandogasa_cli::NotesArgs::default(),
+            target: None,
+            title: None,
+            dry_run: false,
+            yes: false,
+            explain: false,
+        }
+    }
+
+    /// Point the tool at `server` (when given), with fake tools from
+    /// `bin` first on PATH and git reading no developer config.
+    fn guard(server: Option<&MockServer>, bin: &Path) -> EnvGuard {
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let base = server.map_or_else(|| "http://127.0.0.1:9".to_string(), |s| s.uri());
+        EnvGuard::new(&[
+            ("PATH", &path),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &base),
+            ("GITLAB_TOKEN", "test-token"),
+            ("XDG_CONFIG_HOME", &bin.to_string_lossy()),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ])
+    }
+
+    fn project(id: u64, path: &str, import_status: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "path_with_namespace": path,
+            "web_url": format!("https://gitlab.example/{path}"),
+            "ssh_url_to_repo": format!("git@gitlab.example:{path}.git"),
+            "http_url_to_repo": format!("https://gitlab.example/{path}.git"),
+            "import_status": import_status,
+        })
+    }
+
+    fn merge_request(iid: u64, title: &str) -> serde_json::Value {
+        json!({
+            "iid": iid,
+            "title": title,
+            "state": "opened",
+            "web_url": format!("https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/{iid}"),
+            "source_branch": BRANCH,
+            "target_branch": "c9s",
+        })
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_dry_run_shows_the_merge_request_without_forking_or_opening_it() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // One already open about the same CVE: noted, not a stop.
+            Mock::given(method("GET"))
+                .and(path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!([merge_request(3, "CVE-2026-12345 too")])),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let repo = checkout(dir.path(), ("stream", STREAM), &[FIX]);
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        // Only probed: a dry run forks nothing.
+        install_fake_bin(&bin, "centpkg", &[("--help", "usage: centpkg")]);
+        let _g = guard(Some(&server), &bin);
+
+        let mut a = args(&repo);
+        a.dry_run = true;
+        a.notes.notes = Some("Tested with the reproducer.".into());
+        run_inner(&a).expect("dry run");
+        // Nothing switched or pushed.
+        assert_eq!(
+            fixture_git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "c9s"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn yes_forks_pushes_and_opens_the_merge_request() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+            // The new fork, already copied.
+            Mock::given(method("GET"))
+                .and(path("/api/v4/projects/me%2Fcentos_rpms_rsync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(project(
+                    9,
+                    "me/centos_rpms_rsync",
+                    "finished",
+                )))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(project(
+                    5,
+                    "redhat/centos-stream/rpms/rsync",
+                    "none",
+                )))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(
+                    "/api/v4/projects/me%2Fcentos_rpms_rsync/merge_requests",
+                ))
+                .and(body_partial_json(json!({
+                    "source_branch": BRANCH,
+                    "target_project_id": 5,
+                    "target_branch": "c9s",
+                    "title": "Fix a crash (CVE-2026-12345)",
+                })))
+                .respond_with(
+                    ResponseTemplate::new(201)
+                        .set_body_json(merge_request(11, "Fix a crash (CVE-2026-12345)")),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            // No SIG repo yet: the next step says how to make one.
+            Mock::given(method("GET"))
+                .and(path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync",
+                ))
+                .respond_with(ResponseTemplate::new(404))
+                .mount(&server)
+                .await;
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let repo = checkout(dir.path(), ("stream", STREAM), &[FIX]);
+        let fork = dir.path().join("fork.git");
+        fixture_git(dir.path(), &["init", "--quiet", "--bare", "fork.git"]);
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        // centpkg fork adds the fork as a remote; pushes go to a local
+        // bare repository instead of GitLab.
+        let centpkg = bin.join("centpkg");
+        std::fs::write(
+            &centpkg,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in\n--help) exit 0;;\nfork) \
+                 git remote add me https://gitlab.com/me/centos_rpms_rsync.git && \
+                 git remote set-url --push me {}; exit $?;;\nesac\nexit 1\n",
+                fork.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &centpkg,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        let _g = guard(Some(&server), &bin);
+
+        let mut a = args(&repo);
+        a.yes = true;
+        run_inner(&a).expect("opens the merge request");
+        assert_eq!(
+            fixture_git(
+                dir.path(),
+                &["--git-dir=fork.git", "log", "--format=%s", "-1", BRANCH]
+            ),
+            "Fix a crash (CVE-2026-12345)"
+        );
+        // Switched back to where it was.
+        assert_eq!(
+            fixture_git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "c9s"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_fork_gitlab_failed_to_copy_is_not_pushed_to() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v4/projects/me%2Fcentos_rpms_rsync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(project(
+                    9,
+                    "me/centos_rpms_rsync",
+                    "failed",
+                )))
+                .mount(&server)
+                .await;
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let repo = checkout(dir.path(), ("stream", STREAM), &[FIX]);
+        // The fork is a remote already; push it nowhere real.
+        fixture_git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "me",
+                "https://gitlab.com/me/centos_rpms_rsync.git",
+            ],
+        );
+        fixture_git(
+            &repo,
+            &["remote", "set-url", "--push", "me", "/nonexistent"],
+        );
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let _g = guard(Some(&server), &bin);
+        // A fork GitLab failed to copy is not waited for.
+        let err = wait_for_fork(&server.uri(), "me/centos_rpms_rsync", true).unwrap_err();
+        assert!(err.contains("failed to copy the fork"), "{err}");
+        // The fork remote already there is used as it is, without asking
+        // GitLab; a push that fails is an error, with the checkout
+        // restored.
+        let mut a = args(&repo);
+        a.yes = true;
+        assert!(run_inner(&a).is_err());
+        assert_eq!(
+            fixture_git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "c9s"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn what_the_merge_request_needs_is_checked_before_gitlab_is_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        // No server: anything reaching GitLab would fail to connect.
+        let _g = guard(None, &bin);
+        let err_of = |a: &MrArgs| run_inner(a).unwrap_err().to_string();
+
+        // Not a checkout at all.
+        let plain = dir.path().join("plain");
+        std::fs::create_dir(&plain).unwrap();
+        assert!(err_of(&args(&plain)).contains("git rev-parse"));
+
+        // Only a SIG's repo as a remote: says how to add Stream's.
+        let sig = dir.path().join("sig");
+        std::fs::create_dir(&sig).unwrap();
+        let repo = checkout(
+            &sig,
+            (
+                "origin",
+                "https://gitlab.com/CentOS/proposed_updates/rpms/rsync.git",
+            ),
+            &[FIX],
+        );
+        let err = err_of(&args(&repo));
+        assert!(
+            err.contains(
+                "git remote add stream https://gitlab.com/redhat/centos-stream/rpms/rsync.git"
+            ),
+            "{err}"
+        );
+
+        // A branch with no Stream branch in its name, nor tracking one.
+        let one = dir.path().join("one");
+        std::fs::create_dir(&one).unwrap();
+        let repo = checkout(&one, ("stream", STREAM), &[FIX]);
+        fixture_git(&repo, &["branch", "my-fix", BRANCH]);
+        let mut a = args(&repo);
+        a.branch = Some("my-fix".into());
+        assert!(err_of(&a).contains("pass --target"));
+
+        // Nothing beyond the target.
+        a.branch = Some("c9s".into());
+        assert!(err_of(&a).contains("has nothing beyond stream/c9s"));
+
+        // A commit without a Resolves: line.
+        let bare = dir.path().join("bare");
+        std::fs::create_dir(&bare).unwrap();
+        let repo = checkout(&bare, ("stream", STREAM), &["Fix a crash"]);
+        let err = err_of(&args(&repo));
+        assert!(err.contains("no Resolves: line"), "{err}");
+
+        // Several commits need a title.
+        let two = dir.path().join("two");
+        std::fs::create_dir(&two).unwrap();
+        let repo = checkout(
+            &two,
+            ("stream", STREAM),
+            &[FIX, "Fix a typo\n\nRelated: RHEL-100"],
+        );
+        let err = err_of(&args(&repo));
+        assert!(err.contains("has 2 commits: pass --title"), "{err}");
+
+        // Uncommitted changes on another branch stop it.
+        std::fs::write(repo.join("rsync.spec"), "dirty\n").unwrap();
+        let err = err_of(&args(&repo));
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert_eq!(run(&args(&repo)), ExitCode::FAILURE);
+    }
 }

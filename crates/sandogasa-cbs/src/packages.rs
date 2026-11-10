@@ -180,6 +180,84 @@ pub fn listed(tag: &str, package: &str) -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    use crate::test_support::FakeTools;
+
+    #[test]
+    #[serial_test::serial]
+    fn a_builds_tags_are_read_from_koji() {
+        let t = FakeTools::new();
+        t.fake(
+            "koji",
+            &[
+                ("list-tags --build xz-1", "a-candidate\n\n  a-testing  \n"),
+                ("list-tags", "!GenericError: No such build"),
+            ],
+        );
+        assert_eq!(tags_of("xz-1").unwrap(), ["a-candidate", "a-testing"]);
+        let err = tags_of("xz-2").unwrap_err();
+        assert!(
+            err.contains("list-tags --build xz-2: GenericError"),
+            "{err}"
+        );
+        std::fs::remove_file(t.tmp.path().join("bin/koji")).unwrap();
+        assert!(tags_of("xz-1").unwrap_err().contains("cannot run koji"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_newest_build_in_a_tag_is_its_first_word() {
+        let t = FakeTools::new();
+        t.fake(
+            "koji",
+            &[
+                ("--latest --quiet t xz", "xz-5.4-1.el10  t  salimma"),
+                ("list-tagged", ""),
+            ],
+        );
+        assert_eq!(latest("t", "xz").as_deref(), Some("xz-5.4-1.el10"));
+        assert_eq!(latest("t", "rsync"), None);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_cbs_user_is_who_koji_greets() {
+        let t = FakeTools::new();
+        t.fake(
+            "koji",
+            &[("--profile cbs moshimoshi", "what's up, tester!")],
+        );
+        assert_eq!(whoami().as_deref(), Ok("tester"));
+        t.fake("koji", &[("moshimoshi", "Hello!")]);
+        let err = whoami().unwrap_err();
+        assert!(
+            err.contains("could not tell the CBS user") && err.contains("Hello!"),
+            "{err}"
+        );
+        t.fake("koji", &[]);
+        assert!(whoami().unwrap_err().contains("no output"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn whether_a_tag_lists_a_package_is_asked_of_koji() {
+        let t = FakeTools::new();
+        t.fake(
+            "koji",
+            &[
+                ("--tag listed --package xz", "xz  listed  salimma"),
+                ("--tag unlisted", "!(no matching packages)"),
+                ("--tag broken", "!GenericError: no such tag"),
+            ],
+        );
+        assert_eq!(listed("listed", "xz"), Ok(true));
+        assert_eq!(listed("unlisted", "xz"), Ok(false));
+        let err = listed("broken", "xz").unwrap_err();
+        assert!(
+            err.contains("--tag broken --package xz: GenericError"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn a_build_is_promoted_a_stage_at_a_time_and_released_out_of_testing() {
         let c = crate::Sig::ProposedUpdates

@@ -105,6 +105,70 @@ pub fn gitlab_token() -> Option<String> {
 mod tests {
     use super::*;
 
+    use crate::test_support::EnvGuard;
+
+    /// The env pointing the config and GitLab at a temp dir and `base`.
+    fn env(dir: &std::path::Path, base: &str) -> EnvGuard {
+        let config = dir.display().to_string();
+        EnvGuard::new(&[
+            ("XDG_CONFIG_HOME", Some(&config)),
+            ("CBSPKG_GITLAB_BASE", Some(base)),
+            ("GITLAB_TOKEN", None),
+        ])
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_config_is_saved_read_and_trimmed_in_the_users_config_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = env(tmp.path(), "http://127.0.0.1:1");
+        assert_eq!(config_path(), tmp.path().join("cbspkg/config.toml"));
+        // No file yet: an error saying how to make one.
+        let err = load_user().unwrap_err().to_string();
+        assert!(err.contains("Run 'config'"), "{err}");
+        save(&Config {
+            gitlab: Some(GitlabConfig {
+                access_token: "in-file".into(),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(load().unwrap().gitlab.unwrap().access_token, "in-file");
+        assert_eq!(gitlab_token().as_deref(), Some("in-file"));
+        // Nothing left once the token goes: the file is removed.
+        assert!(remove("gitlab", "access_token").unwrap());
+        assert!(!config_path().exists());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_gitlab_token_comes_from_the_env_then_the_keyring_then_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = env(tmp.path(), "http://127.0.0.1:2");
+        assert_eq!(gitlab_base(), "http://127.0.0.1:2");
+        assert_eq!(gitlab_secret().service(), "127.0.0.1:2");
+        assert_eq!(gitlab_token(), None);
+        save(&Config {
+            gitlab: Some(GitlabConfig {
+                access_token: "in-file".into(),
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+        keyring().store(&gitlab_secret(), "in-keyring").unwrap();
+        assert_eq!(gitlab_token().as_deref(), Some("in-keyring"));
+        let _token = EnvGuard::new(&[("GITLAB_TOKEN", Some("in-env"))]);
+        assert_eq!(gitlab_token().as_deref(), Some("in-env"));
+        keyring().clear(&gitlab_secret()).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn gitlab_com_is_the_default_instance() {
+        let _env = EnvGuard::new(&[("CBSPKG_GITLAB_BASE", None)]);
+        assert_eq!(gitlab_base(), "https://gitlab.com");
+    }
+
     /// perf's defaults, as the README gives them.
     #[test]
     fn a_package_table_sets_its_variants() {

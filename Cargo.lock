@@ -137,6 +137,7 @@ dependencies = [
  "sandogasa-gitlab",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "toml",
 ]
@@ -2006,6 +2007,8 @@ version = "0.27.1"
 dependencies = [
  "sandogasa-cli",
  "sandogasa-kojihub",
+ "serial_test",
+ "tempfile",
 ]
 
 [[package]]

@@ -27,6 +27,8 @@ pub mod login;
 pub mod lookaside;
 pub mod packages;
 pub mod remotes;
+#[cfg(test)]
+mod test_support;
 
 /// The koji profile CBS is reached through, and the `cbs` command
 /// that wraps it.

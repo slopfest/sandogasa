@@ -197,6 +197,66 @@ fn check_login(tool: &str, interactive: bool, verbose: bool) -> Result<(), Strin
 mod tests {
     use super::*;
 
+    use crate::test_support::FakeTools;
+
+    /// Fake tools with a koji profile logging in with `~/.centos.cert`,
+    /// koji refusing the login, and a Kerberos ticket for `tester`.
+    fn refused() -> FakeTools {
+        let t = FakeTools::new();
+        std::fs::create_dir_all(t.home().join(".koji")).unwrap();
+        std::fs::write(
+            t.home().join(".koji/config"),
+            "[cbs]\ncert = ~/.centos.cert\n",
+        )
+        .unwrap();
+        t.fake("koji", &[("moshimoshi", "!SSLError: CERTIFICATE_REQUIRED")]);
+        t.fake(
+            "klist",
+            &[("", "Default principal: tester@FEDORAPROJECT.ORG")],
+        );
+        t
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_login_without_its_certificate_is_explained() {
+        let _t = refused();
+        let err = check_login("test", false, true).unwrap_err();
+        assert!(err.contains(".centos.cert, does not exist"), "{err}");
+        assert!(err.contains("centos-cert -u tester"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_login_with_a_rejected_certificate_is_explained() {
+        let t = refused();
+        std::fs::write(t.home().join(".centos.cert"), "").unwrap();
+        t.fake("centos-cert", &[("-v", "!expired")]);
+        let err = check_login("test", false, false).unwrap_err();
+        assert!(err.contains("is not valid any more"), "{err}");
+        // A certificate centos-cert accepts: koji's reason is given.
+        t.fake("centos-cert", &[("-v", "ok")]);
+        let err = check_login("test", false, false).unwrap_err();
+        assert!(err.contains("koji says: SSLError"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn an_accepted_login_is_checked_once() {
+        let t = refused();
+        t.fake(
+            "koji",
+            &[("--profile cbs moshimoshi", "what's up, tester!")],
+        );
+        ensure_login("test", false, false).unwrap();
+        // Accepted already in this process: koji is not asked again.
+        t.fake("koji", &[]);
+        ensure_login("test", false, false).unwrap();
+        assert!(login().is_err());
+        assert_eq!(kerberos_user().as_deref(), Some("tester"));
+        assert_eq!(cert_valid(), None);
+    }
+
     #[test]
     fn a_traceback_is_explained_by_its_last_line() {
         let out = "Traceback (most recent call last):\n  File \"/usr/bin/koji\", line 9\n\
