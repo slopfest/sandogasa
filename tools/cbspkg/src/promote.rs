@@ -173,6 +173,8 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         if !std::io::stdin().is_terminal() {
             return Err("promoting in CBS is confirmed at a terminal; run it in one".into());
         }
+        // Set apart from the login check and the steps above.
+        println!();
         for (nvr, to, argvs) in &steps {
             println!("{nvr} to -{}:", to.as_str());
             for argv in argvs {

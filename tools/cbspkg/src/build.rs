@@ -18,7 +18,7 @@ use std::process::{Command, ExitCode};
 
 use sandogasa_cbs::packages::latest;
 use sandogasa_cbs::remotes::Role;
-use sandogasa_cbs::{Collection, Sig, Stage};
+use sandogasa_cbs::{Collection, Stage};
 use sandogasa_cli::explain::Ui;
 
 use crate::add_pkg::{Checkout, list_missing, resolve};
@@ -119,10 +119,7 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
 /// branch), the remote's.
 pub fn locate(checkout: &Checkout, repo: &Path) -> Result<Located, Box<dyn std::error::Error>> {
     let (branch, package) = (&checkout.branch, &checkout.package);
-    let sig = Sig::ALL
-        .into_iter()
-        .find(|s| s.name() == checkout.collections[0].sig)
-        .ok_or("the branch's SIG has no known GitLab group")?;
+    let sig = checkout.sig;
     let sig_path = format!("{}/{package}", sig.gitlab_group());
     let found = checkout.remotes.find(Role::Sig(sig)).ok_or_else(|| {
         format!(
@@ -244,7 +241,11 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
         // The exact commands, whatever the narration: what would
         // otherwise be pieced together from shell history.
-        println!("{package} {branch} at {}:", &commit[..12.min(commit.len())]);
+        // Set apart from the login check and the steps above.
+        println!(
+            "\n{package} {branch} at {}:",
+            &commit[..12.min(commit.len())]
+        );
         for (_, argv) in &builds {
             println!("  {}", sandogasa_cli::explain::command_line(argv));
         }

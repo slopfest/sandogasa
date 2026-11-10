@@ -56,17 +56,24 @@ pub struct Checkout {
     pub collections: Vec<Collection>,
     pub package: String,
     pub remotes: Remotes,
+    /// The SIG whose repo the checkout builds from.
+    pub sig: Sig,
 }
 
-/// The CentOS Stream major a branch starts from: 10 for `c10s` or
-/// `c10s-CVE-2026-119741`.
-fn stream_major(branch: &str) -> Option<u32> {
-    let rest = branch.strip_prefix('c')?;
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    let after = rest[digits.len()..].strip_prefix('s')?;
-    (after.is_empty() || after.starts_with('-'))
-        .then(|| digits.parse().ok())
-        .flatten()
+impl Checkout {
+    /// What a person should see before a build or promotion: which
+    /// pipeline the package goes through, when it is not the SIG's own.
+    pub fn pipeline_note(&self) -> Option<String> {
+        let c = self.collections.iter().find(|c| c.is_extras())?;
+        Some(format!(
+            "{} is the {} SIG's release package: it is built in Extras, not the SIG's \
+             collection, with target {} and tags {}-{{candidate,testing,release}}.",
+            self.package,
+            self.sig.name(),
+            c.target(),
+            c.prefix()
+        ))
+    }
 }
 
 /// The collections a branch builds into: its own, and the RHEL variant
@@ -79,7 +86,7 @@ fn stream_major(branch: &str) -> Option<u32> {
 pub fn collections_for(branch: &str, sigs: &[Sig]) -> Result<Vec<Collection>, String> {
     let collection = match Sig::detect(branch) {
         Some((_, c)) => c,
-        None => match (stream_major(branch), sigs) {
+        None => match (sandogasa_cbs::stream_major(branch), sigs) {
             (Some(major), [Sig::ProposedUpdates]) => {
                 Collection::new(Sig::ProposedUpdates.name(), major, true, "main")
             }
@@ -136,22 +143,63 @@ pub fn resolve(
         None => git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
     };
     let remotes = Remotes::parse(&git(repo, &["remote", "-v"]).unwrap_or_default());
-    let collections = collections_for(&branch, &remotes.sigs())?;
-    let package = match package {
-        Some(p) => p.to_string(),
-        None => remotes.package().map(str::to_string).ok_or_else(|| {
-            format!(
-                "no remote of {} is a CentOS Stream or SIG repo: name the package",
-                repo.display()
-            )
-        })?,
-    };
-    Ok(Checkout {
+    let package = package
+        .map(str::to_string)
+        .or_else(|| remotes.package().map(str::to_string));
+    // The branch's collections first: an unknown branch is the error to
+    // report, whatever the package.
+    let (sig, collections) =
+        collections_of(package.as_deref().unwrap_or(""), &branch, &remotes.sigs())?;
+    let package = package.ok_or_else(|| {
+        format!(
+            "no remote of {} is a CentOS Stream or SIG repo: name the package",
+            repo.display()
+        )
+    })?;
+    let checkout = Checkout {
         branch,
         collections,
         package,
         remotes,
-    })
+        sig,
+    };
+    if let Some(note) = checkout.pipeline_note() {
+        println!("{note}");
+    }
+    Ok(checkout)
+}
+
+/// The SIG and collections `package` on `branch` builds through. A
+/// SIG's release package (`centos-release-*`) is built from the SIG's
+/// repo into Extras' common collection, so its SIG is the one it is
+/// named after (`centos-release-hyperscale`), else the one whose repo
+/// the checkout's remotes point at (`sigs`), when only one; any other
+/// package's SIG is its collection's.
+pub fn collections_of(
+    package: &str,
+    branch: &str,
+    sigs: &[Sig],
+) -> Result<(Sig, Vec<Collection>), String> {
+    if let Some(c) = sandogasa_cbs::release_package_collection(package, branch) {
+        let named = Sig::ALL
+            .into_iter()
+            .find(|s| s.release_package() == package);
+        return match (named, sigs) {
+            (Some(sig), _) | (None, &[sig]) => Ok((sig, vec![c])),
+            _ => Err(format!(
+                "{package} is a SIG's release package, built from the SIG's repo into {}, and \
+                 the checkout's remotes do not settle which SIG's repo that is: they should \
+                 point at exactly one",
+                c.target()
+            )),
+        };
+    }
+    let collections = collections_for(branch, sigs)?;
+    let sig = Sig::ALL
+        .into_iter()
+        .find(|s| s.name() == collections[0].sig)
+        .ok_or("the branch's SIG has no known GitLab group")?;
+    Ok((sig, collections))
 }
 
 /// List `package` in whichever of the collections' tags do not list it
@@ -306,5 +354,75 @@ mod tests {
         assert!(collections_for("c9s", &[]).is_err());
         assert!(collections_for("c9s", &[Sig::ProposedUpdates, Sig::Hyperscale]).is_err());
         assert!(collections_for("c9sx", &[Sig::ProposedUpdates]).is_err());
+    }
+
+    /// A SIG's release package goes through Extras on the branches it is
+    /// built from, not the SIG's collection the branch would otherwise
+    /// name (Hyperscale's c10s-sig-hyperscale is its main repository).
+    #[test]
+    fn a_release_package_builds_through_extras_from_its_sigs_repo() {
+        let (sig, c) = collections_of(
+            "centos-release-hyperscale",
+            "c10s-sig-hyperscale",
+            &[Sig::Hyperscale],
+        )
+        .unwrap();
+        assert_eq!(sig, Sig::Hyperscale);
+        assert_eq!(
+            c.iter().map(Collection::target).collect::<Vec<_>>(),
+            ["extras10s-extras-common-el10s"]
+        );
+        let (sig, c) = collections_of(
+            "centos-release-proposed_updates",
+            "c9s-proposed",
+            &[Sig::ProposedUpdates],
+        )
+        .unwrap();
+        assert_eq!(sig, Sig::ProposedUpdates);
+        assert_eq!(c[0].prefix(), "extras9s-extras-common");
+        let checkout = Checkout {
+            branch: "c9s-proposed".into(),
+            collections: c,
+            package: "centos-release-proposed_updates".into(),
+            remotes: Remotes::default(),
+            sig,
+        };
+        let note = checkout.pipeline_note().unwrap();
+        assert!(
+            note.contains("built in Extras") && note.contains("extras9s-extras-common-el9s"),
+            "{note}"
+        );
+        // The SIG is the package's, whatever else the remotes name.
+        let (sig, _) = collections_of(
+            "centos-release-hyperscale",
+            "c10s-sig-hyperscale",
+            &[Sig::ProposedUpdates, Sig::Hyperscale],
+        )
+        .unwrap();
+        assert_eq!(sig, Sig::Hyperscale);
+        // A release package not named after the SIG goes to Extras too,
+        // from the one SIG repo the remotes name.
+        let (sig, c) = collections_of(
+            "centos-release-hyperscale-kernel",
+            "c9s-hs+fb",
+            &[Sig::Hyperscale],
+        )
+        .unwrap();
+        assert_eq!(sig, Sig::Hyperscale);
+        assert_eq!(
+            c.iter().map(Collection::prefix).collect::<Vec<_>>(),
+            ["extras9s-extras-common"]
+        );
+        let err = collections_of("centos-release-ceph-reef", "c10s", &[]).unwrap_err();
+        assert!(err.contains("exactly one"), "{err}");
+        // An unknown branch is reported as such, release package or not.
+        let err = collections_of("", "c10s", &[]).unwrap_err();
+        assert!(err.contains("c10s is not"), "{err}");
+        // Any other package keeps its branch's collection, and no note.
+        let (sig, c) = collections_of("rsync", "c9s-proposed-RHEL-1", &[]).unwrap();
+        assert_eq!(
+            (sig, c[0].prefix().as_str()),
+            (Sig::ProposedUpdates, "proposed_updates9s-packages-main")
+        );
     }
 }

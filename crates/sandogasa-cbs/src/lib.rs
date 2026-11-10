@@ -17,6 +17,11 @@
 //! Each SIG has its own branch convention: Proposed Updates proposes a
 //! change on `c10s-proposed-RHEL-170526`, Hyperscale builds its main
 //! repository from `c10s-hs` (see [`Sig::collection_for_branch`]).
+//!
+//! A SIG's release package, `centos-release-<sig>`, which installs the
+//! SIG's repository files, is the exception: it is built from the SIG's
+//! repo but into Extras' common collection, `extras<major>s-extras-common`
+//! (see [`release_package_collection`]).
 
 pub mod login;
 pub mod lookaside;
@@ -87,7 +92,8 @@ impl Stage {
 }
 
 impl Collection {
-    /// A collection of `sig`'s packages.
+    /// A collection of `sig`'s packages. Extras' common collection, which
+    /// is named differently, is [`Collection::extras_common`].
     pub fn new(sig: &str, major: u32, stream: bool, repository: &str) -> Self {
         Self {
             sig: sig.to_string(),
@@ -97,13 +103,48 @@ impl Collection {
         }
     }
 
+    /// Extras' common collection for CentOS Stream `major`, which SIGs'
+    /// release packages are built into: `extras9s-extras-common`.
+    pub fn extras_common(major: u32) -> Self {
+        Self {
+            sig: "extras".to_string(),
+            major,
+            stream: true,
+            repository: "common".to_string(),
+        }
+    }
+
+    /// Whether this is Extras' common collection rather than a SIG's.
+    pub fn is_extras(&self) -> bool {
+        self.sig == "extras"
+    }
+
+    /// What the collection holds, between the release and the
+    /// repository in its names: `extras` for Extras', `packages` for a
+    /// SIG's.
+    fn area(&self) -> &'static str {
+        if self.is_extras() {
+            "extras"
+        } else {
+            "packages"
+        }
+    }
+
     /// The collection and stage a tag is: `hyperscale9s-packages-main-testing`
-    /// is Hyperscale's EL9 Stream main collection, in testing. `None` for
-    /// a tag that is not a known SIG's stage tag.
+    /// is Hyperscale's EL9 Stream main collection, in testing, and
+    /// `extras10s-extras-common-testing` Extras' common collection, which
+    /// SIGs' release packages go through. `None` for any other tag.
     pub fn from_tag(tag: &str) -> Option<(Collection, Stage)> {
         let (rest, stage) = [Stage::Candidate, Stage::Testing, Stage::Release]
             .into_iter()
             .find_map(|s| Some((tag.strip_suffix(&format!("-{}", s.as_str()))?, s)))?;
+        if let Some(major) = rest
+            .strip_prefix("extras")
+            .and_then(|r| r.strip_suffix("s-extras-common"))
+            .and_then(|d| d.parse().ok())
+        {
+            return Some((Collection::extras_common(major), stage));
+        }
         let sig = Sig::ALL.into_iter().find(|s| rest.starts_with(s.name()))?;
         let (release, repository) = rest[sig.name().len()..].split_once("-packages-")?;
         let (digits, stream) = match release.strip_suffix('s') {
@@ -127,9 +168,10 @@ impl Collection {
     /// `hyperscale9s-packages-main`: what every name below starts with.
     pub fn prefix(&self) -> String {
         format!(
-            "{}{}-packages-{}",
+            "{}{}-{}-{}",
             self.sig,
             self.release(),
+            self.area(),
             self.repository
         )
     }
@@ -171,7 +213,9 @@ impl Collection {
         }
         let n = self.major;
         match (self.sig.as_str(), self.repository.as_str()) {
-            ("proposed_updates", "main") => Some(format!("centos-stream-{n}-{arch}")),
+            ("proposed_updates", "main") | ("extras", "common") => {
+                Some(format!("centos-stream-{n}-{arch}"))
+            }
             ("hyperscale", "main") => Some(format!("centos-stream-hyperscale-{n}-{arch}")),
             ("hyperscale", repo @ ("experimental" | "facebook" | "spin")) => {
                 Some(format!("centos-stream-hyperscale-{repo}-{n}-{arch}"))
@@ -191,6 +235,12 @@ impl Sig {
             Sig::Hyperscale => "hyperscale",
             Sig::ProposedUpdates => "proposed_updates",
         }
+    }
+
+    /// The SIG's release package, which installs its repository files:
+    /// `centos-release-hyperscale`.
+    pub fn release_package(self) -> String {
+        format!("centos-release-{}", self.name())
     }
 
     /// The GitLab group holding the SIG's package repositories, under
@@ -276,6 +326,35 @@ pub fn stream_project(package: &str) -> String {
     format!("redhat/centos-stream/rpms/{package}")
 }
 
+/// What SIGs' release packages are named: `centos-release-hyperscale`,
+/// `centos-release-ceph-reef`, `centos-release-samba418`.
+pub const RELEASE_PACKAGE_PREFIX: &str = "centos-release-";
+
+/// The collection a SIG's release package is built into from a branch
+/// of the SIG's repo (`c9s-proposed`, `c10s-sig-hyperscale`): Extras'
+/// common collection for the branch's CentOS Stream release, as
+/// `centos-release-hyperscale-10-5.el10s` was. Every SIG's release
+/// package goes there, whatever it is named after. `None` for any other
+/// package, or a branch naming no Stream release.
+pub fn release_package_collection(package: &str, branch: &str) -> Option<Collection> {
+    let name = package.strip_prefix(RELEASE_PACKAGE_PREFIX)?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(Collection::extras_common(stream_major(branch)?))
+}
+
+/// The CentOS Stream major a branch starts from: 10 for `c10s`,
+/// `c10s-proposed-RHEL-1` or `c10s-CVE-2026-119741`.
+pub fn stream_major(branch: &str) -> Option<u32> {
+    let rest = branch.strip_prefix('c')?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let after = rest[digits.len()..].strip_prefix('s')?;
+    (after.is_empty() || after.starts_with('-'))
+        .then(|| digits.parse().ok())
+        .flatten()
+}
+
 /// The branch a Proposed Update is carried on in the SIG's repo:
 /// `c10s-proposed-RHEL-303721`, for the CentOS Stream branch `release`
 /// and the change's first RHEL issue.
@@ -337,13 +416,62 @@ mod tests {
             c.tag(Stage::Testing),
             "proposed_updates10s-packages-main-testing"
         );
+        let (c, stage) = Collection::from_tag("extras10s-extras-common-testing").unwrap();
+        assert_eq!((c, stage), (Collection::extras_common(10), Stage::Testing));
         for not_one in [
+            "extras10s-extras-common-el10s-build",
+            "extrasXs-extras-common-testing",
             "hyperscale9s-packages-main-el9s-build",
             "aie10s-packages-nvidia-testing",
             "hyperscale9s-images-main-testing",
             "hyperscaleX-packages-main-testing",
         ] {
             assert_eq!(Collection::from_tag(not_one), None, "{not_one}");
+        }
+    }
+
+    /// As `koji -p cbs buildinfo` showed them on 2026-11-10:
+    /// centos-release-proposed_updates-9-1.el9s (task 4531268) and
+    /// centos-release-hyperscale-10-5.el10s (task 5428832).
+    #[test]
+    fn a_sigs_release_package_builds_into_extras_common() {
+        let c =
+            release_package_collection("centos-release-proposed_updates", "c9s-proposed").unwrap();
+        assert_eq!(c.target(), "extras9s-extras-common-el9s");
+        assert_eq!(c.tag(Stage::Testing), "extras9s-extras-common-testing");
+        assert!(c.is_extras());
+        assert_eq!(
+            c.mock_config("x86_64").as_deref(),
+            Some("centos-stream-9-x86_64")
+        );
+        assert_eq!(c.rhel_variant(), None);
+        let hs =
+            release_package_collection("centos-release-hyperscale", "c10s-sig-hyperscale").unwrap();
+        assert_eq!(hs.target(), "extras10s-extras-common-el10s");
+        // Release packages need not be named after their SIG: Extras'
+        // tags held centos-release-ceph-reef and -samba418 on 2026-11-10.
+        assert_eq!(
+            release_package_collection("centos-release-ceph-reef", "c10s"),
+            Some(Collection::extras_common(10))
+        );
+        for (package, branch) in [
+            ("rsync", "c9s-proposed"),
+            ("centos-release-", "c9s-proposed"),
+            ("centos-release-hyperscale", "main"),
+            ("centos-release-hyperscale", "c10x-sig-hyperscale"),
+            ("centos-release-hyperscale", "c+10s"),
+        ] {
+            assert_eq!(
+                release_package_collection(package, branch),
+                None,
+                "{package} {branch}"
+            );
+        }
+        assert!(!Collection::new("proposed_updates", 9, true, "main").is_extras());
+        assert_eq!(stream_major("c10s-CVE-2026-1"), Some(10));
+        assert_eq!(stream_major("c9s"), Some(9));
+        for not_one in ["c9sx", "c+9s", "cs", "9s", "c9"] {
+            assert_eq!(stream_major(not_one), None, "{not_one}");
         }
     }
 

@@ -52,6 +52,16 @@ Hyperscale's Facebook branches also build for the RHEL release
 (`hyperscale9-packages-facebook-el9`), for systems that deploy RHEL
 snapshots; `Collection::rhel_variant` names that collection.
 
+A SIG's release package (`Sig::release_package`:
+`centos-release-hyperscale`, `centos-release-proposed_updates`) is built
+from any of the SIG's `c<N>s` branches into Extras' common collection,
+`extras<N>s-extras-common` (`Collection::extras_common`).
+`release_package_collection` gives that collection for any
+`centos-release-*` package and branch (every SIG's goes there, whatever
+it is named after, such as `centos-release-ceph-reef`), and `None` for
+any other package. `stream_major` reads the CentOS Stream
+release a branch starts from (10 for `c10s` or `c10s-proposed-RHEL-1`).
+
 ## Remotes
 
 `remotes::Remotes::parse` reads `git remote -v` and knows each remote by

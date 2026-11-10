@@ -11,6 +11,14 @@ A SIG's package repo is a pull mirror of the package's CentOS Stream
 repo: GitLab keeps Stream's branches current, and the SIG's own
 branches sit beside them. CBS builds from that repo.
 
+A SIG's release package, `centos-release-<sig>`, which installs the
+SIG's repository files, is built from the SIG's repo (`c9s-proposed`,
+`c10s-sig-hyperscale`) but into Extras' common collection:
+`extras<N>s-extras-common-el<N>s`, then the
+`extras<N>s-extras-common-{candidate,testing,release}` tags. `add-pkg`,
+`build`, `promote` and `upload-sources` use that collection for any
+`centos-release-*` package, and say so before doing anything.
+
 `add-pkg`, `build`, `promote` and `upload-sources` act in CBS or the SIG
 lookaside in your name: see
 [Commands run by a person](../../README.md#commands-run-by-a-person).

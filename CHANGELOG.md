@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### cbspkg: build and promote a SIG's centos-release package through Extras
+
+A SIG's release package, `centos-release-<sig>`, is built into Extras'
+common collection (`extras9s-extras-common-el9s`), not the SIG's own,
+and cbspkg did not know it: on Proposed Updates' `c9s-proposed` it
+picked `proposed_updates9s-packages-main-el9s`, and on Hyperscale's
+`c10s-sig-hyperscale` it picked Hyperscale's main target, either of
+which would have built the package to the wrong place. The package is
+released rarely enough that this is easy to get wrong by hand too.
+
+`add-pkg`, `build`, `promote` and `upload-sources` now take a SIG's
+release package on any of the SIG's `c<N>s` branches through
+`extras<N>s-extras-common-{candidate,testing,release}`, and print which
+pipeline that is before doing anything, dry runs included. Any
+`centos-release-*` package goes there, as every SIG's does in CBS,
+whatever it is named after; the repo it is built from is that of the
+SIG it is named after, else of the one SIG the checkout's remotes
+point at. In
+sandogasa-cbs, `Collection::extras_common` and `is_extras` name Extras'
+common collection, which `Collection::from_tag` and `mock_config` now
+know; `Sig::release_package` names the release package called after a SIG;
+`release_package_collection` gives the collection for any; and
+`stream_major`, moved from cbspkg, reads a branch's Stream release.
+Resolves #103.
+
 ### ebranch: rebuild-plan --contacts counts a package's pushes by people with access
 
 When a package left to rebuild had not been touched by its maintainers
