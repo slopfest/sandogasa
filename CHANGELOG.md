@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### fedora-cve-triage reads what EPEL Next ships in one request per tag
+
+Judging whether an `[epel-all]` bug covers EPEL Next ran up to two
+`koji` commands per component, each about a second of start-up, one
+after another and silently: minutes on a sweep of many components. What
+each EPEL release and its EPEL Next ship of every component with such a
+bug is now read from the Koji hub in one request per tag before the
+bugs are taken one by one, saying so; the `koji` CLI is still asked for
+anything the hub could not answer.
+
 ### cbspkg sig-repo says its warnings on stderr
 
 `cbspkg sig-repo` printed its warnings on stdout: that GitLab refused

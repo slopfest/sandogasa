@@ -569,6 +569,7 @@ dependencies = [
  "sandogasa-distgit",
  "sandogasa-fedrq",
  "sandogasa-koji",
+ "sandogasa-kojihub",
  "sandogasa-nvd",
  "sandogasa-review",
  "sandogasa-rpmvercmp",

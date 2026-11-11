@@ -199,6 +199,26 @@ run left open, for before the next release:
   Stream's `cNs`, in the same checkout, pushed to the fork) is still by
   hand; it belongs with the remote roles above.
 
+## At the next breaking release: EPEL Next compared with epochs (2026-11-11)
+
+fedora-cve-triage decides whether an `[epel-all]` bug covers EPEL Next
+by comparing the latest `epel9` and `epel9-next` builds, as dnf would
+choose between them (#120). It compares Koji NVRs, which carry no
+epoch, so an EPEL build with a higher epoch (`foo-1:1.0-1.el9` against
+`foo-0:2.0-1.el9.next`) is misjudged: dnf installs the EPEL one, the
+check keeps EPEL Next. Found by the 0.28.1 release review; rare.
+
+The hub reads the builds in one batch now (`HubClient::latest_builds`),
+and its `getLatestBuilds` answer carries the epoch, but
+`sandogasa_kojihub::LatestBuild` has no field for it and is not
+`#[non_exhaustive]`, so adding one breaks the crate. A deprecated
+`LatestBuild` beside a new type was tried and dropped: the crate's own
+use of it warns, and `make check-deprecated` forbids the
+`#[allow(deprecated)]` that would silence it. At the next breaking
+release: add `epoch: Option<i64>` to `LatestBuild`, mark it
+`#[non_exhaustive]`, and compare `epoch:version-release` in
+`next_build_wins`.
+
 ## koji-lag
 
 - (2026-08-22) **`fetch-store.sh` reaches only people with a checkout.**
