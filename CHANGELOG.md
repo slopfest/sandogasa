@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### A secret for a service on this machine stays in the config file
+
+A tool configured for a service on this machine, such as a Forgejo on
+`http://localhost:3000`, asked for its token again on every run:
+`config` stored it in the keyring and took it out of the file, while
+reading never looks a local service up in the keyring, so the next run
+found no token. sandogasa-config now never stores or clears a local
+service's secret in the keyring either, so it is kept in the file,
+where it is read.
+
 ### ebranch check-update asks for a security update's severity instead of failing
 
 `ebranch check-update --submit --type security` without `--severity`

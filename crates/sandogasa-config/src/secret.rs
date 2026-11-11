@@ -161,7 +161,8 @@ impl SecretRef {
     }
 
     /// Whether this is a service on this machine, as a test server is:
-    /// such a service never has an entry, so it is not looked up.
+    /// such a service never has an entry, so it is neither looked up nor
+    /// stored, and its secret stays in the config file.
     fn is_local(&self) -> bool {
         let host = self
             .service
@@ -239,6 +240,13 @@ impl SecretStore for SecretToolAt<'_> {
     }
 
     fn store(&self, secret: &SecretRef, value: &str) -> Result<(), SecretError> {
+        // Never looked up, so never stored: kept in the file instead,
+        // where reading finds it, rather than in an entry nothing reads.
+        if secret.is_local() {
+            return Err(SecretError::Unavailable(
+                "a service on this machine is not kept in the keyring".into(),
+            ));
+        }
         let mut child = self
             .run("store", secret, true)
             .stdin(Stdio::piped())
@@ -267,6 +275,10 @@ impl SecretStore for SecretToolAt<'_> {
     }
 
     fn clear(&self, secret: &SecretRef) -> Result<(), SecretError> {
+        // Nothing was stored for it.
+        if secret.is_local() {
+            return Ok(());
+        }
         let out = self
             .run("clear", secret, false)
             .stdin(Stdio::null())
@@ -1213,6 +1225,28 @@ mod tests {
             missing.lookup(&gitlab),
             Err(SecretError::Unavailable(_))
         ));
+    }
+
+    /// A service on this machine (a Forgejo on localhost:3000) is never
+    /// looked up, so it is never stored either: its secret stays in the
+    /// file, where the next run reads it, and secret-tool is not run.
+    #[test]
+    fn a_local_services_secret_stays_in_the_file() {
+        let local = SecretRef::for_url("http://localhost:3000", "sandogasa: Forgejo token");
+        let tool = SecretToolAt {
+            program: std::ffi::OsStr::new("/nonexistent/secret-tool"),
+        };
+        assert_eq!(tool.lookup(&local), Ok(None));
+        assert!(matches!(
+            tool.store(&local, "fj-1"),
+            Err(SecretError::Unavailable(_))
+        ));
+        assert_eq!(tool.clear(&local), Ok(()));
+        assert_eq!(
+            keep_for_file(&tool, "Forgejo token", &local, "fj-1".into()),
+            "fj-1",
+            "kept in the file"
+        );
     }
 
     /// A tool's config as the tools write theirs: secrets and other
