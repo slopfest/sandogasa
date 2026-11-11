@@ -25,9 +25,11 @@
 //!
 //! A candidate is proposed only if [`crate::karma::bug_verdict`]
 //! would score it +1, so what gets attached and what gets voted on
-//! cannot disagree, and only while it is open: a closed bug, often
-//! closed by the Rawhide build of the same change, is listed apart
-//! rather than attached, since nothing is left to decide (#125).
+//! cannot disagree. A closed bug is kept apart from the open ones
+//! (#125): usually the Rawhide build of the same change closed it and
+//! nothing is left to decide, but another branch's update may have
+//! closed a bug this branch still has, so it is offered separately,
+//! not taken by default.
 //!
 //! An open bug filed for another release is still proposed, saying
 //! which release: a maintainer who keeps every branch in step may

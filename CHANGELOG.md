@@ -2,16 +2,19 @@
 
 ## Unreleased
 
-### ebranch's bug proposal leaves off bugs that are closed already
+### ebranch's bug proposal offers closed bugs apart, defaulting to no
 
 For sandogasa 0.28.0 on EPEL 10, `check-update --submit` proposed
 version requests such as "sandogasa-0.21.0 is available" that were
 CLOSED ERRATA long before, because the new changelog entries named
-them. Bugs a changelog names were read by ID and judged without their
-status, unlike the open-bug search, which asks Bugzilla for open bugs
-only. A closed bug is now listed apart under "Left off, closed
-already", with how it was closed, in `check-update --submit` and left
-out of `update-bugs`' proposal.
+them, and took them with the open ones on a plain Enter. Bugs a
+changelog names were read by ID and judged without their status,
+unlike the open-bug search, which asks Bugzilla for open bugs only.
+`check-update --submit` and `update-bugs` now offer a closed bug in a
+second batch, "Also fixed by this update, but closed already", whose
+answer defaults to no: usually the Rawhide build of the same change
+closed it, but an update for one branch can close a bug another
+branch still has.
 
 An open bug filed for another product is still proposed, and now says
 which release it was filed for ("open against sandogasa, filed for

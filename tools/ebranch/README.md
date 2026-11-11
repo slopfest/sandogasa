@@ -872,13 +872,16 @@ Left off, already met before this update (theirs to close):
   #2567306 asterisk-24.0.0 is available (asterisk was 24.0.0-3.fc46 already)
 ```
 
-A bug the changelog names but that is closed already, usually by the
-Rawhide build of the same change, is listed apart too, since there is
-nothing left to decide:
+A bug the changelog names but that is closed already is offered in a
+second batch that defaults to no. Usually the Rawhide build of the same
+change closed it, but an update for one branch can close a bug that
+another branch still has:
 
 ```console
-Left off, closed already:
-  #2521275 sandogasa-0.21.0 is available (CLOSED ERRATA already)
+Also fixed by this update, but closed already:
+  #2521275 sandogasa-0.21.0 is available
+    CLOSED ERRATA already
+Add these closed bugs to the update too? [y/N/each]:
 ```
 
 Listed bugs are then screened for two ways of not belonging: a bug
@@ -1810,7 +1813,8 @@ naming what changed, since that report cannot say what the update
 closes. From the report it proposes the bug list again, as
 `check-update --submit` does: bugs on the update that a build from
 before it had already met are offered for removal, and bugs it looks
-like it closes for adding, each with its reason and `each` to go
+like it closes for adding, the closed ones in a batch of their own
+that defaults to no, each with its reason and `each` to go
 through them one at a time. Then it asks whether Bodhi should close
 the bugs when the update goes stable (`--close-bugs` and
 `--no-close-bugs` decide outright), shows the edit, and saves it on

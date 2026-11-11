@@ -358,34 +358,47 @@ async fn propose_bugs(
             eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
         }
     }
-    if !closed.is_empty() {
-        eprintln!("\nLeft off, closed already:");
-        for c in &closed {
-            eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
+    let mut taken = Vec::new();
+    if !candidates.is_empty() {
+        let shown: Vec<String> = candidates.iter().map(|c| c.shown()).collect();
+        eprintln!("\nThis update looks like it closes:");
+        for candidate in &shown {
+            eprintln!("{candidate}");
         }
+        taken.extend(
+            sandogasa_cli::confirm_each(
+                "Add these bugs to the update?",
+                "Add this bug?",
+                &shown,
+                true,
+            )
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|i| candidates[i].bug_id),
+        );
     }
-    if candidates.is_empty() {
-        return Ok(Vec::new());
+    // Closed already, often by another branch's update of the same fix,
+    // which may have closed a bug that still affects this branch: offered,
+    // but not taken unless asked for.
+    if !closed.is_empty() {
+        let shown: Vec<String> = closed.iter().map(|c| c.shown()).collect();
+        eprintln!("\nAlso fixed by this update, but closed already:");
+        for candidate in &shown {
+            eprintln!("{candidate}");
+        }
+        taken.extend(
+            sandogasa_cli::confirm_each(
+                "Add these closed bugs to the update too?",
+                "Add this closed bug?",
+                &shown,
+                false,
+            )
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|i| closed[i].bug_id),
+        );
     }
-
-    let shown: Vec<String> = candidates
-        .iter()
-        .map(|c| format!("  #{} {}\n    {}", c.bug_id, c.summary, c.source))
-        .collect();
-    eprintln!("\nThis update looks like it closes:");
-    for candidate in &shown {
-        eprintln!("{candidate}");
-    }
-    Ok(sandogasa_cli::confirm_each(
-        "Add these bugs to the update?",
-        "Add this bug?",
-        &shown,
-        true,
-    )
-    .map_err(|e| e.to_string())?
-    .into_iter()
-    .map(|i| candidates[i].bug_id)
-    .collect())
+    Ok(taken)
 }
 
 /// Whether the update may autopush, given what the operator asked

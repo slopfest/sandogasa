@@ -421,12 +421,16 @@ pub fn run(opts: &Options) -> Result<(), String> {
     // Taken only at a terminal: attaching a bug closes it when the
     // update goes stable, and taking one off undoes what someone chose,
     // neither of which `--yes` does unasked.
-    let ask_each = |question: &str, each: &str, shown: &[String]| -> Result<Vec<usize>, String> {
+    let ask_each = |question: &str,
+                    each: &str,
+                    shown: &[String],
+                    default_yes: bool|
+     -> Result<Vec<usize>, String> {
         if opts.yes || !interactive {
             eprintln!("(not taken without a terminal; --yes saves only the flags given)");
             return Ok(Vec::new());
         }
-        sandogasa_cli::confirm_each(question, each, shown, true).map_err(|e| e.to_string())
+        sandogasa_cli::confirm_each(question, each, shown, default_yes).map_err(|e| e.to_string())
     };
 
     // Bugs on the update a build from before it had already met: theirs
@@ -447,6 +451,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
             "Take these bugs off the update?",
             "Take this bug off?",
             &shown,
+            true,
         )?
         .into_iter()
         .map(|i| met[i].bug_id)
@@ -465,10 +470,39 @@ pub fn run(opts: &Options) -> Result<(), String> {
         for line in &shown {
             eprintln!("{line}");
         }
-        added = ask_each("Add these bugs to the update?", "Add this bug?", &shown)?
+        added = ask_each(
+            "Add these bugs to the update?",
+            "Add this bug?",
+            &shown,
+            true,
+        )?
+        .into_iter()
+        .map(|i| new[i].bug_id)
+        .collect();
+    }
+    // Closed already, perhaps by another branch's update that closed a
+    // bug this branch still has: offered, but not taken unless asked.
+    let closed: Vec<&crate::discover::Candidate> = proposal
+        .closed
+        .iter()
+        .filter(|c| !current.contains(&c.bug_id))
+        .collect();
+    if !closed.is_empty() {
+        let shown: Vec<String> = closed.iter().map(|c| c.shown()).collect();
+        eprintln!("\nAlso fixed by this update, but closed already:");
+        for line in &shown {
+            eprintln!("{line}");
+        }
+        added.extend(
+            ask_each(
+                "Add these closed bugs to the update too?",
+                "Add this closed bug?",
+                &shown,
+                false,
+            )?
             .into_iter()
-            .map(|i| new[i].bug_id)
-            .collect();
+            .map(|i| closed[i].bug_id),
+        );
     }
 
     let mut bugs: Vec<u64> = current
