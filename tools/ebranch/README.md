@@ -1016,9 +1016,10 @@ submit it as a security update; and a security update's severity is
 offered as the highest Bugzilla severity among the attached trackers,
 Product Security's impact rating, when `--severity` is missing or
 lower, naming the bug that sets it. So at a terminal `--type security`
-may leave `--severity` out. `--yes` and non-interactive runs report a
-mismatch and keep what was passed, and there `--type security` still
-needs `--severity`.
+may leave `--severity` out: when no tracker gives one, or its
+severity is declined, it is asked for after the check. `--yes` and
+non-interactive runs report a mismatch and keep what was passed, and
+there `--type security` still needs `--severity`.
 
 The pass gate reuses the karma derivation: a clean `+1` check submits
 after showing the plan (packages, type, bugs, thresholds, notes

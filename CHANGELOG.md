@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### ebranch check-update asks for a security update's severity instead of failing
+
+`ebranch check-update --submit --type security` without `--severity`
+ran the whole check, including a side tag's repo regeneration that
+takes minutes, and only then failed with "a security update needs a
+severity": at a terminal it had waited for the attached CVE trackers
+to supply one, and the et update's carried none. When the trackers
+give none, or their severity is declined, it is now asked for there
+(low, medium, high or urgent), so the check is used rather than
+thrown away. Under `--yes` or without a terminal a missing severity is
+still refused before the check. Fixes #135.
+
 ### sandogasa-config lets a tool's prompts be answered by its tests
 
 A tool's interactive `config` could only be tested where the answers

@@ -507,6 +507,49 @@ fn severity_rank(severity: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// The severities a security update can be given, each with the letter
+/// that picks it at the prompt.
+const SEVERITY_CHOICES: [sandogasa_review::Choice; 4] = [
+    sandogasa_review::Choice::new('l', "low"),
+    sandogasa_review::Choice::new('m', "medium"),
+    sandogasa_review::Choice::new('h', "high"),
+    sandogasa_review::Choice::new('u', "urgent"),
+];
+
+/// The severity the prompt's answer `key` picks.
+fn severity_for(key: char) -> Option<&'static str> {
+    SEVERITY_CHOICES
+        .iter()
+        .position(|c| c.word.key == key)
+        .map(|i| SEVERITIES[i + 1])
+}
+
+/// Ask, at a terminal, for the severity of a security update that still
+/// has none once the attached CVE trackers were offered: Bodhi refuses
+/// one without, and failing here instead threw away the check that had
+/// just run (#135). `None` when the user quits.
+fn ask_severity() -> Result<Option<String>, String> {
+    eprintln!(
+        "\nA security update needs a severity, and no attached CVE tracker gives \
+         one (or its severity was declined)."
+    );
+    let answer = sandogasa_review::ask(
+        "Severity of this security update?",
+        &sandogasa_review::Menu {
+            choices: &SEVERITY_CHOICES,
+            default: None,
+            all: false,
+            quit: true,
+            default_arg: None,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(match answer {
+        sandogasa_review::Answer::Pick { key, .. } => severity_for(key).map(str::to_string),
+        _ => None,
+    })
+}
+
 /// The CVE trackers among `ids`, with their Bugzilla severity.
 fn cve_trackers(bugs: &crate::karma::BugMap, ids: &[u64]) -> Vec<(u64, String)> {
     ids.iter()
@@ -599,6 +642,14 @@ fn settle_type_and_severity(
                 }
             } else {
                 eprintln!("note: {why}; pass --severity {level} to match");
+            }
+        }
+        // Still none: ask, where someone can answer, rather than fail
+        // after a check that may have taken minutes (#135).
+        if out.severity == "unspecified" && ask {
+            match ask_severity()? {
+                Some(level) => out.severity = level,
+                None => return Err("no severity given; nothing was submitted".to_string()),
             }
         }
         if out.severity == "unspecified" {
@@ -915,6 +966,15 @@ mod tests {
         let mut given = sandogasa_cli::NotesArgs::default();
         given.notes = Some("Long description.".into());
         assert_eq!(resolve_notes(&given).unwrap(), "Long description.");
+    }
+
+    #[test]
+    fn each_severity_is_picked_by_its_letter() {
+        assert_eq!(severity_for('l'), Some("low"));
+        assert_eq!(severity_for('m'), Some("medium"));
+        assert_eq!(severity_for('h'), Some("high"));
+        assert_eq!(severity_for('u'), Some("urgent"));
+        assert_eq!(severity_for('x'), None);
     }
 
     #[test]

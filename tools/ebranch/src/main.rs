@@ -487,7 +487,8 @@ failing update."
 Update severity: unspecified (default), low,
 medium, high, or urgent. Bodhi requires a real
 severity for --type security; at a terminal,
-the attached CVE trackers' highest is offered.",
+the attached CVE trackers' highest is offered,
+and one still left out is asked for.",
         value_parser = ["unspecified", "low", "medium", "high", "urgent"]
     )]
     severity: String,
@@ -2150,9 +2151,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         // Bodhi rejects security updates without a real severity;
-        // catch it before the analysis rather than at POST time. A run
-        // at a terminal may leave it out: the attached CVE trackers can
-        // supply it, and it is asked for there (#76).
+        // catch it before the analysis rather than at POST time where
+        // nobody could be asked for one. At a terminal it may be left
+        // out: the attached CVE trackers can supply it, and when they do
+        // not it is asked for after the check (#76, #135).
         if a.submit
             && a.update_type == "security"
             && a.severity == "unspecified"
