@@ -199,7 +199,7 @@ run left open, for before the next release:
   Stream's `cNs`, in the same checkout, pushed to the fork) is still by
   hand; it belongs with the remote roles above.
 
-## At the next breaking release: EPEL Next compared with epochs (2026-11-11)
+## At the next breaking release: EPEL Next compared with epochs (2026-11-11, #136)
 
 fedora-cve-triage decides whether an `[epel-all]` bug covers EPEL Next
 by comparing the latest `epel9` and `epel9-next` builds, as dnf would

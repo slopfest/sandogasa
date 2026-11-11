@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own
 
