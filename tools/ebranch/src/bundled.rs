@@ -1200,7 +1200,6 @@ fn git_bytes(dir: Option<&Path>, args: &[&str]) -> Result<Vec<u8>, String> {
 /// each whole. A readable name, then a hash of the URL as given, so two
 /// URLs that read alike never share one.
 fn clone_dir(base: &Path, url: &str, kind: CloneKind) -> PathBuf {
-    use std::hash::{Hash, Hasher};
     let readable: String = url
         .split("://")
         .last()
@@ -1216,13 +1215,21 @@ fn clone_dir(base: &Path, url: &str, kind: CloneKind) -> PathBuf {
             }
         })
         .collect();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    url.hash(&mut h);
     let suffix = match kind {
         CloneKind::History => "history",
         CloneKind::Full => "full",
     };
-    base.join(format!("{readable}-{:08x}-{suffix}.git", h.finish() as u32))
+    base.join(format!("{readable}-{:08x}-{suffix}.git", fnv1a(url)))
+}
+
+/// The 32-bit FNV-1a hash of `text`, for naming a cache directory: a
+/// hash written out here, unlike the standard library's `DefaultHasher`,
+/// gives the same name under every Rust release, so an update of the
+/// toolchain does not orphan the cache and clone everything again.
+fn fnv1a(text: &str) -> u32 {
+    text.bytes().fold(0x811c_9dc5, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+    })
 }
 
 /// A bare clone of `url` under `base` holding each of `wants` (a tag or
@@ -2015,6 +2022,15 @@ rm -rf something-else
         assert_ne!(
             clone_dir(base, "https://x/r", CloneKind::History),
             clone_dir(base, "https://x/r", CloneKind::Full)
+        );
+        // The same name under every Rust release: FNV-1a's published
+        // test vectors, and a directory name pinned.
+        assert_eq!(fnv1a(""), 0x811c_9dc5);
+        assert_eq!(fnv1a("a"), 0xe40c_292c);
+        assert_eq!(fnv1a("foobar"), 0xbf9c_f968);
+        assert_eq!(
+            clone_dir(base, "https://x/r", CloneKind::Full),
+            Path::new(&format!("/c/x_r-{:08x}-full.git", fnv1a("https://x/r")))
         );
     }
 

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### ebranch names its bundled-provides cache with a hash of its own
+
+`ebranch bundled-provides` named each cached clone with the standard
+library's `DefaultHasher`, whose algorithm Rust leaves free to change
+between releases: after a toolchain update every clone would have been
+fetched again under a new name, the old ones left behind until
+`prune-cache`. The names now use FNV-1a, written out in place, which
+does not change. The clones cached so far are fetched again once under
+the new names, and `ebranch prune-cache` removes the old ones.
+
 ### A Bugzilla search that meets a short page carries on rather than starting over
 
 When one page of a parallel Bugzilla search came back shorter than
