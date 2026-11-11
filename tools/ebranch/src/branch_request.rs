@@ -59,6 +59,9 @@ pub struct Options {
     /// Only ever adds a note to a build request; see
     /// [`note_provenpackager`].
     pub provenpackager: bool,
+    /// Fedora's dist-git, asked whether a branch exists and who may
+    /// commit to it.
+    pub distgit_url: String,
     /// Fedora's Forgejo, where a stalled request's releng ticket goes.
     pub forge_url: String,
     /// Token for [`Options::forge_url`]. Empty means `escalate`
@@ -1349,7 +1352,7 @@ pub async fn file_batch(
     let base_label = opts.base_branch.as_deref().unwrap_or("base");
     // What dist-git says: a branch that exists needs no request, and an
     // asker with access can make one rather than ask for it.
-    let distgit = sandogasa_distgit::DistGitClient::new();
+    let distgit = sandogasa_distgit::DistGitClient::with_base_url(&opts.distgit_url);
     let mut standing: BTreeMap<String, BranchStanding> = BTreeMap::new();
     for pkg in &candidates {
         standing.insert(
@@ -2014,7 +2017,7 @@ pub async fn escalate(report: &mut ResolveReport, opts: &Options) -> Result<bool
     // Gathered here rather than inside the loop so the decision flow
     // below can be tested without a dist-git client, the way the rest
     // of this tool keeps an external query out of the flow around it.
-    let distgit = sandogasa_distgit::DistGitClient::new();
+    let distgit = sandogasa_distgit::DistGitClient::with_base_url(&opts.distgit_url);
     let mut standings: BTreeMap<String, BranchStanding> = BTreeMap::new();
     for pkg in report.branch_requests.keys() {
         standings.insert(
@@ -2490,8 +2493,8 @@ fn skipped_report(
 /// `file-request` for a single package. When `report_path` is
 /// set, the new bug id is recorded in that report.
 /// Resolve `hash` to a commit of `pkg` in dist-git.
-async fn starting_point(pkg: &str, hash: &str) -> Result<StartingPoint, String> {
-    let commit = sandogasa_distgit::DistGitClient::new()
+async fn starting_point(distgit_url: &str, pkg: &str, hash: &str) -> Result<StartingPoint, String> {
+    let commit = sandogasa_distgit::DistGitClient::with_base_url(distgit_url)
         .commit(pkg, hash)
         .await
         .map_err(|e| format!("could not look up commit {hash} of {pkg} in dist-git: {e}"))?
@@ -2539,7 +2542,7 @@ pub fn run_file_request(
         // hash would otherwise send the maintainer looking for a
         // commit that does not exist.
         let from = match from_commit {
-            Some(hash) => Some(starting_point(pkg, hash).await?),
+            Some(hash) => Some(starting_point(&opts.distgit_url, pkg, hash).await?),
             None => None,
         };
 
@@ -3511,6 +3514,9 @@ mod tests {
         Options {
             bugzilla_url: url.to_string(),
             api_key: "not-a-key".to_string(),
+            // The same mock, which answers dist-git with a 404: no
+            // branch and no access list, never src.fedoraproject.org.
+            distgit_url: url.to_string(),
             branch: "epel10".to_string(),
             fas: Some("alice".to_string()),
             sig: None,
@@ -4666,6 +4672,7 @@ mod tests {
         opts.identity = Some("alice".into());
         opts.forge_token = "tok".into();
         opts.forge_url = url.to_string();
+        opts.distgit_url = url.to_string();
         opts.assume_yes = true;
         opts
     }

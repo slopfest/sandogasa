@@ -1564,6 +1564,7 @@ fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Opt
         base_branch: resolve::base_branch_for(c.base_branch.as_deref(), Some(&c.branch), None),
         email: config::bugzilla_email(),
         provenpackager: config::is_provenpackager(),
+        distgit_url: "https://src.fedoraproject.org".to_string(),
         forge_url: forge.url,
         forge_token: forge.token,
         // Asked only where someone can answer; a dry run files
