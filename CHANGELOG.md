@@ -36,7 +36,9 @@ as none of them is the server, but only by luck: the check looked for
 vendoring `github.com/prometheus/prometheus` itself would have been
 closed the same way. A CVE NVD records by a bare project name is now
 looked for among the package's `bundled(golang(…))` modules. The
-project's own module (the repository named like it) is judged by its
+project's own module (owner and repository both named like it, so
+`buf.build/gen/go` is no copy of Go, whose toolchain is never looked
+for this way) is judged by its
 declared version, or left to a person when it is numbered differently
 from the fixed release, as Prometheus's server module is (`v0.303.0`
 for 3.3.0). A package vendoring only the project's other modules is
