@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### A Bugzilla search that meets a short page carries on rather than starting over
+
+When one page of a parallel Bugzilla search came back shorter than
+asked, as when a bug turns private between requests, sandogasa-bugzilla
+threw away every page read so far and read the whole search again one
+page at a time: on Red Hat's Bugzilla, which answers 20 bugs a page,
+the minute-long run the parallel reading exists to avoid, on top of
+the parallel one. It now keeps what the earlier pages read and carries
+on page by page from there, and a search that falls back this way
+still returns no more than `max_results`.
+
 ### fedora-cve-triage reads what EPEL Next ships in one request per tag
 
 Judging whether an `[epel-all]` bug covers EPEL Next ran up to two

@@ -454,10 +454,14 @@ impl BzClient {
                 };
                 // A page shorter than asked, before the last, means the
                 // offsets worked out from the first page no longer hold
-                // (the cap changed, bugs went private): read it page by
-                // page from the bugs actually returned instead.
+                // (the cap changed, bugs went private): carry on page by
+                // page from the bugs actually returned. The waves before
+                // this one met, so what they read is kept and the search
+                // goes on from its end rather than from the start.
                 if (resp.bugs.len() as u64) < limit && offset + limit < target {
-                    return self.search_sequential(query, max_results, fields).await;
+                    return self
+                        .search_sequential(query, max_results, fields, all_bugs)
+                        .await;
                 }
                 pages.push((offset, resp.bugs));
             }
@@ -476,16 +480,18 @@ impl BzClient {
     }
 
     /// [`Self::search`] one page after another, each from the number of
-    /// bugs already returned: slower, but sound when the pages are not
-    /// the size the first one said.
+    /// bugs already returned, after the `found` ones read before: slower,
+    /// but sound when the pages are not the size the first one said. At
+    /// most `max_results` (0 for every one), as the parallel reading.
     async fn search_sequential(
         &self,
         query: &str,
         max_results: u64,
         fields: &str,
+        found: Vec<Bug>,
     ) -> Result<Vec<Bug>, reqwest::Error> {
         const PAGE_SIZE: u64 = 1000;
-        let mut all_bugs: Vec<Bug> = Vec::new();
+        let mut all_bugs: Vec<Bug> = found;
         loop {
             let offset = all_bugs.len() as u64;
             let limit = if max_results > 0 {
@@ -504,6 +510,9 @@ impl BzClient {
         }
         let mut seen = std::collections::HashSet::new();
         all_bugs.retain(|b| seen.insert(b.id));
+        if max_results > 0 {
+            all_bugs.truncate(max_results as usize);
+        }
         Ok(all_bugs)
     }
 
@@ -1615,8 +1624,9 @@ mod tests {
     }
 
     /// A page shorter than the first said, before the last, means the
-    /// offsets no longer hold, so the search is read again page by page
-    /// from what came back, and nothing between is lost.
+    /// offsets no longer hold, so the search carries on page by page from
+    /// what came back, keeping the first page rather than reading it
+    /// again, and nothing between is lost.
     #[tokio::test]
     async fn a_short_page_has_the_search_read_page_by_page() {
         use wiremock::matchers::query_param;
@@ -1639,20 +1649,22 @@ mod tests {
             }))
         };
         // Offset 0 answers 3; offset 3 answers only 2, so the pages at 3
-        // and 6 cannot be trusted to meet. Read again: 0 gives 3, 3 gives
-        // 2, 5 gives the last 2.
-        for (offset, ids) in [
-            (0u64, vec![1, 2, 3]),
-            (3, vec![4, 5]),
-            (6, vec![7]),
-            (5, vec![6, 7]),
+        // and 6 cannot be trusted to meet. Carried on from 3: 3 gives 2,
+        // 5 gives the last 2; the first page is not read again.
+        for (offset, ids, times) in [
+            (0u64, vec![1, 2, 3], Some(1)),
+            (3, vec![4, 5], None),
+            (6, vec![7], None),
+            (5, vec![6, 7], Some(1)),
         ] {
-            Mock::given(method("GET"))
+            let mock = Mock::given(method("GET"))
                 .and(path("/rest/bug"))
                 .and(query_param("offset", offset.to_string()))
-                .respond_with(page(ids))
-                .mount(&server)
-                .await;
+                .respond_with(page(ids));
+            match times {
+                Some(n) => mock.expect(n).mount(&server).await,
+                None => mock.mount(&server).await,
+            }
         }
         let bugs = client.search("component=kernel", 0).await.unwrap();
         let ids: Vec<u64> = bugs.iter().map(|b| b.id).collect();
