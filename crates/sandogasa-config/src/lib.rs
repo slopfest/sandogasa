@@ -779,7 +779,12 @@ mod tests {
         let cf = ConfigFile::try_for_tool_file("t", "run.toml").expect("config dir");
         assert!(cf.path().ends_with("t/run.toml"));
         let sources = cf.describe_sources();
-        assert!(sources.starts_with("/etc/t/run.toml + "), "{sources}");
+        // `/etc`, unless the run relocates the system layer.
+        let system = system_root().join("t/run.toml");
+        assert!(
+            sources.starts_with(&format!("{} + ", system.display())),
+            "{sources}"
+        );
         assert!(sources.ends_with("t/run.toml"), "{sources}");
     }
 

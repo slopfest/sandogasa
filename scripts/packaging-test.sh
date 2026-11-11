@@ -17,6 +17,9 @@
 # default on current Debian/Ubuntu/Fedora. Extra args are forwarded to
 # `cargo test` — e.g. `scripts/packaging-test.sh -p dbranch`.
 set -eu
+# From the workspace root, wherever it is run from: the poisoned
+# system config below is laid out from tools/.
+cd "$(dirname "$0")/.."
 
 # Shadow distro tools with stubs that fail loudly if a test invokes one.
 # (git, touch, false, cc, rustc, cargo, … are intentionally left real.)
@@ -28,6 +31,20 @@ for t in gbp dput debuild dh uscan pristine-tar lintian pbuilder-dist \
     printf '#!/bin/sh\necho "packaging-test: %s must not be run in tests (distro tool)" >&2\nexit 127\n' \
         "$t" >"$STUB/$t"
     chmod +x "$STUB/$t"
+done
+
+# A system config layer no test may read (#119): every file name a tool
+# layers under /etc/<tool>/, unparseable, under SANDOGASA_ETC. A test
+# that loads layered config without isolating it (EnvGuard does) then
+# fails here instead of reading whatever the machine or buildroot has
+# installed, unless the code it drives ignores a malformed file.
+ETC="$STUB/etc"
+for t in tools/*/; do
+    t="$(basename "$t")"
+    mkdir -p "$ETC/$t"
+    for f in config.toml fixed-versions.toml run.toml; do
+        printf 'packaging-test: a test read the system config layer (#119) = [\n' >"$ETC/$t/$f"
+    done
 done
 
 # Default to the whole workspace; any args (e.g. `-p dbranch`, a test
@@ -44,4 +61,4 @@ cargo test --no-run "$@"
 # route off the box), loopback up so localhost mock servers can still
 # bind. A bare `unshare -rn` leaves loopback DOWN, which makes wiremock
 # tests fail spuriously — don't diagnose without `ip link set lo up`.
-PATH="$STUB:$PATH" unshare -rn sh -c 'ip link set lo up && cargo test "$@"' sh "$@"
+SANDOGASA_ETC="$ETC" PATH="$STUB:$PATH" unshare -rn sh -c 'ip link set lo up && cargo test "$@"' sh "$@"

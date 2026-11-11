@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Tests no longer read the machine's /etc/<tool>/config.toml
+
+On a machine where a tool's package had installed a system config,
+such as fedora-cve-triage's `run.toml`, tests that loaded the tool's
+layered config read it, and passed or failed because of it; in a
+packaging build they read whatever the buildroot had installed. The
+tests moved the user's config to a temporary directory, but nothing
+moved the system layer beneath it.
+
+`sandogasa_config::test_support::EnvGuard` now points `SANDOGASA_ETC`
+at a directory that does not exist whenever it moves `XDG_CONFIG_HOME`
+or `HOME`, unless the test sets `SANDOGASA_ETC` itself, and a guard
+given `HOME` alone also unsets an exported `XDG_CONFIG_HOME`. The one
+test that set the environment by hand uses the guard. A
+sandogasa-config test that expected the system layer at `/etc` follows
+`SANDOGASA_ETC`. `scripts/packaging-test.sh` gives every tool an
+unparseable system config, so a test that reads one fails there,
+unless the code it drives ignores a malformed file. Fixes #119.
+
 ### ebranch check-update finds a Bodhi outage before the analysis
 
 During a Bodhi outage, `check-update --submit` ran its whole analysis,

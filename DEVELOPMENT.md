@@ -528,6 +528,17 @@ Four consequences worth knowing, for packaging in particular:
   repository's `configs/fesco-chair/config.toml` beneath the real
   user file, tokens included, which is how a shipped system config
   is tried before the package installs it under `/etc`.
+- **Tests read neither layer of the machine's config.** A test that
+  loads a tool's config moves the user layer with `EnvGuard`
+  (`XDG_CONFIG_HOME` or `HOME`), and the guard then points
+  `SANDOGASA_ETC` at a directory that does not exist, so the system
+  layer is skipped too; one that sets the environment by hand sets
+  both. `scripts/packaging-test.sh` runs the suite with
+  `SANDOGASA_ETC` holding an unparseable copy of every file name a
+  tool layers there (`config.toml`, `fixed-versions.toml`, `run.toml`),
+  so a test reading the system layer fails there, unless the code it
+  drives ignores a malformed file; a new layered file name goes in that
+  list (#119).
 
 Keeping credentials out of the system layer is a design choice, not
 just caution, because the alternatives are all worse. Restricting by

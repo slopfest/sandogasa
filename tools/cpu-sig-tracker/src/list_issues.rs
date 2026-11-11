@@ -638,14 +638,13 @@ name = "missingpkg"
         let inv_path = dir.path().join("inv.toml");
         std::fs::write(&inv_path, SAMPLE_INVENTORY).unwrap();
 
-        // SAFETY: env mutations are serialized via
-        // serial_test; no other threads read these vars
-        // concurrently.
-        unsafe {
-            std::env::set_var("GITLAB_TOKEN", "test-token");
-            std::env::set_var("CPU_SIG_TRACKER_GITLAB_BASE", server.uri());
-            std::env::set_var("XDG_CONFIG_HOME", dir.path());
-        }
+        // Restored when dropped, even on a panic; moving the config
+        // home moves the system layer too (#119).
+        let _env = crate::test_support::EnvGuard::new(&[
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("GITLAB_TOKEN", "test-token"),
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+        ]);
 
         let args = ListIssuesArgs {
             adopt: false,
@@ -656,12 +655,6 @@ name = "missingpkg"
             verbose: false,
         };
         let rows = build_rows(&args).expect("build_rows");
-
-        unsafe {
-            std::env::remove_var("GITLAB_TOKEN");
-            std::env::remove_var("CPU_SIG_TRACKER_GITLAB_BASE");
-            std::env::remove_var("XDG_CONFIG_HOME");
-        }
 
         assert_eq!(rows.len(), 2);
         let package_kit = rows.iter().find(|r| r.package == "PackageKit").unwrap();
