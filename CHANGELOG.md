@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### fedora-cve-triage judges a crate by every package it can arrive in, and says why it closes a bug
+
+fedora-cve-triage closed rhbz#2566270, CVE-2026-115905 in the Rust zip
+crate, as "a library this package links from the system and does not
+bundle". nushell's build had zip 0.6.6, below the fix in 9.0.5, through
+calamine, from `rust-zip0.6-devel`, one of Fedora's compat packages for
+an older series. The bundled-library check asked the buildroot only for
+`rust-zip-devel`, found it absent, and concluded nushell never had the
+crate. It now asks for every package that provides `crate(<name>)`,
+which are the crate's own and its compat ones (`rust-zip0.6`,
+`rust-base64_0.21`) and never another crate named like it, and a copy
+below the fix in any of them makes the bug real: for nushell, "built against rust-zip0.6-devel 0.6.6, below
+the fix in 9.0.5".
+
+Two near misses of the same kind are closed off as well. smplayer
+declares `bundled(mongoose) = 6.11`, Cesanta's C web server, while
+CVE-2026-125116 is Automattic's Node.js mongoose, fixed in 6.13.12: by
+name and number the copy read as vulnerable, and only the
+cross-ecosystem check running first kept that from being reported. A
+plain `bundled()` declaration is no longer judged against a CVE in a
+JavaScript, Python or Rust package of that name; the note leaves it to
+a person, with how the version measures if it is the same project,
+since a real bundled jQuery reads the same. And when GitHub cannot say whether a CVE is a crate's, a
+"not affected" verdict about the system package of that name is left
+to a person instead, while a component whose buildroot had the crate
+is judged as carrying it.
+
+Every close now says why, in a sentence about that bug, after the
+check's configured reason: for cross-ecosystem, what the package is
+(its spec's `Summary:`) and what the CVE is in (its repository and the
+first sentence of its description), and for bundled-library, the
+library judged and how the component relates to it. The sentence is
+shown at the prompt as `why:`, so a wrong library is visible before
+anything is written. Bugs whose comments are the same are still closed
+in one request. Fixes #132.
+
 ### cbspkg builds and reads a SIG branch locally: srpm, mockbuild, verrel
 
 `fedpkg srpm` or plain `rpmbuild` in a SIG checkout gives the host's
