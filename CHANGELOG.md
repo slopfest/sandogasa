@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### ebranch bundled-provides fetches each repository once
+
+For a repository with several submodules pinned to commits on no
+branch or tag, `ebranch bundled-provides` fetched every branch and
+tag once per pinned commit on a cold cache, though such a fetch cannot
+bring the commit in, before fetching each commit by name anyway. A
+repository is now fetched once when any of its pins is missing, and
+each commit still missing is fetched by name.
+
 ### ebranch's bug proposal reads a changelog the hub faulted on through the CLI
 
 When the Koji hub faulted on one build inside a batch of changelog

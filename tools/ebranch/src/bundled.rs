@@ -1225,13 +1225,20 @@ fn clone_dir(base: &Path, url: &str, kind: CloneKind) -> PathBuf {
     base.join(format!("{readable}-{:08x}-{suffix}.git", h.finish() as u32))
 }
 
-/// A bare clone of `url` under `base` holding `want` (a tag or commit,
-/// as `git cat-file -e` takes it): one already cached that has it is
-/// used as it is, one that lacks it is fetched, and none is cloned.
-fn mirror(base: &Path, url: &str, kind: CloneKind, want: &str) -> Result<PathBuf, String> {
+/// A bare clone of `url` under `base` holding each of `wants` (a tag or
+/// commit, as `git cat-file -e` takes it): one already cached that has
+/// them all is used as it is, one that lacks any is fetched once, and
+/// none is cloned.
+fn mirror(base: &Path, url: &str, kind: CloneKind, wants: &[&str]) -> Result<PathBuf, String> {
     let dir = clone_dir(base, url, kind);
     if dir.join("HEAD").exists() {
-        if git(Some(&dir), &["cat-file", "-e", want]).is_err() {
+        // One fetch for all of them: it brings the branches and tags a
+        // pin's version is read from. A commit on none of them is not
+        // brought in by it, and is fetched by name where it is read.
+        if wants
+            .iter()
+            .any(|want| git(Some(&dir), &["cat-file", "-e", want]).is_err())
+        {
             // Through the clone's own remote, so a history-only clone
             // keeps its filter.
             git(
@@ -1334,7 +1341,7 @@ fn read_pin(dir: &Path, commit: &str) -> Result<String, String> {
 fn upstream_clone(base: &Path, repo: &str, tag: &str) -> Result<(PathBuf, String), String> {
     let local = Path::new(repo);
     if !local.is_dir() {
-        let dir = mirror(base, repo, CloneKind::Full, &format!("{tag}^{{commit}}"))?;
+        let dir = mirror(base, repo, CloneKind::Full, &[&format!("{tag}^{{commit}}")])?;
         return Ok((dir, repo.to_string()));
     }
     git(
@@ -1581,10 +1588,9 @@ fn read_pins(
                             eprintln!("[bundled] reading {url}");
                         }
                         // Fetched again if any pinned commit is missing.
-                        let mut dir = mirror(base, url, CloneKind::History, commits[0]);
-                        for c in &commits[1..] {
-                            dir = dir.and_then(|_| mirror(base, url, CloneKind::History, c));
-                        }
+                        // Fetched once if any pinned commit is missing;
+                        // one off every branch is then fetched by name.
+                        let dir = mirror(base, url, CloneKind::History, commits);
                         let read = dir.map(|dir| {
                             let licenses = commits
                                 .iter()
