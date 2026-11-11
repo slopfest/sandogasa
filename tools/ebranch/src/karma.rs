@@ -724,6 +724,38 @@ const LOGIN_ARGS: &[&str] = &[
     "1000000",
 ];
 
+/// Whether Bodhi at `base` answers at all, asked before a check that
+/// ends in a vote or a submit, so an outage is found in seconds rather
+/// than after the analysis. Reads one release, the cheapest request
+/// that needs a working Bodhi behind it; the cached login is checked
+/// apart, by [`ensure_session`].
+pub(crate) async fn bodhi_answers(http: &reqwest::Client, base: &str) -> Result<(), String> {
+    let url = format!("{}/releases/?rows_per_page=1", base.trim_end_matches('/'));
+    let policy = sandogasa_cli::retry::Policy::attempts(2);
+    let down = |why: String| {
+        format!(
+            "Bodhi at {base} is not answering ({why}); try again once it \
+             is back (https://status.fedoraproject.org)"
+        )
+    };
+    match sandogasa_cli::retry::send("bodhi", &policy, || http.get(&url)).await {
+        Ok(resp) if resp.status().is_success() => Ok(()),
+        Ok(resp) => Err(down(format!("HTTP {}", resp.status()))),
+        Err(e) => Err(down(e.to_string())),
+    }
+}
+
+/// [`bodhi_answers`] for the CLI, with a timeout short enough that a
+/// hung Bodhi does not read as a hung check.
+pub fn ensure_bodhi_answers(base: &str) -> Result<(), String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    rt.block_on(bodhi_answers(&http, base))
+}
+
 /// Ensure a usable bodhi CLI session exists, driving an
 /// interactive login through the bodhi CLI if there is none.
 ///
@@ -1397,6 +1429,42 @@ mod tests {
             decided(bug_verdict(&request("rust-drm", "epel10"), &update)).is_none(),
             "an unbuilt package must not be proposed"
         );
+    }
+
+    #[tokio::test]
+    async fn bodhi_answers_tells_an_outage_apart() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        sandogasa_cli::install_crypto_provider();
+        let http = reqwest::Client::new();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/releases/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "releases": [], "total": 0
+            })))
+            .mount(&server)
+            .await;
+        assert_eq!(bodhi_answers(&http, &server.uri()).await, Ok(()));
+
+        let down = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&down)
+            .await;
+        let err = bodhi_answers(&http, &down.uri()).await.unwrap_err();
+        assert!(err.contains("not answering (HTTP 404"), "{err}");
+
+        // Nothing listens on port 1.
+        let err = bodhi_answers(&http, "http://127.0.0.1:1")
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("Bodhi at http://127.0.0.1:1 is not answering"),
+            "{err}"
+        );
+        assert!(err.contains("status.fedoraproject.org"), "{err}");
     }
 
     #[test]

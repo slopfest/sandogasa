@@ -793,7 +793,10 @@ requires a Bodhi update (not a bare side tag) and reuses the
 `bodhi` CLI's login session. The session is validated before the
 analysis starts: if there is none, an interactive login is run
 for you through the `bodhi` CLI, and expired tokens
-are refreshed automatically.
+are refreshed automatically. Bodhi itself is asked once too, so an
+outage stops the run before the analysis rather than after it. Should
+the vote or submit still fail at the end, the check is kept, and the
+same command with `--kept` posts from it without checking again.
 
 ```sh
 ebranch check-update FEDORA-2026-94cb04410a --give-karma \

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### ebranch check-update finds a Bodhi outage before the analysis
+
+During a Bodhi outage, `check-update --submit` ran its whole analysis,
+asked "Submit this update?", and only then failed with "bodhi csrf
+fetch failed after retries: error sending request". The session check
+before the analysis reads the bodhi CLI's cached login and never
+contacts Bodhi. `--submit` and `--give-karma` now also ask Bodhi for
+one release first, with a 10-second timeout, and stop with "Bodhi
+... is not answering" and a pointer to status.fedoraproject.org. A
+vote or submit that fails at the end anyway says the check is kept, so
+`--kept` can post from it once Bodhi is back.
+
 ### ebranch's bug proposal offers closed bugs apart, defaulting to no
 
 For sandogasa 0.28.0 on EPEL 10, `check-update --submit` proposed

@@ -1564,6 +1564,11 @@ fn close_bugs_flag(close: bool, no_close: bool) -> Option<bool> {
 /// Where updates are read: `update-bugs` and `check-update --kept`.
 const BODHI_URL: &str = "https://bodhi.fedoraproject.org";
 
+/// Said when a vote or submit fails after the analysis: the check was
+/// kept before either was tried, so it need not be run again (#113).
+const KEPT_HINT: &str = "the check is kept: rerun the same command with --kept to \
+                         vote or submit from it without checking again";
+
 /// Keep the analysis's report, as it left it, with the reviewer's
 /// `decisions` and when it ran, under each of `keys` (#113), warning
 /// when it cannot be: losing it costs a rerun, not this run.
@@ -2015,7 +2020,8 @@ fn main() -> ExitCode {
         // needed) so a missing session doesn't surface only after
         // the analysis has run for minutes.
         if (a.give_karma || a.submit)
-            && let Err(e) = karma::ensure_session()
+            && let Err(e) =
+                karma::ensure_session().and_then(|()| karma::ensure_bodhi_answers(BODHI_URL))
         {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
@@ -2329,6 +2335,7 @@ fn main() -> ExitCode {
                             Ok(aliases) => aliases,
                             Err(e) => {
                                 eprintln!("error: {e}");
+                                eprintln!("{KEPT_HINT}");
                                 overall = ExitCode::FAILURE;
                                 break 'inputs;
                             }
@@ -2408,6 +2415,7 @@ fn main() -> ExitCode {
                 eprintln!("\n── {alias} ({}) ──", c.report.dist_branch());
                 if let Err(e) = karma::run(alias, &c.report, &body, a.comment.clone(), a.yes) {
                     eprintln!("error: posting the review comment on {alias} failed: {e}");
+                    eprintln!("{KEPT_HINT}");
                     overall = ExitCode::FAILURE;
                 }
             }
