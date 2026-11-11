@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### fedora-cve-triage judges EPEL 9 Next by the build its users get
+
+When closing fixed trackers, fedora-cve-triage asked the assignee
+about bug 2559936, "fixed by atuin-18.12.1-3.el9, atuin-18.12.1-3.el10_3
+but still unfixed on EPEL-9N", though atuin has no build in
+`epel9-next` any more: its last one was untagged in 2025, and an EPEL 9
+Next system, which enables `epel9` and `epel9-next` together, installs
+epel9's fixed build. An `[epel-all]` tracker counted every active EPEL
+Next release and judged it by its own Bodhi updates, which still list
+the untagged build.
+
+EPEL-9N is now left out of what such a tracker covers when Koji says
+`epel9-next` has no build of the package that outranks `epel9`'s, as
+dnf picks the higher of the two with no repository priority; EPEL-9's
+verdict covers those users. When Koji cannot be asked, EPEL-9N is
+judged by its updates as before. Fixes #120.
+
 ### Tests no longer read the machine's /etc/<tool>/config.toml
 
 On a machine where a tool's package had installed a system config,

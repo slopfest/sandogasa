@@ -571,6 +571,7 @@ dependencies = [
  "sandogasa-koji",
  "sandogasa-nvd",
  "sandogasa-review",
+ "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
  "serial_test",
