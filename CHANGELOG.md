@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### fedora-cve-triage no longer judges a bundled Go module by the package's own version
+
+bodhi-check proposed closing three real CVEs as already fixed: anubis's
+CVE-2026-25681 (golang.org/x/net) and CVE-2026-61801 (moby/sys/user),
+and dnscrypt-proxy's CVE-2026-40898 (quic-go). It had compared anubis
+1.21.3 with the golang.org/x/net fix 0.55.0, and dnscrypt-proxy 2.1.5
+with the quic-go fix 0.59.1, while anubis on Fedora 43 bundles
+golang.org/x/net 0.48.0 and moby/sys/user 0.4.0, and dnscrypt-proxy
+bundles quic-go 0.54.0, all below their fixes. GitHub's advisory names
+the module by its path, which the package's provides contain only as
+`bundled(golang(<path>))`; the product matched through that line, and
+the package's own version was then measured against the library's
+fix. A product the package only carries a copy of is now judged by
+that copy's version, read from each build as for a bundled C library
+or crate, on both the NVD and the advisory path, and never by the
+package's version; only that product's fixes are measured against it,
+and a package bundling several of the modules an advisory covers
+(anubis bundles two of the twelve aws-sdk-go-v2 modules
+GHSA-xmrv-pmrh-hhx2 names) counts as fixed only when every copy is.
+A release whose builds Koji could not read at all is reported as not
+checked rather than unfixed. The builds are read from the Koji hub
+together, through sandogasa-cve's new `Copies::prefetch_provides`,
+rather than one request per build.
+
 ### fedora-cve-triage reads a Go package's vendored modules for a CVE named by a bare project
 
 fedora-cve-triage proposed closing CVE-2026-119566, in the Prometheus

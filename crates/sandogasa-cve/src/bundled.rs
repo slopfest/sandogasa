@@ -73,44 +73,70 @@ const CACHE_TOOL: &str = "sandogasa-cve";
 /// large enough to trouble the hub.
 const PROVIDES_CHUNK: usize = 200;
 
-/// Everything the build `nvr` provides, read from the Koji hub at
-/// `hub_url` in the format [`sandogasa_koji::build_provides`] writes:
-/// the build's RPMs in one request, then one RPM per subpackage in
-/// batches of [`PROVIDES_CHUNK`]. An RPM whose provides cannot be read
-/// fails the whole read, as there.
+/// Everything each of the builds `nvrs` provides, read from the Koji
+/// hub at `hub_url` in the format [`sandogasa_koji::build_provides`]
+/// writes: every build's RPMs in one request, then their subpackages'
+/// provides in batches of [`PROVIDES_CHUNK`] across all the builds. A
+/// build one of whose RPMs cannot be read gets the error, as there; a
+/// hub that cannot be reached at all fails the whole read.
 ///
 /// The hub client blocks, and blocking inside an async runtime panics,
 /// so the requests run on a thread of their own.
-fn provides_from_hub(hub_url: &str, nvr: &str) -> Result<String, String> {
+fn provides_from_hub(
+    hub_url: &str,
+    nvrs: &[String],
+) -> Result<Vec<Result<String, String>>, String> {
     std::thread::scope(|s| {
         s.spawn(|| {
             let hub = sandogasa_kojihub::HubClient::new(hub_url);
-            let nvrs = [nvr.to_string()];
-            let nvras = sandogasa_kojihub::retry(2, || hub.builds_rpm_nvras(&nvrs))
-                .map_err(|e| e.to_string())?
-                .pop()
-                .ok_or("the hub answered no build")?
+            let builds = sandogasa_kojihub::retry(2, || hub.builds_rpm_nvras(nvrs))
                 .map_err(|e| e.to_string())?;
-            // A build with no binary RPMs provides nothing, as the
-            // koji CLI's reading of it says too.
-            let wanted: Vec<String> = sandogasa_koji::subpackage_nvras(&nvras)
-                .into_iter()
-                .map(str::to_string)
-                .collect();
-            let mut text = String::new();
-            for chunk in wanted.chunks(PROVIDES_CHUNK) {
-                let answers = sandogasa_kojihub::retry(2, || hub.rpms_deps(chunk, 1))
-                    .map_err(|e| e.to_string())?;
-                for (nvra, answer) in chunk.iter().zip(answers) {
-                    let deps = answer.map_err(|e| format!("{nvra}: {e}"))?;
-                    sandogasa_koji::push_provides(&mut text, &deps);
+            if builds.len() != nvrs.len() {
+                return Err("the hub answered for another number of builds".to_string());
+            }
+            // Each build's subpackages, one RPM each, in one list so a
+            // batch can span builds.
+            let mut wanted: Vec<(usize, String)> = Vec::new();
+            let mut out: Vec<Result<String, String>> = Vec::with_capacity(nvrs.len());
+            for (i, build) in builds.into_iter().enumerate() {
+                match build {
+                    Ok(nvras) => {
+                        // A build with no binary RPMs provides nothing,
+                        // as the koji CLI's reading of it says too.
+                        wanted.extend(
+                            sandogasa_koji::subpackage_nvras(&nvras)
+                                .into_iter()
+                                .map(|n| (i, n.to_string())),
+                        );
+                        out.push(Ok(String::new()));
+                    }
+                    Err(e) => out.push(Err(e.to_string())),
                 }
             }
-            Ok(text)
+            for chunk in wanted.chunks(PROVIDES_CHUNK) {
+                let names: Vec<String> = chunk.iter().map(|(_, n)| n.clone()).collect();
+                let answers = sandogasa_kojihub::retry(2, || hub.rpms_deps(&names, 1))
+                    .map_err(|e| e.to_string())?;
+                for ((i, nvra), answer) in chunk.iter().zip(answers) {
+                    let Ok(text) = &mut out[*i] else { continue };
+                    match answer {
+                        Ok(deps) => sandogasa_koji::push_provides(text, &deps),
+                        Err(e) => out[*i] = Err(format!("{nvra}: {e}")),
+                    }
+                }
+            }
+            Ok(out)
         })
         .join()
         .unwrap_or_else(|_| Err("reading from the hub panicked".to_string()))
     })
+}
+
+/// [`provides_from_hub`] for the one build `nvr`.
+fn build_provides_from_hub(hub_url: &str, nvr: &str) -> Result<String, String> {
+    provides_from_hub(hub_url, &[nvr.to_string()])?
+        .pop()
+        .ok_or_else(|| "the hub answered no build".to_string())?
 }
 
 impl Copies {
@@ -173,7 +199,7 @@ impl Copies {
             eprintln!("Reading what {nvr} provides from Koji...");
         }
         if let Some(hub) = &self.hub {
-            match provides_from_hub(hub, nvr) {
+            match build_provides_from_hub(hub, nvr) {
                 Ok(text) => {
                     self.provides.store(&key, &text);
                     return Some(text);
@@ -199,6 +225,41 @@ impl Copies {
             Err(e) => {
                 eprintln!("warning: what {nvr} provides could not be read from Koji: {e}");
                 None
+            }
+        }
+    }
+
+    /// Read what each of `nvrs` provides from the Koji hub in as few
+    /// requests as there are batches, for the builds the cache lacks,
+    /// so that [`build_provides`](Self::build_provides) and
+    /// [`declared`](Self::declared) answer each from the cache rather
+    /// than asking the hub once per build. Without a hub, or for a
+    /// build the hub could not read, nothing is kept and those calls
+    /// read it as they would have.
+    pub fn prefetch_provides(&self, nvrs: &[String]) {
+        let Some(hub) = &self.hub else { return };
+        let mut missing: Vec<String> = nvrs
+            .iter()
+            .filter(|n| self.provides.load(&format!("{n}.provides")).is_none())
+            .cloned()
+            .collect();
+        missing.sort();
+        missing.dedup();
+        if missing.is_empty() {
+            return;
+        }
+        if self.verbose {
+            eprintln!(
+                "Reading what {} build(s) provide from Koji...",
+                missing.len()
+            );
+        }
+        let Ok(all) = provides_from_hub(hub, &missing) else {
+            return;
+        };
+        for (nvr, text) in missing.iter().zip(all) {
+            if let Ok(text) = text {
+                self.provides.store(&format!("{nvr}.provides"), &text);
             }
         }
     }
@@ -596,7 +657,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let text = provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").unwrap();
+        let text = build_provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").unwrap();
         assert_eq!(
             text,
             "asterisk = 24.0.0-3.fc46\n\
@@ -651,6 +712,61 @@ mod tests {
         assert_eq!(copies.declared(nvr, "openssl"), None);
     }
 
+    /// Several builds are read in one request for their RPMs and one for
+    /// their provides, then answered from the cache: anubis's builds,
+    /// one per release, judged for the module each bundles.
+    #[tokio::test]
+    async fn builds_are_read_from_the_hub_together() {
+        use wiremock::matchers::{body_string_contains, method};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        sandogasa_cli::install_crypto_provider();
+        let server = MockServer::start().await;
+        let rpms = |name: &str| {
+            format!(
+                "<value><array><data>{}</data></array></value>",
+                rpm_xml(name, "x86_64")
+            )
+        };
+        Mock::given(method("POST"))
+            .and(body_string_contains("listBuildRPMs"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(multicall_xml(&[rpms("anubis"), rpms("anubis")])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let provides = |v: &str| {
+            format!(
+                "<value><array><data>{}</data></array></value>",
+                provide_xml("bundled(golang(golang.org/x/net))", v)
+            )
+        };
+        Mock::given(method("POST"))
+            .and(body_string_contains("getRPMDeps"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(multicall_xml(&[provides("0.48.0"), provides("0.56.0")])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let copies = Copies::at(dir.path(), reqwest::Client::new(), None).with_hub(&server.uri());
+        let nvrs = [
+            "anubis-1.21.3-1.fc43".to_string(),
+            "anubis-1.26.0-2.fc45".to_string(),
+        ];
+        copies.prefetch_provides(&nvrs);
+        // Nothing left to read: each mock expects its one request.
+        copies.prefetch_provides(&nvrs);
+        let net = "golang(golang.org/x/net)";
+        assert_eq!(copies.declared(&nvrs[0], net).as_deref(), Some("0.48.0"));
+        assert_eq!(copies.declared(&nvrs[1], net).as_deref(), Some("0.56.0"));
+    }
+
     /// A build with no binary RPMs provides nothing, from the hub as from
     /// the koji CLI, and no RPM is asked about.
     #[tokio::test]
@@ -676,7 +792,7 @@ mod tests {
             .mount(&server)
             .await;
         assert_eq!(
-            provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").as_deref(),
+            build_provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").as_deref(),
             Ok("")
         );
     }
@@ -715,7 +831,7 @@ mod tests {
                 .mount(&server)
                 .await;
         });
-        let err = provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").unwrap_err();
+        let err = build_provides_from_hub(&server.uri(), "asterisk-24.0.0-3.fc46").unwrap_err();
         assert!(
             err.contains("asterisk-calendar-24.0.0-3.fc46.x86_64"),
             "{err}"
