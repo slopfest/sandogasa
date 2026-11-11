@@ -1537,6 +1537,8 @@ async fn refresh_reviews(
         .map(|(name, _)| name.clone())
         .collect();
 
+    let mut fetch: Vec<(String, u64)> = Vec::new();
+    let mut search: Vec<String> = Vec::new();
     for name in wanted {
         // A bug the ledger already knows is fetched directly; there
         // is no point searching for what we were told.
@@ -1562,44 +1564,52 @@ async fn refresh_reviews(
                     .and_then(|p| p.review_bug.or(p.review.as_ref().map(|r| r.bug)))
             })
             .flatten();
-        let found = match known {
-            // The status, filing date and fedora-review flag (#123).
-            Some(id) => match bz.bugs_with(&[id], &["flags"]).await {
-                Ok(bugs) => bugs.first().map(|b| {
-                    (
-                        b.id,
-                        b.status.clone(),
-                        is_approved(b),
-                        b.creation_time.format("%Y-%m-%d").to_string(),
-                    )
-                }),
-                Err(e) => {
-                    eprintln!("warning: {name}: rhbz#{id}: {e}");
-                    continue;
+        match known {
+            Some(id) => fetch.push((name, id)),
+            None => search.push(name),
+        }
+    }
+
+    let mut found: Vec<(String, sandogasa_bugzilla::models::Bug)> = Vec::new();
+    if !fetch.is_empty() {
+        let ids: Vec<u64> = fetch
+            .iter()
+            .map(|(_, id)| *id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        // The status, filing date and fedora-review flag (#123).
+        match bz.bugs_with(&ids, &["flags"]).await {
+            Ok(bugs) => {
+                // Two packages may share a review, so each takes a copy.
+                let by_id: BTreeMap<u64, _> = bugs.into_iter().map(|b| (b.id, b)).collect();
+                for (name, id) in fetch {
+                    if let Some(bug) = by_id.get(&id) {
+                        found.push((name, bug.clone()));
+                    }
                 }
-            },
-            None => match crate::review_deps::find_review_bug(bz, &name).await {
-                Ok(Some(bug)) => Some((
-                    bug.id,
-                    bug.status.clone(),
-                    is_approved(&bug),
-                    bug.creation_time.format("%Y-%m-%d").to_string(),
-                )),
-                Ok(None) => None,
-                Err(e) => {
-                    eprintln!("warning: {name}: {e}");
-                    continue;
-                }
-            },
-        };
-        if let Some((bug, status, approved, filed)) = found
-            && let Some(package) = ledger.packages.get_mut(&name)
-        {
+            }
+            Err(e) => {
+                let names: Vec<&str> = fetch.iter().map(|(n, _)| n.as_str()).collect();
+                eprintln!("warning: {}: {e}", names.join(", "));
+            }
+        }
+    }
+    for (name, result) in crate::review_deps::find_review_bugs(bz, &search).await {
+        match result {
+            Ok(Some(bug)) => found.push((name, bug)),
+            Ok(None) => {}
+            Err(e) => eprintln!("warning: {name}: {e}"),
+        }
+    }
+
+    for (name, bug) in found {
+        if let Some(package) = ledger.packages.get_mut(&name) {
             package.review = Some(Review {
-                bug,
-                status,
-                approved,
-                filed,
+                bug: bug.id,
+                approved: is_approved(&bug),
+                filed: bug.creation_time.format("%Y-%m-%d").to_string(),
+                status: bug.status,
                 seen: today.to_string(),
             });
         }
@@ -2502,6 +2512,113 @@ mod tests {
         assert!(text.contains("failed in fedora-rawhide-x86_64"), "{text}");
         assert!(text.contains("via direct"), "{text}");
         assert!(text.contains("targets: rawhide"), "{text}");
+    }
+
+    /// Known reviews are fetched in one request, two packages may share
+    /// one, the rest are searched, and a settled review is left alone.
+    #[tokio::test]
+    async fn reviews_are_fetched_together_and_the_rest_searched() {
+        let review = |id: u64, status: &str, summary: &str| {
+            serde_json::json!({
+                "id": id, "summary": summary, "status": status, "resolution": "",
+                "product": "Fedora", "component": ["Package Review"],
+                "severity": "medium", "priority": "medium",
+                "assigned_to": "r@example.com", "creator": "p@example.com",
+                "creation_time": "2026-03-04T00:00:00Z",
+                "last_change_time": "2026-03-04T00:00:00Z",
+                "flags": [{"name": "fedora-review", "status": "+"}]
+            })
+        };
+        let bugs = [
+            review(10, "POST", "Review Request: rust-known - Known"),
+            review(20, "NEW", "Review Request: rust-new - New"),
+        ];
+        let server = wiremock::MockServer::start().await;
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        wiremock::Mock::given(wiremock::matchers::path("/rest/bug"))
+            .respond_with(move |r: &wiremock::Request| {
+                let pairs: Vec<(String, String)> = r.url.query_pairs().into_owned().collect();
+                let ids: Vec<u64> = pairs
+                    .iter()
+                    .filter(|(k, _)| k == "id")
+                    .map(|(_, v)| v.parse().unwrap())
+                    .collect();
+                let text = pairs
+                    .iter()
+                    .find(|(k, _)| k == "short_desc")
+                    .map(|(_, v)| v);
+                log.lock().unwrap().push(match text {
+                    Some(t) => t.clone(),
+                    None => format!("ids {ids:?}"),
+                });
+                let hits: Vec<_> = bugs
+                    .iter()
+                    .filter(|b| match text {
+                        Some(t) => b["summary"].as_str().unwrap().contains(t.as_str()),
+                        None => ids.contains(&b["id"].as_u64().unwrap()),
+                    })
+                    .cloned()
+                    .collect();
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    sandogasa_bugzilla::test_support::answer(&hits, r.url.query()),
+                )
+            })
+            .mount(&server)
+            .await;
+
+        let unimported = || Some(distgit(false, &[]));
+        let mut ledger = Ledger::default();
+        for name in ["rust-known", "rust-known-alias"] {
+            ledger.packages.insert(
+                name.to_string(),
+                Package {
+                    review_bug: Some(10),
+                    distgit: unimported(),
+                    ..Package::default()
+                },
+            );
+        }
+        ledger.packages.insert(
+            "rust-new".to_string(),
+            Package {
+                distgit: unimported(),
+                ..Package::default()
+            },
+        );
+        // Imported with a closed review: settled, so not asked about.
+        ledger.packages.insert(
+            "rust-done".to_string(),
+            Package {
+                distgit: Some(distgit(true, &["rawhide"])),
+                review: Some(Review {
+                    bug: 5,
+                    status: "CLOSED".to_string(),
+                    approved: true,
+                    filed: "2025-01-01".to_string(),
+                    seen: "2025-01-01".to_string(),
+                }),
+                ..Package::default()
+            },
+        );
+
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        refresh_reviews(&bz, &mut ledger, "2026-11-11", false, &[]).await;
+
+        assert_eq!(
+            *asked.lock().unwrap(),
+            ["ids [10]", "Review Request: rust-new - "]
+        );
+        for name in ["rust-known", "rust-known-alias"] {
+            let r = ledger.packages[name].review.as_ref().unwrap();
+            assert_eq!((r.bug, r.status.as_str(), r.approved), (10, "POST", true));
+            assert_eq!(
+                (r.filed.as_str(), r.seen.as_str()),
+                ("2026-03-04", "2026-11-11")
+            );
+        }
+        assert_eq!(ledger.packages["rust-new"].review.as_ref().unwrap().bug, 20);
+        assert_eq!(ledger.packages["rust-done"].review.as_ref().unwrap().bug, 5);
     }
 
     fn distgit(exists: bool, branches: &[&str]) -> DistGit {

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### ebranch finds a review request among many with its name as a prefix
+
+`check-wip` and `check-pkg-reviews` said rust-gix had no review
+request, and took rust-futures' 2017 review over its re-review. The
+search matched every summary starting `Review Request: rust-gix`, kept
+the first ten, and Red Hat's Bugzilla answers oldest first: rust-gix's
+own review is the 52nd match among the gix-* crates. The search now
+asks for `Review Request: <name> - ` first, which matches only the
+package's own reviews, and falls back to the broad search for a summary
+written with another separator; both read every match. The searches
+for several packages now run a few at a time, and check-wip fetches the
+reviews it already knows in one request. Fixes #129.
+
 ### ebranch check-update offers a kept check of the same builds
 
 When a `check-update --submit` or `--give-karma` run failed at the end,

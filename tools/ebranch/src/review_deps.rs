@@ -123,8 +123,8 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
     }
 
     // Search Bugzilla for packages without cached IDs.
-    for pkg_name in &needs_search {
-        match find_review_bug(&bz, pkg_name).await? {
+    for (pkg_name, found) in find_review_bugs(&bz, &needs_search).await {
+        match found? {
             Some(bug) => {
                 let (id, status) = (bug.id, bug.status.clone());
                 if opts.verbose {
@@ -314,37 +314,62 @@ fn crate_edges_to_pkg_edges(
         .collect()
 }
 
-/// Search Bugzilla for a package review request, open or closed.
-///
-/// The candidate is confirmed with
-/// [`sandogasa_bugclass::bugzilla::review_request_package`] rather
-/// than a prefix comparison: exact where a substring is not, and
-/// tolerant of a reviewer who wrote something other than " - " after
-/// the package name, which a prefix match would silently miss.
-pub async fn find_review_bug(
+/// A query-string value with the characters that would end or change
+/// it escaped; Bugzilla's search is otherwise sent as written.
+fn query_value(text: &str) -> String {
+    text.replace('%', "%25")
+        .replace('&', "%26")
+        .replace('+', "%2B")
+        .replace('#', "%23")
+}
+
+/// The review requests for `rpm_name` whose summary contains `text`.
+/// Every match is read, not a first page: Red Hat's Bugzilla answers
+/// oldest first, so a cap drops the newest reviews, re-reviews among
+/// them (#129). Each candidate is confirmed with
+/// [`sandogasa_bugclass::bugzilla::review_request_package`], which is
+/// exact where a substring is not.
+async fn review_requests(
     bz: &BzClient,
     rpm_name: &str,
-) -> Result<Option<sandogasa_bugzilla::models::Bug>, String> {
+    text: &str,
+) -> Result<Vec<sandogasa_bugzilla::models::Bug>, String> {
     let query = format!(
         "product=Fedora&component=Package Review\
-         &short_desc_type=substring\
-         &short_desc=Review Request: {rpm_name}"
+         &short_desc_type=substring&short_desc={}",
+        query_value(text)
     );
-
     // The summary to match and, for check-wip, the fedora-review flag
     // (`wip::is_approved`); nothing else of the default set (#123).
     let bugs = bz
-        .search_with(&query, 10, &["flags"])
+        .search_with(&query, 0, &["flags"])
         .await
         .map_err(|e| format!("Bugzilla search failed for {rpm_name}: {e}"))?;
-
-    let matched: Vec<_> = bugs
+    Ok(bugs
         .into_iter()
         .filter(|b| {
             sandogasa_bugclass::bugzilla::review_request_package(&b.summary).as_deref()
                 == Some(rpm_name)
         })
-        .collect();
+        .collect())
+}
+
+/// Search Bugzilla for a package review request, open or closed.
+///
+/// Most summaries read `Review Request: <name> - <summary>`, and that
+/// text matches only the package's own reviews. Without the ` - ` it
+/// also matches every package whose name starts with this one
+/// (rust-gix's review is the 52nd match of the gix-* reviews), so that
+/// search is the fallback, for a summary with another separator.
+pub async fn find_review_bug(
+    bz: &BzClient,
+    rpm_name: &str,
+) -> Result<Option<sandogasa_bugzilla::models::Bug>, String> {
+    let mut matched =
+        review_requests(bz, rpm_name, &format!("Review Request: {rpm_name} - ")).await?;
+    if matched.is_empty() {
+        matched = review_requests(bz, rpm_name, &format!("Review Request: {rpm_name}")).await?;
+    }
 
     // Prefer the latest open bug, else the latest closed one. A
     // durable record would want the user to pick between candidates;
@@ -356,6 +381,40 @@ pub async fn find_review_bug(
         .max_by_key(|b| b.id)
         .or_else(|| matched.iter().max_by_key(|b| b.id))
         .cloned())
+}
+
+/// [`find_review_bug`] for each of `names`, a few at a time, in the
+/// order given.
+pub async fn find_review_bugs(
+    bz: &BzClient,
+    names: &[String],
+) -> Vec<(
+    String,
+    Result<Option<sandogasa_bugzilla::models::Bug>, String>,
+)> {
+    const PARALLEL: usize = 4;
+    let mut out = Vec::with_capacity(names.len());
+    for wave in names.chunks(PARALLEL) {
+        let mut set = tokio::task::JoinSet::new();
+        for (i, name) in wave.iter().enumerate() {
+            let bz = bz.clone();
+            let name = name.clone();
+            set.spawn(async move {
+                let found = find_review_bug(&bz, &name).await;
+                (i, name, found)
+            });
+        }
+        let mut done = Vec::with_capacity(wave.len());
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok(r) => done.push(r),
+                Err(e) => panic!("review search task failed: {e}"),
+            }
+        }
+        done.sort_by_key(|(i, _, _)| *i);
+        out.extend(done.into_iter().map(|(_, name, found)| (name, found)));
+    }
+    out
 }
 
 /// Compute link changes by diffing desired vs current depends_on.
@@ -510,6 +569,151 @@ mod tests {
             bug.flags
         );
         assert!(bug.cc.is_empty(), "not asked for, so not sent");
+    }
+
+    /// A mock Package Review search that, like Bugzilla, answers only
+    /// the reviews whose summary contains the `short_desc` asked for,
+    /// oldest first, and records each `short_desc`.
+    async fn review_server(
+        summaries: &[(u64, &str, &str)],
+    ) -> (
+        wiremock::MockServer,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let server = wiremock::MockServer::start().await;
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut bugs: Vec<serde_json::Value> = summaries
+            .iter()
+            .map(|(id, status, summary)| {
+                serde_json::json!({
+                    "id": id, "summary": summary, "status": status, "resolution": "",
+                    "product": "Fedora", "component": ["Package Review"],
+                    "severity": "medium", "priority": "medium",
+                    "assigned_to": "r@example.com", "creator": "p@example.com",
+                    "creation_time": "2026-01-01T00:00:00Z",
+                    "last_change_time": "2026-01-01T00:00:00Z", "flags": []
+                })
+            })
+            .collect();
+        bugs.sort_by_key(|b| b["id"].as_u64());
+        let log = asked.clone();
+        wiremock::Mock::given(wiremock::matchers::path("/rest/bug"))
+            .respond_with(move |r: &wiremock::Request| {
+                let text = r
+                    .url
+                    .query_pairs()
+                    .find(|(k, _)| k == "short_desc")
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap_or_default();
+                log.lock().unwrap().push(text.clone());
+                let hits: Vec<_> = bugs
+                    .iter()
+                    .filter(|b| b["summary"].as_str().unwrap().contains(&text))
+                    .cloned()
+                    .collect();
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    sandogasa_bugzilla::test_support::answer(&hits, r.url.query()),
+                )
+            })
+            .mount(&server)
+            .await;
+        (server, asked)
+    }
+
+    /// rust-gix's review came after a dozen gix-* reviews: a search
+    /// capped at the first ten, oldest first, never saw it (#129).
+    #[tokio::test]
+    async fn a_review_after_many_with_the_name_as_a_prefix_is_found() {
+        let siblings: Vec<String> = (1..=15)
+            .map(|i| format!("Review Request: rust-gix-part{i} - Part"))
+            .collect();
+        let mut summaries: Vec<(u64, &str, &str)> = siblings
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i as u64 + 1, "CLOSED", s.as_str()))
+            .collect();
+        summaries.push((52, "CLOSED", "Review Request: rust-gix - Interact with git"));
+        let (server, asked) = review_server(&summaries).await;
+        let bz = BzClient::new(&server.uri());
+        let bug = find_review_bug(&bz, "rust-gix").await.unwrap().unwrap();
+        assert_eq!(bug.id, 52);
+        assert_eq!(*asked.lock().unwrap(), ["Review Request: rust-gix - "]);
+    }
+
+    /// rust-futures was reviewed twice; the newer review is the one.
+    #[tokio::test]
+    async fn the_newest_of_several_reviews_is_taken() {
+        let (server, _) = review_server(&[
+            (1509540, "CLOSED", "Review Request: rust-futures - Futures"),
+            (1783471, "CLOSED", "Review Request: rust-futures - Futures"),
+            (
+                1900000,
+                "CLOSED",
+                "Review Request: rust-futures-util - Util",
+            ),
+        ])
+        .await;
+        let bz = BzClient::new(&server.uri());
+        let bug = find_review_bug(&bz, "rust-futures").await.unwrap().unwrap();
+        assert_eq!(bug.id, 1783471);
+    }
+
+    /// A summary with another separator is found by the broader
+    /// search, still matched by exact name.
+    #[tokio::test]
+    async fn a_summary_without_the_dash_is_found_by_the_fallback() {
+        let (server, asked) = review_server(&[
+            (1, "CLOSED", "Review Request: rust-foo-bar - Foo bar"),
+            (2, "NEW", "Review Request: rust-foo – Foo"),
+        ])
+        .await;
+        let bz = BzClient::new(&server.uri());
+        let bug = find_review_bug(&bz, "rust-foo").await.unwrap().unwrap();
+        assert_eq!(bug.id, 2);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            ["Review Request: rust-foo - ", "Review Request: rust-foo"]
+        );
+        assert!(find_review_bug(&bz, "rust-baz").await.unwrap().is_none());
+    }
+
+    /// A `+` in a name reaches Bugzilla as a `+`, not a space.
+    #[tokio::test]
+    async fn a_name_with_a_plus_is_searched_as_written() {
+        let (server, asked) = review_server(&[(3, "NEW", "Review Request: foo++ - Foo")]).await;
+        let bz = BzClient::new(&server.uri());
+        let bug = find_review_bug(&bz, "foo++").await.unwrap().unwrap();
+        assert_eq!(bug.id, 3);
+        assert_eq!(*asked.lock().unwrap(), ["Review Request: foo++ - "]);
+    }
+
+    #[tokio::test]
+    async fn several_reviews_are_searched_and_answered_in_order() {
+        let (server, _) = review_server(&[
+            (1, "NEW", "Review Request: a - A"),
+            (2, "NEW", "Review Request: c - C"),
+            (3, "NEW", "Review Request: e - E"),
+            (4, "NEW", "Review Request: f - F"),
+        ])
+        .await;
+        let bz = BzClient::new(&server.uri());
+        let names: Vec<String> = ["a", "b", "c", "d", "e", "f"].map(String::from).into();
+        let found: Vec<(String, Option<u64>)> = find_review_bugs(&bz, &names)
+            .await
+            .into_iter()
+            .map(|(n, r)| (n, r.unwrap().map(|b| b.id)))
+            .collect();
+        let want: Vec<(String, Option<u64>)> = [
+            ("a", Some(1)),
+            ("b", None),
+            ("c", Some(2)),
+            ("d", None),
+            ("e", Some(3)),
+            ("f", Some(4)),
+        ]
+        .map(|(n, id)| (n.to_string(), id))
+        .into();
+        assert_eq!(found, want);
     }
 
     #[test]
