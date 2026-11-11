@@ -35,8 +35,9 @@ needed for side-tag inputs and for downloading builds by NVR, and
 `createrepo_c` — with `bodhi-client` when the input is a Bodhi update —
 for `check-update` on builds that have not reached `updates-testing`
 (it downloads them into a local repository). `bundled-provides` needs
-`git`, and `rpmspec` (from `rpm-build`) to read a spec whose Source0
-uses macros.
+`git`, `rpmspec` (from `rpm-build`) to read a spec whose Source0
+uses macros, and `askalono` (from `askalono-cli`) to identify the
+bundled components' licenses.
 
 ## Usage
 
@@ -90,16 +91,27 @@ each submodule's history says which tag that commit is, or follows.
 $ ebranch bundled-provides --repo https://github.com/MisterTea/EternalTerminal --tag et-v7.1.1
 https://github.com/MisterTea/EternalTerminal at et-v7.1.1: 16 submodule(s), 16 bundled
 
+# base64: MIT, from LICENSE
 Provides:       bundled(base64) = 0^20200731git6780d5b
+# Catch2: BSL-1.0, from LICENSE.txt
 Provides:       bundled(Catch2) = 3.15.2
 ...
+# msgpack-c: BSL-1.0, from LICENSE_1_0.txt; COPYING not identified
+Provides:       bundled(msgpack-c) = 3.3.0
+# PlatformFolders: MIT, from LICENSE
 Provides:       bundled(PlatformFolders) = 4.3.0
 ...
+# sole: Zlib, from LICENSE
 Provides:       bundled(sole) = 1.0.1^20200819git424b969
 
-Not mentioned in upstream's build files at et-v7.1.1, so possibly never built (remove in %prep if so): cotire, msgpack-c
+Not mentioned in upstream's build files at et-v7.1.1, so possibly never built (remove in %prep if so):
+  - cotire
+  - msgpack-c
 
-Copied in without a submodule, so with no pin to read (version by hand): external/libvterm
+Copied in without a submodule, so with no pin to read (version by hand):
+  - external/libvterm (MIT, from LICENSE)
+
+The spec's License: has to cover the bundled components' licenses too.
 
 Bundled directories as the release ships them, as `ls | LC_ALL=C sort -f | xargs` lists them:
   base64 Catch2 cotire cpp-httplib cxxopts easyloggingpp json libvterm msgpack-c ...
@@ -132,6 +144,18 @@ relative submodule URLs followed from its `origin`:
 ```sh
 ebranch bundled-provides et.spec --repo ~/src/github/MisterTea/EternalTerminal
 ```
+
+Each component's license comes from its license files at the pin
+(`LICENSE`, `COPYING*`, `LICENSE_1_0.txt` and the other names
+askalono's crawl looks for), or, for one with none at its top, its
+REUSE `LICENSES/` directory, identified by `askalono` in one run over
+all of them, and is given as a comment above its Provides line and as
+`licenses` in `--json`. A file askalono cannot identify, such as a
+`COPYING` that only points at another file, is named as not
+identified, and a component with no license file is said to have
+none. How the licenses combine into the spec's `License:` is left to
+you. Without askalono, the report names each component's license
+files instead.
 
 The other lists help with what the pins cannot say:
 

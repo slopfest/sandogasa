@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### ebranch bundled-provides reports the bundled components' licenses
+
+`ebranch bundled-provides` wrote each bundled component's `bundled()`
+Provides but said nothing about its license, which the spec's
+`License:` must include: the EternalTerminal specs needed them found by
+hand (MIT for base64 and PlatformFolders, Zlib for sole and
+ThreadPool). It now reads each component's license files from the
+clones it already keeps, at the pinned commit (a history-only clone
+fetches just those trees, and the files in one request per
+component), and from upstream's tree for a directory copied in without
+a submodule. A REUSE `LICENSES/` directory counts only where there is
+no license file at the top, since it holds the licenses of tests and
+tooling too: nlohmann/json's lists GPL-3.0-only beside the MIT its
+header is under. It identifies them all with
+one `askalono --format json identify --batch` run, as Fedora's
+go-vendor-tools does for Go packages, and gives each component's
+license as a comment above its Provides line and as `licenses` in
+`--json`. A file askalono cannot identify, or a component with no
+license file, is said so rather than guessed. Without `askalono`
+(`askalono-cli`), the Provides are still reported, with each
+component's license files named. The lists of what is not shipped,
+possibly never built and copied in are now one item per line, as they
+run long. Resolves #130.
+
 ### sandogasa-report config settles its tokens through the shared secret rules
 
 `sandogasa-report config` decided by itself what happens to a forge

@@ -16,6 +16,12 @@
 //! commit date for any forge, with no rate limit, and is kept under
 //! ebranch's cache so a later run asks the network only for what the
 //! cache lacks.
+//!
+//! Each bundled component's license files (`LICENSE`, `COPYING*`, …, by
+//! the names askalono's own crawl looks for) are read from the same
+//! clones, at the pinned commit, and identified by `askalono` (Fedora's
+//! `askalono-cli`, which go-vendor-tools uses for Go packages), in one
+//! batch. Without it the Provides are still reported, the licenses not.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +39,31 @@ pub enum State {
     Removed,
     /// Replaced in `%prep` by the system's copy (a symlink).
     Replaced,
+}
+
+/// One license file of a bundled component, and what it holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct LicenseFile {
+    /// Its path in the component's tree: `LICENSE`, `COPYING.txt`.
+    pub path: String,
+    /// The SPDX expression askalono identified, `None` when it did not
+    /// identify one or was not run.
+    pub license: Option<String>,
+}
+
+/// A bundled component's licenses, from its license files.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Licenses {
+    pub files: Vec<LicenseFile>,
+    /// Every license identified in them, sorted and joined with ` AND `
+    /// (`MIT`, `BSD-3-Clause AND MIT`); `None` when none was.
+    pub expression: Option<String>,
+    /// Why the files could not be read, when they could not.
+    pub error: Option<String>,
+    /// The files' contents, in `files`' order, until askalono has read
+    /// them.
+    #[serde(skip)]
+    texts: Vec<Vec<u8>>,
 }
 
 /// One submodule at the tag, and what its pin is.
@@ -55,6 +86,8 @@ pub struct Pin {
     /// Whether upstream's build files at the tag mention its directory.
     /// One they do not is likely bundled but never built.
     pub referenced: bool,
+    /// Its license files at the pinned commit.
+    pub licenses: Licenses,
 }
 
 /// A `bundled()` line of the spec that the pins do not bear out.
@@ -76,6 +109,12 @@ pub struct Report {
     /// Directories among the bundled ones that no submodule pins: code
     /// copied in, to version by hand.
     pub unpinned: Vec<String>,
+    /// The license files of each `unpinned` directory, at the tag.
+    pub unpinned_licenses: BTreeMap<String, Licenses>,
+    /// Whether askalono identified the license files: false when it is
+    /// not installed, failed, or had none to read, and then no
+    /// `license` is set.
+    pub licenses_identified: bool,
     /// The spec's lines that disagree with the pins, when a spec was read.
     pub disagreements: Vec<Disagreement>,
     /// Every bundled directory's name, sorted as `LC_ALL=C sort -f`
@@ -342,6 +381,143 @@ pub fn sort_f(names: &mut [String]) {
     names.sort_by_key(|n| n.to_ascii_uppercase());
 }
 
+/// Whether a file named `name` (no directory) is a license file, by the
+/// names askalono's crawl looks for, as go-vendor-tools takes them:
+/// `LICENSE`, `LICENCE.txt`, `COPYING-LGPL`, `COPYRIGHT`, `UNLICENSE`,
+/// `LICENSE_1_0.txt` (Boost's, which askalono's crawl misses),
+/// `foo-LICENSE.md`, `gpl-3.0.txt`, `APACHE-2.0.txt`, `MIT-LICENSE`.
+/// Source files named like one (`license.c`, `license.py`) are code.
+pub fn is_license_file(name: &str) -> bool {
+    // Code and build files: `license.c`, `license-check.sh`,
+    // `LICENSE-header.cmake`.
+    const CODE: &[&str] = &[
+        "ac", "am", "bash", "bat", "c", "cc", "cmake", "cpp", "cs", "cxx", "go", "h", "hh", "hpp",
+        "java", "js", "kt", "lua", "m", "m4", "mk", "mm", "php", "pl", "ps1", "py", "rb", "rs",
+        "sh", "swift", "ts",
+    ];
+    if name
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| CODE.contains(&ext.to_ascii_lowercase().as_str()))
+    {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    // The name, or the name followed by `.`, `-` or `_` and anything.
+    let named = |stem: &str| {
+        lower
+            .strip_prefix(stem)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '-', '_']))
+    };
+    // A license's own name with its version: `apache-2.0.txt`.
+    let versioned = |stem: &str| {
+        lower
+            .strip_prefix(stem)
+            .is_some_and(|rest| rest.chars().any(|c| c.is_ascii_digit()))
+    };
+    [
+        "copying",
+        "copyright",
+        "eula",
+        "licence",
+        "license",
+        "unlicence",
+        "unlicense",
+    ]
+    .iter()
+    .any(|s| named(s))
+        || ["agpl", "gpl", "lgpl"].iter().any(|s| {
+            lower
+                .strip_prefix(s)
+                .is_some_and(|r| r.starts_with(['.', '-']))
+        })
+        || [
+            "agpl-", "apache-", "bsd-", "gfdl-", "gnu-", "gpl-", "lgpl-", "mit-", "mpl-", "ofl-",
+        ]
+        .iter()
+        .any(|s| versioned(s))
+        || lower.starts_with("cc-by-")
+        || lower.contains(".licen")
+        || lower.contains("-licen")
+        || lower.ends_with("-bsd.txt")
+}
+
+/// The license one line of `askalono --format json identify --batch`
+/// gives, with the path it names: every license a file contains, joined
+/// with ` AND `, else the one it is, else `None` (not identified, or an
+/// error for that file).
+pub fn parse_askalono_line(line: &str) -> Option<(String, Option<String>)> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let path = v.get("path")?.as_str()?.trim_end_matches('\n').to_string();
+    let result = v.get("result");
+    let mut containing: Vec<&str> = result
+        .and_then(|r| r.get("containing"))
+        .and_then(|c| c.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.get("license")?.get("name")?.as_str())
+        .collect();
+    containing.sort_unstable();
+    containing.dedup();
+    let license = if containing.is_empty() {
+        result
+            .and_then(|r| r.get("license"))
+            .and_then(|l| l.get("name"))
+            .and_then(|n| n.as_str())
+            .map(str::to_string)
+    } else {
+        Some(containing.join(" AND "))
+    };
+    Some((path, license))
+}
+
+/// The expression for a component's files: every license identified,
+/// split on ` AND `, sorted and joined again; `None` when none was.
+pub fn license_expression(files: &[LicenseFile]) -> Option<String> {
+    let mut all: Vec<&str> = files
+        .iter()
+        .filter_map(|f| f.license.as_deref())
+        .flat_map(|l| l.split(" AND "))
+        .collect();
+    all.sort_unstable();
+    all.dedup();
+    (!all.is_empty()).then(|| all.join(" AND "))
+}
+
+/// What a component's licenses come to, as one line: `MIT, from
+/// LICENSE`, with the files not identified named, or why there are
+/// none.
+pub fn describe_licenses(l: &Licenses, identified: bool) -> String {
+    if let Some(e) = &l.error {
+        return format!("license files not read: {e}");
+    }
+    if l.files.is_empty() {
+        return "no license file found".to_string();
+    }
+    let paths = |files: Vec<&LicenseFile>| {
+        files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    if !identified {
+        return format!("license in {}", paths(l.files.iter().collect()));
+    }
+    let (known, unknown): (Vec<&LicenseFile>, Vec<&LicenseFile>) =
+        l.files.iter().partition(|f| f.license.is_some());
+    let mut out = match &l.expression {
+        Some(e) => format!("{e}, from {}", paths(known)),
+        None => String::new(),
+    };
+    if !unknown.is_empty() {
+        if !out.is_empty() {
+            out.push_str("; ");
+        }
+        out.push_str(&format!("{} not identified", paths(unknown)));
+    }
+    out
+}
+
 /// The report as text.
 pub fn render(report: &Report) -> String {
     use std::fmt::Write;
@@ -361,6 +537,15 @@ pub fn render(report: &Report) -> String {
     );
     let _ = writeln!(out);
     for p in &shipped {
+        // A pin that could not be read is said once, below.
+        if p.version.is_some() || p.licenses.error.is_none() {
+            let _ = writeln!(
+                out,
+                "# {}: {}",
+                p.name,
+                describe_licenses(&p.licenses, report.licenses_identified)
+            );
+        }
         match &p.version {
             Some(v) => {
                 let _ = writeln!(out, "Provides:       bundled({}) = {v}", p.name);
@@ -391,28 +576,62 @@ pub fn render(report: &Report) -> String {
             )
         })
         .collect();
+    // One per line: these run long, and a list across the screen is
+    // hard to read.
+    let bullets = |items: &[String]| {
+        items
+            .iter()
+            .map(|i| format!("  - {i}\n"))
+            .collect::<String>()
+    };
     if !gone.is_empty() {
-        let _ = writeln!(out, "\nNot shipped, so no Provides: {}", gone.join(", "));
+        let _ = write!(out, "\nNot shipped, so no Provides:\n{}", bullets(&gone));
     }
-    let unbuilt: Vec<&str> = shipped
+    let unbuilt: Vec<String> = shipped
         .iter()
         .filter(|p| !p.referenced)
-        .map(|p| p.name.as_str())
+        .map(|p| p.name.clone())
         .collect();
     if !unbuilt.is_empty() {
-        let _ = writeln!(
+        let _ = write!(
             out,
             "\nNot mentioned in upstream's build files at {}, so possibly never built \
-             (remove in %prep if so): {}",
+             (remove in %prep if so):\n{}",
             report.tag,
-            unbuilt.join(", ")
+            bullets(&unbuilt)
         );
     }
     if !report.unpinned.is_empty() {
+        let dirs: Vec<String> = report
+            .unpinned
+            .iter()
+            .map(|d| match report.unpinned_licenses.get(d) {
+                Some(l) => format!("{d} ({})", describe_licenses(l, report.licenses_identified)),
+                None => d.clone(),
+            })
+            .collect();
+        let _ = write!(
+            out,
+            "\nCopied in without a submodule, so with no pin to read (version by hand):\n{}",
+            bullets(&dirs)
+        );
+    }
+    let any_files = report
+        .pins
+        .iter()
+        .map(|p| &p.licenses)
+        .chain(report.unpinned_licenses.values())
+        .any(|l| !l.files.is_empty());
+    if any_files && !report.licenses_identified {
         let _ = writeln!(
             out,
-            "\nCopied in without a submodule, so with no pin to read (version by hand): {}",
-            report.unpinned.join(", ")
+            "\nLicenses not identified, as askalono did not run (sudo dnf install \
+             askalono-cli), so only where they are is shown."
+        );
+    } else if any_files {
+        let _ = writeln!(
+            out,
+            "\nThe spec's License: has to cover the bundled components' licenses too."
         );
     }
     if !report.disagreements.is_empty() {
@@ -429,7 +648,7 @@ pub fn render(report: &Report) -> String {
                 }
                 (None, None) => continue,
             };
-            let _ = writeln!(out, "  {line}");
+            let _ = writeln!(out, "  - {line}");
         }
     }
     if !report.directories.is_empty() {
@@ -456,6 +675,14 @@ pub fn report(
     spec: Option<&SpecFacts>,
     verbose: bool,
 ) -> Result<Report, String> {
+    // Checked first, so the warning comes before the clones, not after.
+    let askalono = askalono_available();
+    if !askalono {
+        eprintln!(
+            "warning: askalono is not installed (sudo dnf install askalono-cli), so the \
+             bundled components' licenses will not be identified"
+        );
+    }
     eprintln!("Reading {repo} at {tag}...");
     let (dir, upstream) = upstream_clone(base, repo, tag)?;
     let tree = git(Some(&dir), &["ls-tree", "-r", "-t", tag])
@@ -489,13 +716,23 @@ pub fn report(
         "Reading {} submodule(s) from their repositories...",
         subs.len()
     );
-    let versions = read_pins(base, &subs, verbose);
+    let state_of = |base_name: &str| match spec {
+        Some(s) if s.removed.iter().any(|d| d == base_name) => State::Removed,
+        Some(s) if s.replaced.iter().any(|d| d == base_name) => State::Replaced,
+        _ => State::Bundled,
+    };
+    // Only what ships needs its licenses read.
+    let licensed: Vec<bool> = subs
+        .iter()
+        .map(|(path, _, _)| state_of(dir_name(path)) == State::Bundled)
+        .collect();
+    let read = read_pins(base, &subs, &licensed, verbose);
 
     let (unpinned, bundled_dirs) = bundle_layout(&entries, &gitlinks);
     let mut pins: Vec<Pin> = subs
         .iter()
-        .zip(versions)
-        .map(|((path, url, commit), version)| {
+        .zip(read)
+        .map(|((path, url, commit), (version, licenses))| {
             let base_name = dir_name(path).to_string();
             let name = spec
                 .and_then(|s| {
@@ -505,11 +742,7 @@ pub fn report(
                         .map(|(n, _)| n.clone())
                 })
                 .unwrap_or_else(|| base_name.clone());
-            let state = match spec {
-                Some(s) if s.removed.iter().any(|d| d == &base_name) => State::Removed,
-                Some(s) if s.replaced.iter().any(|d| d == &base_name) => State::Replaced,
-                _ => State::Bundled,
-            };
+            let state = state_of(&base_name);
             let (version, error) = match version {
                 Ok(v) => (Some(v), None),
                 Err(e) => (None, Some(e)),
@@ -523,9 +756,27 @@ pub fn report(
                 error,
                 state,
                 referenced: referenced(&dir, tag, &base_name, &bundled_dirs),
+                licenses: unread_licenses(licenses),
             }
         })
         .collect();
+    let mut unpinned_licenses: BTreeMap<String, Licenses> = unpinned
+        .iter()
+        .map(|d| {
+            (
+                d.clone(),
+                unread_licenses(license_files(&dir, tag, Some(d))),
+            )
+        })
+        .collect();
+    let licenses_identified = {
+        let mut all: Vec<&mut Licenses> = pins
+            .iter_mut()
+            .map(|p| &mut p.licenses)
+            .chain(unpinned_licenses.values_mut())
+            .collect();
+        askalono && identify_into(&mut all)
+    };
     pins.sort_by_key(|p| p.name.to_ascii_lowercase());
 
     let mut directories: Vec<String> = pins
@@ -545,13 +796,78 @@ pub fn report(
         tag: tag.to_string(),
         pins,
         unpinned,
+        unpinned_licenses,
+        licenses_identified,
         disagreements,
         directories,
         after_prep: spec.is_some(),
     })
 }
 
-/// The `bundled-provides` subcommand.
+/// A component's license files, as read, their contents kept with them
+/// until askalono has read them.
+fn unread_licenses(read: Result<Vec<LicenseText>, String>) -> Licenses {
+    match read {
+        Ok(files) => {
+            let (files, texts) = files
+                .into_iter()
+                .map(|(path, text)| {
+                    (
+                        LicenseFile {
+                            path,
+                            license: None,
+                        },
+                        text,
+                    )
+                })
+                .unzip();
+            Licenses {
+                files,
+                texts,
+                ..Default::default()
+            }
+        }
+        Err(e) => Licenses {
+            error: Some(e),
+            ..Default::default()
+        },
+    }
+}
+
+/// Identify every component's license files with one askalono run, and
+/// set each file's license and each component's expression; the
+/// contents are dropped either way. Whether askalono identified them:
+/// false when there were none, or it failed, which is said once.
+fn identify_into(all: &mut [&mut Licenses]) -> bool {
+    let texts: Vec<Vec<u8>> = all
+        .iter_mut()
+        .flat_map(|l| std::mem::take(&mut l.texts))
+        .collect();
+    if texts.is_empty() {
+        return false;
+    }
+    eprintln!(
+        "Identifying {} license file(s) with askalono...",
+        texts.len()
+    );
+    let flat: Vec<&[u8]> = texts.iter().map(Vec::as_slice).collect();
+    let found = match identify(&flat) {
+        Ok(found) => found,
+        Err(e) => {
+            eprintln!("warning: {e}; the licenses are not identified");
+            return false;
+        }
+    };
+    let mut found = found.into_iter();
+    for l in all.iter_mut() {
+        for f in &mut l.files {
+            f.license = found.next().flatten();
+        }
+        l.expression = license_expression(&l.files);
+    }
+    true
+}
+
 /// The tag to read: the one the spec's Source0 names, or `--tag` where it
 /// names none (no spec, a Source0 that is not a forge archive, or one
 /// whose tag still holds a macro). A spec describes one release, so a
@@ -568,6 +884,7 @@ pub fn pick_tag(explicit: Option<&str>, from_spec: Option<&str>) -> Result<Strin
     }
 }
 
+/// The `bundled-provides` subcommand.
 pub fn run(opts: &Options) -> Result<(), String> {
     sandogasa_cli::require_tools(&[("git", "sudo dnf install git-core", Some("--version"))])?;
     let spec = match &opts.spec {
@@ -848,6 +1165,11 @@ enum CloneKind {
 
 /// Run `git` with `args` in `dir` (when given), returning its stdout.
 fn git(dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
+    git_bytes(dir, args).map(|out| String::from_utf8_lossy(&out).into_owned())
+}
+
+/// [`git`], its stdout as it is: a file's contents need not be text.
+fn git_bytes(dir: Option<&Path>, args: &[&str]) -> Result<Vec<u8>, String> {
     let mut cmd = Command::new("git");
     if let Some(d) = dir {
         cmd.arg("-C").arg(d);
@@ -870,7 +1192,7 @@ fn git(dir: Option<&Path>, args: &[&str]) -> Result<String, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(out.stdout)
 }
 
 /// The cache directory for `url`'s clone of `kind`: one directory per
@@ -947,18 +1269,24 @@ fn best_tag<'a>(tags: impl Iterator<Item = &'a str>) -> Option<String> {
         .map(|(_, t)| t)
 }
 
-/// The version of `commit` in the clone at `dir`.
-fn read_pin(dir: &Path, commit: &str) -> Result<String, String> {
+/// Make sure the clone at `dir` has `commit`: one pinned off every
+/// branch and tag is not fetched with them, so it is asked for by name.
+fn ensure_commit(dir: &Path, commit: &str) -> Result<(), String> {
     if git(
         Some(dir),
         &["cat-file", "-e", &format!("{commit}^{{commit}}")],
     )
     .is_err()
     {
-        // Pinned off every branch and tag: ask for it by name.
         git(Some(dir), &["fetch", "--quiet", "origin", commit])
             .map_err(|e| format!("commit {commit} not found: {e}"))?;
     }
+    Ok(())
+}
+
+/// The version of `commit` in the clone at `dir`.
+fn read_pin(dir: &Path, commit: &str) -> Result<String, String> {
+    ensure_commit(dir, commit)?;
     let exact = git(Some(dir), &["tag", "--points-at", commit])?;
     let exact = best_tag(exact.lines());
     // The nearest earlier tag that names a version: one with a digit,
@@ -1062,28 +1390,187 @@ fn referenced(dir: &Path, tag: &str, name: &str, bundled: &[String]) -> bool {
     })
 }
 
+/// A license file's path and contents.
+type LicenseText = (String, Vec<u8>);
+
+/// Whether the clone at `dir` has `oid`, without fetching it.
+fn has_object(dir: &Path, oid: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["cat-file", "-e", oid])
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The license files at `rev` in the clone at `dir`, with their contents:
+/// at the top of the tree, or in the directory `under` when given (a
+/// copied-in library in upstream's tree), named relative to it. Only
+/// where there is none there, every file of a REUSE `LICENSES/`
+/// directory: it holds the license of anything anywhere in the
+/// repository, tests and tooling included (nlohmann/json's has
+/// GPL-3.0-only beside the MIT its header is under). A history-only
+/// clone lacks the files: those it lacks are fetched in one request, so
+/// a later run reads them from the cache.
+fn license_files(dir: &Path, rev: &str, under: Option<&str>) -> Result<Vec<LicenseText>, String> {
+    let prefix = under
+        .map(|u| format!("{}/", u.trim_end_matches('/')))
+        .unwrap_or_default();
+    let list = |path: &str| {
+        let mut args = vec!["ls-tree", rev];
+        if !path.is_empty() {
+            args.extend(["--", path]);
+        }
+        git(Some(dir), &args).map(|out| parse_ls_tree(&out))
+    };
+    let top = list(&prefix)?;
+    let mut found: Vec<(String, String)> = top
+        .iter()
+        .filter(|(_, kind, _, path)| kind == "blob" && is_license_file(dir_name(path)))
+        .map(|(_, _, obj, path)| (path.clone(), obj.clone()))
+        .collect();
+    let reuse = top.iter().find(|(_, kind, _, path)| {
+        kind == "tree" && dir_name(path).eq_ignore_ascii_case("LICENSES")
+    });
+    if found.is_empty()
+        && let Some((_, _, _, path)) = reuse
+    {
+        for (_, kind, obj, path) in list(&format!("{path}/"))? {
+            if kind == "blob" {
+                found.push((path, obj));
+            }
+        }
+    }
+    let missing: Vec<&str> = found
+        .iter()
+        .map(|(_, obj)| obj.as_str())
+        .filter(|obj| !has_object(dir, obj))
+        .collect();
+    if !missing.is_empty() {
+        // As git's own on-demand fetch does: with no negotiation, as
+        // the clone has the commits that reach these files, which would
+        // tell the forge it has them too.
+        let mut args = vec![
+            "-c",
+            "fetch.negotiationAlgorithm=noop",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "--filter=blob:none",
+            "origin",
+        ];
+        args.extend(&missing);
+        git(Some(dir), &args)?;
+    }
+    found
+        .into_iter()
+        .map(|(path, obj)| {
+            let text = git_bytes(Some(dir), &["cat-file", "blob", &obj])?;
+            let rel = path.strip_prefix(&prefix).unwrap_or(&path).to_string();
+            Ok((rel, text))
+        })
+        .collect()
+}
+
+/// Whether `askalono` can be run.
+fn askalono_available() -> bool {
+    Command::new("askalono")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// What askalono identifies in each of `texts`, in order, from one
+/// `askalono --format json identify --batch` run over them written out
+/// to a temporary directory. An error when askalono is not installed or
+/// fails, so no license is taken from a run that did not happen.
+fn identify(texts: &[&[u8]]) -> Result<Vec<Option<String>>, String> {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().map_err(|e| format!("cannot make a temporary directory: {e}"))?;
+    let mut paths = Vec::with_capacity(texts.len());
+    for (i, text) in texts.iter().enumerate() {
+        let rel = format!("{i}/LICENSE");
+        std::fs::create_dir_all(tmp.path().join(i.to_string()))
+            .and_then(|()| std::fs::write(tmp.path().join(&rel), text))
+            .map_err(|e| format!("cannot write a license file to identify: {e}"))?;
+        paths.push(rel);
+    }
+    let mut child = Command::new("askalono")
+        .args(["--format", "json", "identify", "--batch"])
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => "askalono is not installed".to_string(),
+            _ => format!("cannot run askalono: {e}"),
+        })?;
+    let input = paths.join("\n") + "\n";
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("cannot run askalono: {e}"))?;
+    let _ = writer.join();
+    if !out.status.success() {
+        return Err(format!(
+            "askalono failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let found: BTreeMap<String, Option<String>> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(parse_askalono_line)
+        .collect();
+    paths
+        .iter()
+        .map(|p| {
+            found.get(p).cloned().ok_or_else(|| {
+                format!("askalono said nothing about {p}, so its answers cannot be matched up")
+            })
+        })
+        .collect()
+}
+
 /// Read every pin in `subs` (path, URL, commit): each repository is
-/// cloned or brought up to date once, a few at a time, then each pin is
-/// read from its clone. A submodule with no URL, or whose repository
-/// cannot be read, gets why.
+/// cloned or brought up to date once, a few at a time, with the license
+/// files at each pinned commit (which a history-only clone fetches),
+/// then each pin is read from its clone. A submodule with no URL, or
+/// whose repository cannot be read, gets why, for both.
+#[allow(clippy::type_complexity)]
 fn read_pins(
     base: &Path,
     subs: &[(String, Option<String>, String)],
+    licensed: &[bool],
     verbose: bool,
-) -> Vec<Result<String, String>> {
+) -> Vec<(Result<String, String>, Result<Vec<LicenseText>, String>)> {
     const AT_ONCE: usize = 4;
     // One clone per URL, holding every commit pinned from it.
     let mut wanted: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (_, url, commit) in subs {
+    // The commits whose license files are wanted: those of pins shipped.
+    let mut want_licenses: std::collections::BTreeSet<&str> = Default::default();
+    for ((_, url, commit), licensed) in subs.iter().zip(licensed) {
         if let Some(url) = url {
             wanted
                 .entry(url.as_str())
                 .or_default()
                 .push(commit.as_str());
         }
+        if *licensed {
+            want_licenses.insert(commit.as_str());
+        }
     }
+    let want_licenses = &want_licenses;
     let urls: Vec<(&str, Vec<&str>)> = wanted.into_iter().collect();
-    let mut dirs: BTreeMap<&str, Result<PathBuf, String>> = BTreeMap::new();
+    type Read = (PathBuf, BTreeMap<String, Result<Vec<LicenseText>, String>>);
+    let mut dirs: BTreeMap<&str, Result<Read, String>> = BTreeMap::new();
     for chunk in urls.chunks(AT_ONCE) {
         std::thread::scope(|s| {
             let handles: Vec<_> = chunk
@@ -1098,7 +1585,19 @@ fn read_pins(
                         for c in &commits[1..] {
                             dir = dir.and_then(|_| mirror(base, url, CloneKind::History, c));
                         }
-                        (*url, dir)
+                        let read = dir.map(|dir| {
+                            let licenses = commits
+                                .iter()
+                                .filter(|c| want_licenses.contains(*c))
+                                .map(|c| {
+                                    let files = ensure_commit(&dir, c)
+                                        .and_then(|()| license_files(&dir, c, None));
+                                    (c.to_string(), files)
+                                })
+                                .collect();
+                            (dir, licenses)
+                        });
+                        (*url, read)
                     })
                 })
                 .collect();
@@ -1111,13 +1610,25 @@ fn read_pins(
     }
     subs.iter()
         .map(|(path, url, commit)| {
-            let url = url
-                .as_deref()
-                .ok_or_else(|| format!(".gitmodules names no URL for {path}"))?;
+            let Some(url) = url.as_deref() else {
+                let why = format!(".gitmodules names no URL for {path}");
+                return (Err(why.clone()), Err(why));
+            };
             match dirs.get(url) {
-                Some(Ok(dir)) => read_pin(dir, commit),
-                Some(Err(e)) => Err(e.clone()),
-                None => Err(format!("{url} was not read")),
+                Some(Ok((dir, licenses))) => (
+                    read_pin(dir, commit),
+                    // None for a pin not shipped, whose licenses were
+                    // not wanted.
+                    licenses
+                        .get(commit.as_str())
+                        .cloned()
+                        .unwrap_or(Ok(Vec::new())),
+                ),
+                Some(Err(e)) => (Err(e.clone()), Err(e.clone())),
+                None => {
+                    let why = format!("{url} was not read");
+                    (Err(why.clone()), Err(why))
+                }
             }
         })
         .collect()
@@ -1377,6 +1888,7 @@ rm -rf something-else
             error: None,
             state,
             referenced: true,
+            licenses: Licenses::default(),
         }
     }
 
@@ -1430,6 +1942,8 @@ rm -rf something-else
                 pin("sole", "1.0.1", State::Bundled),
             ],
             unpinned: Vec::new(),
+            unpinned_licenses: BTreeMap::new(),
+            licenses_identified: true,
             disagreements: vec![
                 Disagreement {
                     name: "sole".to_string(),
@@ -1448,8 +1962,8 @@ rm -rf something-else
         let text = render(&report);
         assert!(
             text.contains(
-                "Not shipped, so no Provides: Catch2 (removed in %prep), easyloggingpp \
-                 (replaced by the system copy in %prep)"
+                "Not shipped, so no Provides:\n  - Catch2 (removed in %prep)\n  - \
+                 easyloggingpp (replaced by the system copy in %prep)\n"
             ),
             "{text}"
         );
@@ -1498,6 +2012,165 @@ rm -rf something-else
         );
     }
 
+    #[test]
+    fn license_files_are_known_by_name() {
+        for name in [
+            "LICENSE",
+            "LICENSE.txt",
+            "LICENCE",
+            "license.md",
+            "License",
+            "COPYING",
+            "COPYING.LESSER",
+            "COPYING-LGPL",
+            "LICENSE_1_0.txt",
+            "COPYRIGHT",
+            "UNLICENSE",
+            "foo-LICENSE.md",
+            "MIT-LICENSE",
+            "MIT-1.0.txt",
+            "gpl-3.0.txt",
+            "APACHE-2.0.txt",
+            "CC-BY-4.0",
+            "zlib-bsd.txt",
+        ] {
+            assert!(is_license_file(name), "{name}");
+        }
+        for name in [
+            "license.c",
+            "license.py",
+            "LICENSE.go",
+            "README.md",
+            "licenses_test",
+            "gplot.c",
+            "mit",
+            "APACHE",
+            "CMakeLists.txt",
+        ] {
+            assert!(!is_license_file(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn askalono_says_which_license_a_file_is_or_holds() {
+        let one = r#"{"path":"0/LICENSE\n","result":{"score":1.0,"license":{"name":"Zlib","kind":"original","aliases":[]},"containing":[]}}"#;
+        assert_eq!(
+            parse_askalono_line(one),
+            Some(("0/LICENSE".to_string(), Some("Zlib".to_string())))
+        );
+        let several = r#"{"path":"1/LICENSE","result":{"score":0.4,"license":null,"containing":[
+            {"score":0.98,"license":{"name":"MIT","kind":"original","aliases":[]},"line_range":[1,20]},
+            {"score":0.97,"license":{"name":"BSD-3-Clause","kind":"original","aliases":[]},"line_range":[22,50]},
+            {"score":0.97,"license":{"name":"MIT","kind":"original","aliases":[]},"line_range":[52,70]}]}}"#
+            .replace('\n', "");
+        assert_eq!(
+            parse_askalono_line(&several),
+            Some((
+                "1/LICENSE".to_string(),
+                Some("BSD-3-Clause AND MIT".to_string())
+            ))
+        );
+        let unknown =
+            r#"{"path":"2/LICENSE","result":{"score":0.2,"license":null,"containing":[]}}"#;
+        assert_eq!(
+            parse_askalono_line(unknown),
+            Some(("2/LICENSE".to_string(), None))
+        );
+        let error = r#"{"path":"3/LICENSE","error":"not UTF-8"}"#;
+        assert_eq!(
+            parse_askalono_line(error),
+            Some(("3/LICENSE".to_string(), None))
+        );
+        assert_eq!(parse_askalono_line("not json"), None);
+    }
+
+    #[test]
+    fn a_components_licenses_come_to_one_expression_and_line() {
+        let file = |path: &str, license: Option<&str>| LicenseFile {
+            path: path.to_string(),
+            license: license.map(str::to_string),
+        };
+        let files = vec![
+            file("LICENSE", Some("MIT AND BSD-3-Clause")),
+            file("COPYING", Some("MIT")),
+            file("LICENSE.docs", None),
+        ];
+        let expression = license_expression(&files);
+        assert_eq!(expression.as_deref(), Some("BSD-3-Clause AND MIT"));
+        let l = Licenses {
+            files,
+            expression,
+            ..Default::default()
+        };
+        assert_eq!(
+            describe_licenses(&l, true),
+            "BSD-3-Clause AND MIT, from LICENSE, COPYING; LICENSE.docs not identified"
+        );
+        assert_eq!(
+            describe_licenses(&l, false),
+            "license in LICENSE, COPYING, LICENSE.docs"
+        );
+        assert_eq!(
+            describe_licenses(&Licenses::default(), true),
+            "no license file found"
+        );
+        let unread = Licenses {
+            error: Some("commit 123 not found".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            describe_licenses(&unread, true),
+            "license files not read: commit 123 not found"
+        );
+        let none = Licenses {
+            files: vec![file("LICENSE", None)],
+            ..Default::default()
+        };
+        assert_eq!(describe_licenses(&none, true), "LICENSE not identified");
+    }
+
+    /// How a fake askalono behaves.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Fake {
+        /// MIT for a text granting permission, Zlib for one naming zlib,
+        /// nothing for anything else.
+        Works,
+        /// Fails when asked to identify anything.
+        Fails,
+        /// Answers about files it was not given.
+        Misnames,
+    }
+
+    /// A fake `askalono` in `bin`, behaving as `how`.
+    fn fake_askalono(bin: &Path, how: Fake) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = if how == Fake::Fails {
+            "#!/bin/sh\n[ \"$1\" = --version ] && exit 0\necho 'askalono: broken' >&2\nexit 1\n"
+                .to_string()
+        } else if how == Fake::Misnames {
+            "#!/bin/sh\nwhile read -r p; do printf '{\"path\":\"./%s\"}\\n' \"$p\"; done\n"
+                .to_string()
+        } else {
+            r#"#!/bin/sh
+license() {
+  printf '{"score":1.0,"license":{"name":"%s","kind":"original","aliases":[]},"containing":[]}' "$1"
+}
+while read -r p; do
+  if grep -q "Permission is hereby granted" "$p"; then r=$(license MIT)
+  elif grep -qi "zlib" "$p"; then r=$(license Zlib)
+  else r='{"score":0.1,"license":null,"containing":[]}'
+  fi
+  printf '{"path":"%s\\n","result":%s}\n' "$p" "$r"
+done
+"#
+            .to_string()
+        };
+        std::fs::create_dir_all(bin).unwrap();
+        let path = bin.join("askalono");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
     /// End to end against local repositories standing in for upstream
     /// and its submodules: one pinned on a tag, one ahead of one, one
     /// `.gitmodules` does not name, plus a directory copied in with no
@@ -1507,7 +2180,15 @@ rm -rf something-else
     fn upstream_at_the_tag_gives_every_pin() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home").to_string_lossy().into_owned();
+        let bin = tmp.path().join("bin");
+        fake_askalono(&bin, Fake::Works);
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
         let _env = sandogasa_config::test_support::EnvGuard::new(&[
+            ("PATH", &path),
             ("GIT_AUTHOR_EMAIL", "t@example.com"),
             ("GIT_AUTHOR_NAME", "T"),
             ("GIT_COMMITTER_EMAIL", "t@example.com"),
@@ -1532,6 +2213,11 @@ rm -rf something-else
             let d = tmp.path().join(name);
             std::fs::create_dir_all(&d).unwrap();
             run(&d, &["init", "-q", "-b", "main"], "2020-01-01T00:00:00Z");
+            // Serve history-only clones and objects by id, as a forge
+            // does, so the clones are partial as they are for real.
+            for key in ["uploadpack.allowFilter", "uploadpack.allowAnySHA1InWant"] {
+                run(&d, &["config", key, "true"], "2020-01-01T00:00:00Z");
+            }
             d
         };
         let commit = |d: &Path, file: &str, date: &str| {
@@ -1543,12 +2229,37 @@ rm -rf something-else
         // A submodule pinned exactly on v4.3.0.
         let folders = new_repo("PlatformFolders");
         commit(&folders, "a", "2020-01-01T00:00:00Z");
+        std::fs::write(
+            folders.join("LICENSE"),
+            "MIT License\n\nPermission is hereby granted, free of charge, ...\n",
+        )
+        .unwrap();
+        // Code named like a license file is not one, and a REUSE
+        // directory beside a LICENSE is the repository's, not its.
+        std::fs::write(folders.join("license.c"), "int x;\n").unwrap();
+        std::fs::create_dir_all(folders.join("LICENSES")).unwrap();
+        std::fs::write(folders.join("LICENSES/GPL-3.0-only.txt"), "GPL\n").unwrap();
+        run(&folders, &["add", "."], "2020-06-01T00:00:00Z");
+        run(
+            &folders,
+            &["commit", "-q", "-m", "license"],
+            "2020-06-01T00:00:00Z",
+        );
         let folders_pin = commit(&folders, "b", "2021-02-03T00:00:00Z");
         run(&folders, &["tag", "v4.3.0"], "2021-02-03T00:00:00Z");
         commit(&folders, "c", "2022-01-01T00:00:00Z");
         // One two commits past v1.0.1 (annotated), committed late on
         // 2020-08-19 in UTC but the 20th at its committer's offset.
         let sole = new_repo("sole");
+        // REUSE only: its LICENSES/ directory is what it has.
+        std::fs::create_dir_all(sole.join("LICENSES")).unwrap();
+        std::fs::write(sole.join("LICENSES/Zlib.txt"), "the zlib license\n").unwrap();
+        std::fs::write(
+            sole.join("LICENSES/MIT.txt"),
+            "Permission is hereby granted, free of charge, ...\n",
+        )
+        .unwrap();
+        run(&sole, &["add", "."], "2020-01-01T00:00:00Z");
         commit(&sole, "a", "2020-01-01T00:00:00Z");
         run(
             &sole,
@@ -1557,10 +2268,21 @@ rm -rf something-else
         );
         commit(&sole, "b", "2020-05-01T00:00:00Z");
         let sole_pin = commit(&sole, "c", "2020-08-20T08:00:00+11:00");
+        // Pinned off every branch and tag: fetched by name.
+        run(
+            &sole,
+            &["reset", "-q", "--hard", "HEAD~1"],
+            "2020-08-20T08:00:00Z",
+        );
 
         let upstream = new_repo("EternalTerminal");
         std::fs::create_dir_all(upstream.join("external/libvterm")).unwrap();
         std::fs::write(upstream.join("external/libvterm/vterm.c"), "x").unwrap();
+        std::fs::write(
+            upstream.join("external/libvterm/LICENSE"),
+            "Some license askalono does not know\n",
+        )
+        .unwrap();
         std::fs::write(
             upstream.join("CMakeLists.txt"),
             "add_subdirectory(external/sole)\n",
@@ -1646,7 +2368,87 @@ rm -rf something-else
             text.contains("# bundled(orphan): .gitmodules names no URL"),
             "{text}"
         );
+        assert!(!text.contains("# orphan:"), "said once: {text}");
         assert!(text.contains("possibly never built"), "{text}");
+
+        // Each component's license, from its files at the pin.
+        assert!(report.licenses_identified);
+        let licenses: Vec<Option<&str>> = report
+            .pins
+            .iter()
+            .map(|p| p.licenses.expression.as_deref())
+            .collect();
+        assert_eq!(licenses, [None, Some("MIT"), Some("MIT AND Zlib")]);
+        let sole_files: Vec<&str> = report.pins[2]
+            .licenses
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(sole_files, ["LICENSES/MIT.txt", "LICENSES/Zlib.txt"]);
+        assert_eq!(
+            report.pins[1].licenses.files,
+            [LicenseFile {
+                path: "LICENSE".to_string(),
+                license: Some("MIT".to_string()),
+            }]
+        );
+        assert!(
+            report.pins[0]
+                .licenses
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains(".gitmodules names no URL")),
+            "{:?}",
+            report.pins[0].licenses
+        );
+        assert_eq!(
+            report.unpinned_licenses["external/libvterm"].files,
+            [LicenseFile {
+                path: "LICENSE".to_string(),
+                license: None,
+            }]
+        );
+        assert!(
+            text.contains(
+                "# platformfolders: MIT, from LICENSE\nProvides:       bundled(platformfolders)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("# sole: MIT AND Zlib, from LICENSES/MIT.txt, LICENSES/Zlib.txt"),
+            "{text}"
+        );
+        assert!(
+            text.contains("version by hand):\n  - external/libvterm (LICENSE not identified)\n"),
+            "{text}"
+        );
+        assert!(text.contains("License: has to cover"), "{text}");
+
+        // askalono failing: the files are named, no license is.
+        fake_askalono(&bin, Fake::Fails);
+        let unidentified =
+            super::report(&cache, &url(&upstream), "et-v7.1.1", None, false).unwrap();
+        assert!(!unidentified.licenses_identified);
+        assert_eq!(unidentified.pins[1].licenses.expression, None);
+        let text = render(&unidentified);
+        assert!(
+            text.contains("# PlatformFolders: license in LICENSE"),
+            "{text}"
+        );
+        assert!(text.contains("askalono did not run"), "{text}");
+        // Answers that name other files are not taken.
+        fake_askalono(&bin, Fake::Misnames);
+        let misnamed = super::report(&cache, &url(&upstream), "et-v7.1.1", None, false).unwrap();
+        assert!(!misnamed.licenses_identified);
+        // Not installed: said before anything is cloned.
+        std::fs::remove_file(bin.join("askalono")).unwrap();
+        if !askalono_available() {
+            let without = super::report(&cache, &url(&upstream), "et-v7.1.1", None, false).unwrap();
+            assert!(!without.licenses_identified);
+            assert_eq!(without.pins[1].licenses.files.len(), 1);
+        }
+        fake_askalono(&bin, Fake::Works);
 
         // Upstream as a local checkout is read in place, and gives the
         // same pins; its origin is what relative URLs would follow.
@@ -1685,5 +2487,9 @@ rm -rf something-else
         let again = super::report(&cache, &url(&upstream), "et-v7.1.1", None, false).unwrap();
         assert_eq!(again.pins.len(), 3);
         assert_eq!(again.pins[1].version.as_deref(), Some("4.3.0"));
+        assert_eq!(
+            again.pins[2].licenses.expression.as_deref(),
+            Some("MIT AND Zlib")
+        );
     }
 }

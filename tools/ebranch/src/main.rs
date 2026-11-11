@@ -801,9 +801,11 @@ leaves out the libraries %prep removes or replaces with the system
 copy, flags directories beside the submodules that were copied in
 without one, and lists the bundled directories for a %prep check.
 Submodules that upstream's build files never mention are flagged as
-possibly never built. The repositories are cloned, history only for
-the submodules, into ebranch's cache, and fetched again only when it
-lacks the tag or a pinned commit.")]
+possibly never built. Each component's license files at its pin are
+identified with askalono (askalono-cli), and its license is given above
+its Provides line. The repositories are cloned, history only for the
+submodules, into ebranch's cache, and fetched again only when it lacks
+the tag or a pinned commit.")]
     BundledProvides(BundledProvidesArgs),
     /// Analyze a crates.io crate's dependencies.
     CheckCrate(CheckCrateArgs),
