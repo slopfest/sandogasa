@@ -3,7 +3,7 @@
 //! Config file (`~/.config/cbspkg/config.toml`) and the GitLab
 //! instance the SIGs' repos are on.
 
-use sandogasa_config::secret::{SecretRef, Slot};
+use sandogasa_config::secret::{ConfigSecret, SecretRef};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -41,12 +41,6 @@ pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
     config_file().load()
 }
 
-/// The config file alone, without `/etc`, for the `config` command to
-/// rewrite.
-pub fn load_user() -> Result<Config, Box<dyn std::error::Error>> {
-    config_file().load_user()
-}
-
 pub fn config_path() -> std::path::PathBuf {
     config_file().path().to_path_buf()
 }
@@ -65,22 +59,16 @@ pub fn gitlab_secret() -> SecretRef {
     SecretRef::for_url(&gitlab_base(), "sandogasa: GitLab token")
 }
 
-/// The secrets `config` holds, for [`sandogasa_config::secret::fill`]
-/// and [`sandogasa_config::secret::save_with`]: the GitLab token, when
-/// its table is there.
-pub fn secret_slots(c: &mut Config) -> Vec<Slot<'_>> {
-    c.gitlab
-        .as_mut()
-        .map(|g| Slot {
-            table: "gitlab",
-            key: "access_token",
-            what: "GitLab token",
-            entry: gitlab_secret(),
-            value: &mut g.access_token,
-            required: true,
-        })
-        .into_iter()
-        .collect()
+/// The GitLab token as the config file keeps it, for `config`: in the
+/// keyring when there is one, else as `[gitlab] access_token`.
+pub fn gitlab_token_secret() -> ConfigSecret<'static> {
+    ConfigSecret::new(
+        "cbspkg",
+        "gitlab",
+        "access_token",
+        "GitLab token",
+        gitlab_secret(),
+    )
 }
 
 /// The GitLab token: `GITLAB_TOKEN`, else the keyring's, else the
@@ -115,7 +103,7 @@ mod tests {
         let _env = env(tmp.path(), "http://127.0.0.1:1");
         assert_eq!(config_path(), tmp.path().join("cbspkg/config.toml"));
         // No file yet: an error saying how to make one.
-        let err = load_user().unwrap_err().to_string();
+        let err = config_file().load_user::<Config>().unwrap_err().to_string();
         assert!(err.contains("Run 'config'"), "{err}");
         config_file()
             .save(&Config {

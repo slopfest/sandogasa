@@ -1462,8 +1462,9 @@ const GITLAB_BASE: &str = "https://gitlab.com";
 /// the saved one as the default), check it, and save it.
 fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let cf = config::config_file();
+    let secret = config::gitlab_token_secret();
     let (saved, before) =
-        config::saved_token(&cf, keyring(), args.all, &sandogasa_cli::ask_to_reenable);
+        secret.saved(&cf, keyring(), args.all, &sandogasa_cli::ask_to_reenable)?;
     let existing = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
@@ -1492,7 +1493,7 @@ fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
 
     // Into the keyring when there is one, out of the file then.
     let path = cf.path();
-    if config::save_token(&cf, keyring(), token, &before)? {
+    if secret.save(&cf, keyring(), token, &before)? {
         eprintln!("Saved to {}", path.display());
     } else {
         eprintln!("Nothing else to keep in {}; removed it.", path.display());

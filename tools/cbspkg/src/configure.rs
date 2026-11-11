@@ -5,9 +5,7 @@
 
 use std::process::ExitCode;
 
-use sandogasa_config::secret::{self, Before};
-
-use crate::config::{self, Config, GitlabConfig};
+use crate::config;
 
 pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
     match run_inner(args.all) {
@@ -22,11 +20,10 @@ pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
 /// Ask for the token when it is missing, or with `all` again with the
 /// saved one as the default, check it with GitLab, and save it.
 fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let (saved, before) = saved_token(
-        config::load_user().ok().unwrap_or_default(),
-        all,
-        &sandogasa_cli::ask_to_reenable,
-    );
+    let secret = config::gitlab_token_secret();
+    let cf = config::config_file();
+    let (saved, before) =
+        secret.saved(&cf, config::keyring(), all, &sandogasa_cli::ask_to_reenable)?;
     let have = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
@@ -55,45 +52,11 @@ fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
     if token.is_empty() {
         return Err("no GitLab token provided".into());
     }
-    // Into the keyring when there is one, out of the file then.
-    let mut cfg = Config {
-        gitlab: Some(GitlabConfig {
-            access_token: token,
-        }),
-        // Not written: save() keeps the file's [packages] as they are.
-        ..Default::default()
-    };
-    let kept = secret::save_with(
-        &config::config_file(),
-        config::keyring(),
-        "cbspkg",
-        &mut cfg,
-        &before,
-        config::secret_slots,
-    )?;
-    report_saved(!kept, &config::config_path());
+    // Into the keyring when there is one, out of the file then; the
+    // file's [packages] stay as they are.
+    let kept = secret.save(&cf, config::keyring(), token, &before)?;
+    report_saved(!kept, cf.path());
     Ok(())
-}
-
-/// The token to offer as the saved one, the keyring's first (#79), and
-/// how it stood, from [`secret::fill`]; `review` is the `--all` run. One
-/// turned off is offered blank, unless `ask` takes the keyring's back,
-/// which is the default, as the token is required.
-fn saved_token(
-    mut existing: Config,
-    review: bool,
-    ask: &dyn Fn(&str, bool) -> bool,
-) -> (String, Vec<Before>) {
-    existing.gitlab.get_or_insert_with(Default::default);
-    let before = secret::fill(
-        config::keyring(),
-        "cbspkg",
-        config::secret_slots(&mut existing),
-        review,
-        ask,
-    );
-    let saved = existing.gitlab.map(|g| g.access_token).unwrap_or_default();
-    (saved, before)
 }
 
 /// Where the settings went: the file, or nowhere, when it was left with
@@ -160,7 +123,7 @@ mod tests {
                 .as_deref(),
             Some("glpat-x")
         );
-        let left = config::load_user().unwrap();
+        let left: config::Config = config::config_file().load_user().unwrap();
         assert!(left.gitlab.is_none());
         assert_eq!(left.packages["perf"].rhel, ["facebook"]);
         config::keyring().clear(&config::gitlab_secret()).unwrap();
@@ -192,69 +155,27 @@ mod tests {
         config::keyring().clear(&config::gitlab_secret()).unwrap();
     }
 
-    /// The keyring's token is offered over a stale one in the file; a
-    /// token turned off is offered blank, unless the keyring's is taken
-    /// back, which then comes out of the file.
+    /// The token is required, so one turned off for cbspkg is asked
+    /// about by name, with yes the default.
     #[test]
-    #[serial_test::serial]
-    fn the_keyrings_token_is_offered_and_an_off_one_only_when_taken_back() {
-        use sandogasa_config::secret::{OFF, never};
-        let tmp = tempfile::tempdir().unwrap();
-        let (_server, _mock, _env) = gitlab(tmp.path(), 200);
-        let file = |t: &str| -> Config {
-            toml::from_str(&format!("[gitlab]\naccess_token = \"{t}\"\n")).unwrap()
-        };
-        assert_eq!(
-            saved_token(file("stale"), false, &never),
-            ("stale".into(), vec![Before::Set { keyring: None }])
-        );
-        assert_eq!(
-            saved_token(Config::default(), false, &never),
-            (String::new(), vec![Before::Absent])
-        );
-        // Off, and nothing in the keyring to take back: not asked.
-        let unasked = |_: &str, _: bool| -> bool { panic!("nothing to take back") };
-        assert_eq!(
-            saved_token(file(OFF), false, &unasked),
-            (String::new(), vec![Before::Off])
-        );
-        config::keyring()
-            .store(&config::gitlab_secret(), "glpat-newer")
+    fn an_off_token_is_asked_about_for_cbspkg() {
+        use sandogasa_config::secret::{MemoryStore, SecretStore};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[gitlab]\naccess_token = \"-\"\n").unwrap();
+        let cf = sandogasa_config::ConfigFile::from_path(path);
+        let store = MemoryStore::default();
+        store
+            .store(&config::gitlab_secret(), "glpat-shared")
             .unwrap();
-        assert_eq!(saved_token(file("stale"), false, &never).0, "glpat-newer");
-        assert_eq!(
-            saved_token(file(OFF), false, &never),
-            (String::new(), vec![Before::Off])
-        );
-
-        // Required: asked on a plain run, with yes the default; taken
-        // back, it is offered, and Enter takes the marker out.
-        std::fs::create_dir_all(tmp.path().join("cbspkg")).unwrap();
-        std::fs::write(config::config_path(), "[gitlab]\naccess_token = \"-\"\n").unwrap();
-        let (saved, before) =
-            saved_token(config::load_user().unwrap(), false, &|q, default_yes| {
+        let (saved, _) = config::gitlab_token_secret()
+            .saved(&cf, &store, false, &|q, default_yes| {
                 assert!(q.contains("GitLab token: off for cbspkg"), "{q}");
-                default_yes
-            });
-        assert_eq!(saved, "glpat-newer");
-        let mut cfg = Config {
-            gitlab: Some(GitlabConfig {
-                access_token: saved,
-            }),
-            ..Default::default()
-        };
-        let kept = secret::save_with(
-            &config::config_file(),
-            config::keyring(),
-            "cbspkg",
-            &mut cfg,
-            &before,
-            config::secret_slots,
-        )
-        .unwrap();
-        assert!(!kept);
-        assert!(!config::config_path().exists());
-        config::keyring().clear(&config::gitlab_secret()).unwrap();
+                assert!(default_yes);
+                true
+            })
+            .unwrap();
+        assert_eq!(saved, "glpat-shared");
     }
 
     #[test]

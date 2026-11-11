@@ -46,7 +46,11 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   file when there is no keyring to use. `SecretStore` is the seam:
   `SecretTool` for real use, `MemoryStore` for tests that must not
   touch the user's keyring. `ConfigFile::remove` takes a moved secret
-  out of the file, which `save` alone never does.
+  out of the file, which `save` alone never does. `ConfigSecret` is a
+  `config` command's whole round trip for a tool with one secret kept
+  as `[table] key`: `saved` gives the value to offer from the user's
+  file and the keyring, and `save` stores the answer. `NoKeyring`,
+  like `MemoryStore`, is for tests: a keyring that cannot be used.
 - **prompt_field** — prompt the user for a config value with support for
   sensitive (hidden) input and optional sync validation.
   `prompt_optional_field` and `prompt_optional_field_validated` take

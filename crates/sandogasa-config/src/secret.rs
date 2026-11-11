@@ -74,6 +74,11 @@ pub trait SecretStore {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SecretTool;
 
+/// A keyring that cannot be used, as on a machine without one: every
+/// call fails as unavailable. For tests of the fall-back to the file.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoKeyring;
+
 /// A keyring in memory, for tests that must not touch the user's.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
@@ -277,6 +282,20 @@ impl SecretStore for SecretToolAt<'_> {
     }
 }
 
+impl SecretStore for NoKeyring {
+    fn lookup(&self, _: &SecretRef) -> Result<Option<String>, SecretError> {
+        Err(SecretError::Unavailable("no keyring".into()))
+    }
+
+    fn store(&self, _: &SecretRef, _: &str) -> Result<(), SecretError> {
+        Err(SecretError::Unavailable("no keyring".into()))
+    }
+
+    fn clear(&self, _: &SecretRef) -> Result<(), SecretError> {
+        Err(SecretError::Unavailable("no keyring".into()))
+    }
+}
+
 impl SecretStore for MemoryStore {
     fn lookup(&self, secret: &SecretRef) -> Result<Option<String>, SecretError> {
         let entries = self.entries.lock().expect("store lock");
@@ -452,6 +471,26 @@ pub enum Before {
     Off,
 }
 
+/// A tool's one secret, kept in the keyring when there is one and else
+/// as `[table] key` in its config file: hs-relmon's and cbspkg's GitLab
+/// token. What a `config` command offers as the saved value
+/// ([`saved`](Self::saved)) and how it saves the answer
+/// ([`save`](Self::save)), so a tool with one secret needs no
+/// [`Slot`]s of its own. Made with [`new`](Self::new).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ConfigSecret<'a> {
+    /// The tool, as [`fill`] and [`save_with`] name it.
+    pub tool: &'a str,
+    pub table: &'a str,
+    pub key: &'a str,
+    /// What the secret is, for messages: "GitLab token".
+    pub what: &'a str,
+    pub entry: SecretRef,
+    /// Whether the tool cannot work without it, as [`Slot::required`].
+    pub required: bool,
+}
+
 /// Whether `value` is a secret to use: set, and not turned off. What a
 /// tool checks before sending one to its service, so neither an empty
 /// value nor [`OFF`] is ever checked or used as one.
@@ -598,6 +637,113 @@ pub fn save_with<T: serde::Serialize>(
     Ok(!removed)
 }
 
+impl<'a> ConfigSecret<'a> {
+    /// `tool`'s `what` ("GitLab token"), kept in the keyring `entry`
+    /// or else as `[table] key` in its config file; required, as a
+    /// tool's one secret usually is.
+    pub fn new(
+        tool: &'a str,
+        table: &'a str,
+        key: &'a str,
+        what: &'a str,
+        entry: SecretRef,
+    ) -> Self {
+        Self {
+            tool,
+            table,
+            key,
+            what,
+            entry,
+            required: true,
+        }
+    }
+
+    /// The same, for a secret the tool can work without, as
+    /// [`Slot::required`].
+    pub fn optional(self) -> Self {
+        Self {
+            required: false,
+            ..self
+        }
+    }
+
+    fn slot<'b>(&self, value: &'b mut String) -> Slot<'b>
+    where
+        'a: 'b,
+    {
+        Slot {
+            table: self.table,
+            key: self.key,
+            what: self.what,
+            entry: self.entry.clone(),
+            value,
+            required: self.required,
+        }
+    }
+
+    /// The value `config` offers as the saved one, from `cf`'s user
+    /// file alone, never `/etc`'s, which saving would copy into it: the
+    /// keyring's in `store` first. `review` is the `--all` run. One
+    /// turned off is offered blank unless `ask` takes the keyring's
+    /// back, as [`fill`] does. With how it stood, for
+    /// [`save`](Self::save). A user file that cannot be read, or holds
+    /// something other than a string there, is an error rather than no
+    /// secret, so nothing is saved over it.
+    pub fn saved(
+        &self,
+        cf: &crate::ConfigFile,
+        store: &dyn SecretStore,
+        review: bool,
+        ask: &dyn Fn(&str, bool) -> bool,
+    ) -> Result<(String, Vec<Before>), Box<dyn std::error::Error>> {
+        let mut value = match cf.path().exists() {
+            true => match cf.load_user::<toml::Table>()?.get(self.table) {
+                None => String::new(),
+                Some(table) => match table.get(self.key) {
+                    None => String::new(),
+                    Some(toml::Value::String(v)) => v.clone(),
+                    Some(_) => {
+                        return Err(format!(
+                            "{}: [{}] {} is not a string",
+                            cf.path().display(),
+                            self.table,
+                            self.key
+                        )
+                        .into());
+                    }
+                },
+            },
+            false => String::new(),
+        };
+        let before = fill(store, self.tool, vec![self.slot(&mut value)], review, ask);
+        Ok((value, before))
+    }
+
+    /// Save `value`, in the keyring `store` when there is one and out of
+    /// `cf` then, `before` being what [`saved`](Self::saved) said; the
+    /// file's other tables are left as they are. Whether `cf` is still
+    /// there, as [`save_with`].
+    pub fn save(
+        &self,
+        cf: &crate::ConfigFile,
+        store: &dyn SecretStore,
+        mut value: String,
+        before: &[Before],
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let out_of_file = !settle(store, self.tool, vec![self.slot(&mut value)], before).is_empty();
+        if out_of_file {
+            cf.remove(self.table, self.key)?;
+        } else {
+            let mut keys = toml::Table::new();
+            keys.insert(self.key.to_string(), toml::Value::String(value));
+            let mut file = toml::Table::new();
+            file.insert(self.table.to_string(), toml::Value::Table(keys));
+            cf.save(&file)?;
+        }
+        Ok(cf.path().exists())
+    }
+}
+
 /// The tools that keep a secret under each label, so a tool clearing
 /// one can say which others it would break: entries are shared by
 /// service, and removing one is removing it for all of them. Sorted by
@@ -696,6 +842,164 @@ fn kept_note(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gitlab_token() -> ConfigSecret<'static> {
+        ConfigSecret::new(
+            "a-tool",
+            "gitlab",
+            "access_token",
+            "GitLab token",
+            SecretRef::for_url("https://gitlab.com", "sandogasa: GitLab token"),
+        )
+    }
+
+    /// A token in an old file is offered keyring-first, then moved to
+    /// the keyring; the file's other tables stay, and a file left with
+    /// nothing is removed.
+    #[test]
+    fn a_config_secret_is_offered_from_the_keyring_and_moved_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[gitlab]\naccess_token = \"glpat-stale\"\n\n[packages.perf]\nvariants = [\"main\"]\n",
+        )
+        .unwrap();
+        let cf = crate::ConfigFile::from_path(path.clone());
+        let token = gitlab_token();
+        let store = MemoryStore::default();
+        let (saved, before) = token.saved(&cf, &store, false, &never).unwrap();
+        assert_eq!(saved, "glpat-stale");
+        assert_eq!(before, [Before::Set { keyring: None }]);
+        store.store(&token.entry, "glpat-newer").unwrap();
+        let (saved, before) = token.saved(&cf, &store, false, &never).unwrap();
+        assert_eq!(saved, "glpat-newer");
+        // Enter keeps it: out of the file, the rest of it kept.
+        assert!(token.save(&cf, &store, saved, &before).unwrap());
+        let left = std::fs::read_to_string(&path).unwrap();
+        assert!(!left.contains("gitlab"), "{left}");
+        assert!(left.contains("[packages.perf]"), "{left}");
+        std::fs::remove_file(&path).unwrap();
+        // With nothing saved anywhere, a new one goes to the keyring and
+        // no file is written.
+        let empty = MemoryStore::default();
+        let (saved, before) = token.saved(&cf, &empty, false, &never).unwrap();
+        assert_eq!(
+            (saved.as_str(), before.as_slice()),
+            ("", [Before::Absent].as_slice())
+        );
+        assert!(
+            !token
+                .save(&cf, &empty, "glpat-new".into(), &before)
+                .unwrap()
+        );
+        assert!(!path.exists());
+        assert_eq!(
+            empty.lookup(&token.entry).unwrap().as_deref(),
+            Some("glpat-new")
+        );
+    }
+
+    /// One turned off is offered blank, and asked about only when the
+    /// keyring has one to take back; taken back, it leaves the file.
+    #[test]
+    fn an_off_config_secret_is_offered_only_when_taken_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[gitlab]\naccess_token = \"-\"\n").unwrap();
+        let cf = crate::ConfigFile::from_path(path.clone());
+        let token = gitlab_token();
+        let store = MemoryStore::default();
+        let unasked = |_: &str, _: bool| -> bool { panic!("nothing to take back") };
+        assert_eq!(
+            token.saved(&cf, &store, false, &unasked).unwrap(),
+            (String::new(), vec![Before::Off])
+        );
+        store.store(&token.entry, "glpat-shared").unwrap();
+        assert_eq!(
+            token.saved(&cf, &store, false, &never).unwrap(),
+            (String::new(), vec![Before::Off])
+        );
+        let (saved, before) = token
+            .saved(&cf, &store, false, &|q, default_yes| {
+                assert!(q.contains("GitLab token: off for a-tool"), "{q}");
+                default_yes
+            })
+            .unwrap();
+        assert_eq!(saved, "glpat-shared");
+        assert!(!token.save(&cf, &store, saved, &before).unwrap());
+        assert!(!path.exists());
+    }
+
+    /// What `/etc` ships is read beneath the user's file but never
+    /// offered, so saving never copies it there.
+    #[test]
+    fn an_etc_config_secret_is_not_copied_into_the_users_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let user = dir.path().join("user.toml");
+        let etc = dir.path().join("etc.toml");
+        std::fs::write(&etc, "[gitlab]\naccess_token = \"etc-token\"\n").unwrap();
+        let cf = crate::ConfigFile::from_path(user.clone()).with_system_path(etc);
+        let token = gitlab_token();
+        let store = MemoryStore::default();
+        let (saved, before) = token.saved(&cf, &store, false, &never).unwrap();
+        assert_eq!(saved, "", "the /etc token is not offered");
+        assert_eq!(before, [Before::Absent]);
+        assert!(
+            !token
+                .save(&cf, &store, "glpat-mine".into(), &before)
+                .unwrap()
+        );
+        assert!(!user.exists());
+        assert_eq!(
+            store.lookup(&token.entry).unwrap().as_deref(),
+            Some("glpat-mine")
+        );
+    }
+
+    /// A file that does not parse, or holds no string where the secret
+    /// goes, is an error: nothing is offered or saved over it.
+    #[test]
+    fn an_unreadable_config_secret_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let cf = crate::ConfigFile::from_path(path.clone());
+        let token = gitlab_token();
+        std::fs::write(&path, "[gitlab\n").unwrap();
+        assert!(token.saved(&cf, &NoKeyring, false, &never).is_err());
+        std::fs::write(&path, "[gitlab]\naccess_token = 123\n").unwrap();
+        let e = token
+            .saved(&cf, &NoKeyring, false, &never)
+            .unwrap_err()
+            .to_string();
+        assert!(e.ends_with("[gitlab] access_token is not a string"), "{e}");
+        // Another table, or none: no secret yet.
+        std::fs::write(&path, "[other]\nx = 1\n").unwrap();
+        assert_eq!(token.saved(&cf, &NoKeyring, false, &never).unwrap().0, "");
+        assert!(token.required);
+        assert!(!token.optional().required);
+    }
+
+    /// Without a keyring the value stays in the file.
+    #[test]
+    fn a_config_secret_stays_in_the_file_without_a_keyring() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let cf = crate::ConfigFile::from_path(path.clone());
+        let token = gitlab_token();
+        let store = NoKeyring;
+        let (_, before) = token.saved(&cf, &store, false, &never).unwrap();
+        assert!(
+            token
+                .save(&cf, &store, "glpat-file".into(), &before)
+                .unwrap()
+        );
+        let loaded: toml::Table = cf.load_user().unwrap();
+        assert_eq!(
+            loaded["gitlab"]["access_token"].as_str(),
+            Some("glpat-file")
+        );
+    }
 
     /// Every label each tool writes in its sources, `"sandogasa: …"`
     /// literals, which are the entries it keeps.

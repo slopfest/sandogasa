@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### hs-relmon and cbspkg save their GitLab token through one shared helper
+
+A broken `config.toml` made `hs-relmon config` and `cbspkg config`
+offer a blank token, store the new one in the keyring, and only then
+fail to write the file. Both tools carried their own near-identical
+copy of the code that offers the saved token and saves the answer, so
+this had to be fixed twice, as hs-relmon's copying of `/etc`'s token
+into the user's file had been.
+
+Both now use `sandogasa_config::secret::ConfigSecret`, for any tool with
+one secret kept in the keyring or else as `[table] key` in its config
+file. `saved` reads the user's file alone and returns the value to
+offer with how it stood; a file that does not parse, or holds no string
+there, is now an error before anything is asked. `save` stores the
+answer in the keyring when there is one and takes it out of the file,
+leaving the file's other tables (cbspkg's `[packages]`) as they are.
+`NoKeyring` joins `MemoryStore` as a test seam, for the fall-back to the
+file. Resolves #121.
+
 ### ebranch finds a review request among many with its name as a prefix
 
 `check-wip` and `check-pkg-reviews` said rust-gix had no review
