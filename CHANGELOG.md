@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### sandogasa-config lets a tool's prompts be answered by its tests
+
+A tool's interactive `config` could only be tested where the answers
+came from a terminal, so sandogasa-report's (its profiles, usernames
+and tokens) sat untested at 55% line coverage. sandogasa-config now
+exports `ask_with`, which reads each answer through a function it is
+given, and `read_line_from_terminal`, the one `ask` uses. sandogasa-report's
+`config` reads through one, its tests through scripted answers, which
+brings configure.rs to 87%.
+
 ### fedora-cve-triage says why a bug counts as fixed
 
 bodhi-check's review prompt named only the bug, the build and the

@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 use std::process::ExitCode;
 
-use sandogasa_config::{Setting, ask};
+use sandogasa_config::{Setting, ask_with};
 
 use crate::config;
 use crate::forge;
@@ -32,8 +32,13 @@ pub struct ConfigArgs {
     pub config: Option<String>,
 }
 
+/// Where a prompt's answer is read from: the terminal, or a test's
+/// answers ([`sandogasa_config::ask_with`]'s `read`).
+type Reader<'a> = dyn FnMut(&str, bool) -> std::io::Result<String> + 'a;
+
 pub fn run(args: &ConfigArgs) -> ExitCode {
-    match run_inner(args) {
+    let mut terminal = sandogasa_config::read_line_from_terminal;
+    match run_inner(args, &mut terminal) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -42,7 +47,8 @@ pub fn run(args: &ConfigArgs) -> ExitCode {
     }
 }
 
-fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
+/// `config`, reading each answer through `read`.
+fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std::error::Error>> {
     // Merged view (main + existing overlay) drives prompts so we
     // can show current values as defaults.
     let merged = config::load_config(args.config.as_deref())
@@ -108,10 +114,11 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
             existing_keys.join(", ")
         }
     );
-    let profile_key = ask(
+    let profile_key = ask_with(
         &Setting::new("profile", "to configure (an existing name or a new one)").optional(),
         "",
         false,
+        read,
     )?;
     if profile_key.is_empty() {
         eprintln!("No profile name given, aborting.");
@@ -127,6 +134,7 @@ fn run_inner(args: &ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
         &forgejo_instances,
         &sourcehut_instances,
         &bugzilla_instances,
+        read,
     )?;
 
     // Token section: one prompt per unique instance, per forge.
@@ -216,12 +224,13 @@ fn prompt_profile(
     forgejo_instances: &BTreeSet<String>,
     sourcehut_instances: &BTreeSet<String>,
     bugzilla_instances: &BTreeSet<String>,
+    read: &mut Reader<'_>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     let fas_default = existing
         .and_then(|p| p.fas.clone())
         .unwrap_or_else(|| profile_key.to_string());
-    let fas = ask(&Setting::new("FAS", "username"), &fas_default, true)?;
+    let fas = ask_with(&Setting::new("FAS", "username"), &fas_default, true, read)?;
     if existing.and_then(|p| p.fas.as_deref()) != Some(&fas) {
         overlay_set_str(overlay, &["users", profile_key, "fas"], &fas);
         changed = true;
@@ -230,12 +239,13 @@ fn prompt_profile(
     let bz_default = existing
         .and_then(|p| p.bugzilla_email.clone())
         .unwrap_or_default();
-    let bz = ask(
+    let bz = ask_with(
         &Setting::new("Bugzilla", "email")
             .optional()
             .validated(&sandogasa_config::validate_email),
         &bz_default,
         true,
+        read,
     )?;
     changed |= overlay_update(
         overlay,
@@ -252,6 +262,7 @@ fn prompt_profile(
         "bugzilla_emails",
         |p, host| p.bugzilla_emails.get(host),
         forge::instance_host,
+        read,
     )?;
 
     // Git author emails for Sourcehut commit attribution — only relevant
@@ -259,7 +270,7 @@ fn prompt_profile(
     if !sourcehut_instances.is_empty() {
         let existing_emails = existing.map(|p| p.git_emails.clone()).unwrap_or_default();
         let emails_default = existing_emails.join(", ");
-        let answer = ask(
+        let answer = ask_with(
             &Setting::new(
                 "Sourcehut",
                 "commit attribution git emails (comma-separated, * for all)",
@@ -267,6 +278,7 @@ fn prompt_profile(
             .optional(),
             &emails_default,
             true,
+            read,
         )?;
         let emails: Vec<String> = answer
             .split(',')
@@ -288,6 +300,7 @@ fn prompt_profile(
         "gitlab",
         |u, host| u.gitlab.get(host),
         crate::gitlab::instance_host,
+        read,
     )? {
         changed = true;
     }
@@ -300,6 +313,7 @@ fn prompt_profile(
         "github",
         |u, host| u.github.get(host),
         crate::github::instance_host,
+        read,
     )? {
         changed = true;
     }
@@ -312,6 +326,7 @@ fn prompt_profile(
         "forgejo",
         |u, host| u.forgejo.get(host),
         crate::forgejo::instance_host,
+        read,
     )? {
         changed = true;
     }
@@ -324,6 +339,7 @@ fn prompt_profile(
         "sourcehut",
         |u, host| u.sourcehut.get(host),
         crate::sourcehut::instance_host,
+        read,
     )? {
         changed = true;
     }
@@ -346,6 +362,7 @@ fn prompt_per_instance_usernames(
     forge_key: &str,
     lookup: impl for<'a> Fn(&'a config::User, &str) -> Option<&'a String>,
     host_of: impl Fn(&str) -> String,
+    read: &mut Reader<'_>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     for instance in instances {
@@ -354,10 +371,11 @@ fn prompt_per_instance_usernames(
             .and_then(|p| lookup(p, &host))
             .cloned()
             .unwrap_or_default();
-        let u = ask(
+        let u = ask_with(
             &Setting::new(forge_label, &format!("username on {host}")).optional(),
             &current,
             true,
+            read,
         )?;
         changed |= overlay_update(
             overlay,
@@ -420,6 +438,7 @@ fn prompt_token(
     existing: Option<&str>,
     prompt: &str,
     validate: ValidateFn,
+    read: &mut Reader<'_>,
 ) -> Result<TokenChoice, Box<dyn std::error::Error>> {
     if let Some(tok) = existing {
         // An unreachable API keeps the token for every forge now, not
@@ -452,13 +471,14 @@ fn prompt_token(
         .trim_end_matches(':')
         .trim_end_matches("(enter to skip)")
         .trim_end();
-    let token = ask(
+    let token = ask_with(
         &Setting::new(instance, "token (empty to skip)")
             .sensitive()
             .optional()
             .hint(hint),
         "",
         false,
+        read,
     )?;
     // Checked here, not by `validated_key_blocking`: neither an empty
     // answer nor the off marker is sent to the forge as a token.
@@ -490,6 +510,7 @@ fn prompt_gitlab_token(
              (enter to skip): "
         ),
         sandogasa_gitlab::validate_token,
+        &mut sandogasa_config::read_line_from_terminal,
     )
 }
 
@@ -508,6 +529,7 @@ fn prompt_github_token(
              (enter to skip): "
         ),
         sandogasa_github::validate_token,
+        &mut sandogasa_config::read_line_from_terminal,
     )
 }
 
@@ -526,6 +548,7 @@ fn prompt_forgejo_token(
              (enter to skip): "
         ),
         sandogasa_forgejo::validate_token,
+        &mut sandogasa_config::read_line_from_terminal,
     )
 }
 
@@ -544,6 +567,7 @@ fn prompt_sourcehut_token(
              (from meta.sr.ht/oauth2/personal-token; enter to skip): "
         ),
         sandogasa_sourcehut::validate_token,
+        &mut sandogasa_config::read_line_from_terminal,
     )
 }
 
@@ -1298,6 +1322,172 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome, TokenOutcome::Unchanged);
+    }
+
+    /// A reader answering each prompt from `answers` in turn, recording
+    /// the prompts; one asked for past the last answer fails the test.
+    fn scripted<'a>(
+        answers: &'a [&'a str],
+        asked: &'a std::cell::RefCell<Vec<String>>,
+    ) -> impl FnMut(&str, bool) -> std::io::Result<String> + 'a {
+        let mut next = answers.iter();
+        move |prompt, _hidden| {
+            asked.borrow_mut().push(prompt.to_string());
+            next.next()
+                .map(|a| a.to_string())
+                .ok_or_else(|| std::io::Error::other(format!("no answer for {prompt:?}")))
+        }
+    }
+
+    /// `config` end to end, from answers: a new profile with its FAS
+    /// login, Bugzilla email and the email on another Bugzilla, saved
+    /// to the overlay; run again with the same answers, nothing
+    /// changes; with no profile named, nothing is asked.
+    #[test]
+    #[serial_test::serial]
+    fn config_saves_a_profile_from_its_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let main = dir.path().join("main.toml");
+        std::fs::write(
+            &main,
+            "[domains.opensuse.bugzilla]\ninstance = \"https://bugzilla.opensuse.org\"\n",
+        )
+        .unwrap();
+        let args = ConfigArgs {
+            all: false,
+            config: Some(main.display().to_string()),
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        // Profile, FAS (keeping the profile's name), Bugzilla email,
+        // openSUSE's email.
+        let answers = ["me", "", "me@example.com", "me@suse.example"];
+        run_inner(&args, &mut scripted(&answers, &asked)).unwrap();
+        let cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
+        let saved = parse_overlay(&std::fs::read_to_string(cf.path()).unwrap()).unwrap();
+        assert_eq!(
+            overlay_get_str(&saved, &["users", "me", "fas"]).as_deref(),
+            Some("me")
+        );
+        assert_eq!(
+            overlay_get_str(&saved, &["users", "me", "bugzilla_email"]).as_deref(),
+            Some("me@example.com")
+        );
+        assert_eq!(
+            overlay_get_str(
+                &saved,
+                &["users", "me", "bugzilla_emails", "bugzilla.opensuse.org"]
+            )
+            .as_deref(),
+            Some("me@suse.example")
+        );
+        assert_eq!(asked.borrow().len(), 4, "{:?}", asked.borrow());
+
+        // The same answers again, empty ones keeping what is saved.
+        let before = std::fs::read_to_string(cf.path()).unwrap();
+        run_inner(&args, &mut scripted(&["me", "", "", ""], &asked)).unwrap();
+        assert_eq!(std::fs::read_to_string(cf.path()).unwrap(), before);
+
+        // No profile named: nothing else asked, nothing written.
+        asked.borrow_mut().clear();
+        run_inner(&args, &mut scripted(&[""], &asked)).unwrap();
+        assert_eq!(asked.borrow().len(), 1);
+    }
+
+    /// Every forge's username is asked per instance and recorded under
+    /// its host, the Sourcehut commit emails as a list; an answer that
+    /// clears a username removes it.
+    #[test]
+    fn a_profile_records_each_forges_usernames() {
+        let set =
+            |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
+        let mut overlay = toml::Value::Table(Default::default());
+        let asked = std::cell::RefCell::new(Vec::new());
+        let answers = [
+            "me-fas",
+            "",
+            "me@example.com, *",
+            "me-gl",
+            "me-gh",
+            "me-fj",
+            "me-sh",
+        ];
+        let changed = prompt_profile(
+            &mut overlay,
+            "me",
+            None,
+            &set(&["https://gitlab.com"]),
+            &set(&["https://api.github.com"]),
+            &set(&["https://codeberg.org"]),
+            &set(&["sr.ht"]),
+            &BTreeSet::new(),
+            &mut scripted(&answers, &asked),
+        )
+        .unwrap();
+        assert!(changed);
+        let get = |path: &[&str]| overlay_get_str(&overlay, path);
+        assert_eq!(get(&["users", "me", "fas"]).as_deref(), Some("me-fas"));
+        assert_eq!(get(&["users", "me", "bugzilla_email"]), None);
+        assert_eq!(
+            get(&["users", "me", "gitlab", "gitlab.com"]).as_deref(),
+            Some("me-gl")
+        );
+        assert_eq!(
+            get(&["users", "me", "github", "api.github.com"]).as_deref(),
+            Some("me-gh")
+        );
+        assert_eq!(
+            get(&["users", "me", "forgejo", "codeberg.org"]).as_deref(),
+            Some("me-fj")
+        );
+        assert_eq!(
+            get(&["users", "me", "sourcehut", "sr.ht"]).as_deref(),
+            Some("me-sh")
+        );
+        assert_eq!(
+            overlay["users"]["me"]["git_emails"],
+            toml::Value::Array(vec!["me@example.com".into(), "*".into()])
+        );
+    }
+
+    /// A new token is checked with the forge before it is kept: a valid
+    /// one is kept, an empty answer or "-" skips the instance, and one
+    /// the forge refuses, or that cannot be checked, is an error. A
+    /// saved token the forge accepts is kept without a question.
+    #[test]
+    fn a_new_token_is_validated_before_it_is_kept() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let ask = |answer: &'static str, validate: ValidateFn| {
+            let answers = [answer];
+            let asked = std::cell::RefCell::new(Vec::new());
+            prompt_token(
+                "gitlab.example",
+                None,
+                "  Paste a token (enter to skip): ",
+                validate,
+                &mut scripted(&answers, &asked),
+            )
+        };
+        let ok: ValidateFn = |_, _| Ok(true);
+        let refused: ValidateFn = |_, _| Ok(false);
+        let unreachable: ValidateFn = |_, _| Err("no route".into());
+        assert!(matches!(ask("glpat", ok).unwrap(), TokenChoice::Saved(t) if t == "glpat"));
+        assert!(matches!(ask("", ok).unwrap(), TokenChoice::Skipped));
+        assert!(matches!(ask("-", ok).unwrap(), TokenChoice::Skipped));
+        let err = ask("glpat", refused).err().unwrap().to_string();
+        assert!(err.contains("rejected by gitlab.example"), "{err}");
+        let err = ask("glpat", unreachable).err().unwrap().to_string();
+        assert!(err.contains("validation failed"), "{err}");
+        let kept = prompt_token(
+            "gitlab.example",
+            Some("glpat-saved"),
+            "",
+            ok,
+            &mut scripted(&[], &asked),
+        )
+        .unwrap();
+        assert!(matches!(kept, TokenChoice::KeepExisting));
+        assert!(asked.borrow().is_empty());
     }
 
     /// The entries are the ones every sandogasa tool reads for the

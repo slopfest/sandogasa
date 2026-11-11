@@ -485,8 +485,9 @@ fn apply_erasures(raw: &str) -> String {
 }
 
 /// Print `prompt` and read one answer, hidden if `sensitive`, with
-/// passed-through backspaces applied and surrounding space trimmed.
-fn read_line_from_terminal(prompt: &str, sensitive: bool) -> io::Result<String> {
+/// passed-through backspaces applied and surrounding space trimmed: what
+/// [`ask`] reads through, for a tool passing [`ask_with`] its reader.
+pub fn read_line_from_terminal(prompt: &str, sensitive: bool) -> io::Result<String> {
     print!("{prompt}");
     io::stdout().flush()?;
     let raw = if sensitive {
@@ -528,9 +529,10 @@ fn review_prompt(setting: &Setting<'_>, saved: &str) -> String {
     )
 }
 
-/// [`ask`], reading answers through `read` (prompt, hidden?), so the
-/// decisions can be tested without a terminal.
-fn ask_with(
+/// [`ask`], reading answers through `read` (prompt, hidden?), so a
+/// tool's prompts can be tested without a terminal: the real run passes
+/// [`read_line_from_terminal`], a test a closure with its answers.
+pub fn ask_with(
     setting: &Setting<'_>,
     saved: &str,
     review: bool,
