@@ -54,6 +54,11 @@ pub struct RemovedEntry {
 /// how long one may go unused before it is removed.
 pub const CACHES: &[Cache] = &[
     Cache {
+        name: "bundled",
+        holds: "upstream and submodule clones, for bundled-provides",
+        max_age: Duration::from_secs(30 * 24 * 60 * 60),
+    },
+    Cache {
         name: "crates-io",
         holds: "crates.io answers, per crate",
         max_age: Duration::from_secs(30 * 24 * 60 * 60),

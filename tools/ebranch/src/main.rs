@@ -7,6 +7,7 @@ use sandogasa_bodhi::models::UpdateSource;
 
 mod arrival;
 mod branch_request;
+mod bundled;
 mod check_crate;
 mod check_update;
 mod config;
@@ -590,6 +591,32 @@ actionable problems."
 }
 
 #[derive(clap::Args, Clone)]
+struct BundledProvidesArgs {
+    /// The spec, to read upstream and the tag from its Source0 and to
+    /// compare its bundled() lines with the pins.
+    #[arg(value_name = "SPEC")]
+    spec: Option<std::path::PathBuf>,
+
+    /// Print the report as JSON.
+    #[arg(long)]
+    json: bool,
+
+    /// Upstream's git repository, a URL or a local checkout (read in
+    /// place), instead of the spec's Source0.
+    #[arg(long, value_name = "REPO", required_unless_present = "spec")]
+    repo: Option<String>,
+
+    /// The release tag, where the spec's Source0 names none; one that
+    /// disagrees with the spec is refused.
+    #[arg(long, required_unless_present = "spec")]
+    tag: Option<String>,
+
+    /// Print progress to stderr.
+    #[arg(short, long)]
+    verbose: bool,
+}
+
+#[derive(clap::Args, Clone)]
 struct CheckCrateArgs {
     /// Crate name on crates.io.
     #[arg(required_unless_present = "from")]
@@ -755,6 +782,29 @@ to copr build-package."
 
 #[derive(Subcommand)]
 enum Command {
+    /// Generate a spec's bundled() Provides from upstream's submodule pins.
+    #[command(long_about = "\
+Generate a spec's bundled() Provides from upstream's submodule pins.
+
+A package that bundles upstream's git submodules restates each one's
+version in `Provides: bundled(<name>) = <version>`, and by hand those
+lines drift. This reads the pins from upstream's repository at the
+release tag: the tree there holds each submodule's commit and
+.gitmodules its URL, and each submodule's own history says which tag
+the commit is or follows. An exact tag gives its version (4.3.0), a
+commit after one the tag's version and the commit's date and hash
+(1.0.1^20200819git424b969), and one before any tag 0^<date>git<hash>.
+
+Given the spec, upstream and the tag come from its Source0, and the
+report also lists the bundled() lines that disagree with the pins,
+leaves out the libraries %prep removes or replaces with the system
+copy, flags directories beside the submodules that were copied in
+without one, and lists the bundled directories for a %prep check.
+Submodules that upstream's build files never mention are flagged as
+possibly never built. The repositories are cloned, history only for
+the submodules, into ebranch's cache, and fetched again only when it
+lacks the tag or a pinned commit.")]
+    BundledProvides(BundledProvidesArgs),
     /// Analyze a crates.io crate's dependencies.
     CheckCrate(CheckCrateArgs),
     /// Find and link Bugzilla package review requests.
@@ -1757,6 +1807,16 @@ fn main() -> ExitCode {
         let rt = tokio::runtime::Runtime::new().expect("failed to create async runtime");
         return exit_code(rt.block_on(config::cmd_config(a)));
     }
+    if let Command::BundledProvides(a) = &cli.command {
+        return exit_code(bundled::run(&bundled::Options {
+            spec: a.spec.clone(),
+            repo: a.repo.clone(),
+            tag: a.tag.clone(),
+            json: a.json,
+            verbose: a.verbose,
+        }));
+    }
+
     if let Command::PruneCache(a) = &cli.command {
         return exit_code(prune_cache::run(&prune_cache::Options {
             older_than: a
@@ -2531,7 +2591,8 @@ fn main() -> ExitCode {
     }
 
     let (args, mode) = match &cli.command {
-        Command::CheckCrate(_)
+        Command::BundledProvides(_)
+        | Command::CheckCrate(_)
         | Command::CheckPkgReviews(_)
         | Command::CheckUpdate(_)
         | Command::CheckWip(_)

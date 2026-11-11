@@ -18,6 +18,34 @@ offered under `--yes`, without a terminal, or with `-b`, `-r`,
 `--testing-branch` or `--refresh`, which `--kept` refuses. Resolves
 #128.
 
+### ebranch bundled-provides writes a spec's bundled() lines from upstream's pins
+
+A package that bundles upstream's git submodules restates each one's
+version in a `Provides: bundled(<name>) = <version>` line, and by hand
+those drift: et's 7.1.1 spec said sentry-native 0.6.0 where the pin was
+0.15.3, and its 6.2.11 one PlatformFolders 4.0.0 where it was 4.2.0.
+They had been put right by hand twice the same week.
+
+The new `ebranch bundled-provides` reads upstream's repository at the
+release tag, given `--repo` and `--tag` or a spec's Source0, and prints
+one line per submodule: an exact tag's version, the nearest earlier
+tag's with the commit's date and hash, or `0^<date>git<hash>`. Given
+the spec, it also leaves out the libraries `%prep` deletes or replaces
+with the system copy, loops included, and lists the spec's lines that
+disagree with the pins. It flags submodules upstream's build files
+never name (et's cotire and msgpack-c), directories copied in with no
+submodule (et's libvterm), and lists the bundled directories for a
+`%prep` drift check, as `%prep` leaves them: for both et specs, the
+list their check already expects. `--repo` takes a local checkout too,
+read in place. `--tag` is for a spec whose Source0 names no tag; one
+naming a different release than the spec is refused, since the spec's
+lines describe its own.
+Repositories are read with `git`, the submodules' history only, into
+`~/.cache/ebranch/bundled/`, which `prune-cache` now knows, and fetched
+again only for a tag or commit the cache lacks; so any forge works,
+without an API rate limit, and a repeat run needs no network. Licenses
+are not read yet. Resolves #109.
+
 ### Every Bugzilla search asks for only the fields its caller reads
 
 pkg-health's open-bug count, fedora-cve-triage's CVE sweep,

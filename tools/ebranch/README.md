@@ -9,7 +9,9 @@ for parallel execution. It can also verify that all subpackages will
 be installable after building, expanding the closure as needed.
 
 Beyond dependency resolution, ebranch files and escalates branch
-requests (`branch-request`), analyzes crates.io dependencies
+requests (`branch-request`), writes a spec's `bundled()` Provides from
+upstream's submodule pins (`bundled-provides`), analyzes crates.io
+dependencies
 (`check-crate`), links Bugzilla package review requests
 (`check-pkg-reviews`), tracks a packaging effort's progress into the
 distro (`check-wip`), plans the rebuilds a library's SONAME bump
@@ -32,7 +34,9 @@ Requires `fedrq` to be installed and available in `$PATH`. `koji` is
 needed for side-tag inputs and for downloading builds by NVR, and
 `createrepo_c` — with `bodhi-client` when the input is a Bodhi update —
 for `check-update` on builds that have not reached `updates-testing`
-(it downloads them into a local repository).
+(it downloads them into a local repository). `bundled-provides` needs
+`git`, and `rpmspec` (from `rpm-build`) to read a spec whose Source0
+uses macros.
 
 ## Usage
 
@@ -73,6 +77,78 @@ Koji repos can be used as source (`--source-repo @koji:f45-build`).
 Since `@koji:` repos only index binary RPMs, ebranch automatically
 uses `@koji-src:` for source RPM queries (BuildRequires, subpackage
 Requires) while keeping `@koji:` for binary RPM resolution.
+
+### Generate bundled() Provides from upstream's submodule pins
+
+A package that bundles upstream's git submodules restates each one's
+version in a `Provides: bundled(<name>) = <version>` line.
+`bundled-provides` reads the versions from upstream's repository at
+the release tag: the tree there holds each submodule's commit, and
+each submodule's history says which tag that commit is, or follows.
+
+```console
+$ ebranch bundled-provides --repo https://github.com/MisterTea/EternalTerminal --tag et-v7.1.1
+https://github.com/MisterTea/EternalTerminal at et-v7.1.1: 16 submodule(s), 16 bundled
+
+Provides:       bundled(base64) = 0^20200731git6780d5b
+Provides:       bundled(Catch2) = 3.15.2
+...
+Provides:       bundled(PlatformFolders) = 4.3.0
+...
+Provides:       bundled(sole) = 1.0.1^20200819git424b969
+
+Not mentioned in upstream's build files at et-v7.1.1, so possibly never built (remove in %prep if so): cotire, msgpack-c
+
+Copied in without a submodule, so with no pin to read (version by hand): external/libvterm
+
+Bundled directories as the release ships them, as `ls | LC_ALL=C sort -f | xargs` lists them:
+  base64 Catch2 cotire cpp-httplib cxxopts easyloggingpp json libvterm msgpack-c ...
+```
+
+A commit on a tag gets that tag's version, a leading `v` or name
+dropped (`4.3.0`). One after a tag gets the nearest earlier tag's
+version with the commit's date, in UTC, and short hash
+(`1.0.1^20200819git424b969`), and one before any tag
+`0^20140926git9a42ec1`, as the packaging guidelines spell snapshots.
+
+Given the spec instead, upstream and the tag come from its Source0
+(read through `rpmspec -P`), and the report also:
+
+- leaves out the libraries `%prep` deletes, or replaces with a link to
+  the system's copy, and lists them apart, following braces and
+  `for … in …; do … done` loops;
+- lists the spec's `bundled()` lines that disagree with the pins, and
+  pins with no line, by name regardless of case. A line for a
+  directory copied in without a submodule is left to you.
+
+```sh
+ebranch bundled-provides et.spec
+```
+
+`--repo` names upstream besides a spec, or instead of Source0's: a URL,
+or a local checkout, which is read in place and never fetched, with
+relative submodule URLs followed from its `origin`:
+
+```sh
+ebranch bundled-provides et.spec --repo ~/src/github/MisterTea/EternalTerminal
+```
+
+The other lists help with what the pins cannot say:
+
+- **Possibly never built:** a submodule no CMake, Meson or make file
+  of upstream's names, outside the bundled directories themselves.
+  It is a hint, not a verdict: a build option can still pull one in.
+- **Copied in without a submodule:** a directory among the bundled
+  ones that no submodule pins, whose version has to be found by hand.
+- **Bundled directories:** every one's name in `LC_ALL=C sort -f`
+  order, for a `%prep` check that fails the build when upstream adds
+  or drops one: as `%prep` leaves them when given the spec, as the
+  release ships them otherwise.
+
+The repositories are cloned into `~/.cache/ebranch/bundled/`, the
+submodules' history only, and on later runs fetched only when the
+cache lacks the tag or a pinned commit, so a second run takes seconds
+and needs no network. `--json` prints the report as JSON.
 
 ### Analyze a crates.io crate's dependencies
 

@@ -15,6 +15,47 @@ Print help
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS ebranch bundled-provides
+\fBebranch bundled\-provides\fR [\fB\-\-json\fR] [\fB\-\-repo\fR] [\fB\-\-tag\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fISPEC\fR]
+.PP
+Generate a spec\*(Aqs bundled() Provides from upstream\*(Aqs submodule pins.
+.PP
+A package that bundles upstream\*(Aqs git submodules restates each one\*(Aqs
+version in `Provides: bundled(<name>) = <version>`, and by hand those
+lines drift. This reads the pins from upstream\*(Aqs repository at the
+release tag: the tree there holds each submodule\*(Aqs commit and
+\&.gitmodules its URL, and each submodule\*(Aqs own history says which tag
+the commit is or follows. An exact tag gives its version (4.3.0), a
+commit after one the tag\*(Aqs version and the commit\*(Aqs date and hash
+(1.0.1^20200819git424b969), and one before any tag 0^<date>git<hash>.
+.PP
+Given the spec, upstream and the tag come from its Source0, and the
+report also lists the bundled() lines that disagree with the pins,
+leaves out the libraries %prep removes or replaces with the system
+copy, flags directories beside the submodules that were copied in
+without one, and lists the bundled directories for a %prep check.
+Submodules that upstream\*(Aqs build files never mention are flagged as
+possibly never built. The repositories are cloned, history only for
+the submodules, into ebranch\*(Aqs cache, and fetched again only when it
+lacks the tag or a pinned commit.
+.TP
+\fB\-\-json\fR
+Print the report as JSON
+.TP
+\fB\-\-repo\fR \fI<REPO>\fR
+Upstream\*(Aqs git repository, a URL or a local checkout (read in place), instead of the spec\*(Aqs Source0
+.TP
+\fB\-\-tag\fR \fI<TAG>\fR
+The release tag, where the spec\*(Aqs Source0 names none; one that disagrees with the spec is refused
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+[\fISPEC\fR]
+The spec, to read upstream and the tag from its Source0 and to compare its bundled() lines with the pins
 .SS ebranch check-crate
 \fBebranch check\-crate\fR [\fB\-b\fR|\fB\-\-branch\fR] [\fB\-\-copr\fR] [\fB\-\-from\fR] [\fB\-\-package\fR] [\fB\-r\fR|\fB\-\-repo\fR] [\fB\-\-exclude\fR] [\fB\-\-exclude\-dev\fR] [\fB\-\-exclude\-unmet\fR] [\fB\-\-features\fR] [\fB\-\-in\-tree\fR] [\fB\-\-include\-optional\fR] [\fB\-j\fR|\fB\-\-jobs\fR] [\fB\-\-no\-default\-features\fR] [\fB\-\-refresh\fR] [\fB\-t\fR|\fB\-\-transitive\fR] [\fB\-\-copr\-script\fR] [\fB\-\-dot\fR] [\fB\-\-json\fR] [\fB\-\-koji\fR] [\fB\-\-toml\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINAME\fR] [\fIVERSION\fR]
 .PP
