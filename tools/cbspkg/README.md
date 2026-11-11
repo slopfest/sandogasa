@@ -72,7 +72,10 @@ cargo install cbspkg
 
 `add-pkg`, `build` and `upload-sources` need `koji`, `cbs` and
 `centos-lookaside-upload-sig` (centos-packager), `centpkg`, and a CBS
-login (`~/.centos.cert`, from `centos-cert`). `sig-repo` needs `git`. Creating a repo needs a GitLab token with the
+login (`~/.centos.cert`, from `centos-cert`). `srpm`, `mockbuild` and
+`verrel` need `koji` with the `cbs` profile, to read CBS, and
+`rpm-build`; `mockbuild` needs `mock` and mock-centos-sig-configs.
+`sig-repo` needs `git`. Creating a repo needs a GitLab token with the
 `api` scope, from `GITLAB_TOKEN` or `cbspkg config`, belonging to an
 account with the Maintainer role in the SIG's group.
 
@@ -161,30 +164,24 @@ sandogasa service gitlab.com`). Without a keyring to use it goes to
 `~/.config/cbspkg/config.toml` instead; a token found there is moved to
 the keyring the next time `config` runs. `GITLAB_TOKEN` overrides both.
 
-### `upload-sources`
+### `mockbuild`
 
 ```sh
-cbspkg upload-sources [-C DIR] [--branch BRANCH] [--explain] [--dry-run]
+cbspkg mockbuild [-C DIR] [--branch BRANCH] [--variant VARIANT]… \
+    [--rhel VARIANT]… [--arch ARCH] [--explain] [--dry-run]
 ```
 
-Uploads the files the branch's `sources` file names to the SIG
-lookaside (`git.centos.org/sources/<pkg>/<file>/sha512/<sum>/<file>`),
-which is where CBS fetches a SIG build's sources, not CentOS Stream's
-lookaside. The `sources` file is read from the branch's commit, and
-the lookaside is asked for each file first, so files already there are
-left alone and a second run does nothing.
-
-A file the checkout lacks, or has with another sum, is fetched with
-`centpkg sources`, from CentOS Stream's lookaside. That fetches the
-checked-out branch's files, so when the branch is not checked out,
-`upload-sources` checks it out for it (tracking the SIG remote's when
-there is no local branch) and switches back afterwards, whether or not
-the fetch worked; the fetched files are untracked, so they stay. A
-checkout with uncommitted changes is not switched: that stops it with
-what to do instead. Every file is checked against its sha512 before
-`centos-lookaside-upload-sig -f <file> -n <pkg>` uploads it. The
-upload is confirmed at a terminal, showing each command, and refused
-without one. `--explain` and `--dry-run` show each step's command.
+Builds the branch's SRPM (as `srpm` does), then builds it locally in
+the mock config whose buildroot matches each collection the branch
+builds into (`centos-stream-hyperscale-10-x86_64`,
+`centos-stream-10-x86_64` for Proposed Updates and Extras), with the
+collection's macros from CBS passed to mock. The results go in
+`results_<package>/<version>/<release>`, as `fedpkg mockbuild` puts
+them. A collection mock ships no config for is skipped with a note,
+such as the RHEL build a Facebook Stream branch also makes; one with
+none left to build, such as Hyperscale's asahi and kernel repositories,
+is refused. Build those in CBS with `cbspkg build --scratch`. `--arch`
+builds for another architecture than this machine's.
 
 ### `promote`
 
@@ -273,3 +270,61 @@ for the merge request, or, when there is none yet, the
 typed, pausing before each; `--dry-run` shows the steps without doing
 anything. The GitLab steps are API requests, described in words with
 where to do the same on the web.
+
+### `srpm`
+
+```sh
+cbspkg srpm [-C DIR] [--branch BRANCH] [--variant VARIANT]… \
+    [--rhel VARIANT]… [--explain] [--dry-run]
+```
+
+Builds the branch's SRPM in the checkout, with the dist tag CBS would
+give it: `rsync-3.2.7-5~proposed.el10.src.rpm`, not the host's `.fc44`.
+The dist tag comes from the collection's buildroot tag in CBS, read
+with `koji -p cbs call getBuildConfig`: Hyperscale's Stream collections
+set `dist` itself (`.hs.el10`), while Proposed Updates and Extras set a
+`distprefix` or `distsuffix` (`~proposed`, `s`) that `srpm` wraps
+around `.el<N>`. A source file the `sources` file names and the
+checkout lacks is fetched from the SIG lookaside first, checked against
+its sha512; one the checkout has with another sum is an error, not
+replaced. A branch building into several collections gets an SRPM for
+each. The spec and sources are the working tree's, so `--branch` must
+name the branch checked out, as all three commands require.
+
+### `upload-sources`
+
+```sh
+cbspkg upload-sources [-C DIR] [--branch BRANCH] [--explain] [--dry-run]
+```
+
+Uploads the files the branch's `sources` file names to the SIG
+lookaside (`git.centos.org/sources/<pkg>/<file>/sha512/<sum>/<file>`),
+which is where CBS fetches a SIG build's sources, not CentOS Stream's
+lookaside. The `sources` file is read from the branch's commit, and
+the lookaside is asked for each file first, so files already there are
+left alone and a second run does nothing.
+
+A file the checkout lacks, or has with another sum, is fetched with
+`centpkg sources`, from CentOS Stream's lookaside. That fetches the
+checked-out branch's files, so when the branch is not checked out,
+`upload-sources` checks it out for it (tracking the SIG remote's when
+there is no local branch) and switches back afterwards, whether or not
+the fetch worked; the fetched files are untracked, so they stay. A
+checkout with uncommitted changes is not switched: that stops it with
+what to do instead. Every file is checked against its sha512 before
+`centos-lookaside-upload-sig -f <file> -n <pkg>` uploads it. The
+upload is confirmed at a terminal, showing each command, and refused
+without one. `--explain` and `--dry-run` show each step's command.
+
+### `verrel`
+
+```sh
+cbspkg verrel [-C DIR] [--branch BRANCH] [--variant VARIANT]… \
+    [--rhel VARIANT]… [--explain] [--json]
+```
+
+Prints the version-release the branch builds in CBS, with the same dist
+tag as `srpm`: `centos-release-proposed_updates-9-2.el9s` for a release
+package built in Extras. A branch building into several collections
+prints one line for each, naming its target. `--json` prints a list of
+`{"target", "verrel"}`.

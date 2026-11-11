@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cbspkg 1 2026-11-10 "sandogasa 0.28.0" "Sandogasa Manual"
+.TH cbspkg 1 2026-11-11 "sandogasa 0.28.0" "Sandogasa Manual"
 .SH NAME
 cbspkg \- Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedora
 .SH SYNOPSIS
@@ -102,6 +102,38 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS cbspkg mockbuild
+\fBcbspkg mockbuild\fR [\fB\-\-branch\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-\-arch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Build the checked\-out SIG branch locally in mock, in the config matching its collection, with CBS\*(Aqs macros
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SELECTION
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch to build (default: the one checked out; another must be checked out first)
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-rhel\fR \fI<VARIANT>\fR
+A Hyperscale variant to build against RHEL rather than CentOS Stream (repeatable; facebook is the one there is)
+.TP
+\fB\-\-variant\fR \fI<VARIANT>\fR
+A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or branch suffix (hs+fb); repeatable
+.SH BUILDING
+.TP
+\fB\-\-arch\fR \fI<ARCH>\fR
+The architecture to build for (default: this machine\*(Aqs)
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.SH OUTPUT
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
 .SS cbspkg promote
 \fBcbspkg promote\fR [\fB\-\-branch\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-\-to\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINVR\fR]
 .PP
@@ -182,6 +214,31 @@ Print help
 .TP
 <\fIMR_URL|PACKAGE\fR>
 A CentOS Stream merge request URL (a Proposed Update), or a package name
+.SS cbspkg srpm
+\fBcbspkg srpm\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Build the checked\-out SIG branch\*(Aqs SRPM, with the dist tag CBS would give it
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch to build (default: the one checked out; another must be checked out first)
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-rhel\fR \fI<VARIANT>\fR
+A Hyperscale variant to build against RHEL rather than CentOS Stream (repeatable; facebook is the one there is)
+.TP
+\fB\-\-variant\fR \fI<VARIANT>\fR
+A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or branch suffix (hs+fb); repeatable
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
 .SS cbspkg upload-sources
 \fBcbspkg upload\-sources\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
@@ -198,6 +255,31 @@ Narrate each step and show its command, pausing before each
 .TP
 \fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
 The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS cbspkg verrel
+\fBcbspkg verrel\fR [\fB\-\-branch\fR] [\fB\-\-explain\fR] [\fB\-\-json\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+Print the version\-release the checked\-out SIG branch builds in CBS, dist tag included
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch to read (default: the one checked out; another must be checked out first)
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command (not with \-\-json)
+.TP
+\fB\-\-json\fR
+Print the version\-releases as JSON
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-rhel\fR \fI<VARIANT>\fR
+A Hyperscale variant to build against RHEL rather than CentOS Stream (repeatable; facebook is the one there is)
+.TP
+\fB\-\-variant\fR \fI<VARIANT>\fR
+A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or branch suffix (hs+fb); repeatable
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

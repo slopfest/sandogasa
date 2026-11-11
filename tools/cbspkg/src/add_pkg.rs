@@ -278,7 +278,7 @@ pub fn resolve(
         if c.sig == Sig::Hyperscale.name()
             && sandogasa_cbs::hyperscale_variant(&c.repository).is_some_and(|v| v.deprecated)
         {
-            println!("Note: Hyperscale's {} variant is deprecated.", c.repository);
+            eprintln!("Note: Hyperscale's {} variant is deprecated.", c.repository);
         }
     }
     let checkout = Checkout {
@@ -288,8 +288,10 @@ pub fn resolve(
         remotes,
         sig,
     };
+    // On stderr: it is about the run, and a command's output (verrel
+    // --json) stays only what was asked for.
     if let Some(note) = checkout.pipeline_note() {
-        println!("{note}");
+        eprintln!("{note}");
     }
     Ok(checkout)
 }

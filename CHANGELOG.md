@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### cbspkg builds and reads a SIG branch locally: srpm, mockbuild, verrel
+
+`fedpkg srpm` or plain `rpmbuild` in a SIG checkout gives the host's
+dist tag (`.fc44`), and centpkg-sig, which has the same commands, takes
+it from the branch alone: for Proposed Updates' release package it says
+`9-2.el9`, where CBS built `9-2.el9s`. `cbspkg srpm`, `mockbuild` and
+`verrel` now use the dist tag CBS would build with.
+
+They read it from each collection's buildroot tag in CBS
+(`koji -p cbs call getBuildConfig`), where it is set one of two ways:
+Hyperscale's Stream collections set `dist` itself (`.hs.el10`,
+`.hs+fb.el10`), while Proposed Updates, Extras and Hyperscale's RHEL
+build set a `distprefix` or `distsuffix` (`~proposed`, `s`, `.hs+fb` and
+`_z`) for redhat-rpm-config to wrap around `.el<N>`. On the host `dist`
+is spelled out from those parts; inside mock the tag's own macros are
+passed, as CBS's buildroot gets them. `srpm` fetches a missing source
+from the SIG lookaside first, checked against its sha512, and refuses
+to replace one the checkout has with another sum; `mockbuild` builds in
+the mock config matching each collection, skipping one mock has none
+for (a Facebook branch's RHEL build), and puts the results in
+`results_<package>/<version>/<release>`; `verrel --json` gives each
+collection's version-release. The spec is the working tree's, so
+`--branch` must name the branch checked out. All three take `--explain`, and `srpm`
+and `mockbuild` `--dry-run`. The note that a release package builds in
+Extras, and the one that a Hyperscale variant is deprecated, now go to
+stderr, so they no longer mix with a command's output. Resolves #106.
+
 ### hs-relmon and cbspkg save their GitLab token through one shared helper
 
 A broken `config.toml` made `hs-relmon config` and `cbspkg config`

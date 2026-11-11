@@ -111,7 +111,7 @@ fn in_lookaside(http: &reqwest::blocking::Client, url: &str) -> Result<bool, Str
 }
 
 /// Whether `file` in `repo` has the sum `source` names.
-fn matches(repo: &Path, source: &Source) -> bool {
+pub fn matches(repo: &Path, source: &Source) -> bool {
     if source.hash != "sha512" || !repo.join(&source.name).is_file() {
         return false;
     }

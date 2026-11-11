@@ -8,6 +8,7 @@ mod add_pkg;
 mod build;
 mod config;
 mod configure;
+mod local;
 mod promote;
 mod sig_repo;
 #[cfg(test)]
@@ -16,6 +17,7 @@ mod upload_sources;
 
 use add_pkg::AddPkgArgs;
 use build::BuildArgs;
+use local::{MockbuildArgs, SrpmArgs, VerrelArgs};
 use promote::PromoteArgs;
 use sig_repo::SigRepoArgs;
 use upload_sources::UploadSourcesArgs;
@@ -53,6 +55,10 @@ enum Command {
     /// Set up the GitLab token.
     Config(sandogasa_cli::ConfigArgs),
 
+    /// Build the checked-out SIG branch locally in mock, in the config
+    /// matching its collection, with CBS's macros
+    Mockbuild(MockbuildArgs),
+
     /// Move a build to its collection's next stage (-testing, then
     /// -release, untagging it from -testing)
     Promote(PromoteArgs),
@@ -61,9 +67,17 @@ enum Command {
     /// CentOS Stream's, and push a merge request's change to it
     SigRepo(SigRepoArgs),
 
+    /// Build the checked-out SIG branch's SRPM, with the dist tag CBS
+    /// would give it
+    Srpm(SrpmArgs),
+
     /// Upload the files a branch's sources names to the SIG lookaside,
     /// where CBS fetches them
     UploadSources(UploadSourcesArgs),
+
+    /// Print the version-release the checked-out SIG branch builds in
+    /// CBS, dist tag included
+    Verrel(VerrelArgs),
 }
 
 fn main() -> ExitCode {
@@ -73,9 +87,12 @@ fn main() -> ExitCode {
         Command::AddPkg(args) => add_pkg::run(&args),
         Command::Build(args) => build::run(&args),
         Command::Config(args) => configure::run(&args),
+        Command::Mockbuild(args) => local::run_mockbuild(&args),
         Command::Promote(args) => promote::run(&args),
         Command::SigRepo(args) => sig_repo::run(&args),
+        Command::Srpm(args) => local::run_srpm(&args),
         Command::UploadSources(args) => upload_sources::run(&args),
+        Command::Verrel(args) => local::run_verrel(&args),
     }
 }
 
