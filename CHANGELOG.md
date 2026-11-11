@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### fedora-cve-triage says why a bug counts as fixed
+
+bodhi-check's review prompt named only the bug, the build and the
+update ("close bug 2408121 as ERRATA — anubis-1.23.0-1.fc43
+(FEDORA-2025-1be29d273b)"): nothing on screen said which CVE the bug
+was, what fixes it, or why that build counts, so each close was
+approved blind or looked up by hand. Every close, and every question
+to an assignee about a bug fixed on some releases only, now shows a
+`bug:` line with the bug's summary and a `why:` line saying what each
+fixing build carries and the fixed version it meets ("anubis-1.26.0-2.fc44
+bundles golang.org/x/net 0.56.0, at or past the fix in 0.55.0"), one
+per release for a family tracker. The same goes into the closing
+comment and the partly-fixed comment, and the report lists it under
+each stable and partial fix. It is what exposed the bodhi-check
+comparisons fixed above. A note given at the prompt with (e)xplain
+for an ERRATA or never-affected close, which the comment used to
+leave out, is now written with it. Resolves #134.
+
 ### fedora-cve-triage no longer judges a bundled Go module by the package's own version
 
 bodhi-check proposed closing three real CVEs as already fixed: anubis's
