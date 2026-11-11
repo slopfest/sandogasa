@@ -29,13 +29,14 @@ since a real bundled jQuery reads the same. And when GitHub cannot say whether a
 to a person instead, while a component whose buildroot had the crate
 is judged as carrying it.
 
-Every close now says why, in a sentence about that bug, after the
-check's configured reason: for cross-ecosystem, what the package is
-(its spec's `Summary:`) and what the CVE is in (its repository and the
-first sentence of its description), and for bundled-library, the
-library judged and how the component relates to it. The sentence is
-shown at the prompt as `why:`, so a wrong library is visible before
-anything is written. Bugs whose comments are the same are still closed
+Every close now says why, about that bug, after the check's configured
+reason: for cross-ecosystem, one bullet per project, saying what the
+package is (its spec's `Summary:`), any copy it declares named like the
+CVE's project, and what the CVE is in (its repository and the first
+sentence of its description), and for
+bundled-library, the library judged and how the component relates to
+it. It is shown at the prompt as `why:`, wrapped under its label, so a
+wrong library is visible before anything is written. Bugs whose comments are the same are still closed
 in one request. Fixes #132.
 
 ### cbspkg builds and reads a SIG branch locally: srpm, mockbuild, verrel
