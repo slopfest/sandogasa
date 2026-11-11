@@ -1371,9 +1371,7 @@ fn remember_rebuilds(
 /// 2. `<datadir>/ebranch/rpmfusion/<name>`, where datadir is
 ///    `$SANDOGASA_DATADIR` or `/usr/share`
 fn rpmfusion_data_file(name: &str) -> (Option<std::path::PathBuf>, Vec<String>) {
-    let datadir = std::env::var_os("SANDOGASA_DATADIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
+    let datadir = sandogasa_config::system_data_root();
     let mut tried = Vec::new();
     for base in [dirs::data_dir(), Some(datadir)].into_iter().flatten() {
         let path = base.join("ebranch/rpmfusion").join(name);
@@ -2983,6 +2981,107 @@ fn print_cycles(cycles: &[dag::Cycle], closure: &resolve::Closure) {
 mod tests {
     use super::input_identity;
     use crate::check_update::detect_input_type;
+
+    /// The RPM Fusion data files: the user's copy wins over the one a
+    /// package installed, and the installed one is found when there is
+    /// no user copy. The guard keeps the machine's /usr/share out of it
+    /// unless the test names a datadir itself (#127).
+    #[test]
+    #[serial_test::serial]
+    fn rpmfusion_data_files_prefer_the_users_copy() {
+        use sandogasa_config::test_support::EnvGuard;
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("data");
+        let share = tmp.path().join("share");
+        for base in [&user, &share] {
+            std::fs::create_dir_all(base.join("ebranch/rpmfusion")).unwrap();
+        }
+        std::fs::write(share.join("ebranch/rpmfusion/inventory.toml"), "").unwrap();
+        std::fs::write(share.join("ebranch/rpmfusion/renames.toml"), "").unwrap();
+        let _env = EnvGuard::new(&[
+            ("SANDOGASA_DATADIR", &share.to_string_lossy()),
+            ("XDG_DATA_HOME", &user.to_string_lossy()),
+        ]);
+
+        // Only the installed copy exists.
+        assert_eq!(
+            super::rpmfusion_inventory_path("").unwrap(),
+            share.join("ebranch/rpmfusion/inventory.toml")
+        );
+        assert_eq!(
+            super::rpmfusion_renames_path(None),
+            Some(
+                share
+                    .join("ebranch/rpmfusion/renames.toml")
+                    .display()
+                    .to_string()
+            )
+        );
+        // A user copy wins; a path given wins over both.
+        std::fs::write(user.join("ebranch/rpmfusion/inventory.toml"), "").unwrap();
+        assert_eq!(
+            super::rpmfusion_inventory_path("").unwrap(),
+            user.join("ebranch/rpmfusion/inventory.toml")
+        );
+        assert_eq!(
+            super::rpmfusion_inventory_path("/x/inv.toml").unwrap(),
+            std::path::PathBuf::from("/x/inv.toml")
+        );
+        assert_eq!(
+            super::rpmfusion_renames_path(Some("/x/r.toml")).as_deref(),
+            Some("/x/r.toml")
+        );
+    }
+
+    /// With neither copy, the error says where it looked. A guard that
+    /// moves the data home, or HOME alone, takes the machine's
+    /// /usr/share out of the lookup and restores both on drop (#127).
+    #[test]
+    #[serial_test::serial]
+    fn a_missing_rpmfusion_inventory_names_where_it_looked() {
+        use sandogasa_config::test_support::EnvGuard;
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("data");
+        let outer = EnvGuard::new(&[
+            ("SANDOGASA_DATADIR", "/outer/share"),
+            ("XDG_DATA_HOME", "/outer/data"),
+        ]);
+        let inside_tmp = |err: &str| {
+            let tried = err.rsplit("install one at ").next().unwrap_or_default();
+            tried
+                .split(" or ")
+                .all(|p| p.starts_with(&*tmp.path().to_string_lossy()))
+        };
+        {
+            let _env = EnvGuard::new(&[("XDG_DATA_HOME", &user.to_string_lossy())]);
+            let err = super::rpmfusion_inventory_path("").unwrap_err();
+            assert!(err.contains("poi-tracker sync-rpmfusion"), "{err}");
+            assert!(
+                err.contains(&format!(
+                    "{}/ebranch/rpmfusion/inventory.toml",
+                    user.display()
+                )),
+                "{err}"
+            );
+            assert!(inside_tmp(&err), "{err}");
+            assert_eq!(super::rpmfusion_renames_path(None), None);
+        }
+        {
+            // HOME alone: the exported XDG_DATA_HOME goes too.
+            let home = tmp.path().join("home");
+            let _env = EnvGuard::new(&[("HOME", &home.to_string_lossy())]);
+            assert!(std::env::var_os("XDG_DATA_HOME").is_none());
+            let err = super::rpmfusion_inventory_path("").unwrap_err();
+            assert!(inside_tmp(&err), "{err}");
+        }
+        // Both guards restored what was there before them.
+        assert_eq!(
+            std::env::var("SANDOGASA_DATADIR").as_deref(),
+            Ok("/outer/share")
+        );
+        assert_eq!(std::env::var("XDG_DATA_HOME").as_deref(), Ok("/outer/data"));
+        drop(outer);
+    }
 
     /// `--kept` reads the check kept for the NVRs given from the state
     /// directory, and refuses COPR input, which keeps none.

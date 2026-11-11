@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Tests no longer read data files installed under /usr/share
+
+ebranch's lookup of its RPM Fusion inventory and rename map had no
+tests: one would have read whatever copy the machine or buildroot had
+installed under `/usr/share/ebranch/rpmfusion/`, as #119's tests read
+`/etc`. The lookup checks the user's data directory first, then the
+system one, `/usr/share` unless `SANDOGASA_DATADIR` says otherwise.
+
+`EnvGuard` now also points `SANDOGASA_DATADIR` at a directory that does
+not exist whenever it moves `XDG_DATA_HOME` or `HOME`, and given `HOME`
+without `XDG_DATA_HOME` it unsets an exported one. ebranch's lookup has
+tests, and `scripts/packaging-test.sh` poisons the installed copies.
+The system data root is resolved by the new
+`sandogasa_config::system_data_root`, which, like `SANDOGASA_ETC`,
+treats an empty `SANDOGASA_DATADIR` as unset; ebranch had taken an
+empty one as the current directory. Fixes #127.
+
 ### fedora-cve-triage judges EPEL 9 Next by the build its users get
 
 When closing fixed trackers, fedora-cve-triage asked the assignee

@@ -451,6 +451,21 @@ pub fn ask(
     })
 }
 
+/// The variable relocating the system config layer, `/etc`.
+pub(crate) const SYSTEM_ROOT_VAR: &str = "SANDOGASA_ETC";
+
+/// The variable relocating the system data layer, `/usr/share`.
+pub(crate) const SYSTEM_DATA_ROOT_VAR: &str = "SANDOGASA_DATADIR";
+
+/// The system data layer's root, for files a package installs beside a
+/// tool rather than for its config: `/usr/share`, or
+/// `$SANDOGASA_DATADIR` when set to something, as `SANDOGASA_ETC` does
+/// for `/etc`. An empty value is unset, so a variable that expanded to
+/// nothing does not make the lookup relative to the current directory.
+pub fn system_data_root() -> PathBuf {
+    root_from(std::env::var_os(SYSTEM_DATA_ROOT_VAR), "/usr/share")
+}
+
 /// Apply the backspaces a terminal passed through as characters.
 ///
 /// A tty in canonical mode erases on one character, usually DEL; a
@@ -665,13 +680,14 @@ fn overlay_items(existing: &mut toml_edit::Table, new: &toml_edit::Table) {
 /// tried beneath the real user file before it is installed
 /// (`SANDOGASA_ETC=$PWD/configs`).
 fn system_root() -> PathBuf {
-    system_root_from(std::env::var_os("SANDOGASA_ETC"))
+    root_from(std::env::var_os(SYSTEM_ROOT_VAR), "/etc")
 }
 
-fn system_root_from(override_dir: Option<std::ffi::OsString>) -> PathBuf {
+/// `override_dir` when it is set to something, `default` otherwise.
+fn root_from(override_dir: Option<std::ffi::OsString>, default: &str) -> PathBuf {
     match override_dir {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => PathBuf::from("/etc"),
+        _ => PathBuf::from(default),
     }
 }
 
@@ -694,11 +710,16 @@ mod tests {
     }
 
     #[test]
-    fn system_root_is_etc_unless_overridden() {
-        assert_eq!(system_root_from(None), PathBuf::from("/etc"));
-        assert_eq!(system_root_from(Some("".into())), PathBuf::from("/etc"));
+    fn a_system_root_is_its_default_unless_overridden() {
+        assert_eq!(root_from(None, "/etc"), PathBuf::from("/etc"));
+        // Empty is unset: never a path relative to the current directory.
+        assert_eq!(root_from(Some("".into()), "/etc"), PathBuf::from("/etc"));
         assert_eq!(
-            system_root_from(Some("/srv/cfg".into())),
+            root_from(Some("".into()), "/usr/share"),
+            PathBuf::from("/usr/share")
+        );
+        assert_eq!(
+            root_from(Some("/srv/cfg".into()), "/etc"),
             PathBuf::from("/srv/cfg")
         );
     }

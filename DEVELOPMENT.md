@@ -538,7 +538,10 @@ Four consequences worth knowing, for packaging in particular:
   tool layers there (`config.toml`, `fixed-versions.toml`, `run.toml`),
   so a test reading the system layer fails there, unless the code it
   drives ignores a malformed file; a new layered file name goes in that
-  list (#119).
+  list (#119). The same holds for the data layer under `/usr/share`:
+  a guard moving `XDG_DATA_HOME` or `HOME` points `SANDOGASA_DATADIR`
+  nowhere, and the script poisons ebranch's RPM Fusion files there
+  (#127).
 
 Keeping credentials out of the system layer is a design choice, not
 just caution, because the alternatives are all worse. Restricting by

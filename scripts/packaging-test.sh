@@ -47,6 +47,15 @@ for t in tools/*/; do
     done
 done
 
+# The same for the data layer under /usr/share (#127): ebranch's RPM
+# Fusion inventory and rename map, under SANDOGASA_DATADIR.
+DATA="$STUB/share"
+mkdir -p "$DATA/ebranch/rpmfusion"
+for f in inventory.toml renames.toml; do
+    printf 'packaging-test: a test read the system data layer (#127) = [\n' \
+        >"$DATA/ebranch/rpmfusion/$f"
+done
+
 # Default to the whole workspace; any args (e.g. `-p dbranch`, a test
 # name filter) replace that so you can scope the run.
 if [ "$#" -eq 0 ]; then
@@ -61,4 +70,4 @@ cargo test --no-run "$@"
 # route off the box), loopback up so localhost mock servers can still
 # bind. A bare `unshare -rn` leaves loopback DOWN, which makes wiremock
 # tests fail spuriously — don't diagnose without `ip link set lo up`.
-SANDOGASA_ETC="$ETC" PATH="$STUB:$PATH" unshare -rn sh -c 'ip link set lo up && cargo test "$@"' sh "$@"
+SANDOGASA_DATADIR="$DATA" SANDOGASA_ETC="$ETC" PATH="$STUB:$PATH" unshare -rn sh -c 'ip link set lo up && cargo test "$@"' sh "$@"

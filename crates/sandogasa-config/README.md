@@ -22,6 +22,10 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   points the system layer at another root, so a config a repository
   ships under `configs/<tool>/` can be tried beneath the real user
   file before it is installed (`SANDOGASA_ETC=$PWD/configs`).
+- **system_data_root** — the root of the system data layer, for
+  files a package installs beside a tool rather than its config:
+  `/usr/share`, or `$SANDOGASA_DATADIR` when set (an empty value counts
+  as unset).
 - **try_for_tool_file** — the same layered pair for a file other than
   `config.toml`, e.g. a run profile a package ships under
   `/etc/{tool}/` while users override it per key in `~/.config/{tool}/`.

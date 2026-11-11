@@ -9,13 +9,15 @@
 /// it with `#[serial_test::serial]`, as the environment is the
 /// process's.
 ///
-/// A guard that moves the user's config (`XDG_CONFIG_HOME` or `HOME`)
-/// moves the system layer too, unless `SANDOGASA_ETC` is among the
-/// variables given: it points `SANDOGASA_ETC` at a directory that does
-/// not exist beneath the new config home, so a layered load reads no
-/// `/etc/<tool>/config.toml` from the machine running the tests (#119).
-/// One given `HOME` alone also unsets `XDG_CONFIG_HOME`, which would
-/// otherwise keep the user's config where a developer exported it.
+/// A guard that moves the user's config or data (`XDG_CONFIG_HOME`,
+/// `XDG_DATA_HOME` or `HOME`) moves the system layer beneath it too,
+/// unless the variable relocating that layer is among those given: it
+/// points `SANDOGASA_ETC` (for `/etc/<tool>/`) or `SANDOGASA_DATADIR`
+/// (for `/usr/share/<tool>/`) at a directory that does not exist
+/// beneath the new home, so a test reads nothing the machine running
+/// it has installed (#119, #127). Given `HOME` without a layer's XDG
+/// variable, it also unsets that variable, which would otherwise keep
+/// the user's files where a developer exported them.
 pub struct EnvGuard {
     originals: Vec<(String, Option<String>)>,
 }
@@ -32,15 +34,17 @@ impl EnvGuard {
             unsafe { std::env::set_var(k, v) };
         }
         let has = |name: &str| vars.iter().any(|(k, _)| *k == name);
-        if has("HOME") && !has("XDG_CONFIG_HOME") {
-            guard.remember("XDG_CONFIG_HOME");
-            // SAFETY: as above.
-            unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
-        }
-        if let Some(etc) = isolated_etc(vars) {
-            guard.remember(SYSTEM_ROOT_VAR);
-            // SAFETY: as above.
-            unsafe { std::env::set_var(SYSTEM_ROOT_VAR, etc) };
+        for layer in LAYERS {
+            if has("HOME") && !has(layer.user) {
+                guard.remember(layer.user);
+                // SAFETY: as above.
+                unsafe { std::env::remove_var(layer.user) };
+            }
+            if let Some(dir) = isolated(vars, layer) {
+                guard.remember(layer.system);
+                // SAFETY: as above.
+                unsafe { std::env::set_var(layer.system, dir) };
+            }
         }
         guard
     }
@@ -78,54 +82,100 @@ impl Drop for EnvGuard {
     }
 }
 
-/// The variable that relocates the system layer, read by
-/// `system_root`.
-const SYSTEM_ROOT_VAR: &str = "SANDOGASA_ETC";
+/// A per-user directory and the system layer beneath it.
+struct Layer {
+    /// The XDG variable naming the user's directory.
+    user: &'static str,
+    /// The variable relocating the system layer.
+    system: &'static str,
+    /// Where a guard puts the system layer, beneath the user's home.
+    missing: &'static str,
+}
 
-/// Where a guard setting `vars` puts the system layer: nowhere that
-/// exists, beneath the config home it moves the user's config to, or
-/// `None` when it moves neither or sets the system layer itself.
-fn isolated_etc(vars: &[(&str, &str)]) -> Option<String> {
-    if vars.iter().any(|(k, _)| *k == SYSTEM_ROOT_VAR) {
+/// Config over `/etc`, as `ConfigFile`'s layered loads read it.
+const CONFIG: Layer = Layer {
+    user: "XDG_CONFIG_HOME",
+    system: crate::SYSTEM_ROOT_VAR,
+    missing: "no-system-config",
+};
+
+/// Data over `/usr/share`, as [`crate::system_data_root`] reads it.
+const DATA: Layer = Layer {
+    user: "XDG_DATA_HOME",
+    system: crate::SYSTEM_DATA_ROOT_VAR,
+    missing: "no-system-data",
+};
+
+/// The layers a guard isolates.
+const LAYERS: &[Layer] = &[CONFIG, DATA];
+
+/// Where a guard setting `vars` puts `layer`'s system side: nowhere
+/// that exists, beneath the home it moves the user's side to, or
+/// `None` when it moves neither or relocates the system side itself.
+fn isolated(vars: &[(&str, &str)], layer: &Layer) -> Option<String> {
+    if vars.iter().any(|(k, _)| *k == layer.system) {
         return None;
     }
-    let home = ["XDG_CONFIG_HOME", "HOME"]
+    let home = [layer.user, "HOME"]
         .iter()
         .find_map(|name| vars.iter().find(|(k, _)| k == name))?;
-    Some(format!("{}/no-system-config", home.1))
+    Some(format!("{}/{}", home.1, layer.missing))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn etc(vars: &[(&str, &str)]) -> Option<String> {
+        isolated(vars, &CONFIG)
+    }
+
+    fn data(vars: &[(&str, &str)]) -> Option<String> {
+        isolated(vars, &DATA)
+    }
+
     #[test]
-    fn moving_the_config_home_moves_the_system_layer() {
+    fn moving_a_home_moves_the_system_layer_beneath_it() {
         assert_eq!(
-            isolated_etc(&[("XDG_CONFIG_HOME", "/tmp/x/config"), ("PATH", "/bin")]).as_deref(),
+            etc(&[("XDG_CONFIG_HOME", "/tmp/x/config"), ("PATH", "/bin")]).as_deref(),
             Some("/tmp/x/config/no-system-config")
         );
         assert_eq!(
-            isolated_etc(&[("HOME", "/tmp/x/home")]).as_deref(),
+            etc(&[("HOME", "/tmp/x/home")]).as_deref(),
             Some("/tmp/x/home/no-system-config")
         );
-        // XDG_CONFIG_HOME is where the user's config is read from when
+        // The XDG variable is where the user's files are read from when
         // both are set.
         assert_eq!(
-            isolated_etc(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/c")]).as_deref(),
+            etc(&[("HOME", "/h"), ("XDG_CONFIG_HOME", "/c")]).as_deref(),
             Some("/c/no-system-config")
         );
+        assert_eq!(
+            data(&[("HOME", "/h"), ("XDG_DATA_HOME", "/d")]).as_deref(),
+            Some("/d/no-system-data")
+        );
+        assert_eq!(
+            data(&[("HOME", "/h")]).as_deref(),
+            Some("/h/no-system-data")
+        );
+        // Moving the config home says nothing about data, and back.
+        assert_eq!(data(&[("XDG_CONFIG_HOME", "/c")]), None);
+        assert_eq!(etc(&[("XDG_DATA_HOME", "/d")]), None);
     }
 
     #[test]
     fn a_guard_that_sets_the_system_layer_or_no_home_is_left_alone() {
         assert_eq!(
-            isolated_etc(&[
+            etc(&[
                 ("XDG_CONFIG_HOME", "/c"),
                 ("SANDOGASA_ETC", "/repo/configs")
             ]),
             None
         );
-        assert_eq!(isolated_etc(&[("GITLAB_TOKEN", "t")]), None);
+        assert_eq!(
+            data(&[("HOME", "/h"), ("SANDOGASA_DATADIR", "/repo/data")]),
+            None
+        );
+        assert_eq!(etc(&[("GITLAB_TOKEN", "t")]), None);
     }
 }
