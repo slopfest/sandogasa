@@ -383,7 +383,7 @@ fn set_merge_method(client: &Client, path: &str, method: &str) {
         ..Default::default()
     }) {
         Ok(()) => println!("{path} now merges with {method}."),
-        Err(e) => println!("warning: could not set {path}'s merge method to {method}: {e}"),
+        Err(e) => eprintln!("warning: could not set {path}'s merge method to {method}: {e}"),
     }
 }
 
@@ -419,7 +419,7 @@ fn ensure_merge_method(
         return Ok(());
     }
     if !args.yes && !std::io::stdin().is_terminal() {
-        println!("No terminal to confirm at, and no --yes: the merge method is left as it is.");
+        eprintln!("No terminal to confirm at, and no --yes: the merge method is left as it is.");
         return Ok(());
     }
     if confirmed(
@@ -555,7 +555,7 @@ fn ensure_default_branch(
     let (current, merge_method, branches) = match read {
         Ok(read) => read,
         Err(e) => {
-            println!(
+            eprintln!(
                 "Cannot read {path}'s settings ({e}); its default branch and merge method are \
                  left as they are. Run sig-repo again to retry."
             );
@@ -597,7 +597,7 @@ fn ensure_default_branch(
         return Ok(read);
     }
     if !args.yes && !std::io::stdin().is_terminal() {
-        println!("No terminal to confirm at, and no --yes: the default branch is left as it is.");
+        eprintln!("No terminal to confirm at, and no --yes: the default branch is left as it is.");
         return Ok(read);
     }
     if !confirmed(
@@ -614,7 +614,7 @@ fn ensure_default_branch(
         Ok(()) => println!("{path} now opens on {newest}."),
         // Usually the Maintainer role missing: the rest of the run
         // still stands.
-        Err(e) => println!("warning: could not make {newest} the default branch: {e}"),
+        Err(e) => eprintln!("warning: could not make {newest} the default branch: {e}"),
     }
     Ok(read)
 }

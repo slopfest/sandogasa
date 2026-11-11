@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### cbspkg sig-repo says its warnings on stderr
+
+`cbspkg sig-repo` printed its warnings on stdout: that GitLab refused
+to set the default branch or merge method, that a repo's settings
+could not be read, and that a change was left undone for want of a
+terminal. Mixed into the progress a caller captures, a refused change
+read as an ordinary line. They now go to stderr.
+
 ### ebranch bundled-provides fetches each repository once
 
 For a repository with several submodules pinned to commits on no
