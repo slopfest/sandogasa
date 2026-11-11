@@ -62,6 +62,9 @@ Any other branch is an error that names it.
 `c<N>s-sig-hyperscale`) from the rest, and `Sig::newest_own_branch`
 picks the one a SIG repo should open on: the newest Stream release's,
 and of several, the one with the newest head commit.
+`Sig::merge_method` is how merge requests into the SIG's repos land, in
+GitLab's terms, one of `MERGE_METHODS`: `ff` for both SIGs, and
+`Sig::wanted_merge_method` lets a tool's config override it.
 
 Hyperscale's Facebook branches also build for the RHEL release
 (`hyperscale9-packages-facebook-el9`), for systems that deploy RHEL

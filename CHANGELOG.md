@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### cbspkg sig-repo sets the SIG's merge method
+
+`cbspkg sig-repo` left a SIG repo's merge method at GitLab's default, a
+merge commit, so merge requests into a repo it had just created landed
+as merge commits, and `hs-relmon check-repos` then flagged the repo for
+not fast-forwarding. Each SIG now has a merge method of its own in
+sandogasa-cbs (`Sig::merge_method`), `ff` for both: Hyperscale's for
+linear history, and Proposed Updates' because its branches are the
+Stream merge request's commits as they are, which a merge commit would
+part them from. `sig-repo` creates a repo
+with it and offers it to an existing repo that differs, as it does for
+the default branch, saying what it would set under `--dry-run` and
+`--explain`. `[sigs.<sig>] merge_method` in cbspkg's config overrides a
+SIG's choice, and hs-relmon's `check-repos` reads Hyperscale's from
+there too, instead of a constant of its own, so the two tools never set
+a repo back and forth. A cbspkg config that does not parse is now a
+warning for `sig-repo`, which goes by the SIGs' own methods. Its tests
+now also carry a merge request to a local SIG repo end to end. Resolves
+#131.
+
 ### fedora-cve-triage judges a crate by every package it can arrive in, and says why it closes a bug
 
 fedora-cve-triage closed rhbz#2566270, CVE-2026-115905 in the Rust zip

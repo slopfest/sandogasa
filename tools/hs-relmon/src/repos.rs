@@ -28,8 +28,33 @@ use sandogasa_gitlab::{Client, ProjectUpdate};
 
 use crate::cbs::Build;
 
-/// The merge method every SIG repo should use.
-pub const MERGE_METHOD: &str = "ff";
+/// The merge method Hyperscale's repos should have, from cbspkg's
+/// config (`[sigs.hyperscale] merge_method`, read from `table`, the
+/// merged file) else the SIG's own in sandogasa-cbs: the same one
+/// `cbspkg sig-repo` sets, so neither tool undoes the other.
+pub fn wanted_merge_method(table: Option<&toml::Table>) -> Result<String, String> {
+    let configured = table
+        .and_then(|t| t.get("sigs"))
+        .and_then(|s| s.get(sandogasa_cbs::Sig::Hyperscale.name()))
+        .and_then(|h| h.get("merge_method"));
+    let configured = match configured {
+        None => None,
+        Some(toml::Value::String(m)) => Some(m.as_str()),
+        Some(_) => return Err("[sigs.hyperscale] merge_method is not a string".to_string()),
+    };
+    sandogasa_cbs::Sig::Hyperscale
+        .wanted_merge_method(configured)?
+        .ok_or_else(|| "Hyperscale has no merge method".to_string())
+}
+
+/// [`wanted_merge_method`] from cbspkg's config files, as cbspkg reads
+/// them; an error names them.
+pub fn configured_merge_method() -> Result<String, String> {
+    let cf = sandogasa_config::ConfigFile::for_tool("cbspkg");
+    cf.read_merged()
+        .and_then(|t| wanted_merge_method(t.as_ref()))
+        .map_err(|e| format!("{e} (in {})", cf.describe_sources()))
+}
 
 /// How a Hyperscale branch is spelled, best first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -173,7 +198,8 @@ impl RepoPlan {
     }
 }
 
-/// Judge one repo from what GitLab reports and what CBS has tagged.
+/// [`plan_wanting`] Hyperscale's own merge method.
+#[cfg(test)]
 pub fn plan(
     package: &str,
     archived: bool,
@@ -181,6 +207,29 @@ pub fn plan(
     merge_method: Option<&str>,
     branches: &[String],
     builds: &[Build],
+) -> RepoPlan {
+    let wanted = wanted_merge_method(None).unwrap();
+    plan_wanting(
+        package,
+        archived,
+        default_branch,
+        merge_method,
+        branches,
+        builds,
+        &wanted,
+    )
+}
+
+/// Judge one repo from what GitLab reports and what CBS has tagged,
+/// wanting merge requests to land by `wanted_method`.
+pub fn plan_wanting(
+    package: &str,
+    archived: bool,
+    default_branch: Option<&str>,
+    merge_method: Option<&str>,
+    branches: &[String],
+    builds: &[Build],
+    wanted_method: &str,
 ) -> RepoPlan {
     let hs: Vec<&str> = branches
         .iter()
@@ -197,7 +246,7 @@ pub fn plan(
         _ => None,
     };
     let merge_change = match merge_method {
-        Some(m) if m != MERGE_METHOD => Some((m.to_string(), MERGE_METHOD.to_string())),
+        Some(m) if m != wanted_method => Some((m.to_string(), wanted_method.to_string())),
         _ => None,
     };
     RepoPlan {
@@ -319,11 +368,12 @@ pub fn apply(
 }
 
 /// Fetch a repo's settings and branches and judge them against the
-/// package's tagged builds.
+/// package's tagged builds and `wanted_method`.
 pub fn plan_for_repo(
     client: &Client,
     package: &str,
     builds: &[Build],
+    wanted_method: &str,
 ) -> Result<RepoPlan, Box<dyn std::error::Error>> {
     let status = client.project_status()?;
     let branches: Vec<String> = client
@@ -331,19 +381,67 @@ pub fn plan_for_repo(
         .into_iter()
         .map(|b| b.name)
         .collect();
-    Ok(plan(
+    Ok(plan_wanting(
         package,
         status.archived,
         status.default_branch.as_deref(),
         status.merge_method.as_deref(),
         &branches,
         builds,
+        wanted_method,
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cbspkgs_merge_method_for_hyperscale_is_the_one_wanted() {
+        assert_eq!(wanted_merge_method(None).unwrap(), "ff");
+        let table = |t: &str| -> toml::Table { toml::from_str(t).unwrap() };
+        let other = table("[sigs.proposed_updates]\nmerge_method = \"merge\"\n");
+        assert_eq!(wanted_merge_method(Some(&other)).unwrap(), "ff");
+        let set = table("[sigs.hyperscale]\nmerge_method = \"rebase_merge\"\n");
+        assert_eq!(wanted_merge_method(Some(&set)).unwrap(), "rebase_merge");
+        let p = plan_wanting("rpm", false, None, Some("ff"), &[], &[], "rebase_merge");
+        assert_eq!(
+            p.merge_method,
+            Some(("ff".to_string(), "rebase_merge".to_string()))
+        );
+        let bad = table("[sigs.hyperscale]\nmerge_method = \"squash\"\n");
+        assert!(
+            wanted_merge_method(Some(&bad))
+                .unwrap_err()
+                .contains("squash")
+        );
+        let typed = table("[sigs.hyperscale]\nmerge_method = 1\n");
+        assert!(
+            wanted_merge_method(Some(&typed))
+                .unwrap_err()
+                .contains("not a string")
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_merge_method_is_read_from_cbspkgs_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("cbspkg");
+        std::fs::create_dir_all(&dir).unwrap();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[(
+            "XDG_CONFIG_HOME",
+            &tmp.path().display().to_string(),
+        )]);
+        assert_eq!(configured_merge_method().unwrap(), "ff");
+        std::fs::write(
+            dir.join("config.toml"),
+            "[sigs.hyperscale]\nmerge_method = \"squash\"\n",
+        )
+        .unwrap();
+        let err = configured_merge_method().unwrap_err();
+        assert!(err.contains("cbspkg/config.toml"), "{err}");
+    }
 
     /// One tagged build per Hyperscale branch named, so every such
     /// branch counts as live.

@@ -1162,6 +1162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let group = gitlab_group.trim_end_matches('/');
             // Which branches anyone builds from comes from CBS: every
             // release/testing tag, read once.
+            let wanted = repos::configured_merge_method()?;
             let index = prune_tags::TagIndex::load_all(&cbs::Client::new(), verbose)?;
             let mut plans = Vec::new();
             let mut failures = 0usize;
@@ -1180,7 +1181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .flat_map(|(_, b)| b)
                     .collect();
                 match gitlab::client_from_project_url(keyring(), &url)
-                    .and_then(|c| repos::plan_for_repo(&c, &pkg.name, &builds))
+                    .and_then(|c| repos::plan_for_repo(&c, &pkg.name, &builds, &wanted))
                 {
                     Ok(p) => plans.push(p),
                     Err(e) => {

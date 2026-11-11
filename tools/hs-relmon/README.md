@@ -174,7 +174,9 @@ Repos forked in from Fedora or created by hand drift from the SIG's
 conventions in two settings: the default branch, which should be the
 newest release's Hyperscale branch rather than the `rawhide` or `c10s`
 the fork arrived with, and the merge method, which should be
-fast-forward so branch history stays linear. `check-repos <manifest>`
+fast-forward so branch history stays linear: the same one `cbspkg
+sig-repo` sets, including an override in cbspkg's config
+(`[sigs.hyperscale] merge_method` in `~/.config/cbspkg/config.toml`). `check-repos <manifest>`
 reads every manifest package's repo under `--gitlab-group` and reports
 what differs; `--apply` then asks per repo — `y` sets it, `s` (Enter)
 skips it, `a` sets the rest, `q` stops — and `--yes` sets every one

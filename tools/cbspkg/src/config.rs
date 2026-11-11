@@ -13,6 +13,10 @@ pub struct Config {
     /// `--variant` or `--rhel` (`[packages.perf]`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub packages: std::collections::BTreeMap<String, PackageConfig>,
+    /// Per SIG, by its CBS name: overrides of the SIG's conventions
+    /// (`[sigs.hyperscale]`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sigs: std::collections::BTreeMap<String, SigConfig>,
 }
 
 /// A package's Hyperscale variants, as `--variant` and `--rhel` give
@@ -24,6 +28,17 @@ pub struct PackageConfig {
     pub variants: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rhel: Vec<String>,
+}
+
+/// A SIG's conventions where its own choice differs from cbspkg's
+/// default: `merge_method = "rebase_merge"`.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SigConfig {
+    /// How merge requests into the SIG's repos land: `ff`, `merge` or
+    /// `rebase_merge`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_method: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -41,8 +56,31 @@ pub fn load() -> Result<Config, Box<dyn std::error::Error>> {
     config_file().load()
 }
 
+/// The config, or the defaults when there is no config file; a file
+/// that does not parse is an error.
+pub fn load_or_default() -> Result<Config, Box<dyn std::error::Error>> {
+    match config_file().read_merged()? {
+        Some(table) => Ok(toml::Value::Table(table).try_into()?),
+        None => Ok(Config::default()),
+    }
+}
+
 pub fn config_path() -> std::path::PathBuf {
     config_file().path().to_path_buf()
+}
+
+/// The merge method `sig`'s repos should have: the config's
+/// `[sigs.<name>] merge_method`, else the SIG's own
+/// ([`sandogasa_cbs::Sig::wanted_merge_method`]); `None` leaves a repo's
+/// as it is. A value GitLab does not know is an error naming the
+/// choices and the files it can come from.
+pub fn merge_method(config: &Config, sig: sandogasa_cbs::Sig) -> Result<Option<String>, String> {
+    let configured = config
+        .sigs
+        .get(sig.name())
+        .and_then(|s| s.merge_method.as_deref());
+    sig.wanted_merge_method(configured)
+        .map_err(|e| format!("{e} (in {})", config_file().describe_sources()))
 }
 
 /// The GitLab instance: gitlab.com, or `CBSPKG_GITLAB_BASE` (for
@@ -141,6 +179,42 @@ mod tests {
         let _token = EnvGuard::new(&[("GITLAB_TOKEN", "in-env")]);
         assert_eq!(gitlab_token().as_deref(), Some("in-env"));
         keyring().clear(&gitlab_secret()).unwrap();
+    }
+
+    #[test]
+    fn a_sigs_merge_method_is_its_own_unless_the_config_sets_one() {
+        use sandogasa_cbs::Sig;
+        let mut config: Config =
+            toml::from_str("[sigs.proposed_updates]\nmerge_method = \"rebase_merge\"\n").unwrap();
+        assert_eq!(
+            merge_method(&config, Sig::Hyperscale).unwrap().as_deref(),
+            Some("ff")
+        );
+        assert_eq!(
+            merge_method(&config, Sig::ProposedUpdates)
+                .unwrap()
+                .as_deref(),
+            Some("rebase_merge")
+        );
+        config.sigs.clear();
+        assert_eq!(
+            merge_method(&config, Sig::ProposedUpdates)
+                .unwrap()
+                .as_deref(),
+            Some("ff")
+        );
+        config.sigs.insert(
+            "hyperscale".into(),
+            SigConfig {
+                merge_method: Some("squash".into()),
+            },
+        );
+        let err = merge_method(&config, Sig::Hyperscale).unwrap_err();
+        assert!(
+            err.contains("[sigs.hyperscale] merge_method = \"squash\""),
+            "{err}"
+        );
+        assert!(err.contains("ff, merge, rebase_merge"), "{err}");
     }
 
     #[test]

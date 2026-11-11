@@ -900,6 +900,7 @@ dependencies = [
  "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
+ "serial_test",
  "tempfile",
  "toml",
  "toml_edit",

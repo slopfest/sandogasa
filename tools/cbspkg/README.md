@@ -235,6 +235,22 @@ head commit. A repo with no SIG branch yet keeps the default it has.
 Changing it needs the Maintainer role; without it, or without a
 terminal or `--yes`, the default is left as it is, and the run says so.
 
+Merge requests into a SIG's repos land the way the SIG has chosen:
+both SIGs fast-forward them (`ff`), so they are rebased and history
+stays linear. For Proposed Updates, whose branches are the Stream merge
+request's commits as they are, that also keeps a merge request from
+putting a commit on one that the Stream merge request does not have.
+A new repo is created with the SIG's merge method, and an
+existing one that differs is offered it, the same way as the default
+branch. A SIG's choice can be overridden in
+`~/.config/cbspkg/config.toml`, with GitLab's names for the methods
+(`ff`, `merge` or `rebase_merge`):
+
+```toml
+[sigs.proposed_updates]
+merge_method = "rebase_merge"
+```
+
 A checkout's remotes are known by the project they point at, not by
 name: CentOS Stream's repo, a SIG's, or a personal fork
 (`<user>/centos_rpms_<package>`), so `origin` can be any of them. A

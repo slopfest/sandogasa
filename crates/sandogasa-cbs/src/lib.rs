@@ -34,6 +34,10 @@ mod test_support;
 /// that wraps it.
 pub const PROFILE: &str = "cbs";
 
+/// The merge methods GitLab offers a project, as its API names them:
+/// a merge commit, a merge commit after a rebase, a fast-forward.
+pub const MERGE_METHODS: [&str; 3] = ["ff", "merge", "rebase_merge"];
+
 /// The SIGs whose conventions are known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -284,6 +288,42 @@ impl Sig {
         }
     }
 
+    /// How merge requests into the SIG's package repos land, as
+    /// GitLab's `merge_method` names it, when the SIG has settled on
+    /// one; `None` would leave each repo's as it is. Tools let their
+    /// config override this per SIG.
+    ///
+    /// Both SIGs fast-forward (`ff`). Hyperscale's so merge requests are
+    /// rebased and history stays linear. Proposed Updates rarely merges
+    /// anything: its branches are the Stream merge request's commits,
+    /// pushed as they are. But a merge commit in one would part it from
+    /// the merge request's head, which `cbspkg sig-repo` compares it
+    /// with and pushes onto, and in a mirrored `c<N>s` branch would stop
+    /// the mirror updating it; a fast-forward adds only commits the
+    /// merge request's own branch has.
+    pub fn merge_method(self) -> Option<&'static str> {
+        match self {
+            Sig::Hyperscale | Sig::ProposedUpdates => Some("ff"),
+        }
+    }
+
+    /// The merge method the SIG's repos should have: `configured`, an
+    /// override from cbspkg's config (`[sigs.<name>] merge_method`, which
+    /// hs-relmon reads too, so the two tools agree), else the SIG's own
+    /// ([`Sig::merge_method`]). A method GitLab does not know is an
+    /// error naming the ones it does.
+    pub fn wanted_merge_method(self, configured: Option<&str>) -> Result<Option<String>, String> {
+        match configured {
+            None => Ok(self.merge_method().map(str::to_string)),
+            Some(m) if MERGE_METHODS.contains(&m) => Ok(Some(m.to_string())),
+            Some(m) => Err(format!(
+                "[sigs.{}] merge_method = \"{m}\": GitLab knows {}",
+                self.name(),
+                MERGE_METHODS.join(", ")
+            )),
+        }
+    }
+
     /// The collection a branch of this SIG's package repos builds into.
     ///
     /// Proposed Updates: `c<N>s-proposed-<key>` (one topic branch per
@@ -509,6 +549,35 @@ fn stream_branch(branch: &str) -> Option<(u32, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_sigs_fast_forward() {
+        assert_eq!(Sig::Hyperscale.merge_method(), Some("ff"));
+        assert_eq!(Sig::ProposedUpdates.merge_method(), Some("ff"));
+        for sig in Sig::ALL {
+            assert!(
+                sig.merge_method()
+                    .is_none_or(|m| MERGE_METHODS.contains(&m))
+            );
+        }
+    }
+
+    #[test]
+    fn a_configured_merge_method_wins_if_gitlab_knows_it() {
+        let hs = Sig::Hyperscale;
+        assert_eq!(hs.wanted_merge_method(None).unwrap().as_deref(), Some("ff"));
+        assert_eq!(
+            hs.wanted_merge_method(Some("rebase_merge"))
+                .unwrap()
+                .as_deref(),
+            Some("rebase_merge")
+        );
+        let err = hs.wanted_merge_method(Some("squash")).unwrap_err();
+        assert_eq!(
+            err,
+            "[sigs.hyperscale] merge_method = \"squash\": GitLab knows ff, merge, rebase_merge"
+        );
+    }
 
     #[test]
     fn a_collection_names_its_target_and_tags_as_cbs_does() {

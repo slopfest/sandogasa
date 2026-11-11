@@ -148,10 +148,20 @@ pub fn mirror_update(status: Option<&str>) -> MirrorUpdate {
 }
 
 pub fn run(args: &SigRepoArgs) -> ExitCode {
-    match run_with(
+    // Only [sigs] matters here: a config that does not parse is a
+    // warning, as the token is read without it too.
+    let config = crate::config::load_or_default().unwrap_or_else(|e| {
+        eprintln!(
+            "warning: cannot read {} ({e}); going by the SIGs' own merge methods",
+            crate::config::config_file().describe_sources()
+        );
+        Default::default()
+    });
+    match run_configured(
         args,
         &crate::config::gitlab_base(),
         crate::config::gitlab_token(),
+        &config,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -280,7 +290,8 @@ fn ensure_repo(
     token: Option<&str>,
     sig: Sig,
     package: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+    merge_method: Option<&str>,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let group = sig.gitlab_group();
     let path = format!("{group}/{package}");
     let stream_path = sandogasa_cbs::stream_project(package);
@@ -293,7 +304,8 @@ fn ensure_repo(
         .is_some()
     {
         println!("{path} exists.");
-        return check_mirror(ui, args, base, token, &path, &stream);
+        check_mirror(ui, args, base, token, &path, &stream)?;
+        return Ok(false);
     }
     // A Proposed Update is always of a Stream package; a Hyperscale one
     // need not be.
@@ -309,6 +321,9 @@ fn ensure_repo(
             " → Create blank project"
         }
     ));
+    if let Some(method) = merge_method {
+        ui.step(&merge_method_step(method));
+    }
     if mirrored {
         ui.step(&format!(
             "Make it a pull mirror of {stream}'s {MIRRORED_BRANCHES} branches, never \
@@ -318,7 +333,8 @@ fn ensure_repo(
         ui.step("Wait for GitLab's first mirror update");
     }
     if args.dry_run {
-        return Ok(());
+        // Narrated as for a new repo: nothing to check afterwards.
+        return Ok(true);
     }
     let token = token.ok_or(
         "creating the SIG's repo needs a GitLab token: set GITLAB_TOKEN, or run `cbspkg config`",
@@ -333,12 +349,85 @@ fn ensure_repo(
     }
     let project = GroupClient::new(base, group, token)?.create_project(package, "public")?;
     println!("Created {}", project.web_url);
+    if let Some(method) = merge_method {
+        set_merge_method(&Client::new(base, &path, token)?, &path, method);
+    }
     if mirrored {
         let client = Client::new(base, &path, token)?;
         client.set_pull_mirror(&PullMirror::branches_matching(&stream, MIRRORED_BRANCHES))?;
         client.start_pull_mirror()?;
         wait_for_mirror(&client, &path)?;
         println!("{path} mirrors {stream}'s {MIRRORED_BRANCHES} branches.");
+    }
+    Ok(true)
+}
+
+/// The `--explain` step for setting a repo's merge method, with where
+/// it is on the web.
+fn merge_method_step(method: &str) -> String {
+    format!(
+        "Set its merge method to {method} (Settings → Merge requests → Merge method){}",
+        if method == "ff" {
+            ", so merge requests are rebased and history stays linear"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Set the repo's merge method; a refusal (usually the Maintainer role
+/// missing) is a warning, as the rest of the run still stands.
+fn set_merge_method(client: &Client, path: &str, method: &str) {
+    match client.update_project(&sandogasa_gitlab::ProjectUpdate {
+        merge_method: Some(method.to_string()),
+        ..Default::default()
+    }) {
+        Ok(()) => println!("{path} now merges with {method}."),
+        Err(e) => println!("warning: could not set {path}'s merge method to {method}: {e}"),
+    }
+}
+
+/// For an existing repo: whether merge requests land the way the SIG
+/// wants ([`crate::config::merge_method`]), offering to change it when
+/// not, as for the default branch. `current` is the repo's method as
+/// [`ensure_default_branch`] read it: without a token, a repo that
+/// could not be read, or no method to want, this is skipped; a run with
+/// no terminal to confirm at and no `--yes` leaves it as it is, saying
+/// so.
+fn ensure_merge_method(
+    ui: &Ui,
+    args: &SigRepoArgs,
+    base: &str,
+    token: Option<&str>,
+    path: &str,
+    current: Option<Option<String>>,
+    wanted: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (Some(token), Some(current), Some(wanted)) = (token, current, wanted) else {
+        return Ok(());
+    };
+    if current.as_deref() == Some(wanted) {
+        println!("{path} merges with {wanted} already.");
+        return Ok(());
+    }
+    println!(
+        "{path} merges with {}; the SIG's repos merge with {wanted}.",
+        current.as_deref().unwrap_or("GitLab's default")
+    );
+    ui.step(&merge_method_step(wanted));
+    if args.dry_run {
+        return Ok(());
+    }
+    if !args.yes && !std::io::stdin().is_terminal() {
+        println!("No terminal to confirm at, and no --yes: the merge method is left as it is.");
+        return Ok(());
+    }
+    if confirmed(
+        args,
+        &format!("Make {path} merge with {wanted}?"),
+        "changing the merge method",
+    )? {
+        set_merge_method(&Client::new(base, path, token)?, path, wanted);
     }
     Ok(())
 }
@@ -437,7 +526,9 @@ pub fn default_branch_for<'a, T: Ord>(
 /// dry run counts the branch it would push. Changing the default branch
 /// needs the Maintainer role, so without a token this is skipped; a
 /// repo that cannot be read or changed, or a run with no terminal to
-/// confirm at and no `--yes`, leaves it as it is, saying so.
+/// confirm at and no `--yes`, leaves it as it is, saying so. The repo's
+/// merge method as read along the way, for [`ensure_merge_method`];
+/// `None` when nothing was read.
 fn ensure_default_branch(
     ui: &Ui,
     args: &SigRepoArgs,
@@ -446,27 +537,32 @@ fn ensure_default_branch(
     sig: Sig,
     path: &str,
     pushed: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Option<Option<String>>, Box<dyn std::error::Error>> {
     let Some(token) = token else {
-        return Ok(());
+        return Ok(None);
     };
     ui.step(&format!(
         "Find {path}'s newest SIG branch, the one it should open on, through GitLab's API"
     ));
     let client = Client::new(base, path, token)?;
-    let read = client
-        .project_status()
-        .and_then(|status| Ok((status.default_branch, client.list_branches()?)));
-    let (current, branches) = match read {
+    let read = client.project_status().and_then(|status| {
+        Ok((
+            status.default_branch,
+            status.merge_method,
+            client.list_branches()?,
+        ))
+    });
+    let (current, merge_method, branches) = match read {
         Ok(read) => read,
         Err(e) => {
             println!(
-                "Cannot read {path}'s branches ({e}); its default branch is left as it is. \
-                 Run sig-repo again to retry."
+                "Cannot read {path}'s settings ({e}); its default branch and merge method are \
+                 left as they are. Run sig-repo again to retry."
             );
-            return Ok(());
+            return Ok(None);
         }
     };
+    let read = Some(merge_method);
     let dated: Vec<(String, Option<chrono::DateTime<chrono::Utc>>)> = branches
         .iter()
         .map(|b| {
@@ -484,11 +580,11 @@ fn ensure_default_branch(
             "{path} has no SIG branch yet; it opens on {} for now.",
             current.as_deref().unwrap_or("GitLab's default")
         );
-        return Ok(());
+        return Ok(read);
     };
     if current.as_deref() == Some(newest) {
         println!("{path} opens on {newest} already.");
-        return Ok(());
+        return Ok(read);
     }
     println!(
         "{path} opens on {}; its newest SIG branch is {newest}.",
@@ -498,18 +594,18 @@ fn ensure_default_branch(
         "Make {newest} the default branch (Settings → Repository → Branch defaults)"
     ));
     if args.dry_run {
-        return Ok(());
+        return Ok(read);
     }
     if !args.yes && !std::io::stdin().is_terminal() {
         println!("No terminal to confirm at, and no --yes: the default branch is left as it is.");
-        return Ok(());
+        return Ok(read);
     }
     if !confirmed(
         args,
         &format!("Make {newest} {path}'s default branch?"),
         "changing the default branch",
     )? {
-        return Ok(());
+        return Ok(read);
     }
     match client.update_project(&sandogasa_gitlab::ProjectUpdate {
         default_branch: Some(newest.to_string()),
@@ -520,7 +616,7 @@ fn ensure_default_branch(
         // still stands.
         Err(e) => println!("warning: could not make {newest} the default branch: {e}"),
     }
-    Ok(())
+    Ok(read)
 }
 
 /// Push the merge request's commits to the SIG's repo as its branch.
@@ -636,11 +732,22 @@ fn track_locally(
     Ok(())
 }
 
-/// `run`, with the GitLab instance and token passed in.
+/// `run`, with the GitLab instance and token passed in, and no config.
+#[cfg(test)]
 pub fn run_with(
     args: &SigRepoArgs,
     base: &str,
     token: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_configured(args, base, token, &crate::config::Config::default())
+}
+
+/// `run`, with the GitLab instance, token and config passed in.
+pub fn run_configured(
+    args: &SigRepoArgs,
+    base: &str,
+    token: Option<String>,
+    config: &crate::config::Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ui = Ui {
         explain: args.explain,
@@ -661,7 +768,16 @@ pub fn run_with(
             .ok_or("say which SIG the repo is for: --sig hyperscale or --sig proposed-updates")?;
         (Sig::from(sig), args.target.clone(), None)
     };
-    ensure_repo(&ui, args, base, token.as_deref(), sig, &package)?;
+    let merge_method = crate::config::merge_method(config, sig)?;
+    let created = ensure_repo(
+        &ui,
+        args,
+        base,
+        token.as_deref(),
+        sig,
+        &package,
+        merge_method.as_deref(),
+    )?;
     let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
     let path = format!("{}/{package}", sig.gitlab_group());
     // In a checkout of the package, the SIG's repo is a remote of it, by
@@ -674,7 +790,18 @@ pub fn run_with(
         push_change(&ui, &repo, base, &path, &package, change)?;
     }
     let pushed = change.as_ref().map(|c| c.branch.as_str());
-    ensure_default_branch(&ui, args, base, token.as_deref(), sig, &path, pushed)?;
+    let current = ensure_default_branch(&ui, args, base, token.as_deref(), sig, &path, pushed)?;
+    if !created {
+        ensure_merge_method(
+            &ui,
+            args,
+            base,
+            token.as_deref(),
+            &path,
+            current,
+            merge_method.as_deref(),
+        )?;
+    }
     if let Some(change) = change {
         // The tracking issue next, unless the SIG has one for it.
         let issues = Client::new(base, &path, token.as_deref().unwrap_or(""))?
@@ -773,6 +900,15 @@ mod tests {
             .with_status(200)
             .with_body(r#"{"update_status": "finished"}"#)
             .create();
+        let fast_forward = server
+            .mock("PUT", path)
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"merge_method": "ff"}),
+            ))
+            .with_status(200)
+            .with_body("{}")
+            .expect(1)
+            .create();
 
         run_with(
             &args("rsync", Some(SigName::ProposedUpdates)),
@@ -783,6 +919,7 @@ mod tests {
         created.assert();
         configured.assert();
         started.assert();
+        fast_forward.assert();
     }
 
     #[test]
@@ -939,7 +1076,7 @@ mod tests {
             .with_body(
                 r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
                     "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
-                    "default_branch": "c10s"}"#,
+                    "default_branch": "c10s", "merge_method": "ff"}"#,
             )
             .create();
         server
@@ -1013,6 +1150,15 @@ mod tests {
             .mock("PUT", mockito::Matcher::Regex("mirror/pull".into()))
             .expect(0)
             .create();
+        let fast_forward = server
+            .mock("PUT", "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fwprof")
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"merge_method": "ff"}),
+            ))
+            .with_status(200)
+            .with_body("{}")
+            .expect(1)
+            .create();
         run_with(
             &args("wprof", Some(SigName::Hyperscale)),
             &server.url(),
@@ -1021,6 +1167,249 @@ mod tests {
         .unwrap();
         created.assert();
         mirror.assert();
+        fast_forward.assert();
+    }
+
+    /// The SIG's existing repo for rpm, merging with `method`, with no
+    /// branches yet.
+    fn existing_repo(server: &mut mockito::Server, group: &str, method: &str) -> mockito::Mock {
+        let path = format!("/api/v4/projects/CentOS%2F{group}%2Frpms%2Frpm");
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        server
+            .mock("GET", path.as_str())
+            .with_status(200)
+            .with_body(format!(
+                r#"{{"id": 3, "path_with_namespace": "CentOS/{group}/rpms/rpm",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "merge_method": "{method}"}}"#
+            ))
+            .create()
+    }
+
+    /// An existing repo merging with a merge commit: a dry run says so
+    /// and changes nothing, a run with --yes sets the SIG's method, and
+    /// one already on it is left alone.
+    #[test]
+    fn an_existing_repo_is_made_to_merge_the_sigs_way() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Frpm";
+        let get = existing_repo(&mut server, "Hyperscale", "merge");
+        let set = server
+            .mock("PUT", path)
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"merge_method": "ff"}),
+            ))
+            .with_status(200)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let mut dry = args("rpm", Some(SigName::Hyperscale));
+        dry.dry_run = true;
+        run_with(&dry, &server.url(), Some("t".into())).unwrap();
+        run_with(
+            &args("rpm", Some(SigName::Hyperscale)),
+            &server.url(),
+            Some("t".into()),
+        )
+        .unwrap();
+        set.assert();
+        get.remove();
+        existing_repo(&mut server, "Hyperscale", "ff");
+        run_with(
+            &args("rpm", Some(SigName::Hyperscale)),
+            &server.url(),
+            Some("t".into()),
+        )
+        .unwrap();
+        set.assert();
+    }
+
+    /// The config's method for a SIG wins over the SIG's own, and one
+    /// GitLab does not know is an error.
+    #[test]
+    fn a_configured_merge_method_is_the_one_set() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frpm";
+        existing_repo(&mut server, "proposed_updates", "merge");
+        let set = server
+            .mock("PUT", path)
+            .match_body(mockito::Matcher::Json(
+                serde_json::json!({"merge_method": "rebase_merge"}),
+            ))
+            .with_status(200)
+            .with_body("{}")
+            .expect(1)
+            .create();
+        let pu = args("rpm", Some(SigName::ProposedUpdates));
+        let config: crate::config::Config =
+            toml::from_str("[sigs.proposed_updates]\nmerge_method = \"rebase_merge\"\n").unwrap();
+        run_configured(&pu, &server.url(), Some("t".into()), &config).unwrap();
+        set.assert();
+        let bad: crate::config::Config =
+            toml::from_str("[sigs.proposed_updates]\nmerge_method = \"squash\"\n").unwrap();
+        let err = run_configured(&pu, &server.url(), Some("t".into()), &bad).unwrap_err();
+        assert!(err.to_string().contains("squash"), "{err}");
+    }
+
+    /// Without the Maintainer role GitLab refuses the change; the run
+    /// still succeeds, saying so.
+    #[test]
+    fn a_refused_merge_method_change_is_a_warning() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Frpm";
+        existing_repo(&mut server, "Hyperscale", "merge");
+        let refused = server.mock("PUT", path).with_status(403).create();
+        run_with(
+            &args("rpm", Some(SigName::Hyperscale)),
+            &server.url(),
+            Some("t".into()),
+        )
+        .unwrap();
+        refused.assert();
+    }
+
+    /// A Proposed Update carried from its merge request: rsync's
+    /// RHEL-303721 fix, fetched from CentOS Stream (a local bare repo, by
+    /// a URL rewrite) and pushed to the SIG's repo as its branch, with a
+    /// local branch tracking it. Run again, nothing is fetched or pushed.
+    #[test]
+    #[serial_test::serial]
+    fn a_merge_request_is_pushed_to_the_sigs_repo_once() {
+        use crate::test_support::{Fixture, git};
+        let fx = Fixture::proposed("c10s", &[]);
+        let mut server = mockito::Server::new();
+        let stream_root = fx.tmp.path().join("stream");
+        let stream = stream_root.join("redhat/centos-stream/rpms/rsync.git");
+        std::fs::create_dir_all(&stream).unwrap();
+        git(&stream, &["init", "--quiet", "--bare"]);
+        fx.git(&[
+            "config",
+            &format!("url.{}/.insteadOf", stream_root.display()),
+            &format!("{}/", server.url()),
+        ]);
+        // The merge request's commit, on Stream only.
+        fx.git(&["checkout", "--quiet", "-b", "mr"]);
+        std::fs::write(fx.repo.join("fix.patch"), "fix\n").unwrap();
+        fx.git(&["add", "."]);
+        fx.git(&["commit", "--quiet", "-m", "Fix CVE"]);
+        let head = fx.git(&["rev-parse", "HEAD"]);
+        fx.git(&[
+            "push",
+            "--quiet",
+            &stream.display().to_string(),
+            "mr:refs/merge-requests/7/head",
+        ]);
+        fx.git(&["checkout", "--quiet", "c10s"]);
+        fx.git(&["branch", "--quiet", "-D", "mr"]);
+
+        let mr_url = format!(
+            "{}/redhat/centos-stream/rpms/rsync/-/merge_requests/7",
+            server.url()
+        );
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests/7",
+            )
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "iid": 7, "title": "Fix CVE", "state": "opened",
+                    "web_url": mr_url, "source_branch": "fix", "target_branch": "c10s",
+                    "description": "Resolves: RHEL-303721\n", "sha": head,
+                })
+                .to_string(),
+            )
+            .create();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "c10s-proposed-RHEL-303721"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"[{"name": "c10s-proposed-RHEL-303721"}]"#)
+            .create();
+        let mut run = args(&mr_url, None);
+        run.repo = Some(fx.repo.clone());
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+
+        let branch = "c10s-proposed-RHEL-303721";
+        let on_sig = fx.git(&["ls-remote", "sig", &format!("refs/heads/{branch}")]);
+        assert!(on_sig.starts_with(&head), "{on_sig}");
+        assert_eq!(
+            fx.git(&[
+                "rev-parse",
+                "--abbrev-ref",
+                &format!("{branch}@{{upstream}}")
+            ]),
+            format!("sig/{branch}")
+        );
+        // At the head already: the stream repo is not needed again.
+        std::fs::remove_dir_all(&stream_root).unwrap();
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+
+        // A Hyperscale --sig for a merge request is refused.
+        run.sig = Some(SigName::Hyperscale);
+        let err = run_with(&run, &server.url(), None).unwrap_err();
+        assert!(err.to_string().contains("drop --sig"), "{err}");
+    }
+
+    /// `run` reads the config, warning about one that does not parse,
+    /// and reports a failure as an exit status.
+    #[test]
+    #[serial_test::serial]
+    fn run_warns_about_an_unreadable_config_and_fails_cleanly() {
+        let fx = crate::test_support::Fixture::proposed("c10s", &[]);
+        fx.config("[sigs\n");
+        assert_eq!(run(&args("rsync", None)), ExitCode::FAILURE);
+    }
+
+    /// The SIG's repo is added as a remote named after the SIG to a
+    /// checkout of the package that has none for it.
+    #[test]
+    #[serial_test::serial]
+    fn a_checkout_of_the_package_gets_the_sigs_repo_as_a_remote() {
+        let fx = crate::test_support::Fixture::proposed("c10s", &[]);
+        fx.git(&["remote", "remove", "sig"]);
+        fx.git(&[
+            "remote",
+            "add",
+            "origin",
+            "git+ssh://git@gitlab.example/redhat/centos-stream/rpms/rsync.git",
+        ]);
+        let mut server = mockito::Server::new();
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync",
+            )
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h"}"#,
+            )
+            .create();
+        let mut run = args("rsync", Some(SigName::ProposedUpdates));
+        run.repo = Some(fx.repo.clone());
+        run_with(&run, &server.url(), None).unwrap();
+        let host = server.url().replace("http://", "");
+        assert_eq!(
+            fx.git(&["remote", "get-url", "proposed_updates"]),
+            format!("git+ssh://git@{host}/CentOS/proposed_updates/rpms/rsync.git")
+        );
     }
 
     /// rsync's mirror, set up to copy every branch: offered, and with
