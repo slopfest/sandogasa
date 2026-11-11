@@ -817,16 +817,18 @@ autopush thresholds.
 The bug list is settled before the plan is shown. First ebranch
 proposes bugs the update looks like it closes, from two places: bugs
 still open against a package it builds, and `rhbz#` references in the
-changelog entries it introduces — the second matters because a bug
-fixed in Rawhide is closed when that build lands, so a branch update
-carrying the same fix would otherwise have nothing to attach. Only
-bugs that would be voted `+1` are proposed, and each is shown with how
-it was found. Answering `each` walks the list one bug at a time,
+changelog entries it introduces, which can name a bug filed against
+another component. Only open bugs that would be voted `+1` are
+proposed, and each is shown with how it was found. Answering `each` walks the list one bug at a time,
 reshowing that reason before each question, so a single wrong match
 can be dropped without losing the rest. The open-bug search is not
 scoped to the update's release: update requests are filed against
 Rawhide and package reviews under Fedora, so an EPEL update's bugs are
-mostly not EPEL bugs. CVE
+mostly not EPEL bugs. A bug filed for another release says which
+(`open against sandogasa, filed for Fedora rawhide`): whether an EPEL
+update should close a Rawhide version request depends on how the
+package is maintained, for instance kept open until the last branch
+has the version. CVE
 trackers among them are judged as described above, so a security
 update is offered the trackers filed against its release whose fix its
 build reaches, each with the CVE, the fixed version and the source, or
@@ -868,6 +870,15 @@ update's; a rebuild in someone else's side tag did not deliver them.
 ```console
 Left off, already met before this update (theirs to close):
   #2567306 asterisk-24.0.0 is available (asterisk was 24.0.0-3.fc46 already)
+```
+
+A bug the changelog names but that is closed already, usually by the
+Rawhide build of the same change, is listed apart too, since there is
+nothing left to decide:
+
+```console
+Left off, closed already:
+  #2521275 sandogasa-0.21.0 is available (CLOSED ERRATA already)
 ```
 
 Listed bugs are then screened for two ways of not belonging: a bug

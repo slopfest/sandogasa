@@ -17,17 +17,22 @@
 //!   release, are judged by where the CVE is fixed — NVD, or GitHub's
 //!   advisories when NVD has nothing — since their titles carry no
 //!   version; a build at or past the fix closes the tracker.
-//! - **`rhbz#` references in the new changelog entries.** A bug fixed
-//!   in Rawhide is closed when that build lands, so it is no longer
-//!   open and the first source misses it — but a branch update
-//!   carrying the same fix still closes it for that branch. Only for
-//!   a package the target already has: a package arriving for the
-//!   first time brings every entry it ever had, and those bugs were
-//!   closed by builds on another branch.
+//! - **`rhbz#` references in the new changelog entries**, which can
+//!   name a bug filed against another component. Only for a package
+//!   the target already has: a package arriving for the first time
+//!   brings every entry it ever had, and those bugs were closed by
+//!   builds on another branch.
 //!
 //! A candidate is proposed only if [`crate::karma::bug_verdict`]
 //! would score it +1, so what gets attached and what gets voted on
-//! cannot disagree.
+//! cannot disagree, and only while it is open: a closed bug, often
+//! closed by the Rawhide build of the same change, is listed apart
+//! rather than attached, since nothing is left to decide (#125).
+//!
+//! An open bug filed for another release is still proposed, saying
+//! which release: a maintainer who keeps every branch in step may
+//! keep a Rawhide version request open until the last EPEL update
+//! delivers it, which is then the update to close it.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -49,13 +54,17 @@ impl Candidate {
     }
 }
 
-/// What [`candidates`] found: the bugs to propose, and the open ones
-/// left off because a build from before the update already met them.
+/// What [`candidates`] found: the bugs to propose, the open ones left
+/// off because a build from before the update already met them, and
+/// the closed ones left off.
 pub struct Proposal {
     pub candidates: Vec<Candidate>,
     /// Each with why it is left off, as [`Candidate::source`] says why
     /// one is proposed.
     pub already_met: Vec<Candidate>,
+    /// Bugs that would be proposed but are closed already, each with
+    /// how (#125).
+    pub closed: Vec<Candidate>,
 }
 
 /// Why `bug`, open against a package the update builds, was met before
@@ -280,11 +289,20 @@ pub async fn candidates(
     crate::karma::attach_cve_facts(&mut facts, update, verbose).await;
     let mut out = Vec::new();
     let mut already_met = Vec::new();
+    let mut closed = Vec::new();
     for id in wanted {
         let Some(bug) = facts.get(&id) else { continue };
         let Verdict::Decided { karma: 1, reason } = crate::karma::bug_verdict(bug, update) else {
             continue;
         };
+        if let Some(how) = bug.closed() {
+            closed.push(Candidate {
+                bug_id: id,
+                summary: bug.summary.clone(),
+                source: format!("{how} already"),
+            });
+            continue;
+        }
         if !from_changelog.contains_key(&id)
             && let Some(why) = met_before(bug, old_versions)
         {
@@ -295,7 +313,7 @@ pub async fn candidates(
             });
             continue;
         }
-        let source = from_changelog.get(&id).cloned().unwrap_or_else(|| {
+        let mut source = from_changelog.get(&id).cloned().unwrap_or_else(|| {
             match (&bug.cve_fix, &bug.bundled, open.get(&id)) {
                 (Some(fix), _, _) => format!(
                     "{} tracker, fixed in {} per {}",
@@ -310,6 +328,13 @@ pub async fn candidates(
                 (None, None, None) => "open".to_string(),
             }
         });
+        // A tracker's release was matched by the verdict already.
+        if bug.cve_fix.is_none()
+            && bug.bundled.is_none()
+            && let Some(release) = bug.other_release(update.branch)
+        {
+            source.push_str(&format!(", filed for {release}"));
+        }
         out.push(Candidate {
             bug_id: id,
             summary: bug.summary.clone(),
@@ -319,6 +344,7 @@ pub async fn candidates(
     Proposal {
         candidates: out,
         already_met,
+        closed,
     }
 }
 
@@ -475,6 +501,80 @@ mod tests {
         // A bug already on the update is not proposed again.
         let again = candidates(&bz, &BTreeMap::new(), &old, &update, &[2458837], false).await;
         assert!(again.candidates.is_empty());
+    }
+
+    /// The run #125 was found on, an EPEL update: a version request the
+    /// new changelog names but Rawhide's build already closed is left
+    /// off as closed, and the open Rawhide request is proposed, saying
+    /// it was filed for Rawhide.
+    #[tokio::test]
+    async fn candidates_leave_off_closed_bugs_and_name_another_release() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let bug = |id: u64, summary: &str, status: &str, resolution: &str| {
+            serde_json::json!({
+                "id": id, "summary": summary, "status": status,
+                "resolution": resolution, "product": "Fedora",
+                "component": ["sandogasa"], "version": ["rawhide"],
+                "severity": "unspecified", "priority": "unspecified",
+                "assigned_to": "nobody@fedoraproject.org", "creator": "r@example.com",
+                "creation_time": "2026-01-01T00:00:00Z",
+                "last_change_time": "2026-01-01T00:00:00Z"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("bug_status", "__open__"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug(2569815, "sandogasa-0.28.0 is available", "NEW", "")],
+                "total_matches": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("id", "2521275"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "bugs": [bug(2521275, "sandogasa-0.21.0 is available", "CLOSED", "ERRATA")],
+                "total_matches": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        let builds = vec![("sandogasa".to_string(), "0.28.0-1.el10_4".to_string())];
+        let nvrs = vec!["sandogasa-0.28.0-1.el10_4".to_string()];
+        let trackers = sandogasa_bugclass::bugzilla::BranchTrackers::default();
+        let update = UpdateFacts {
+            builds: &builds,
+            nvrs: &nvrs,
+            trackers: &trackers,
+            branch: "epel10.4",
+            unsatisfied: &[],
+            full_analysis: true,
+        };
+        let changelogs = BTreeMap::from([(
+            "sandogasa".to_string(),
+            "* Mon Nov 09 2026 Packager <p@example.com> - 0.28.0-1\n\
+             - Update to 0.28.0; Resolves rhbz#2521275\n\n\
+             * Fri Oct 30 2026 Packager <p@example.com> - 0.27.1-1\n\
+             - Update to 0.27.1\n"
+                .to_string(),
+        )]);
+        let old = olds(&[("sandogasa", Some("0.27.1-1.el10_4"))]);
+        let proposal = candidates(&bz, &changelogs, &old, &update, &[], false).await;
+        let ids = |cs: &[Candidate]| cs.iter().map(|c| c.bug_id).collect::<Vec<_>>();
+        assert_eq!(ids(&proposal.candidates), [2569815]);
+        assert_eq!(
+            proposal.candidates[0].source,
+            "open against sandogasa, filed for Fedora rawhide"
+        );
+        assert_eq!(ids(&proposal.closed), [2521275]);
+        assert_eq!(proposal.closed[0].source, "CLOSED ERRATA already");
+        assert!(proposal.already_met.is_empty());
     }
 
     #[test]

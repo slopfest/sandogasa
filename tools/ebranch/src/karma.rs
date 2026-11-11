@@ -41,6 +41,11 @@ pub(crate) struct BugFacts {
     /// Bugzilla's severity: on a CVE tracker, Product Security's
     /// impact rating, which a security update's severity follows.
     pub severity: String,
+    /// Bugzilla's status and resolution (`CLOSED`, `ERRATA`): a closed
+    /// bug is not proposed for an update, whoever named it (#125).
+    /// Empty when not known.
+    pub status: String,
+    pub resolution: String,
     /// For a security tracker on a package the update builds, filed
     /// against the update's release: where the CVE is fixed, from NVD
     /// or GitHub's advisories. Filled by [`attach_cve_facts`]; `None`
@@ -68,6 +73,30 @@ pub(crate) struct BundledCopy {
 }
 
 impl BugFacts {
+    /// How the bug was closed (`CLOSED ERRATA`), or `None` while it is
+    /// open or its status is not known.
+    pub(crate) fn closed(&self) -> Option<String> {
+        (self.status == "CLOSED").then(|| {
+            if self.resolution.is_empty() {
+                self.status.clone()
+            } else {
+                format!("{} {}", self.status, self.resolution)
+            }
+        })
+    }
+
+    /// The release the bug is filed for (`Fedora rawhide`) when it is
+    /// for another product than `branch`'s, as an EPEL update's version
+    /// requests are filed against Fedora rawhide. Versions within a
+    /// product are not compared: Rawhide's side tag is `f45` while its
+    /// bugs say `rawhide`, which would read as another release.
+    pub(crate) fn other_release(&self, branch: &str) -> Option<String> {
+        let (product, _) = sandogasa_bugclass::bugzilla::product_version_for_branch(branch)?;
+        let filed = self.product.as_deref()?;
+        let filed_version = self.version.first()?;
+        (filed != product).then(|| format!("{filed} {filed_version}"))
+    }
+
     /// Whether the bug is a CVE tracker filed against the release the
     /// update targets — a tracker for another release is not this
     /// update's to answer.
@@ -806,6 +835,8 @@ pub(crate) fn facts_of(bugs: Vec<sandogasa_bugzilla::models::Bug>) -> BugMap {
                     version: bug.version,
                     keywords: bug.keywords,
                     severity: bug.severity,
+                    status: bug.status,
+                    resolution: bug.resolution,
                     cve_fix: None,
                     bundled: None,
                 },
@@ -1366,6 +1397,54 @@ mod tests {
             decided(bug_verdict(&request("rust-drm", "epel10"), &update)).is_none(),
             "an unbuilt package must not be proposed"
         );
+    }
+
+    #[test]
+    fn closed_says_how_and_only_for_a_closed_bug() {
+        let with = |status: &str, resolution: &str| BugFacts {
+            status: status.to_string(),
+            resolution: resolution.to_string(),
+            ..BugFacts::default()
+        };
+        assert_eq!(
+            with("CLOSED", "ERRATA").closed().as_deref(),
+            Some("CLOSED ERRATA")
+        );
+        assert_eq!(with("CLOSED", "").closed().as_deref(), Some("CLOSED"));
+        assert_eq!(with("MODIFIED", "").closed(), None);
+        assert_eq!(BugFacts::default().closed(), None);
+    }
+
+    #[test]
+    fn other_release_names_the_release_a_bug_is_filed_for() {
+        let filed = |product: &str, version: &str| BugFacts {
+            product: Some(product.to_string()),
+            version: vec![version.to_string()],
+            ..BugFacts::default()
+        };
+        let rawhide = filed("Fedora", "rawhide");
+        assert_eq!(
+            rawhide.other_release("epel10.4").as_deref(),
+            Some("Fedora rawhide")
+        );
+        // Within Fedora the versions are not compared: a Rawhide side
+        // tag's branch is a number.
+        assert_eq!(rawhide.other_release("f45"), None);
+        assert_eq!(rawhide.other_release("rawhide"), None);
+        assert_eq!(
+            filed("Fedora EPEL", "epel9")
+                .other_release("f44")
+                .as_deref(),
+            Some("Fedora EPEL epel9")
+        );
+        // EPEL minors share their major's product version.
+        assert_eq!(
+            filed("Fedora EPEL", "epel10").other_release("epel10.4"),
+            None
+        );
+        // Nothing known, nothing said.
+        assert_eq!(BugFacts::default().other_release("epel10.4"), None);
+        assert_eq!(rawhide.other_release("c10s"), None);
     }
 
     /// A bug as Bugzilla would describe it.

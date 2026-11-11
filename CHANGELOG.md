@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### ebranch's bug proposal leaves off bugs that are closed already
+
+For sandogasa 0.28.0 on EPEL 10, `check-update --submit` proposed
+version requests such as "sandogasa-0.21.0 is available" that were
+CLOSED ERRATA long before, because the new changelog entries named
+them. Bugs a changelog names were read by ID and judged without their
+status, unlike the open-bug search, which asks Bugzilla for open bugs
+only. A closed bug is now listed apart under "Left off, closed
+already", with how it was closed, in `check-update --submit` and left
+out of `update-bugs`' proposal.
+
+An open bug filed for another product is still proposed, and now says
+which release it was filed for ("open against sandogasa, filed for
+Fedora rawhide"). Whether an EPEL update should close a Rawhide version
+request depends on how the package is maintained: a maintainer who
+keeps every branch in step may keep it open until the last EPEL update
+has the version. Fixes #125.
+
 ### ebranch checks an EPEL 10 minor's update against that minor's own repos
 
 `ebranch check-update sandogasa-0.28.0-1.el10_4` compared the build

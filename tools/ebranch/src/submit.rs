@@ -279,6 +279,7 @@ pub(crate) async fn gather_bugs(
         return crate::discover::Proposal {
             candidates: Vec::new(),
             already_met: Vec::new(),
+            closed: Vec::new(),
         };
     }
     // The changelogs, open bugs and CVE fixes take a while on a big
@@ -349,10 +350,17 @@ async fn propose_bugs(
     let crate::discover::Proposal {
         candidates,
         already_met,
+        closed,
     } = gather_bugs(bz, report, already_listed, koji_profile, verbose).await;
     if !already_met.is_empty() {
         eprintln!("\nLeft off, already met before this update (theirs to close):");
         for c in &already_met {
+            eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
+        }
+    }
+    if !closed.is_empty() {
+        eprintln!("\nLeft off, closed already:");
+        for c in &closed {
             eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
         }
     }
