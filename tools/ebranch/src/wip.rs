@@ -1563,7 +1563,8 @@ async fn refresh_reviews(
             })
             .flatten();
         let found = match known {
-            Some(id) => match bz.bugs(&[id]).await {
+            // The status, filing date and fedora-review flag (#123).
+            Some(id) => match bz.bugs_with(&[id], &["flags"]).await {
                 Ok(bugs) => bugs.first().map(|b| {
                     (
                         b.id,

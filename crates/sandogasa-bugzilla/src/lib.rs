@@ -3,6 +3,8 @@
 pub mod claim;
 mod client;
 pub mod models;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 pub use client::{BzClient, KeyCheck, LoginCheck, WriteOutcome};
 

@@ -59,8 +59,9 @@ impl HealthCheck for PendingUpdate {
             "product=Fedora&product=Fedora EPEL&component={package}\
              &reporter={RELEASE_MONITORING_REPORTER}&bug_status=__open__"
         );
+        // Only the summary is read, which every bug comes with (#123).
         let bugs = ctx
-            .block_on(ctx.bz.search(&query, 0))
+            .block_on(ctx.bz.search_with(&query, 0, &[]))
             .map_err(|e| format!("Bugzilla search failed: {e}"))?;
 
         let Some((bug_id, new)) = pick_latest(&bugs, package) else {
@@ -204,16 +205,20 @@ mod tests {
         })
     }
 
+    /// Answered as Bugzilla does, with only the fields asked for.
     async fn mount_bugs(server: &MockServer, bugs: Vec<serde_json::Value>) {
-        let total = bugs.len();
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
             .and(query_param("component", "foo"))
             .and(query_param("reporter", RELEASE_MONITORING_REPORTER))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "bugs": bugs,
-                "total_matches": total
-            })))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = bugs;
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
             .mount(server)
             .await;
     }

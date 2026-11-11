@@ -110,9 +110,12 @@ pub async fn run(
                 eprintln!("[poi-tracker] batch: querying bugs for {email}");
             }
             let query = crate::triage_updates::batch_bug_query(email, false);
-            let bugs = retry("batch bug search", RETRY_ATTEMPTS, || bz.search(&query, 0))
-                .await
-                .map_err(|e| format!("Bugzilla batch search: {e}"))?;
+            // The summary is all that is read (#123).
+            let bugs = retry("batch bug search", RETRY_ATTEMPTS, || {
+                bz.search_with(&query, 0, &[])
+            })
+            .await
+            .map_err(|e| format!("Bugzilla batch search: {e}"))?;
             Some(crate::triage_updates::group_bugs_by_component(bugs))
         }
         None => None,
@@ -162,7 +165,7 @@ pub async fn run(
                 per_pkg = retry(
                     &format!("bug search for {}", pkg.name),
                     RETRY_ATTEMPTS,
-                    || bz.search(&query, 0),
+                    || bz.search_with(&query, 0, &[]),
                 )
                 .await
                 .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;

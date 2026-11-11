@@ -29,6 +29,11 @@ assert_eq!(kind.as_str(), "security"); // or whatever
 # }
 ```
 
+A search whose bugs go to `classify` asks for
+`bugzilla::CLASSIFY_FIELDS` (`bz.search_with(query, 0,
+bugzilla::CLASSIFY_FIELDS)`): the fields it reads beyond those every
+bug comes with.
+
 ## License
 
 Licensed under either of

@@ -30,6 +30,7 @@ sandogasa-build = { workspace = true }
 
 [dev-dependencies]
 mockito = { workspace = true }
+sandogasa-bugzilla = { workspace = true, features = ["test-support"] }
 sandogasa-cli = { workspace = true, features = ["man"] }
 sandogasa-config = { workspace = true, features = ["test-support"] }
 serial_test = { workspace = true }

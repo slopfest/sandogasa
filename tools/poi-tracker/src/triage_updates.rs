@@ -337,6 +337,16 @@ pub fn find_addressing(
     best.map(|(b, _)| b)
 }
 
+/// The fields of a release-monitoring bug that triage-updates and
+/// triage-retired read beyond those every bug comes with
+/// (`BzClient::REQUIRED_FIELDS`), for their searches to ask for rather
+/// than the whole default set with flags (#123): `cf_fixed_in`, so a
+/// MODIFIED bug that already records its build is not marked again
+/// ([`plan_stale_bug`]), and `version`, which matches a batch-mode bug
+/// to its branch (`triage_retired::bugs_for_branch`). A field read and
+/// missing here reads as empty.
+pub const RELEASE_MONITORING_BUG_FIELDS: &[&str] = &["cf_fixed_in", "version"];
+
 /// Decide the action for one bug from its per-release findings.
 /// Returns `None` when nothing addresses the bug yet (it's a
 /// genuine pending update).
@@ -484,7 +494,11 @@ pub async fn run(
                 eprintln!("[poi-tracker] batch: querying bugs for {email}");
             }
             let bugs = client
-                .search(&batch_bug_query(email, false), 0)
+                .search_with(
+                    &batch_bug_query(email, false),
+                    0,
+                    RELEASE_MONITORING_BUG_FIELDS,
+                )
                 .await
                 .map_err(|e| format!("Bugzilla batch search: {e}"))?;
             if verbose {
@@ -566,7 +580,7 @@ pub async fn run(
                 }
                 let query = bug_search_query(&pkg.name);
                 per_pkg = client
-                    .search(&query, 0)
+                    .search_with(&query, 0, RELEASE_MONITORING_BUG_FIELDS)
                     .await
                     .map_err(|e| format!("Bugzilla search for {}: {e}", pkg.name))?;
                 &per_pkg
@@ -1229,6 +1243,45 @@ mod tests {
         assert_eq!(plan.fixed_in, "foo-1.2.0-1.fc45");
     }
 
+    /// What the narrowed searches return still carries what their
+    /// readers use, against a mock that, like Bugzilla, sends only the
+    /// fields asked for (#123): a MODIFIED bug with its Fixed In
+    /// Version recorded is left alone, and a batch bug is matched to
+    /// its branch by version.
+    #[tokio::test]
+    async fn the_release_monitoring_search_carries_what_triage_reads() {
+        let server = MockServer::start().await;
+        let mut bug = bug_json(1, "foo-1.2.0 is available");
+        bug["status"] = serde_json::json!("MODIFIED");
+        bug["cf_fixed_in"] = serde_json::json!("foo-1.2.0-1.fc43");
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = vec![bug];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
+            .mount(&server)
+            .await;
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        let bugs = bz
+            .search_with(&bug_search_query("foo"), 0, RELEASE_MONITORING_BUG_FIELDS)
+            .await
+            .unwrap();
+        let findings = vec![finding(
+            "F43",
+            Some(("foo-1.2.0-1.fc43", "FEDORA-B", false)),
+        )];
+        assert!(plan_stale_bug(&bugs[0], "foo", "1.2.0", findings).is_none());
+        assert_eq!(
+            crate::triage_retired::bugs_for_branch(&bugs, "rawhide").len(),
+            1
+        );
+    }
+
     #[test]
     fn plan_stale_skips_already_modified_with_fixed_in() {
         let mut bug = make_bug(1, "unspecified", "foo-1.2.0 is available");
@@ -1309,6 +1362,10 @@ mod tests {
             "creator": RELEASE_MONITORING_REPORTER,
             "creation_time": "2026-05-01T00:00:00Z",
             "last_change_time": "2026-05-01T00:00:00Z",
+            "version": ["rawhide"],
+            "cf_fixed_in": "",
+            "flags": [],
+            "cc": [],
         })
     }
 
@@ -1318,10 +1375,14 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
             .and(query_param("component", "foo"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "bugs": [bug_json(1, "foo-1.2.0 is available")],
-                "total_matches": 1
-            })))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = vec![bug_json(1, "foo-1.2.0 is available")];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
             .mount(server)
             .await;
         Mock::given(method("GET"))
@@ -1903,10 +1964,15 @@ mod tests {
             .and(query_param("email1", "me@example.com"))
             .and(query_param("emailassigned_to1", "1"))
             .and(query_param("emailcc1", "1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "bugs": [bug_json(1, "foo-1.2.0 is available"), other],
-                "total_matches": 2
-            })))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> =
+                    vec![bug_json(1, "foo-1.2.0 is available"), other];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
             .expect(1)
             .mount(&server)
             .await;

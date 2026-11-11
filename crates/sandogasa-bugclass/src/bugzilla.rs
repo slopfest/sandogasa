@@ -130,6 +130,12 @@ pub fn branch_request_names(package: &str, component: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('-'))
 }
 
+/// The fields [`classify`] reads beyond those every bug comes with
+/// (`BzClient::REQUIRED_FIELDS`), for a search whose bugs are
+/// classified to ask for (`BzClient::search_with`). A field missing
+/// here reads as empty, and the bug as the wrong kind.
+pub const CLASSIFY_FIELDS: &[&str] = &["blocks", "keywords"];
+
 /// Classify a Bugzilla bug into a [`BugKind`].
 ///
 /// Returns `Review` for bugs filed against the "Package Review"
@@ -291,7 +297,8 @@ pub async fn lookup_branch_trackers(bz: &BzClient, branch: &str) -> BranchTracke
         return BranchTrackers::default();
     };
     let query = format!("alias={ftbfs_alias}&alias={fti_alias}");
-    let Ok(bugs) = bz.search(&query, 0).await else {
+    // A tracker is told by its alias alone (#123).
+    let Ok(bugs) = bz.search_with(&query, 0, &["alias"]).await else {
         return BranchTrackers::default();
     };
     let mut trackers = BranchTrackers::default();
@@ -326,7 +333,8 @@ pub async fn lookup_trackers(bz: &BzClient, versions: &[u32], verbose: bool) -> 
 
     let alias_params: Vec<String> = aliases.iter().map(|a| format!("alias={a}")).collect();
     let query = alias_params.join("&");
-    if let Ok(bugs) = bz.search(&query, 0).await {
+    // A tracker is told by its alias alone (#123).
+    if let Ok(bugs) = bz.search_with(&query, 0, &["alias"]).await {
         for bug in &bugs {
             for alias in &bug.alias {
                 if alias.ends_with("FTBFS") {
@@ -352,6 +360,48 @@ pub async fn lookup_trackers(bz: &BzClient, versions: &[u32], verbose: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tracker lookups tell trackers apart by alias, which they ask
+    /// for: answered as Bugzilla does, with only the fields asked for,
+    /// a search without it would find none (#123).
+    #[tokio::test]
+    async fn tracker_lookups_read_the_aliases_they_ask_for() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer};
+        let server = MockServer::start().await;
+        let tracker = |id: u64, alias: &str| {
+            serde_json::json!({
+                "id": id, "summary": "tracker", "status": "NEW", "resolution": "",
+                "product": "Fedora", "component": ["distribution"],
+                "severity": "unspecified", "priority": "unspecified",
+                "assigned_to": "a", "creator": "c",
+                "creation_time": "2026-01-01T00:00:00Z",
+                "last_change_time": "2026-01-01T00:00:00Z",
+                "alias": [alias], "cc": ["x"], "flags": []
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = vec![
+                    tracker(100, "RAWHIDEFTBFS"),
+                    tracker(200, "RAWHIDEFailsToInstall"),
+                ];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
+            .mount(&server)
+            .await;
+        let bz = BzClient::new(&server.uri());
+        let branch = lookup_branch_trackers(&bz, "rawhide").await;
+        assert_eq!((branch.ftbfs, branch.fti), (Some(100), Some(200)));
+        let all = lookup_trackers(&bz, &[], false).await;
+        assert_eq!(all.ftbfs, HashSet::from([100]));
+        assert_eq!(all.fti, HashSet::from([200]));
+    }
 
     /// Construct a `Bug` via serde — `Bug` is `#[non_exhaustive]`,
     /// so literal construction is reserved to its own crate.

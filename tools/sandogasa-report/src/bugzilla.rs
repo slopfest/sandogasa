@@ -181,12 +181,16 @@ pub async fn bugzilla_report(
 const COMPLETED_STATUSES: [&str; 2] = ["CLOSED", "RELEASE_PENDING"];
 
 /// Run one Bugzilla search (unlimited results), normalizing the
-/// transport error into our string form.
+/// transport error into our string form. `fields` are those read
+/// beyond the ones every bug comes with, rather than the whole default
+/// set with flags, over a report's hundreds of bugs (#123): the
+/// classification's for the bugs it sorts, none for the review queries.
 async fn search(
     bz: &BzClient,
     query: &str,
+    fields: &[&str],
 ) -> Result<Vec<sandogasa_bugzilla::models::Bug>, String> {
-    bz.search(query, 0)
+    bz.search_with(query, 0, fields)
         .await
         .map_err(|e| format!("Bugzilla search failed: {e}"))
 }
@@ -234,6 +238,7 @@ async fn bugzilla_report_with_client(
              &creation_time={since_str}\
              &chfieldfrom={since_str}&chfieldto={until_str}"
         ),
+        sandogasa_bugclass::bugzilla::CLASSIFY_FIELDS,
     )
     .await?;
 
@@ -255,6 +260,7 @@ async fn bugzilla_report_with_client(
                      &chfield=bug_status&chfieldvalue={status}\
                      &chfieldfrom={since_str}&chfieldto={until_str}"
                 ),
+                sandogasa_bugclass::bugzilla::CLASSIFY_FIELDS,
             )
             .await?,
         );
@@ -278,6 +284,7 @@ async fn bugzilla_report_with_client(
                  &assigned_to={email}\
                  &chfieldfrom={since_str}&chfieldto={until_str}"
             ),
+            &[],
         )
         .await?;
 
@@ -295,6 +302,7 @@ async fn bugzilla_report_with_client(
                      &chfield=bug_status&chfieldvalue={status}\
                      &chfieldfrom={since_str}&chfieldto={until_str}"
                 ),
+                &[],
             )
             .await?;
             reviews_completed_ids.extend(bugs.iter().map(|b| b.id));
@@ -314,6 +322,7 @@ async fn bugzilla_report_with_client(
                      &chfield=bug_status&chfieldvalue={status}\
                      &chfieldfrom={since_str}&chfieldto={until_str}"
                 ),
+                &[],
             )
             .await?;
             reviews_done_completed_ids.extend(bugs.iter().map(|b| b.id));
@@ -701,20 +710,61 @@ mod tests {
         let server = MockServer::start().await;
         let bz = BzClient::new(&server.uri());
 
-        // All search queries return the same set of bugs for simplicity.
-        let bugs = serde_json::json!({
-            "bugs": [
-                bug_json(1, "Review Request: rust-foo - Foo", "Package Review", "NEW", &[], "test@example.com"),
-                bug_json(2, "CVE-2026-1234 bar: overflow", "bar", "CLOSED", &["SecurityTracking"], "other@example.com"),
-                bug_json(3, "fish-4.0 is available", "fish", "CLOSED", &["FutureFeature"], "other@example.com"),
-                bug_json(4, "Please branch rust-baz for epel10", "rust-baz", "CLOSED", &[], "test@example.com"),
-                bug_json(5, "qux crashes on startup", "qux", "NEW", &[], "test@example.com"),
-            ],
-            "total_matches": 5
-        });
+        // All search queries return the same set of bugs for simplicity,
+        // answered as Bugzilla does, with only the fields asked for: the
+        // update request is one by its FutureFeature keyword (#123).
+        let bugs = vec![
+            bug_json(
+                1,
+                "Review Request: rust-foo - Foo",
+                "Package Review",
+                "NEW",
+                &[],
+                "test@example.com",
+            ),
+            bug_json(
+                2,
+                "CVE-2026-1234 bar: overflow",
+                "bar",
+                "CLOSED",
+                &["SecurityTracking"],
+                "other@example.com",
+            ),
+            bug_json(
+                3,
+                "fish-4.0 is available",
+                "fish",
+                "CLOSED",
+                &["FutureFeature"],
+                "other@example.com",
+            ),
+            bug_json(
+                4,
+                "Please branch rust-baz for epel10",
+                "rust-baz",
+                "CLOSED",
+                &[],
+                "test@example.com",
+            ),
+            bug_json(
+                5,
+                "qux crashes on startup",
+                "qux",
+                "NEW",
+                &[],
+                "test@example.com",
+            ),
+        ];
 
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&bugs))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = bugs;
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
             .mount(&server)
             .await;
 

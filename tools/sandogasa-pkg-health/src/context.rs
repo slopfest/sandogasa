@@ -196,7 +196,8 @@ async fn fetch_version_trackers(bz: &BzClient, prefix: &str) -> TrackerIds {
     let query = aliases.join("&");
     let mut ftbfs = HashSet::new();
     let mut fti = HashSet::new();
-    if let Ok(bugs) = bz.search(&query, 0).await {
+    // The tracker's id and aliases are all that is read (#123).
+    if let Ok(bugs) = bz.search_with(&query, 0, &["alias"]).await {
         for bug in &bugs {
             for alias in &bug.alias {
                 if alias.ends_with("FTBFS") {
@@ -208,4 +209,47 @@ async fn fetch_version_trackers(bz: &BzClient, prefix: &str) -> TrackerIds {
         }
     }
     TrackerIds { ftbfs, fti }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The trackers are told apart by their aliases, which the search
+    /// has to ask for: answered as Bugzilla does, a search without them
+    /// finds no tracker at all (#123).
+    #[tokio::test]
+    async fn trackers_are_read_by_their_aliases() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer};
+        let server = MockServer::start().await;
+        let tracker = |id: u64, alias: &str| {
+            serde_json::json!({
+                "id": id, "summary": "tracker", "status": "NEW", "resolution": "",
+                "product": "Fedora", "component": ["distribution"],
+                "severity": "unspecified", "priority": "unspecified",
+                "assigned_to": "a", "creator": "c",
+                "creation_time": "2026-01-01T00:00:00Z",
+                "last_change_time": "2026-01-01T00:00:00Z",
+                "alias": [alias], "blocks": [], "flags": []
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("alias", "F45FTBFS"))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> =
+                    vec![tracker(100, "F45FTBFS"), tracker(200, "F45FailsToInstall")];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
+            .mount(&server)
+            .await;
+        let ids = fetch_version_trackers(&BzClient::new(&server.uri()), "F45").await;
+        assert_eq!(ids.ftbfs, HashSet::from([100]));
+        assert_eq!(ids.fti, HashSet::from([200]));
+    }
 }

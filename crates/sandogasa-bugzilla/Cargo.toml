@@ -8,6 +8,10 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# A Bugzilla-like answer for callers' tests; see src/test_support.rs.
+test-support = []
+
 [dependencies]
 tokio = { workspace = true }
 chrono = { workspace = true }

@@ -85,7 +85,8 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
         if opts.verbose {
             eprintln!("[check-pkg-reviews] verifying {} cached bug(s)", ids.len());
         }
-        match bz.bugs(&ids).await {
+        // Only the status is read (#123).
+        match bz.bugs_with(&ids, &[]).await {
             Ok(bugs) => {
                 let fetched: BTreeMap<u64, _> = bugs.into_iter().map(|b| (b.id, b)).collect();
                 for (id, pkg_name) in &cached_pkg_by_id {
@@ -154,7 +155,7 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
         BTreeMap::new()
     } else {
         let bugs = bz
-            .bugs(&all_bug_ids)
+            .bugs_with(&all_bug_ids, &["depends_on"])
             .await
             .map_err(|e| format!("failed to fetch bugs: {e}"))?;
         bugs.into_iter().map(|b| (b.id, b.depends_on)).collect()
@@ -330,8 +331,10 @@ pub async fn find_review_bug(
          &short_desc=Review Request: {rpm_name}"
     );
 
+    // The summary to match and, for check-wip, the fedora-review flag
+    // (`wip::is_approved`); nothing else of the default set (#123).
     let bugs = bz
-        .search(&query, 10)
+        .search_with(&query, 10, &["flags"])
         .await
         .map_err(|e| format!("Bugzilla search failed for {rpm_name}: {e}"))?;
 
@@ -460,6 +463,54 @@ fn print_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The review search asks for the flags check-wip reads, against a
+    /// mock that, like Bugzilla, sends only the fields asked for
+    /// (#123), and matches the package exactly.
+    #[tokio::test]
+    async fn the_review_search_carries_the_review_flag() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer};
+        let server = MockServer::start().await;
+        let review = |id: u64, summary: &str| {
+            serde_json::json!({
+                "id": id, "summary": summary, "status": "POST", "resolution": "",
+                "product": "Fedora", "component": ["Package Review"],
+                "severity": "medium", "priority": "medium",
+                "assigned_to": "r@example.com", "creator": "p@example.com",
+                "creation_time": "2026-01-01T00:00:00Z",
+                "last_change_time": "2026-01-01T00:00:00Z",
+                "flags": [{"name": "fedora-review", "status": "+"}],
+                "cc": ["x@example.com"], "depends_on": [1]
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = vec![
+                    review(10, "Review Request: rust-foo-bar - Foo bar"),
+                    review(11, "Review Request: rust-foo - Foo"),
+                ];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
+            .mount(&server)
+            .await;
+        let bz = BzClient::new(&server.uri());
+        let bug = find_review_bug(&bz, "rust-foo").await.unwrap().unwrap();
+        assert_eq!(bug.id, 11);
+        assert!(
+            bug.flags
+                .iter()
+                .any(|f| f.name == "fedora-review" && f.status == "+"),
+            "{:?}",
+            bug.flags
+        );
+        assert!(bug.cc.is_empty(), "not asked for, so not sent");
+    }
 
     #[test]
     fn collect_packages_includes_root() {

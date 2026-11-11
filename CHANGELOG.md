@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Every Bugzilla search asks for only the fields its caller reads
+
+pkg-health's open-bug count, fedora-cve-triage's CVE sweep,
+poi-tracker's triage and semver audit, sandogasa-report, hattrack,
+fesco-chair and ebranch's branch-request and review lookups each asked
+Bugzilla for the whole default set of fields plus flags, CC lists
+included, though they read a handful. Red Hat's Bugzilla answers 20
+bugs a page, so a sweep of hundreds of bugs is dozens of pages, and
+#116 measured that asking for only what ebranch's bug proposal read
+took its 452-bug search from 24 to 13 seconds.
+
+Every search and read by ID outside the client now goes through
+`search_with` or `bugs_with`, naming the fields read beyond
+`BzClient::REQUIRED_FIELDS`: for instance `flags` for check-wip's
+review approval, `cf_fixed_in` and `version` for poi-tracker, and for
+fedora-cve-triage `alias`, `cf_fixed_in`, `keywords` and `version`,
+where a missing Fixed In Version would have been overwritten on close.
+sandogasa-bugclass exports `CLASSIFY_FIELDS`, the fields `classify`
+reads, for searches whose bugs it sorts.
+
+sandogasa-bugzilla gains a `test-support` feature with
+`test_support::answer`, which builds the body Bugzilla would send,
+with only the fields asked for, for a wiremock or mockito mock to
+answer with. The switched searches' tests use it, so a field a caller
+reads but does not ask for reads as empty there too. Fixes #123.
+
 ### ebranch reads an EPEL minor in freeze from that minor's own repos
 
 Once EPEL 10.5 opens, EPEL 10.4 goes into freeze, and checking a 10.4

@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 
-use sandogasa_bugclass::bugzilla::classify;
+use sandogasa_bugclass::bugzilla::{CLASSIFY_FIELDS, classify};
 
 use crate::check::{CheckResult, CostTier, HealthCheck};
 use crate::context::Context;
@@ -58,8 +58,10 @@ impl HealthCheck for BugCount {
 
         let query =
             format!("product=Fedora&product=Fedora EPEL&component={package}&resolution=---");
+        // Only what the classification reads: a package's open bugs
+        // run to hundreds, and Bugzilla answers 20 a page (#123).
         let bugs = ctx
-            .block_on(ctx.bz.search(&query, 0))
+            .block_on(ctx.bz.search_with(&query, 0, CLASSIFY_FIELDS))
             .map_err(|e| format!("Bugzilla search failed: {e}"))?;
 
         let mut by_kind: BTreeMap<&str, u64> = BTreeMap::new();
@@ -189,14 +191,22 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "bugs": [
+            // Answered as Bugzilla does, with only the fields asked for,
+            // so a field the classification reads but the search does
+            // not ask for would read empty here too (#123).
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = vec![
                     bug_json(1, "CVE-2026-1234 foo: overflow", "foo", &[], &[]),
                     bug_json(2, "foo: typo in help text", "foo", &[], &[]),
                     bug_json(3, "foo FTBFS in rawhide", "foo", &[], &[999]),
-                ],
-                "total_matches": 3
-            })))
+                    bug_json(4, "foo: crash on start", "foo", &["Security"], &[]),
+                ];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
             .mount(&server)
             .await;
 
@@ -207,8 +217,9 @@ mod tests {
         let ctx = make_ctx(&server.uri(), trackers);
         let result = BugCount.run("foo", Some("rawhide"), &ctx).unwrap();
 
-        assert_eq!(result.data["open"], 3);
-        assert_eq!(result.data["by_kind"]["security"], 1);
+        assert_eq!(result.data["open"], 4);
+        // One by its summary, one by its keyword.
+        assert_eq!(result.data["by_kind"]["security"], 2);
         assert_eq!(result.data["by_kind"]["ftbfs"], 1);
         assert_eq!(result.data["by_kind"]["other"], 1);
     }

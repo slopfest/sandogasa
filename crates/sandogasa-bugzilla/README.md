@@ -16,6 +16,11 @@ either way, though a stock instance serves one string).
   with the full default set. A field not asked for reads as its
   default (an empty `flags` list, for one), so name every field the
   caller reads
+- For callers' tests, behind the `test-support` feature:
+  `test_support::answer`, the body Bugzilla answers a bug search with,
+  carrying only the fields `include_fields` names (`_default` without
+  `flags`), for any mock server to send, so a test handing it complete
+  bugs shows the caller asks for every field it reads
 - Fetch comments on a bug
 - Update single or multiple bugs in one request (requires API key)
 - Bearer token authentication

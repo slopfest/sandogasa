@@ -702,8 +702,13 @@ async fn cmd_bugzilla(
     for email in &emails {
         // Last bug filed by this email
         if last_filed.is_none() {
+            // Only fields every bug comes with are read (#123).
             let bugs = client
-                .search(&format!("creator={email}&limit=1&order=bug_id%20DESC"), 1)
+                .search_with(
+                    &format!("creator={email}&limit=1&order=bug_id%20DESC"),
+                    1,
+                    &[],
+                )
                 .await?;
             if let Some(bug) = bugs.into_iter().next() {
                 last_filed = Some(BugSummary {
@@ -719,12 +724,13 @@ async fn cmd_bugzilla(
         // Last bug changed by this email
         if last_changed.is_none() {
             let bugs = client
-                .search(
+                .search_with(
                     &format!(
                         "f1=commenter&o1=equals&v1={email}\
                          &limit=1&order=last_change_time%20DESC"
                     ),
                     1,
+                    &[],
                 )
                 .await?;
             if let Some(bug) = bugs.into_iter().next() {
@@ -1831,7 +1837,11 @@ async fn check_bugzilla(emails: &[String]) -> ServiceLastSeen {
     let client = sandogasa_bugzilla::BzClient::new("https://bugzilla.redhat.com");
     for email in emails {
         let bugs = client
-            .search(&format!("creator={email}&limit=1&order=bug_id%20DESC"), 1)
+            .search_with(
+                &format!("creator={email}&limit=1&order=bug_id%20DESC"),
+                1,
+                &[],
+            )
             .await;
         if let Ok(bugs) = bugs
             && let Some(bug) = bugs.into_iter().next()

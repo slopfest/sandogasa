@@ -402,6 +402,12 @@ fn date_of(timestamp: Option<&str>) -> String {
     timestamp.unwrap_or("?").chars().take(10).collect()
 }
 
+/// The fields of a Change tracker bug [`assemble`] reads beyond those
+/// every bug comes with (`BzClient::REQUIRED_FIELDS`): `blocks`, which
+/// release tracker it is on, and `flags`, for an open needinfo and whom
+/// it waits on (#123). A field read and missing here reads as empty.
+const TRACKER_FIELDS: &[&str] = &["blocks", "flags"];
+
 /// Read the ticket, fold its blocks, and check every tracker bug.
 fn assemble(
     args: &ChangesArgs,
@@ -452,7 +458,7 @@ fn assemble(
     }
     let rt = tokio::runtime::Runtime::new()?;
     let (bugs, this, next) = rt.block_on(async {
-        let bugs = bz.bugs(&ids).await?;
+        let bugs = bz.bugs_with(&ids, TRACKER_FIELDS).await?;
         let this = bz.bug_by_alias(&format!("F{release}Changes")).await?.id;
         let next = bz
             .bug_by_alias(&format!("F{}Changes", release + 1))
@@ -793,6 +799,52 @@ pub fn run(args: &ChangesArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tracker read asks for what `assemble` reads, against a mock
+    /// that, like Bugzilla, sends only the fields asked for (#123): the
+    /// release tracker a Change bug blocks, and its open needinfo.
+    #[test]
+    fn the_tracker_read_carries_blocks_and_the_needinfo_flag() {
+        let mut server = mockito::Server::new();
+        let bug = serde_json::json!({
+            "id": 1, "summary": "F45 Change: Foo", "status": "ASSIGNED",
+            "resolution": "", "product": "Fedora", "component": ["Changes Tracking"],
+            "severity": "unspecified", "priority": "unspecified",
+            "assigned_to": "a@example.com", "creator": "c@example.com",
+            "creation_time": "2026-01-01T00:00:00Z",
+            "last_change_time": "2026-01-01T00:00:00Z",
+            "blocks": [2],
+            "flags": [{"name": "needinfo", "status": "?", "requestee": "owner@example.com"}],
+            "cc": ["x@example.com"]
+        });
+        let _m = server
+            .mock("GET", "/rest/bug")
+            .match_query(mockito::Matcher::Any)
+            .with_body_from_request(move |req| {
+                let query = req.path_and_query().split_once('?').map(|(_, q)| q);
+                serde_json::to_vec(&sandogasa_bugzilla::test_support::answer(
+                    std::slice::from_ref(&bug),
+                    query,
+                ))
+                .unwrap()
+            })
+            .create();
+        let bz = sandogasa_bugzilla::BzClient::new(&server.url());
+        let bugs = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(bz.bugs_with(&[1], TRACKER_FIELDS))
+            .unwrap();
+        assert_eq!(bugs[0].blocks, [2]);
+        assert!(
+            bugs[0]
+                .flags
+                .iter()
+                .any(|f| f.name == "needinfo" && f.status == "?"),
+            "{:?}",
+            bugs[0].flags
+        );
+        assert!(bugs[0].cc.is_empty(), "not asked for, so not sent");
+    }
 
     const BODY: &str = "Below is the current list of incomplete changes.\n\n\
 Change: [mkosi-initrd](https://fedoraproject.org/wiki/Changes/mkosi-initrd)\n\

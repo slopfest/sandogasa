@@ -577,7 +577,8 @@ async fn open_rebuild_request(
         product.replace(' ', "%20"),
         rf
     );
-    bz.search(&query, 50)
+    // Only the id and summary are read (#123).
+    bz.search_with(&query, 50, &[])
         .await
         .ok()?
         .into_iter()

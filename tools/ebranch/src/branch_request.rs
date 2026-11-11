@@ -790,8 +790,9 @@ async fn refresh_recorded(bz: &BzClient, report: &mut ResolveReport) -> Result<b
     if ids.is_empty() {
         return Ok(false);
     }
+    // Whether each was closed as a duplicate, and of what (#123).
     let superseded: BTreeMap<u64, sandogasa_bugzilla::models::Bug> = bz
-        .bugs(&ids)
+        .bugs_with(&ids, &["dupe_of"])
         .await
         .map_err(|e| format!("could not read the recorded requests: {e}"))?
         .into_iter()
@@ -1237,7 +1238,10 @@ async fn search_existing(
         .map(|p| format!("component={}", crate::discover::urlencode(p)))
         .collect();
     query.push("bug_status=__open__".to_string());
-    match bz.search(&query.join("&"), 0).await {
+    // `adoptable` reads the summary and component, which every bug
+    // comes with; over a big batch the whole default set is pages of
+    // CC lists (#123).
+    match bz.search_with(&query.join("&"), 0, &[]).await {
         Ok(bugs) => adoptable(&bugs, branch),
         Err(e) => {
             eprintln!(
@@ -1951,7 +1955,8 @@ async fn releng_followup(
     let mut bugs: BTreeMap<u64, RequestBug> = BTreeMap::new();
     let mut ids: Vec<u64> = report.branch_requests.values().map(|r| r.rhbz).collect();
     for round in 0..2 {
-        match bz.bugs(&ids).await {
+        // Each request's status and what it waits on (#123).
+        match bz.bugs_with(&ids, &["depends_on"]).await {
             Ok(read) => {
                 for b in read {
                     bugs.insert(
@@ -2359,7 +2364,8 @@ pub(crate) async fn escalate_with(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let still_open: BTreeMap<u64, String> = match bz.bugs(&dep_ids).await {
+    // Each blocker's status and component (#123).
+    let still_open: BTreeMap<u64, String> = match bz.bugs_with(&dep_ids, &[]).await {
         Ok(bugs) => bugs
             .iter()
             .filter(|b| b.status != "CLOSED")
@@ -4166,17 +4172,18 @@ mod tests {
     #[tokio::test]
     async fn searching_finds_the_open_request_for_a_candidate() {
         use wiremock::matchers::{method, path, query_param};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::{Mock, MockServer};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
             .and(query_param("bug_status", "__open__"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "bugs": [
+            // Answered as Bugzilla does, with only the fields asked for.
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = vec![
                     bug_json(2368920, "NEW", None),
                     // Open against the same component, but not a request.
-                    {
+                    serde_json::json!({
                         "id": 2400001,
                         "summary": "cxxopts-3.3.1 is available",
                         "status": "NEW",
@@ -4189,9 +4196,14 @@ mod tests {
                         "creator": "someone",
                         "creation_time": "2026-05-28T09:02:27Z",
                         "last_change_time": "2026-05-28T09:02:27Z",
-                    }
-                ]
-            })))
+                    }),
+                ];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
             .mount(&server)
             .await;
 
@@ -4227,12 +4239,19 @@ mod tests {
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        // The batch read of what the report records.
+        // The batch read of what the report records, answered as
+        // Bugzilla does, with only the fields asked for: without
+        // dupe_of the duplicate would go unnoticed (#123).
         Mock::given(method("GET"))
             .and(path("/rest/bug"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "bugs": [bug_json(2543941, "CLOSED", Some(2531397))]
-            })))
+            .respond_with({
+                let bugs: Vec<serde_json::Value> = vec![bug_json(2543941, "CLOSED", Some(2531397))];
+                move |r: &wiremock::Request| {
+                    wiremock::ResponseTemplate::new(200).set_body_json(
+                        sandogasa_bugzilla::test_support::answer(&bugs, r.url.query()),
+                    )
+                }
+            })
             .mount(&server)
             .await;
         Mock::given(method("GET"))

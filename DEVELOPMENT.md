@@ -76,7 +76,14 @@ turned up in one day:
   review. `BzClient` now sends `include_fields=_default,flags` on
   every bug read, with a wiremock test asserting it is on the wire.
   `_default` keeps the whole default set, so adding a field to that
-  list can never take one away.
+  list can never take one away. Callers outside the client now ask for
+  less than that (#123): every search and read by ID goes through
+  `search_with` or `bugs_with`, naming the fields it reads beyond
+  `REQUIRED_FIELDS`, the same trap in the other direction. So a new
+  read of a field adds it to that caller's list, and the caller's test
+  answers through `sandogasa_bugzilla::test_support::answer`, which
+  sends only what was asked for, as the server does, from a wiremock
+  or mockito mock alike.
 - **An identifier that matches nothing is not an empty result.**
   poi-tracker searched Bugzilla with `version=f43` where Fedora
   numbers its versions bare (`43`), so every numbered-branch
