@@ -1698,10 +1698,12 @@ fn check_update_body(
 
     // Prefer @testing when the update has been pushed to testing,
     // since it has authoritative repo metadata (no staleness issue).
-    // The newest EPEL minor's testing is read through the Stream it is
-    // paired with: fedrq's own `epel10.4` asks for a repo that does not
-    // exist (#124).
-    let testing_view = if is_stream_minor(&branch) {
+    // An EPEL minor's testing is read through the base it is paired
+    // with, the Stream for the newest minor and the snapshot for one in
+    // freeze: fedrq's own `epel10.N` asks for `epel-z-testing-10.N`,
+    // which MirrorManager answers only once the minor is released
+    // (#124, #126).
+    let testing_view = if is_stream_minor(&branch) || is_snapshot_minor(&branch) {
         &branch
     } else {
         &new_branch
@@ -3142,6 +3144,23 @@ fn resolve_bodhi_branch(
             Err("could not determine branch from Bodhi release; use --branch".to_string())
         }
     }
+}
+
+/// Whether `branch` is a CentOS Stream snapshot paired with an EPEL
+/// minor (`c10.3-snapshot`), sandogasa's fedrq release for a minor in
+/// freeze. A snapshot without a minor (`c10-snapshot`) is not: its
+/// EPEL is the newest released one, as fedrq's own `epel10` reads.
+fn is_snapshot_minor(branch: &str) -> bool {
+    branch
+        .strip_suffix("-snapshot")
+        .and_then(|b| b.strip_prefix('c'))
+        .and_then(|v| v.split_once('.'))
+        .is_some_and(|(major, minor)| {
+            !major.is_empty()
+                && !minor.is_empty()
+                && major.bytes().all(|c| c.is_ascii_digit())
+                && minor.bytes().all(|c| c.is_ascii_digit())
+        })
 }
 
 /// Whether `branch` is a CentOS Stream paired with an EPEL minor
@@ -5630,21 +5649,48 @@ mod tests {
         assert_eq!(sandogasa_release_hint("c10s"), None);
     }
 
-    /// The fedrq release sandogasa ships for the newest EPEL minor
-    /// matches the branch ebranch asks for, and reads the minor's own
-    /// EPEL repos rather than fedrq's `epel-z-` ones, which do not
-    /// exist for that minor.
+    /// The fedrq releases sandogasa ships for an EPEL minor, the newest
+    /// one's and one in freeze, match the branches ebranch asks for, and
+    /// read the minor's own EPEL repos rather than fedrq's `epel-z-`
+    /// ones, which exist only for a released minor (#124, #126).
     #[test]
-    fn the_stream_minor_config_matches_and_names_the_minors_repos() {
+    fn the_minor_configs_match_and_name_the_minors_repos() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../configs/fedrq");
-        let toml: toml::Value = toml::from_str(
-            &std::fs::read_to_string(format!("{dir}/centos-stream-minor.toml")).unwrap(),
-        )
-        .unwrap();
-        let release = &toml["releases"]["centos-stream-minor"];
-        assert_eq!(release["matcher"].as_str(), Some(r"^c(\d+\.\d+)s$"));
-        let repo =
-            std::fs::read_to_string(format!("{dir}/repos/centos-stream-minor.repo")).unwrap();
+        for (name, matcher, branch, base_url) in [
+            (
+                "centos-stream-minor",
+                r"^c(\d+\.\d+)s$",
+                "c10.4s",
+                "centos-baseos-$releasever_major-stream",
+            ),
+            (
+                "centos-snapshot",
+                r"^c(\d+(?:\.\d+)?)-snapshot$",
+                "c10.3-snapshot",
+                "centos-$releasever_major-snapshot/BaseOS",
+            ),
+        ] {
+            check_minor_config(dir, name, matcher, base_url);
+            assert!(sandogasa_release_hint(branch).is_some(), "{branch}");
+        }
+        assert!(is_snapshot_minor("c10.3-snapshot"));
+        for b in ["c10-snapshot", "c10.3s", "c10.-snapshot", "cx.3-snapshot"] {
+            assert!(!is_snapshot_minor(b), "{b}");
+        }
+    }
+
+    fn check_minor_config(dir: &str, name: &str, matcher: &str, base_url: &str) {
+        let toml: toml::Value =
+            toml::from_str(&std::fs::read_to_string(format!("{dir}/{name}.toml")).unwrap())
+                .unwrap();
+        let release = &toml["releases"][name];
+        assert_eq!(release["matcher"].as_str(), Some(matcher), "{name}");
+        assert_eq!(
+            release["defpaths"].as_array().map(Vec::len),
+            Some(1),
+            "{name} reads only its own repo file"
+        );
+        let repo = std::fs::read_to_string(format!("{dir}/repos/{name}.repo")).unwrap();
         for def in ["base", "epel", "testing"] {
             for id in release["defs"][def].as_array().unwrap() {
                 let id = id.as_str().unwrap();
@@ -5655,16 +5701,14 @@ mod tests {
             }
         }
         assert!(repo.contains("repo=epel-$releasever&"), "{repo}");
+        assert!(repo.contains("repo=epel-testing-$releasever&"), "{repo}");
         assert!(
             repo.lines()
                 .filter(|l| l.starts_with("metalink="))
                 .all(|l| !l.contains("epel-z")),
             "{repo}"
         );
-        assert!(
-            repo.contains("centos-baseos-$releasever_major-stream"),
-            "{repo}"
-        );
+        assert!(repo.contains(base_url), "{name}: {repo}");
     }
 
     #[test]

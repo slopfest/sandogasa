@@ -647,7 +647,7 @@ name it: `c10-*` → `c10.4s` (for epel10.4: sandogasa's fedrq config
 own EPEL repos, where fedrq's `c10s -r @epel` reads the newest released
 minor's), `c10-snapshot-*` → `c10.3-snapshot` (for epel10.3:
 sandogasa's `centos-snapshot.toml`, which pairs the snapshot with that
-minor's own EPEL repos), `rhel10.N-*` → `al10.N` (AlmaLinux's rebuild
+minor's own EPEL repos, its updates-testing included), `rhel10.N-*` → `al10.N` (AlmaLinux's rebuild
 of that RHEL minor, paired with the minor's own EPEL repos; Koji's RHEL
 repos are not public) — and the note says which repos decided it. A
 Bodhi update for an EPEL 10 minor is checked as that minor

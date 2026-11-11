@@ -6,14 +6,18 @@
 #
 #   fedrq pkgs -b c10-snapshot -F nev rust            # what an epel10.3 build sees
 #   fedrq pkgs -b c10.3-snapshot -r @epel libheif     # plus EPEL 10.3 itself
+#   fedrq pkgs -b c10.3-snapshot -r @testing libheif  # EPEL 10.3 and its testing
 #
 # Three branches say three different things about a RHEL 10 minor:
 # ubi10 is the released one, c10-snapshot the one in freeze, c10s the
 # moving stream already at the minor after. The capture group becomes
-# $releasever: with a minor (`c10.3-snapshot`) it is `10.3`, which is
-# what fedrq's epel.repo needs to pick the EPEL 10.3 repos
-# (`epel-z-10.3`), while the snapshot URLs use $releasever_major, since
-# the snapshot is published per stream. Binaries only: the snapshot
+# $releasever: with a minor (`c10.3-snapshot`) it is `10.3`, which picks
+# the EPEL 10.3 repos, while the snapshot URLs use $releasever_major,
+# since the snapshot is published per stream. The EPEL repos are the
+# ones in centos-snapshot.repo, named `epel-10.N` as MirrorManager
+# answers for every minor, not fedrq's epel.repo: its `epel-z-10.N`
+# and `epel-z-testing-10.N` exist only once a minor is released, which
+# one in freeze is not yet. Binaries only: the snapshot
 # publishes no source trees, so source-side queries return nothing
 # here. Koji has c10-snapshot repos only today; the matcher is generic
 # so a future c11-snapshot works unchanged, and an unpublished one
@@ -24,11 +28,19 @@
 
 [releases.centos-snapshot]
 matcher = '^c(\d+(?:\.\d+)?)-snapshot$'
-defpaths = ["centos-snapshot.repo", "epel.repo"]
+defpaths = ["centos-snapshot.repo"]
 system_repos = false
 
 defs.base = ["centos-snapshot-baseos", "centos-snapshot-appstream", "centos-snapshot-crb"]
 # The base plus EPEL for the same releasever, as fedrq's own
 # centos-stream release spells it: `-b c10.3-snapshot -r @epel` is an
 # epel10.3 buildroot's view.
-defs.epel = ["@base", "@repo:epel", "epel-source"]
+defs.epel = ["@base", "epel-minor", "epel-minor-source"]
+# As fedrq's own epel release spells it: the minor's stable EPEL plus
+# its updates-testing, without the base.
+defs.testing = [
+    "epel-minor",
+    "epel-minor-source",
+    "epel-minor-testing",
+    "epel-minor-testing-source",
+]

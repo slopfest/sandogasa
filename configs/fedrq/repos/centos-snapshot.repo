@@ -6,6 +6,10 @@
 # only — the snapshot publishes no source trees. gpgcheck is off because
 # fedrq never installs anything from here and the mirror carries no
 # key file of its own.
+#
+# The EPEL repos below are the minor's own, `epel-10.N`, which
+# MirrorManager answers for every minor; fedrq's `epel-z-10.N` and
+# `epel-z-testing-10.N` need the minor to be released.
 
 [centos-snapshot-baseos]
 name=CentOS Stream $releasever snapshot - BaseOS (Fedora Koji EPEL buildroot)
@@ -25,5 +29,37 @@ enabled=0
 name=CentOS Stream $releasever snapshot - CRB (Fedora Koji EPEL buildroot)
 baseurl=https://infrastructure.fedoraproject.org/repo/centos/centos-$releasever_major-snapshot/CRB/$basearch/os/
 gpgcheck=0
+repo_gpgcheck=0
+enabled=0
+
+[epel-minor]
+name=EPEL $releasever - Everything
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/epel/RPM-GPG-KEY-EPEL-$releasever_major
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[epel-minor-source]
+name=EPEL $releasever - Everything - Source
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-source-$releasever&arch=source
+gpgkey=file:///usr/share/distribution-gpg-keys/epel/RPM-GPG-KEY-EPEL-$releasever_major
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[epel-minor-testing]
+name=EPEL $releasever - Testing
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-testing-$releasever&arch=$basearch
+gpgkey=file:///usr/share/distribution-gpg-keys/epel/RPM-GPG-KEY-EPEL-$releasever_major
+gpgcheck=1
+repo_gpgcheck=0
+enabled=0
+
+[epel-minor-testing-source]
+name=EPEL $releasever - Testing - Source
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-testing-source-$releasever&arch=source
+gpgkey=file:///usr/share/distribution-gpg-keys/epel/RPM-GPG-KEY-EPEL-$releasever_major
+gpgcheck=1
 repo_gpgcheck=0
 enabled=0

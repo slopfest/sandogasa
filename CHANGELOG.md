@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### ebranch reads an EPEL minor in freeze from that minor's own repos
+
+Once EPEL 10.5 opens, EPEL 10.4 goes into freeze, and checking a 10.4
+update would likely have failed the way #124 did for the newest minor:
+fedrq's EPEL repos for a minor are named `epel-z-10.N` and
+`epel-z-testing-10.N`, which MirrorManager answers only once the minor
+is released. A minor in freeze is checked as `c10.N-snapshot`, and
+sandogasa's `centos-snapshot.toml` took its EPEL repos from fedrq's.
+
+The snapshot config now carries its own EPEL repos, `epel-10.N` and
+`epel-testing-10.N` with their source repos, which MirrorManager
+answers for every minor, as `centos-stream-minor.toml` already did,
+and gains a `@testing` group. ebranch reads a frozen minor's testing
+through the snapshot too, rather than through fedrq's `epel10.N`.
+Fixes #126.
+
 ### Tests no longer read data files installed under /usr/share
 
 ebranch's lookup of its RPM Fusion inventory and rename map had no
