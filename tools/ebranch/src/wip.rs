@@ -498,6 +498,24 @@ pub struct Options {
     pub json: bool,
 }
 
+/// The services a refreshing run asks, so a test can point them at a
+/// local server. fedrq and Koji are reached through their own tools.
+struct Remotes {
+    bodhi: sandogasa_bodhi::BodhiClient,
+    copr: sandogasa_copr::Copr,
+    distgit: sandogasa_distgit::DistGitClient,
+}
+
+impl Remotes {
+    fn fedora() -> Self {
+        Self {
+            bodhi: sandogasa_bodhi::BodhiClient::new(),
+            copr: sandogasa_copr::Copr::new(),
+            distgit: sandogasa_distgit::DistGitClient::new(),
+        }
+    }
+}
+
 /// Report the effort, refreshing from its COPRs first unless
 /// `--offline`.
 ///
@@ -507,6 +525,10 @@ pub struct Options {
 /// only make the next run pay again. Decisions — which route a
 /// package takes, which bug is landing it — are never inferred here.
 pub fn run(opts: &Options) -> Result<(), String> {
+    run_with(opts, &Remotes::fedora())
+}
+
+fn run_with(opts: &Options, remotes: &Remotes) -> Result<(), String> {
     let mut ledger = Ledger::load(&opts.ledger)?;
     for target in &opts.targets {
         if !ledger.targets.iter().any(|t| t == target) {
@@ -616,7 +638,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
         // nothing about whether it is still staged.
         copr_absence_established = !coprs.is_empty();
         for spec in &coprs {
-            match staged_in_copr(spec) {
+            match staged_in_copr(&remotes.copr, spec) {
                 Ok(staged) => {
                     let changes = ledger.reconcile(spec, &staged, &today);
                     report_changes(spec, &changes);
@@ -629,7 +651,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 }
             }
         }
-        refresh_distgit(&mut ledger, &today, &opts.packages);
+        refresh_distgit(&remotes.distgit, &mut ledger, &today, &opts.packages);
         // Rawhide is where everything lands first, so it is always
         // worth comparing against even when the effort targets
         // branches as well.
@@ -649,7 +671,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 lookup.push(branch);
             }
         }
-        let (mut tags, mut releases, dist_git_branches) = release_tags(&lookup);
+        let (mut tags, mut releases, dist_git_branches) = release_tags(&remotes.bodhi, &lookup);
         // Recorded so the report can tell a target that needs branching
         // from one whose branch simply has another name, without asking
         // Bodhi again on an offline run.
@@ -745,14 +767,20 @@ pub fn run(opts: &Options) -> Result<(), String> {
             // in on some later run.
             if !side_tags.discovered.is_empty() {
                 let new = side_tags.discovered.clone();
-                refresh_distgit(&mut ledger, &today, &new);
+                refresh_distgit(&remotes.distgit, &mut ledger, &today, &new);
                 refresh_shipped(&mut ledger, &branches, &today, &new);
                 refresh_reviews_blocking(&mut ledger, &today, opts.rescan_reviews, &new);
             }
         } else {
             eprintln!("warning: koji is not installed; skipping build lookups");
         }
-        refresh_updates_blocking(&mut ledger, &releases, &today, &opts.packages);
+        refresh_updates_blocking(
+            &remotes.bodhi,
+            &mut ledger,
+            &releases,
+            &today,
+            &opts.packages,
+        );
         dirty = true;
     }
 
@@ -1215,12 +1243,12 @@ fn refresh_built(
 /// is ahead of what the branch ships are asked about, which is exactly
 /// when "is an update in flight, or does one need submitting?" arises.
 async fn refresh_updates(
+    client: &sandogasa_bodhi::BodhiClient,
     ledger: &mut Ledger,
     releases: &BTreeMap<String, String>,
     today: &str,
     only: &[String],
 ) {
-    let client = sandogasa_bodhi::BodhiClient::new();
     for (branch, release) in releases {
         let wanted: Vec<String> = ledger
             .packages
@@ -1434,7 +1462,7 @@ type ReleaseFacts = (
     BTreeMap<String, String>,
 );
 
-fn release_tags(branches: &[String]) -> ReleaseFacts {
+fn release_tags(bodhi: &sandogasa_bodhi::BodhiClient, branches: &[String]) -> ReleaseFacts {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -1442,7 +1470,7 @@ fn release_tags(branches: &[String]) -> ReleaseFacts {
             return (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         }
     };
-    let releases = match rt.block_on(sandogasa_bodhi::BodhiClient::new().active_releases()) {
+    let releases = match rt.block_on(bodhi.active_releases()) {
         Ok(releases) => releases,
         Err(e) => {
             eprintln!("warning: could not list Bodhi releases ({e}); skipping Koji lookups");
@@ -1618,6 +1646,7 @@ async fn refresh_reviews(
 
 /// Run the Bodhi lookups on their own runtime, since `run` is sync.
 fn refresh_updates_blocking(
+    bodhi: &sandogasa_bodhi::BodhiClient,
     ledger: &mut Ledger,
     releases: &BTreeMap<String, String>,
     today: &str,
@@ -1627,7 +1656,7 @@ fn refresh_updates_blocking(
         return;
     }
     match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt.block_on(refresh_updates(ledger, releases, today, only)),
+        Ok(rt) => rt.block_on(refresh_updates(bodhi, ledger, releases, today, only)),
         Err(e) => eprintln!("warning: Bodhi lookups skipped ({e})"),
     }
 }
@@ -1773,7 +1802,12 @@ fn selected(packages: &[String], name: &str) -> bool {
 /// package that means the review has not finished. That is a real
 /// answer and is recorded as one; a lookup that fails is not, and
 /// leaves whatever the ledger already knew, dated as before.
-fn refresh_distgit(ledger: &mut Ledger, today: &str, only: &[String]) {
+fn refresh_distgit(
+    client: &sandogasa_distgit::DistGitClient,
+    ledger: &mut Ledger,
+    today: &str,
+    only: &[String],
+) {
     let names: Vec<String> = ledger
         .packages
         .keys()
@@ -1790,7 +1824,6 @@ fn refresh_distgit(ledger: &mut Ledger, today: &str, only: &[String]) {
             return;
         }
     };
-    let client = sandogasa_distgit::DistGitClient::new();
     let mut failed = 0usize;
     rt.block_on(async {
         for name in &names {
@@ -1808,7 +1841,7 @@ fn refresh_distgit(ledger: &mut Ledger, today: &str, only: &[String]) {
                         None
                     };
                     let retired_on = match &reason {
-                        Some(reason) => retirement_date(&client, name, reason).await,
+                        Some(reason) => retirement_date(client, name, reason).await,
                         None => None,
                     };
                     let record = DistGit {
@@ -1837,11 +1870,12 @@ fn refresh_distgit(ledger: &mut Ledger, today: &str, only: &[String]) {
 
 /// Read a COPR's packages as `(name, version-release, failed
 /// chroots)`.
-fn staged_in_copr(spec: &str) -> Result<Vec<(String, String, Vec<String>)>, String> {
+fn staged_in_copr(
+    copr: &sandogasa_copr::Copr,
+    spec: &str,
+) -> Result<Vec<(String, String, Vec<String>)>, String> {
     let (owner, project) = parse_copr(spec).ok_or_else(|| format!("not a COPR spec: {spec}"))?;
-    let packages = sandogasa_copr::Copr::new()
-        .monitor(&owner, &project)
-        .map_err(|e| e.to_string())?;
+    let packages = copr.monitor(&owner, &project).map_err(|e| e.to_string())?;
     Ok(packages
         .into_iter()
         .map(|p| {
@@ -2512,6 +2546,422 @@ mod tests {
         assert!(text.contains("failed in fedora-rawhide-x86_64"), "{text}");
         assert!(text.contains("via direct"), "{text}");
         assert!(text.contains("targets: rawhide"), "{text}");
+    }
+
+    fn offline(ledger: &Path) -> Options {
+        Options {
+            ledger: ledger.to_path_buf(),
+            coprs: vec![],
+            targets: vec![],
+            offline: true,
+            prune: vec![],
+            forget: vec![],
+            rescan_reviews: false,
+            packages: vec![],
+            set: vec![],
+            add: vec![],
+            side_tags: vec![],
+            json: false,
+        }
+    }
+
+    /// Remotes nobody should reach: a test that asks one fails.
+    fn unreachable() -> Remotes {
+        Remotes {
+            bodhi: sandogasa_bodhi::BodhiClient::with_base_url("http://127.0.0.1:9"),
+            copr: sandogasa_copr::Copr::with_base_url("http://127.0.0.1:9"),
+            distgit: sandogasa_distgit::DistGitClient::with_base_url("http://127.0.0.1:9"),
+        }
+    }
+
+    /// An offline run records what it was told — targets, side tags,
+    /// packages added, forgotten and assigned — without asking anything,
+    /// and declines to prune on evidence it did not gather.
+    #[test]
+    fn an_offline_run_records_decisions_and_prunes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wip.toml");
+        let mut seed = Ledger::default();
+        seed.side_tags.push("not-a-side-tag".to_string());
+        seed.packages
+            .insert("rust-old".to_string(), Package::default());
+        seed.save(&path).unwrap();
+
+        let opts = Options {
+            targets: vec!["f44".to_string()],
+            side_tags: vec!["f44-build-side-123".to_string()],
+            forget: vec!["rust-old".to_string()],
+            add: vec!["rust-a".to_string(), "rust-b".to_string()],
+            set: vec!["rust-a=review:42".to_string()],
+            prune: vec![Prunable::Packages, Prunable::SideTags],
+            packages: vec!["rust-a".to_string(), "rust-untracked".to_string()],
+            ..offline(&path)
+        };
+        run_with(&opts, &unreachable()).unwrap();
+        // Run again: adding what is tracked and forgetting what is
+        // forgotten change nothing.
+        run_with(
+            &Options {
+                add: vec!["rust-a".to_string()],
+                forget: vec!["rust-old".to_string()],
+                json: true,
+                ..offline(&path)
+            },
+            &unreachable(),
+        )
+        .unwrap();
+
+        let ledger = Ledger::load(&path).unwrap();
+        assert_eq!(ledger.targets, ["f44"]);
+        assert_eq!(ledger.side_tags, ["f44-build-side-123"]);
+        assert_eq!(
+            ledger.packages.keys().collect::<Vec<_>>(),
+            ["rust-a", "rust-b"]
+        );
+        assert!(ledger.ignores("rust-old"));
+        let a = &ledger.packages["rust-a"];
+        assert_eq!((a.route, a.review_bug), (Route::Review, Some(42)));
+    }
+
+    #[test]
+    fn a_side_tag_that_is_not_one_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wip.toml");
+        let e = run_with(
+            &Options {
+                side_tags: vec!["f44-updates".to_string()],
+                ..offline(&path)
+            },
+            &unreachable(),
+        )
+        .unwrap_err();
+        assert!(e.contains("not a side tag name"), "{e}");
+        assert!(!path.exists(), "nothing written");
+    }
+
+    /// A multi-threaded runtime serving a mock while sync code calls it.
+    fn mock_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_copr_says_what_is_staged_and_where_it_fails() {
+        use wiremock::matchers::{path, query_param};
+        let rt = mock_runtime();
+        let server = rt.block_on(wiremock::MockServer::start());
+        rt.block_on(
+            wiremock::Mock::given(path("/api_3/monitor"))
+                .and(query_param("ownername", "@rust"))
+                .and(query_param("projectname", "effort"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "output": "ok",
+                        "packages": [
+                            {"name": "rust-a", "chroots": {
+                                "fedora-rawhide-x86_64": {"state": "succeeded", "pkg_version": "1.2-1"},
+                                "fedora-44-x86_64": {"state": "failed", "pkg_version": "1.2-1"}
+                            }},
+                            {"name": "rust-b", "chroots": {}}
+                        ]
+                    })),
+                )
+                .mount(&server),
+        );
+        let copr = sandogasa_copr::Copr::with_base_url(&server.uri());
+        let staged = staged_in_copr(&copr, "@rust/effort").unwrap();
+        assert_eq!(
+            staged,
+            [
+                (
+                    "rust-a".to_string(),
+                    "1.2-1".to_string(),
+                    vec!["fedora-44-x86_64".to_string()]
+                ),
+                ("rust-b".to_string(), "unknown".to_string(), vec![]),
+            ]
+        );
+        assert!(staged_in_copr(&copr, "no-slash").is_err());
+    }
+
+    /// dist-git says whether a repository exists, which branches it
+    /// has, and for a retired package why and, when the retirement is
+    /// the branch's last commit, when.
+    #[test]
+    fn dist_git_says_what_exists_and_what_is_retired() {
+        use wiremock::matchers::{path, query_param};
+        use wiremock::{Mock, ResponseTemplate};
+        let rt = mock_runtime();
+        let server = rt.block_on(wiremock::MockServer::start());
+        let json = |v: serde_json::Value| ResponseTemplate::new(200).set_body_json(v);
+        let mocks = [
+            Mock::given(path("/api/0/rpms/rust-a/git/branches"))
+                .respond_with(json(serde_json::json!({"branches": ["f44", "rawhide"]}))),
+            Mock::given(path("/rpms/rust-a/raw/rawhide/f/dead.package"))
+                .respond_with(ResponseTemplate::new(404)),
+            Mock::given(path("/api/0/rpms/rust-new/git/branches"))
+                .respond_with(ResponseTemplate::new(404)),
+            Mock::given(path("/api/0/rpms/rust-dead/git/branches"))
+                .and(query_param("with_commits", "1"))
+                .respond_with(json(serde_json::json!({"branches": {"rawhide": "abc123"}}))),
+            Mock::given(path("/api/0/rpms/rust-dead/git/branches"))
+                .respond_with(json(serde_json::json!({"branches": ["rawhide"]}))),
+            Mock::given(path("/rpms/rust-dead/raw/rawhide/f/dead.package"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("Replaced by rust-new\n")),
+            Mock::given(path("/api/0/rpms/rust-dead/c/abc123/info")).respond_with(json(
+                serde_json::json!({"hash": "abc123", "commit_time": 1767225600,
+                                   "message": "Replaced by rust-new\n\nDetails."}),
+            )),
+        ];
+        for m in mocks {
+            rt.block_on(m.mount(&server));
+        }
+        let mut ledger = Ledger::default();
+        for name in ["rust-a", "rust-dead", "rust-new", "bad/name"] {
+            ledger.packages.insert(name.to_string(), Package::default());
+        }
+        let client = sandogasa_distgit::DistGitClient::with_base_url(&server.uri());
+        refresh_distgit(&client, &mut ledger, "2026-11-11", &[]);
+
+        let a = ledger.packages["rust-a"].distgit.as_ref().unwrap();
+        assert!(a.exists && !a.retired);
+        assert_eq!(a.branches, ["f44", "rawhide"]);
+        let new = ledger.packages["rust-new"].distgit.as_ref().unwrap();
+        assert!(!new.exists);
+        let dead = ledger.packages["rust-dead"].distgit.as_ref().unwrap();
+        assert!(dead.retired);
+        assert_eq!(dead.retired_reason.as_deref(), Some("Replaced by rust-new"));
+        assert_eq!(dead.retired_on.as_deref(), Some("2026-01-01"));
+        // A failed lookup keeps what the ledger had: nothing.
+        assert!(ledger.packages["bad/name"].distgit.is_none());
+    }
+
+    /// Bodhi's releases give each target its Koji tags, matched by
+    /// branch or by name, and the dist-git branch where that differs.
+    #[test]
+    fn targets_find_their_release_by_branch_or_name() {
+        let rt = mock_runtime();
+        let server = rt.block_on(wiremock::MockServer::start());
+        let release = |name: &str, branch: &str, prefix: &str, tagged: bool| {
+            let tag = |kind: &str| match tagged {
+                true => format!("{}-updates-{kind}", name.to_ascii_lowercase()),
+                false => String::new(),
+            };
+            serde_json::json!({
+                "name": name, "branch": branch, "id_prefix": prefix, "state": "current",
+                "candidate_tag": tag("candidate"), "testing_tag": tag("testing"),
+                "stable_tag": ""
+            })
+        };
+        rt.block_on(
+            wiremock::Mock::given(wiremock::matchers::path("/releases/"))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "releases": [
+                            release("F44C", "f44", "FEDORA-CONTAINER", true),
+                            release("F44", "f44", "FEDORA", true),
+                            release("F45", "rawhide", "FEDORA", true),
+                            release("EPEL-10.3", "epel10", "FEDORA-EPEL", true),
+                            release("EPEL-10.4", "epel10.4", "FEDORA-EPEL", false),
+                        ],
+                        "total": 5, "page": 1, "pages": 1
+                    }),
+                ))
+                .mount(&server),
+        );
+        let bodhi = sandogasa_bodhi::BodhiClient::with_base_url(&server.uri());
+        let branches: Vec<String> = ["rawhide", "f44", "epel10.3", "epel10.4", "f99"]
+            .map(String::from)
+            .into();
+        let (tags, names, dist_git) = release_tags(&bodhi, &branches);
+        assert_eq!(
+            tags,
+            BTreeMap::from([
+                (
+                    "epel10.3".to_string(),
+                    vec![
+                        "epel-10.3-updates-candidate".to_string(),
+                        "epel-10.3-updates-testing".to_string()
+                    ]
+                ),
+                (
+                    "f44".to_string(),
+                    vec![
+                        "f44-updates-candidate".to_string(),
+                        "f44-updates-testing".to_string()
+                    ]
+                ),
+                (
+                    "rawhide".to_string(),
+                    vec![
+                        "f45-updates-candidate".to_string(),
+                        "f45-updates-testing".to_string()
+                    ]
+                ),
+            ])
+        );
+        assert_eq!(names["f44"], "F44");
+        assert_eq!(names["epel10.4"], "EPEL-10.4");
+        assert!(!names.contains_key("f99"));
+        assert_eq!(
+            dist_git,
+            BTreeMap::from([("epel10.3".to_string(), "epel10".to_string())])
+        );
+
+        // Bodhi unreachable: nothing, rather than a guess.
+        let down = sandogasa_bodhi::BodhiClient::with_base_url("http://127.0.0.1:9");
+        let (tags, names, _) = release_tags(&down, &branches);
+        assert!(tags.is_empty() && names.is_empty());
+    }
+
+    /// Each package ahead of a branch is asked about. The update
+    /// carrying the version being pushed is the one recorded; failing
+    /// that, one still in flight for an older version; and with none,
+    /// a stale record goes.
+    #[tokio::test]
+    async fn the_update_carrying_the_staged_version_is_recorded() {
+        use wiremock::matchers::{path, query_param};
+        use wiremock::{Mock, ResponseTemplate};
+        let server = wiremock::MockServer::start().await;
+        let update = |alias: &str, status: &str, nvr: &str| {
+            serde_json::json!({
+                "alias": alias, "status": status, "builds": [{"nvr": nvr}],
+                "date_testing": "2026-11-01 12:00:00", "stable_days": 7
+            })
+        };
+        let answer = |updates: Vec<serde_json::Value>| {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": updates, "total": 1, "page": 1, "pages": 1
+            }))
+        };
+        for (package, updates) in [
+            (
+                "rust-a",
+                vec![
+                    update("FEDORA-2026-old", "stable", "rust-a-1.1-1.fc45"),
+                    update("FEDORA-2026-new", "testing", "rust-a-1.2-1.fc45"),
+                ],
+            ),
+            (
+                "rust-b",
+                vec![update("FEDORA-2026-older", "pending", "rust-b-1.9-1.fc45")],
+            ),
+            ("rust-c", vec![]),
+        ] {
+            Mock::given(path("/updates/"))
+                .and(query_param("packages", package))
+                .respond_with(answer(updates))
+                .mount(&server)
+                .await;
+        }
+        Mock::given(path("/updates/"))
+            .and(query_param("packages", "rust-bad"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let staged = |version: &str| {
+            Some(Staged {
+                copr: "@rust/effort".to_string(),
+                version: version.to_string(),
+                failed_chroots: vec![],
+                seen: "2026-11-10".to_string(),
+            })
+        };
+        let shipped = |version: &str| {
+            BTreeMap::from([(
+                "rawhide".to_string(),
+                Shipped {
+                    version: version.to_string(),
+                    seen: "2026-11-10".to_string(),
+                },
+            )])
+        };
+        let stale = BTreeMap::from([(
+            "rawhide".to_string(),
+            UpdateRef {
+                alias: "FEDORA-2025-gone".to_string(),
+                status: "testing".to_string(),
+                version: "0.9-1".to_string(),
+                testing_since: None,
+                stable_days: None,
+                seen: "2025-01-01".to_string(),
+            },
+        )]);
+        let mut ledger = Ledger::default();
+        for (name, package) in [
+            (
+                "rust-a",
+                Package {
+                    staged: staged("1.2-1"),
+                    shipped: shipped("1.1-1"),
+                    ..Package::default()
+                },
+            ),
+            (
+                "rust-b",
+                Package {
+                    staged: staged("2.0-1"),
+                    ..Package::default()
+                },
+            ),
+            (
+                "rust-c",
+                Package {
+                    staged: staged("3.0-1"),
+                    update: stale.clone(),
+                    ..Package::default()
+                },
+            ),
+            // Already shipped, so not asked about: no mock answers it.
+            (
+                "rust-d",
+                Package {
+                    staged: staged("4.0-1"),
+                    shipped: shipped("4.0-1"),
+                    update: stale.clone(),
+                    ..Package::default()
+                },
+            ),
+            (
+                "rust-bad",
+                Package {
+                    staged: staged("5.0-1"),
+                    update: stale.clone(),
+                    ..Package::default()
+                },
+            ),
+        ] {
+            ledger.packages.insert(name.to_string(), package);
+        }
+        let releases = BTreeMap::from([("rawhide".to_string(), "F45".to_string())]);
+        let bodhi = sandogasa_bodhi::BodhiClient::with_base_url(&server.uri());
+        refresh_updates(&bodhi, &mut ledger, &releases, "2026-11-11", &[]).await;
+
+        let a = &ledger.packages["rust-a"].update["rawhide"];
+        assert_eq!(
+            (a.alias.as_str(), a.status.as_str(), a.version.as_str()),
+            ("FEDORA-2026-new", "testing", "1.2-1.fc45")
+        );
+        assert_eq!(a.testing_since.as_deref(), Some("2026-11-01"));
+        assert_eq!((a.stable_days, a.seen.as_str()), (Some(7), "2026-11-11"));
+        assert_eq!(
+            ledger.packages["rust-b"].update["rawhide"].alias,
+            "FEDORA-2026-older"
+        );
+        assert!(ledger.packages["rust-c"].update.is_empty());
+        assert_eq!(
+            ledger.packages["rust-d"].update["rawhide"].alias,
+            "FEDORA-2025-gone"
+        );
+        // A failed query keeps what the ledger had.
+        assert_eq!(
+            ledger.packages["rust-bad"].update["rawhide"].alias,
+            "FEDORA-2025-gone"
+        );
     }
 
     /// Known reviews are fetched in one request, two packages may share

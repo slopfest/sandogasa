@@ -167,7 +167,7 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
     let changes = compute_changes(&pkg_edges, &bug_map, &current_depends);
 
     // Print summary.
-    print_summary(&changes, &bug_map, &not_found);
+    print!("{}", summary(&changes, &bug_map, &not_found));
 
     if changes.is_empty() {
         println!("\nNo changes needed.");
@@ -187,44 +187,7 @@ async fn check_pkg_reviews_async(opts: &CheckPkgReviewsOptions) -> Result<(), St
         return Ok(());
     }
 
-    // Apply changes.
-    for change in &changes {
-        if opts.verbose {
-            eprintln!(
-                "[review-deps] updating bug {} ({})",
-                change.bug_id, change.package
-            );
-        }
-
-        let mut update = serde_json::Map::new();
-        let mut depends = serde_json::Map::new();
-
-        if !change.add_depends.is_empty() {
-            depends.insert("add".to_string(), serde_json::json!(change.add_depends));
-        }
-        if !change.remove_depends.is_empty() {
-            depends.insert(
-                "remove".to_string(),
-                serde_json::json!(change.remove_depends),
-            );
-        }
-        update.insert("depends_on".to_string(), serde_json::Value::Object(depends));
-
-        let out = bz
-            .update_verified(change.bug_id, &serde_json::Value::Object(update), 3)
-            .await;
-        if let Some(note) = out.note() {
-            eprintln!("note: bug {}: {note}", change.bug_id);
-        }
-        if !out.complete() {
-            return Err(format!(
-                "failed to update bug {}: {}",
-                change.bug_id,
-                out.last_error.unwrap_or_default()
-            ));
-        }
-    }
-
+    apply_changes(&bz, &changes, opts.verbose).await?;
     println!("Updated {} bug(s).", changes.len());
     Ok(())
 }
@@ -466,12 +429,57 @@ fn compute_changes(
     changes
 }
 
-/// Print a summary of proposed changes.
-fn print_summary(
+/// Write each change's Depends On to its review bug, stopping at the
+/// first that cannot be confirmed.
+async fn apply_changes(bz: &BzClient, changes: &[LinkChange], verbose: bool) -> Result<(), String> {
+    for change in changes {
+        if verbose {
+            eprintln!(
+                "[review-deps] updating bug {} ({})",
+                change.bug_id, change.package
+            );
+        }
+
+        let mut update = serde_json::Map::new();
+        let mut depends = serde_json::Map::new();
+
+        if !change.add_depends.is_empty() {
+            depends.insert("add".to_string(), serde_json::json!(change.add_depends));
+        }
+        if !change.remove_depends.is_empty() {
+            depends.insert(
+                "remove".to_string(),
+                serde_json::json!(change.remove_depends),
+            );
+        }
+        update.insert("depends_on".to_string(), serde_json::Value::Object(depends));
+
+        let out = bz
+            .update_verified(change.bug_id, &serde_json::Value::Object(update), 3)
+            .await;
+        if let Some(note) = out.note() {
+            eprintln!("note: bug {}: {note}", change.bug_id);
+        }
+        if !out.complete() {
+            return Err(format!(
+                "failed to update bug {}: {}",
+                change.bug_id,
+                out.last_error.unwrap_or_default()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// The summary of review bugs found and changes proposed.
+fn summary(
     changes: &[LinkChange],
     bug_map: &BTreeMap<String, (u64, String)>,
     not_found: &[String],
-) {
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
     // Reverse map for display.
     let id_to_pkg: BTreeMap<u64, &str> = bug_map
         .iter()
@@ -486,37 +494,39 @@ fn print_summary(
     };
 
     // Show found bugs with their status.
-    println!("Review bugs found:\n");
+    let _ = writeln!(out, "Review bugs found:\n");
     for (pkg, (id, status)) in bug_map {
-        println!("  {pkg}: bug {id} ({status})");
+        let _ = writeln!(out, "  {pkg}: bug {id} ({status})");
     }
 
     if !changes.is_empty() {
-        println!("\nProposed changes:\n");
+        let _ = writeln!(out, "\nProposed changes:\n");
         for c in changes {
-            println!("  Bug {} ({}):", c.bug_id, c.package);
+            let _ = writeln!(out, "  Bug {} ({}):", c.bug_id, c.package);
             for id in &c.add_depends {
-                println!("    + Depends On: {}", bug_label(*id));
+                let _ = writeln!(out, "    + Depends On: {}", bug_label(*id));
             }
             for id in &c.remove_depends {
-                println!("    - Depends On: {}", bug_label(*id));
+                let _ = writeln!(out, "    - Depends On: {}", bug_label(*id));
             }
         }
     }
 
     if !not_found.is_empty() {
-        println!("\nReview bugs not found:");
+        let _ = writeln!(out, "\nReview bugs not found:");
         for name in not_found {
-            println!("  - {name}");
+            let _ = writeln!(out, "  - {name}");
         }
     }
 
     let found = bug_map.len();
     let total = found + not_found.len();
-    println!(
+    let _ = writeln!(
+        out,
         "\n{found}/{total} review bug(s) found, {} change(s) needed.",
         changes.len()
     );
+    out
 }
 
 #[cfg(test)]
@@ -714,6 +724,250 @@ mod tests {
         .map(|(n, id)| (n.to_string(), id))
         .into();
         assert_eq!(found, want);
+    }
+
+    /// A report for rust-my-crate, missing dep-a, which pulls in the
+    /// missing dep-b and dep-c.
+    fn report_with_missing_deps(review_bugs: &[(&str, u64)]) -> CheckCrateReport {
+        let transitive = |name: &str| check_crate::TransitiveDep {
+            name: name.to_string(),
+            package: format!("rust-{name}"),
+            status: check_crate::TransitiveStatus::Missing,
+            version: "0.5.0".to_string(),
+            version_req: "^0.5".to_string(),
+            pulled_by: "dep-a".to_string(),
+        };
+        CheckCrateReport {
+            crate_name: "my-crate".to_string(),
+            crate_version: "1.0.0".to_string(),
+            package: "rust-my-crate".to_string(),
+            branch: "rawhide".to_string(),
+            already_built: None,
+            dependencies: vec![check_crate::DepResult {
+                dep: check_crate::CrateDep {
+                    name: "dep-a".to_string(),
+                    version_req: "^1.0".to_string(),
+                    kind: "normal".to_string(),
+                    optional: false,
+                },
+                status: DepStatus::Missing,
+                via: None,
+            }],
+            in_tree: vec![],
+            transitive_missing: vec![transitive("dep-b"), transitive("dep-c")],
+            transitive_staged: vec![],
+            transitive_build_order: vec![],
+            transitive_edges: BTreeMap::from([
+                (
+                    "dep-a".to_string(),
+                    BTreeSet::from(["dep-b".to_string(), "dep-c".to_string()]),
+                ),
+                ("dep-b".to_string(), BTreeSet::new()),
+                ("dep-c".to_string(), BTreeSet::new()),
+            ]),
+            review_bugs: review_bugs
+                .iter()
+                .map(|(n, id)| (n.to_string(), *id))
+                .collect(),
+            branch_requests: BTreeMap::new(),
+            copr: None,
+        }
+    }
+
+    /// A review bug as Bugzilla sends it.
+    fn review_bug(id: u64, summary: &str, depends_on: &[u64]) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "summary": summary, "status": "NEW", "resolution": "",
+            "product": "Fedora", "component": ["Package Review"],
+            "severity": "medium", "priority": "medium",
+            "assigned_to": "r@example.com", "creator": "p@example.com",
+            "creation_time": "2026-01-01T00:00:00Z",
+            "last_change_time": "2026-01-01T00:00:00Z",
+            "flags": [], "depends_on": depends_on
+        })
+    }
+
+    /// A mock Bugzilla answering both a search, by summary, and a read
+    /// by ids.
+    async fn bugzilla_with(bugs: Vec<serde_json::Value>) -> wiremock::MockServer {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/rest/bug"))
+            .respond_with(move |r: &wiremock::Request| {
+                let pairs: Vec<(String, String)> = r.url.query_pairs().into_owned().collect();
+                let ids: Vec<u64> = pairs
+                    .iter()
+                    .filter(|(k, _)| k == "id")
+                    .map(|(_, v)| v.parse().unwrap())
+                    .collect();
+                let text = pairs
+                    .iter()
+                    .find(|(k, _)| k == "short_desc")
+                    .map(|(_, v)| v);
+                let hits: Vec<_> = bugs
+                    .iter()
+                    .filter(|b| match text {
+                        Some(t) => b["summary"].as_str().unwrap().contains(t.as_str()),
+                        None => ids.contains(&b["id"].as_u64().unwrap()),
+                    })
+                    .cloned()
+                    .collect();
+                wiremock::ResponseTemplate::new(200).set_body_json(
+                    sandogasa_bugzilla::test_support::answer(&hits, r.url.query()),
+                )
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// A dry run finds the reviews, the cached one by id and the rest
+    /// by search, records them in the report, and writes nothing.
+    #[tokio::test]
+    async fn a_dry_run_records_the_reviews_found_and_changes_nothing() {
+        let server = bugzilla_with(vec![
+            review_bug(10, "Review Request: rust-my-crate - Mine", &[99]),
+            review_bug(20, "Review Request: rust-dep-a - A", &[]),
+            review_bug(30, "Review Request: rust-dep-b - B", &[]),
+        ])
+        .await;
+        // No PUT is mounted, so a write would fail the run.
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("report.toml").display().to_string();
+        check_crate::write_toml(&report_with_missing_deps(&[("rust-dep-b", 30)]), &toml_path)
+            .unwrap();
+        let opts = CheckPkgReviewsOptions {
+            toml_path: toml_path.clone(),
+            bugzilla_url: server.uri(),
+            api_key: "key".to_string(),
+            dry_run: true,
+            verbose: true,
+        };
+        check_pkg_reviews_async(&opts).await.unwrap();
+        let saved = check_crate::load_report(&toml_path).unwrap();
+        assert_eq!(
+            saved.review_bugs,
+            BTreeMap::from([
+                ("rust-dep-a".to_string(), 20),
+                ("rust-dep-b".to_string(), 30),
+                ("rust-my-crate".to_string(), 10),
+            ])
+        );
+        let puts = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.method.as_str() != "GET")
+            .count();
+        assert_eq!(puts, 0);
+    }
+
+    /// A cached id Bugzilla no longer has is searched for instead.
+    #[tokio::test]
+    async fn a_cached_review_that_is_gone_is_searched_for() {
+        let server =
+            bugzilla_with(vec![review_bug(20, "Review Request: rust-dep-a - A", &[])]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("report.toml").display().to_string();
+        check_crate::write_toml(&report_with_missing_deps(&[("rust-dep-a", 7)]), &toml_path)
+            .unwrap();
+        let opts = CheckPkgReviewsOptions {
+            toml_path: toml_path.clone(),
+            bugzilla_url: server.uri(),
+            api_key: "key".to_string(),
+            dry_run: true,
+            verbose: false,
+        };
+        check_pkg_reviews_async(&opts).await.unwrap();
+        let saved = check_crate::load_report(&toml_path).unwrap();
+        assert_eq!(saved.review_bugs.get("rust-dep-a"), Some(&20));
+    }
+
+    #[test]
+    fn the_summary_names_each_bug_change_and_missing_review() {
+        let bug_map = BTreeMap::from([
+            ("rust-a".to_string(), (1, "NEW".to_string())),
+            ("rust-b".to_string(), (2, "POST".to_string())),
+        ]);
+        let changes = [LinkChange {
+            bug_id: 1,
+            package: "rust-a".to_string(),
+            add_depends: vec![2],
+            remove_depends: vec![9],
+        }];
+        let text = summary(&changes, &bug_map, &["rust-c".to_string()]);
+        for want in [
+            "  rust-a: bug 1 (NEW)",
+            "  rust-b: bug 2 (POST)",
+            "  Bug 1 (rust-a):",
+            "    + Depends On: 2 (rust-b)",
+            "    - Depends On: 9",
+            "Review bugs not found:\n  - rust-c",
+            "2/3 review bug(s) found, 1 change(s) needed.",
+        ] {
+            assert!(text.contains(want), "{want:?} not in:\n{text}");
+        }
+        let none = summary(&[], &bug_map, &[]);
+        assert!(!none.contains("Proposed changes"), "{none}");
+        assert!(!none.contains("not found"), "{none}");
+    }
+
+    /// Each change is written as a Depends On add and remove.
+    #[tokio::test]
+    async fn changes_are_written_as_depends_on_edits() {
+        let server = bugzilla_with(vec![review_bug(1, "Review Request: rust-a - A", &[9])]).await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": []})),
+            )
+            .mount(&server)
+            .await;
+        let bz = BzClient::new(&server.uri())
+            .with_api_key("key".to_string())
+            .unwrap();
+        let changes = [LinkChange {
+            bug_id: 1,
+            package: "rust-a".to_string(),
+            add_depends: vec![2],
+            remove_depends: vec![9],
+        }];
+        apply_changes(&bz, &changes, true).await.unwrap();
+        let put = server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.method.as_str() == "PUT")
+            .unwrap();
+        assert_eq!(put.url.path(), "/rest/bug/1");
+        let body: serde_json::Value = serde_json::from_slice(&put.body).unwrap();
+        assert_eq!(
+            body["depends_on"],
+            serde_json::json!({"add": [2], "remove": [9]})
+        );
+    }
+
+    /// A write that cannot be confirmed stops the run with an error.
+    #[tokio::test]
+    async fn a_write_that_fails_is_an_error() {
+        let server = bugzilla_with(vec![review_bug(1, "Review Request: rust-a - A", &[])]).await;
+        wiremock::Mock::given(wiremock::matchers::method("PUT"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let bz = BzClient::new(&server.uri())
+            .with_api_key("key".to_string())
+            .unwrap()
+            .with_retry_backoff(std::time::Duration::ZERO);
+        let changes = [LinkChange {
+            bug_id: 1,
+            package: "rust-a".to_string(),
+            add_depends: vec![2],
+            remove_depends: vec![],
+        }];
+        let e = apply_changes(&bz, &changes, false).await.unwrap_err();
+        assert!(e.starts_with("failed to update bug 1"), "{e}");
     }
 
     #[test]
