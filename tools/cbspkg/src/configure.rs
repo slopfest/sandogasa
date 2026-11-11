@@ -157,9 +157,13 @@ mod tests {
 
     /// The token is required, so one turned off for cbspkg is asked
     /// about by name, with yes the default.
+    /// Serial: the keyring entry follows `CBSPKG_GITLAB_BASE`, which
+    /// other tests set.
     #[test]
+    #[serial_test::serial]
     fn an_off_token_is_asked_about_for_cbspkg() {
         use sandogasa_config::secret::{MemoryStore, SecretStore};
+        let _env = EnvGuard::new(&[("CBSPKG_GITLAB_BASE", "http://127.0.0.1:9")]);
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, "[gitlab]\naccess_token = \"-\"\n").unwrap();
