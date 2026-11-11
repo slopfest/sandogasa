@@ -192,15 +192,24 @@ fn changelog_nvrs(
 const CHANGELOG_CHUNK: usize = 25;
 
 /// The changelogs of `nvrs` from the Koji hub at `hub_url`, one result
-/// per chunk of [`CHANGELOG_CHUNK`] builds: each a changelog per build
-/// (`None` for one the hub does not know), or why the chunk could not
-/// be read, so a failure costs only its own chunk. Blocks.
-fn changelogs_from_hub(hub_url: &str, nvrs: &[String]) -> Vec<Result<Vec<Option<String>>, String>> {
+/// per chunk of [`CHANGELOG_CHUNK`] builds: each a changelog per build,
+/// or the fault the hub gave for that one build, or why the chunk could
+/// not be read, so a failure costs only its own chunk or build. Blocks.
+#[allow(clippy::type_complexity)]
+fn changelogs_from_hub(
+    hub_url: &str,
+    nvrs: &[String],
+) -> Vec<Result<Vec<Result<String, String>>, String>> {
     let hub = sandogasa_kojihub::HubClient::new(hub_url);
     nvrs.chunks(CHANGELOG_CHUNK)
         .map(|chunk| {
             sandogasa_kojihub::retry(2, || hub.builds_changelogs(chunk))
-                .map(|answers| answers.into_iter().map(Result::ok).collect())
+                .map(|answers| {
+                    answers
+                        .into_iter()
+                        .map(|a| a.map_err(|e| e.to_string()))
+                        .collect()
+                })
                 .map_err(|e| e.to_string())
         })
         .collect()
@@ -208,9 +217,9 @@ fn changelogs_from_hub(hub_url: &str, nvrs: &[String]) -> Vec<Result<Vec<Option<
 
 /// The changelogs of `builds` (`(package, NVR)`), by package: from the
 /// hub the Koji profile names, in batches, or through the `koji` CLI one
-/// build at a time for a batch the hub could not give, or all of them
-/// when no hub is configured. Falling back is said, as the CLI takes
-/// about a second a build.
+/// build at a time for a batch, or a build, the hub could not give, or
+/// all of them when no hub is configured. Falling back is said, as the
+/// CLI takes about a second a build.
 async fn read_changelogs(
     builds: &[(String, String)],
     koji_profile: Option<&str>,
@@ -235,12 +244,23 @@ async fn read_changelogs(
     let chunks = tokio::task::spawn_blocking(move || changelogs_from_hub(&hub, &nvrs))
         .await
         .unwrap_or_else(|e| vec![Err(e.to_string()); builds.len().div_ceil(CHANGELOG_CHUNK)]);
+    // A build whose own request faulted (a hub hiccup, or a build it
+    // does not know) is asked of the CLI too, rather than silently
+    // contributing no changelog and so no bug.
+    let mut faulted: Vec<(String, String)> = Vec::new();
+    let mut fault = String::new();
     for (chunk, result) in builds.chunks(CHANGELOG_CHUNK).zip(chunks) {
         match result {
             Ok(texts) => {
-                for ((pkg, _), text) in chunk.iter().zip(texts) {
-                    if let Some(text) = text {
-                        out.insert(pkg.clone(), text);
+                for ((pkg, nvr), text) in chunk.iter().zip(texts) {
+                    match text {
+                        Ok(text) => {
+                            out.insert(pkg.clone(), text);
+                        }
+                        Err(e) => {
+                            fault = e;
+                            faulted.push((pkg.clone(), nvr.clone()));
+                        }
                     }
                 }
             }
@@ -253,6 +273,18 @@ async fn read_changelogs(
                 cli(chunk, &mut out);
             }
         }
+    }
+    if !faulted.is_empty() {
+        eprintln!(
+            "warning: the Koji hub could not give the changelog of {} ({fault}); \
+             asking the koji CLI",
+            faulted
+                .iter()
+                .map(|(_, nvr)| nvr.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        cli(&faulted, &mut out);
     }
     out
 }
@@ -919,7 +951,12 @@ mod tests {
             crate::discover::new_entry_bug_refs(text, Some("3.0.20-11.fc46")),
             [2458837]
         );
-        assert_eq!(got[1], None);
+        // The unknown build is its own fault, kept for the CLI to retry.
+        assert!(
+            got[1].as_ref().is_err_and(|e| e.contains("No such build")),
+            "{:?}",
+            got[1]
+        );
     }
 
     #[test]

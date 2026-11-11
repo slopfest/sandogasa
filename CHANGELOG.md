@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### ebranch's bug proposal reads a changelog the hub faulted on through the CLI
+
+When the Koji hub faulted on one build inside a batch of changelog
+reads, ebranch's bug proposal silently went without that build's
+changelog, so the bugs its new entries named were never proposed: only
+a whole batch failing fell back to the `koji` CLI. A build whose own
+request faults is now asked of the CLI too, and the fallback is said.
+
 ### A secret for a service on this machine stays in the config file
 
 A tool configured for a service on this machine, such as a Forgejo on
