@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### ebranch check-update offers a kept check of the same builds
+
+When a `check-update --submit` or `--give-karma` run failed at the end,
+as during the 2026-11-11 Bodhi outage, running it again redid the whole
+analysis unless `--kept` was remembered. Now, at a terminal, a vote or
+submit first looks for a kept check of the same builds and offers it,
+saying what it was judged against and how long ago:
+"FEDORA-EPEL-2026-b45dd52e7f was checked against epel10.4 25 min ago
+and its builds are unchanged. Use that check instead of checking
+again? [Y/n]". The answer defaults to taking it only for a check under
+a day old. Whether anything is kept is read off the disk first, so an
+input with nothing kept costs no extra Bodhi or Koji call. It is not
+offered under `--yes`, without a terminal, or with `-b`, `-r`,
+`--testing-branch` or `--refresh`, which `--kept` refuses. Resolves
+#128.
+
 ### Every Bugzilla search asks for only the fields its caller reads
 
 pkg-health's open-bug count, fedora-cve-triage's CVE sweep,

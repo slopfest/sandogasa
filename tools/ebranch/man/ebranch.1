@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH ebranch 1 2026-11-10 "sandogasa 0.28.0" "Sandogasa Manual"
+.TH ebranch 1 2026-11-11 "sandogasa 0.28.0" "Sandogasa Manual"
 .SH NAME
 ebranch \- Cross\-branch porting: build order, branch requests, update checks, Bodhi karma
 .SH SYNOPSIS
@@ -218,6 +218,10 @@ rather decide afresh); any findings left are
 offered as usual. Says how old the check is, as
 the reverse dependencies can have moved since.
 Not for COPR input.
+
+Without \-\-kept, a \-\-give\-karma or \-\-submit run
+at a terminal offers a kept check of unchanged
+builds before checking again.
 .TP
 \fB\-\-koji\-profile\fR \fI<KOJI_PROFILE>\fR
 Koji CLI profile (e.g. cbs for CentOS)

@@ -350,7 +350,11 @@ applied again (at a terminal, unless you would
 rather decide afresh); any findings left are
 offered as usual. Says how old the check is, as
 the reverse dependencies can have moved since.
-Not for COPR input."
+Not for COPR input.
+
+Without --kept, a --give-karma or --submit run
+at a terminal offers a kept check of unchanged
+builds before checking again."
     )]
     kept: bool,
 
@@ -1588,14 +1592,16 @@ fn keep_check(
 /// The check kept for `input` that `check-update --kept` uses: the one
 /// that judged the builds it holds now, the update's for an alias (read
 /// from the Bodhi at `bodhi_url`), the side tag's latest, or the NVRs
-/// given. COPR input is refused before this is reached.
-fn kept_check_for(
+/// given, with how long ago it ran. COPR input is refused before this
+/// is reached. Says nothing: [`kept_check_for`] and the offer of a kept
+/// check (#128) each say it their own way.
+fn find_kept_check(
     input: &str,
     vote_alias: Option<&str>,
     source: Option<&UpdateSource>,
     koji_profile: Option<&str>,
     bodhi_url: &str,
-) -> Result<update_bugs::KeptCheck, String> {
+) -> Result<(update_bugs::KeptCheck, Option<std::time::Duration>), String> {
     let mut keys = vec![input.to_string()];
     // The update's auto-push as it is now, not as it was when kept: it
     // decides the RPM Fusion warning and what the comment says.
@@ -1625,6 +1631,97 @@ fn kept_check_for(
     if autokarma.is_some() {
         kept.report.autokarma = autokarma;
     }
+    Ok((kept, age))
+}
+
+/// Whether `check-update` offers a kept check of the same builds
+/// instead of checking again (#128). Only where a kept check is worth
+/// reusing, a vote or a submit, whose failure at the end leaves one;
+/// only at a terminal, and not under `--yes`, so a run nobody watches
+/// checks again; not with the flags `--kept` refuses, which ask for a
+/// different analysis; and not for COPR input (`has_builds` false),
+/// which keeps none.
+fn offers_kept(a: &CheckUpdateArgs, interactive: bool, has_builds: bool) -> bool {
+    has_builds
+        && !a.kept
+        && (a.submit || a.give_karma)
+        && interactive
+        && !a.yes
+        && a.branch.is_none()
+        && a.repo.is_none()
+        && a.testing_branch.is_none()
+        && !a.refresh
+}
+
+/// The question offering the kept check of `input`, with its age,
+/// since the reverse dependencies it judged can have moved since, and
+/// the branch it was judged against, since a run without `-b` may mean
+/// another.
+fn kept_offer_question(input: &str, branch: &str, age: Option<std::time::Duration>) -> String {
+    let when = match age {
+        Some(age) => format!(
+            "was checked against {branch} {} ago",
+            update_bugs::age_text(age)
+        ),
+        None => format!("has a kept check against {branch}"),
+    };
+    format!(
+        "{input} {when} and its builds are unchanged.\nUse that check instead of checking again?"
+    )
+}
+
+/// How old a kept check may be for the offer to default to taking it:
+/// a day. An older one's reverse dependencies have likely moved, so
+/// checking again is the default, and taking it the reviewer's choice.
+const KEPT_OFFER_FRESH: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Whether the offer of a kept check of `age` defaults to taking it.
+fn kept_offer_default(age: Option<std::time::Duration>) -> bool {
+    age.is_some_and(|a| a < KEPT_OFFER_FRESH)
+}
+
+/// Offer the kept check of `input`, if there is one of its current
+/// builds, and return it when taken. Whether anything is kept for it
+/// is asked of the disk first, so an input with nothing kept costs no
+/// remote call; one that is kept but no longer matches its builds, or
+/// whose builds cannot be read, is said, as the run then checks again.
+fn offer_kept_check(
+    input: &str,
+    vote_alias: Option<&str>,
+    source: Option<&UpdateSource>,
+    koji_profile: Option<&str>,
+) -> Option<update_bugs::KeptCheck> {
+    if !update_bugs::kept_dir().is_ok_and(|dir| update_bugs::has_kept(&dir, input)) {
+        return None;
+    }
+    let (kept, age) = match find_kept_check(input, vote_alias, source, koji_profile, BODHI_URL) {
+        Ok(found) => found,
+        Err(e) => {
+            eprintln!("note: not offering the kept check of {input}: {e}; checking again");
+            return None;
+        }
+    };
+    let question = kept_offer_question(input, kept.report.dist_branch(), age);
+    match sandogasa_cli::confirm(&question, kept_offer_default(age)) {
+        Ok(true) => Some(kept),
+        Ok(false) => None,
+        Err(e) => {
+            eprintln!("warning: {e}; checking again");
+            None
+        }
+    }
+}
+
+/// [`find_kept_check`] for `--kept`, saying which check it uses.
+fn kept_check_for(
+    input: &str,
+    vote_alias: Option<&str>,
+    source: Option<&UpdateSource>,
+    koji_profile: Option<&str>,
+    bodhi_url: &str,
+) -> Result<update_bugs::KeptCheck, String> {
+    let (kept, age) = find_kept_check(input, vote_alias, source, koji_profile, bodhi_url)
+        .map_err(|e| format!("{e}: run it again without --kept for a fresh analysis"))?;
     match age {
         Some(age) => eprintln!(
             "Using the check of {input} kept {} ago; its builds are unchanged.",
@@ -2084,6 +2181,18 @@ fn main() -> ExitCode {
                     let at = k.checked_at.unwrap_or_else(chrono::Utc::now);
                     (k.report, k.decisions, at)
                 })
+            } else if offers_kept(
+                a,
+                opts.interactive,
+                vote_alias.is_some() || source.is_some(),
+            ) && let Some(k) = offer_kept_check(
+                input,
+                vote_alias.as_deref(),
+                source.as_ref(),
+                a.koji_profile.as_deref(),
+            ) {
+                let at = k.checked_at.unwrap_or_else(chrono::Utc::now);
+                Ok((k.report, k.decisions, at))
             } else {
                 check_update::check_update(input, &opts)
                     .map(|r| (r, Vec::new(), chrono::Utc::now()))
@@ -3127,6 +3236,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("out of date"), "{err}");
+        // `--kept` says how to get a fresh analysis instead.
+        assert!(err.contains("run it again without --kept"), "{err}");
     }
 
     /// For an alias, the update's builds and side tag come from Bodhi,
@@ -3207,6 +3318,115 @@ mod tests {
                 "{flag:?}"
             );
         }
+    }
+
+    /// A kept check of the same builds is offered for a vote or a
+    /// submit at a terminal, and never where it would not be taken
+    /// unasked or where `--kept` would be refused (#128).
+    #[test]
+    fn a_kept_check_is_offered_only_where_it_could_be_taken() {
+        use clap::Parser;
+        let offers = |extra: &[&str], interactive: bool| {
+            let mut args = vec!["ebranch", "check-update", "FEDORA-2026-1"];
+            args.extend_from_slice(extra);
+            let cli = super::Cli::try_parse_from(args).expect("parses");
+            let super::Command::CheckUpdate(a) = &cli.command else {
+                panic!("check-update");
+            };
+            super::offers_kept(a, interactive, true)
+        };
+        assert!(offers(&["--give-karma"], true));
+        assert!(offers(&["--give-karma", "-v"], true));
+        // A plain check is meant to check again; nobody to ask; --yes.
+        assert!(!offers(&[], true));
+        assert!(!offers(&["--give-karma"], false));
+        assert!(!offers(&["--give-karma", "--yes"], true));
+        // Already reusing it, or asking for a different analysis.
+        assert!(!offers(&["--give-karma", "--kept"], true));
+        for flag in [
+            &["-b", "f44"][..],
+            &["-r", "@epel"],
+            &["--testing-branch", "f44"],
+            &["--refresh"],
+        ] {
+            let mut args = vec!["--give-karma"];
+            args.extend_from_slice(flag);
+            assert!(!offers(&args, true), "{flag:?}");
+        }
+    }
+
+    #[test]
+    fn the_kept_check_offer_says_how_old_it_is_and_against_what() {
+        let q = super::kept_offer_question(
+            "FEDORA-EPEL-2026-b45dd52e7f",
+            "epel10.4",
+            Some(std::time::Duration::from_secs(25 * 60)),
+        );
+        assert!(
+            q.starts_with("FEDORA-EPEL-2026-b45dd52e7f was checked against epel10.4 25 min ago"),
+            "{q}"
+        );
+        assert!(
+            q.ends_with("Use that check instead of checking again?"),
+            "{q}"
+        );
+        let q = super::kept_offer_question("f45-build-side-1", "f45", None);
+        assert!(
+            q.starts_with("f45-build-side-1 has a kept check against f45 and"),
+            "{q}"
+        );
+    }
+
+    /// Taking a kept check is the default only while it is fresh; an
+    /// older one, or one of unknown age, defaults to checking again.
+    #[test]
+    fn only_a_fresh_kept_check_is_taken_by_default() {
+        let h = |hours: u64| Some(std::time::Duration::from_secs(hours * 60 * 60));
+        assert!(super::kept_offer_default(h(0)));
+        assert!(super::kept_offer_default(h(23)));
+        assert!(!super::kept_offer_default(h(24)));
+        assert!(!super::kept_offer_default(h(24 * 12)));
+        assert!(!super::kept_offer_default(None));
+    }
+
+    /// Whether anything is kept for an input is read off the disk, so an
+    /// input with nothing kept costs the offer no remote call; and COPR
+    /// input, which keeps nothing, is never offered one.
+    #[test]
+    #[serial_test::serial]
+    fn a_kept_check_is_found_on_disk_by_its_input() {
+        use clap::Parser;
+        let dir = tempfile::tempdir().unwrap();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[(
+            "XDG_STATE_HOME",
+            &dir.path().to_string_lossy(),
+        )]);
+        let kept_dir = super::update_bugs::kept_dir().unwrap();
+        let input = "f45-build-side-1";
+        assert!(!super::update_bugs::has_kept(&kept_dir, input));
+        let report: crate::check_update::CheckUpdateReport =
+            serde_json::from_value(serde_json::json!({
+                "input": input, "branch": "f45", "updated_packages": [],
+                "full_analysis": true, "reverse_deps": {}, "changes": []
+            }))
+            .unwrap();
+        super::keep_check(
+            &report,
+            &[],
+            chrono::Utc::now(),
+            &[input.to_string()],
+            false,
+        );
+        assert!(super::update_bugs::has_kept(&kept_dir, input));
+        assert!(!super::update_bugs::has_kept(&kept_dir, "f45-build-side-2"));
+
+        let cli = super::Cli::try_parse_from(["ebranch", "check-update", input, "--give-karma"])
+            .expect("parses");
+        let super::Command::CheckUpdate(a) = &cli.command else {
+            panic!("check-update");
+        };
+        assert!(super::offers_kept(a, true, true));
+        assert!(!super::offers_kept(a, true, false), "COPR input");
     }
 
     #[test]

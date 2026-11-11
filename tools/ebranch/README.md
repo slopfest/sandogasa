@@ -1868,6 +1868,20 @@ applied as they were. Explained findings are posted again in the
 comment's "addressed by the reviewer" section. COPR input is not kept,
 and `--kept` refuses it.
 
+Without `--kept`, a `--give-karma` or `--submit` run at a terminal looks
+for a kept check of the same builds first and offers it:
+
+```console
+FEDORA-EPEL-2026-b45dd52e7f was checked against epel10.4 25 min ago and its builds are unchanged.
+Use that check instead of checking again? [Y/n]
+```
+
+Answering no checks again. A check more than a day old is still
+offered, but the answer defaults to checking again, as its reverse
+dependencies have likely moved. The offer is not made under `--yes`,
+without a terminal, or with the flags `--kept` refuses; a kept check
+that no longer matches the builds is said and passed over.
+
 ## System-wide configuration
 
 Settings are read from `/etc/ebranch/config.toml` first, then overridden

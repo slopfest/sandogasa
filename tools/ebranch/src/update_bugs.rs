@@ -140,6 +140,12 @@ fn kept_file(dir: &Path, key: &str) -> PathBuf {
     dir.join(format!("{safe}.json"))
 }
 
+/// Whether a check is kept under `key` in `dir`, asked of the disk
+/// alone: cheap enough to ask before anything remote is.
+pub fn has_kept(dir: &Path, key: &str) -> bool {
+    kept_file(dir, key).exists()
+}
+
 /// The builds a report judged, as Koji NVRs (no epoch), sorted.
 pub fn report_nvrs(report: &CheckUpdateReport) -> Vec<String> {
     let mut nvrs: Vec<String> = report
@@ -277,8 +283,7 @@ pub fn reuse(
     keys: &[&str],
     now: &[String],
 ) -> Result<(KeptCheck, Option<std::time::Duration>), String> {
-    let kept = pick_kept(dir, keys, now)
-        .map_err(|e| format!("{e}: run it again without --kept for a fresh analysis"))?;
+    let kept = pick_kept(dir, keys, now)?;
     let age = kept
         .checked_at
         .and_then(|at| (chrono::Utc::now() - at).to_std().ok());
@@ -920,9 +925,10 @@ mod tests {
             &["libical-4.0.7-2.fc46".to_string()],
         )
         .unwrap_err();
+        // What changed; the remedy is the caller's to add, as `--kept`
+        // and the offer of a kept check (#128) need different ones.
         assert!(
-            err.contains("now also carries libical-4.0.7-2.fc46")
-                && err.contains("run it again without --kept"),
+            err.contains("now also carries libical-4.0.7-2.fc46"),
             "{err}"
         );
     }
