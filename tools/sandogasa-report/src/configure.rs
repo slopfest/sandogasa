@@ -375,7 +375,7 @@ enum TokenChoice {
     Skipped,
 }
 
-/// Where [`keep_token`] left a token.
+/// Where [`instance_token`] left a token.
 #[derive(Debug, PartialEq)]
 enum TokenOutcome {
     /// Nothing to do: skipped, or kept where it already was.
@@ -585,14 +585,19 @@ fn token_what(kind: &TokenKind, host: &str) -> String {
     format!("{} for {host}", kind.what)
 }
 
-/// Settle `instance`'s token, by the rule
-/// [`sandogasa_config::secret::fill`] keeps for an optional secret,
-/// which every instance is. One turned off for sandogasa-report
-/// ([`OFF`](sandogasa_config::secret::OFF) at `[<table>] <host>` in the
-/// overlay) is left off on a plain run, with nothing asked and the
-/// keyring not read; `review` (`--all`) offers it again through
-/// [`reenable_token`]. Otherwise [`keep_token`] asks `choose` for it.
-/// The keyring is read at most once.
+/// Settle `instance`'s token through
+/// [`fill`](sandogasa_config::secret::fill) and
+/// [`settle`](sandogasa_config::secret::settle), by their rules for an
+/// optional secret, which every instance is: the overlay is a
+/// `toml::Value`, not a struct, so the token at `[<table>] <host>` is
+/// taken out as a string, driven through them as one slot, and written
+/// back, the overlay keeping everything else as it is.
+///
+/// One turned off for sandogasa-report is left off on a plain run, with
+/// nothing asked and the keyring not read; `review` (`--all`) offers it
+/// again, and a yes to using the keyring's entry again settles it with
+/// no prompt. Otherwise `choose` is asked for it, offered the saved one
+/// (the keyring's, else the overlay's).
 fn instance_token(
     overlay: &mut toml::Value,
     kind: &TokenKind,
@@ -602,103 +607,98 @@ fn instance_token(
     ask: &dyn Fn(&str, bool) -> bool,
     choose: impl FnOnce(Option<&str>) -> Result<TokenChoice, Box<dyn std::error::Error>>,
 ) -> Result<TokenOutcome, Box<dyn std::error::Error>> {
-    let off = overlay_get_str(overlay, &[kind.table, host]).as_deref()
-        == Some(sandogasa_config::secret::OFF);
-    if off && !review {
-        return Ok(TokenOutcome::Unchanged);
-    }
-    let held = crate::secrets::keyring()
-        .lookup(&(kind.secret)(instance))
-        .ok()
-        .flatten();
-    if off && reenable_token(overlay, kind, host, held.as_deref(), ask) {
-        return Ok(TokenOutcome::InKeyring { was_in_file: true });
-    }
-    keep_token(overlay, kind, instance, host, held, choose)
+    instance_token_in(
+        crate::secrets::keyring(),
+        overlay,
+        kind,
+        instance,
+        host,
+        review,
+        ask,
+        choose,
+    )
 }
 
-/// Whether `host`'s token, turned off, is to use the keyring's entry
-/// again: with `held` an entry, `ask` is asked
-/// [`reenable_question`](sandogasa_config::secret::reenable_question),
-/// defaulting to no, and a yes takes the marker out of the overlay (the
-/// caller taking it out of the file too), storing nothing. False where
-/// [`keep_token`] is to ask for it, offered blank.
-fn reenable_token(
-    overlay: &mut toml::Value,
-    kind: &TokenKind,
-    host: &str,
-    held: Option<&str>,
-    ask: &dyn Fn(&str, bool) -> bool,
-) -> bool {
-    let question =
-        sandogasa_config::secret::reenable_question(&token_what(kind, host), "sandogasa-report");
-    if held.is_some() && ask(&question, false) {
-        overlay_remove(overlay, &[kind.table, host]);
-        return true;
-    }
-    false
-}
-
-/// Ask `choose` for `instance`'s token, offering the one saved (`held`,
-/// the keyring's, else the overlay's at `[<table>] <host>`), and keep the
-/// answer in the keyring when there is one, taking it out of the
-/// overlay; otherwise in the overlay, as before. A token kept as it
-/// was but found only in the overlay moves to the keyring too.
-fn keep_token(
+/// [`instance_token`] with the keyring passed in.
+#[allow(clippy::too_many_arguments)]
+fn instance_token_in(
+    store: &dyn sandogasa_config::secret::SecretStore,
     overlay: &mut toml::Value,
     kind: &TokenKind,
     instance: &str,
     host: &str,
-    held: Option<String>,
+    review: bool,
+    ask: &dyn Fn(&str, bool) -> bool,
     choose: impl FnOnce(Option<&str>) -> Result<TokenChoice, Box<dyn std::error::Error>>,
 ) -> Result<TokenOutcome, Box<dyn std::error::Error>> {
+    use sandogasa_config::secret::{Before, OFF, Slot};
+    const TOOL: &str = "sandogasa-report";
     let path = [kind.table, host];
-    let secret = (kind.secret)(instance);
     let file = overlay_get_str(overlay, &path);
-    // The saved token, as reading finds it (without the environment):
-    // the keyring's, else the overlay's; none for one turned off, which
-    // is offered blank so the marker is never checked against the forge.
-    let existing = if file.as_deref() == Some(sandogasa_config::secret::OFF) {
-        None
-    } else {
-        held.clone()
-            .or_else(|| file.clone().filter(|f| !f.is_empty()))
-    };
-    let token = match (choose(existing.as_deref())?, existing) {
-        (TokenChoice::Saved(t), _) => t,
-        (TokenChoice::KeepExisting, Some(t)) if file.is_some() => t,
-        _ => return Ok(TokenOutcome::Unchanged),
-    };
-    // One slot settled on its own: the overlay is a `toml::Value`, not
-    // a struct, so the prompts run per instance and the keys to take
-    // out of the file are gathered by the caller. What the keyring held
-    // is passed on, so a token it already has stays there quietly rather
-    // than being stored and announced again.
     let what = token_what(kind, host);
-    let mut kept = token;
-    sandogasa_config::secret::settle(
-        crate::secrets::keyring(),
-        "sandogasa-report",
-        vec![sandogasa_config::secret::Slot {
+    let mut value = file.clone().unwrap_or_default();
+    fn slot<'a>(
+        kind: &TokenKind,
+        host: &'a str,
+        what: &'a str,
+        instance: &str,
+        value: &'a mut String,
+    ) -> Slot<'a> {
+        Slot {
             table: kind.table,
             key: host,
-            what: &what,
-            entry: secret,
-            value: &mut kept,
+            what,
+            entry: (kind.secret)(instance),
+            value,
             required: false,
-        }],
-        &[sandogasa_config::secret::Before::Set { keyring: held }],
-    );
-    if kept.is_empty() {
-        Ok(TokenOutcome::InKeyring {
-            was_in_file: overlay_remove(overlay, &path),
-        })
-    } else if file.as_deref() == Some(kept.as_str()) {
-        Ok(TokenOutcome::Unchanged)
-    } else {
-        overlay_set_str(overlay, &path, &kept);
-        Ok(TokenOutcome::InOverlay)
+        }
     }
+    let before = sandogasa_config::secret::fill(
+        store,
+        TOOL,
+        vec![slot(kind, host, &what, instance, &mut value)],
+        review,
+        ask,
+    );
+    let mut saved_new = false;
+    match before.first() {
+        // Left off, or turned back on with the keyring's entry: nothing
+        // to ask.
+        Some(Before::Off) if value == OFF => return Ok(TokenOutcome::Unchanged),
+        Some(Before::Set { .. }) if file.as_deref() == Some(OFF) => {}
+        _ => {
+            let existing = sandogasa_config::secret::is_set(&value).then(|| value.clone());
+            match choose(existing.as_deref())? {
+                TokenChoice::Saved(t) => {
+                    saved_new = true;
+                    value = t;
+                }
+                TokenChoice::KeepExisting => {}
+                TokenChoice::Skipped => value.clear(),
+            }
+        }
+    }
+    sandogasa_config::secret::settle(
+        store,
+        TOOL,
+        vec![slot(kind, host, &what, instance, &mut value)],
+        &before,
+    );
+    if value.is_empty() {
+        // In the keyring: out of the overlay.
+        let was_in_file = overlay_remove(overlay, &path);
+        return Ok(if was_in_file || saved_new {
+            TokenOutcome::InKeyring { was_in_file }
+        } else {
+            TokenOutcome::Unchanged
+        });
+    }
+    if file.as_deref() == Some(value.as_str()) {
+        return Ok(TokenOutcome::Unchanged);
+    }
+    // No keyring to keep it in, or turned off ("-").
+    overlay_set_str(overlay, &path, &value);
+    Ok(TokenOutcome::InOverlay)
 }
 
 /// Save `overlay` to `cf`, then take out the `(table, key)` tokens now
@@ -1025,14 +1025,33 @@ mod tests {
     /// a kind whose entry cannot even be named still settles.
     #[test]
     fn a_plain_run_does_not_read_the_keyring_for_a_token_turned_off() {
-        const UNREAD: TokenKind = TokenKind {
-            secret: |_| panic!("read the keyring"),
-            ..GITLAB
-        };
+        struct Unread;
+        impl sandogasa_config::secret::SecretStore for Unread {
+            fn lookup(
+                &self,
+                _: &sandogasa_config::secret::SecretRef,
+            ) -> Result<Option<String>, sandogasa_config::secret::SecretError> {
+                panic!("read the keyring")
+            }
+            fn store(
+                &self,
+                _: &sandogasa_config::secret::SecretRef,
+                _: &str,
+            ) -> Result<(), sandogasa_config::secret::SecretError> {
+                panic!("wrote to the keyring")
+            }
+            fn clear(
+                &self,
+                _: &sandogasa_config::secret::SecretRef,
+            ) -> Result<(), sandogasa_config::secret::SecretError> {
+                panic!("cleared the keyring")
+            }
+        }
         let mut overlay = parse_overlay(OFF_TEXT).unwrap();
-        let outcome = instance_token(
+        let outcome = instance_token_in(
+            &Unread,
             &mut overlay,
-            &UNREAD,
+            &GITLAB,
             GITLAB_I,
             "gitlab.keyring.test",
             false,
@@ -1168,6 +1187,22 @@ mod tests {
         assert_eq!(outcome, TokenOutcome::Unchanged);
         assert_eq!(overlay, parse_overlay(OFF_TEXT).unwrap(), "still off");
         assert_eq!(asked.into_inner(), [(QUESTION.to_string(), false)]);
+        // Keeping "the saved one" when none was offered keeps it off too.
+        let outcome = instance_token(
+            &mut overlay,
+            &GITLAB,
+            GITLAB_I,
+            host,
+            true,
+            &|_, _| false,
+            |existing| {
+                assert_eq!(existing, None);
+                Ok(TokenChoice::KeepExisting)
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome, TokenOutcome::Unchanged);
+        assert_eq!(overlay, parse_overlay(OFF_TEXT).unwrap(), "still off");
 
         let outcome = instance_token(&mut overlay, &GITLAB, GITLAB_I, host, true, &never, |_| {
             Ok(TokenChoice::Saved("glpat-new".into()))
@@ -1180,6 +1215,89 @@ mod tests {
             "glpat-new"
         );
         keyring.clear(&crate::gitlab::secret(GITLAB_I)).unwrap();
+    }
+
+    /// A saved token cleared at the prompt is turned off for
+    /// sandogasa-report ("-" in the overlay), the keyring's entry left
+    /// for the other tools, as every tool's `config` does; the next plain
+    /// run asks nothing about it.
+    #[test]
+    #[serial_test::serial]
+    fn a_cleared_token_is_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let host = "gitlab.keyring.test";
+        let keyring = crate::secrets::keyring();
+        keyring
+            .store(&crate::gitlab::secret(GITLAB_I), "glpat-kept")
+            .unwrap();
+        let mut overlay = parse_overlay("[users.me]\nfas = \"me\"\n").unwrap();
+        let outcome = instance_token(&mut overlay, &GITLAB, GITLAB_I, host, false, &never, |e| {
+            assert_eq!(e, Some("glpat-kept"));
+            Ok(TokenChoice::Skipped)
+        })
+        .unwrap();
+        assert_eq!(outcome, TokenOutcome::InOverlay);
+        assert_eq!(
+            overlay_get_str(&overlay, &["gitlab_tokens", host]).as_deref(),
+            Some("-")
+        );
+        assert_eq!(
+            keyring
+                .lookup(&crate::gitlab::secret(GITLAB_I))
+                .unwrap()
+                .as_deref(),
+            Some("glpat-kept")
+        );
+        let outcome = instance_token(&mut overlay, &GITLAB, GITLAB_I, host, false, &never, |_| {
+            panic!("prompted for a token turned off")
+        })
+        .unwrap();
+        assert_eq!(outcome, TokenOutcome::Unchanged);
+        keyring.clear(&crate::gitlab::secret(GITLAB_I)).unwrap();
+    }
+
+    /// Without a keyring, a token is kept in the overlay, and kept as it
+    /// is when run again.
+    #[test]
+    fn without_a_keyring_the_token_stays_in_the_overlay() {
+        let none = sandogasa_config::secret::NoKeyring;
+        let host = "gitlab.keyring.test";
+        let mut overlay = toml::Value::Table(Default::default());
+        let outcome = instance_token_in(
+            &none,
+            &mut overlay,
+            &GITLAB,
+            GITLAB_I,
+            host,
+            false,
+            &never,
+            |e| {
+                assert_eq!(e, None);
+                Ok(TokenChoice::Saved("glpat-file".into()))
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome, TokenOutcome::InOverlay);
+        assert_eq!(
+            overlay_get_str(&overlay, &["gitlab_tokens", host]).as_deref(),
+            Some("glpat-file")
+        );
+        let outcome = instance_token_in(
+            &none,
+            &mut overlay,
+            &GITLAB,
+            GITLAB_I,
+            host,
+            false,
+            &never,
+            |e| {
+                assert_eq!(e, Some("glpat-file"));
+                Ok(TokenChoice::KeepExisting)
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome, TokenOutcome::Unchanged);
     }
 
     /// The entries are the ones every sandogasa tool reads for the

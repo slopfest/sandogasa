@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-report config settles its tokens through the shared secret rules
+
+`sandogasa-report config` decided by itself what happens to a forge
+token turned off by hand ("-"): left off on a plain run, offered again
+with `--all`, and the keyring's entry offered back. Only the question's
+wording came from sandogasa-config, so a change to the rules every
+other tool's `config` follows would not have reached it, and its tests
+pinned the wording rather than the decisions. Each instance's token is
+now taken out of the overlay as a string and run through
+`secret::fill` and `secret::settle` as one optional slot, then written
+back, and the overlay keeps everything else as it was. The one visible
+difference is the shared rule for a saved token answered with nothing:
+it is turned off for sandogasa-report, with the keyring's entry left
+for the other tools, rather than kept. Resolves #122.
+
 ### cbspkg sig-repo sets the SIG's merge method
 
 `cbspkg sig-repo` left a SIG repo's merge method at GitLab's default, a
