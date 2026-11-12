@@ -287,12 +287,31 @@ pub fn hints(
     branch: &str,
     verbose: bool,
 ) -> (Vec<CoprHint>, Vec<(Option<String>, String)>) {
+    hints_on(
+        &sandogasa_copr::Copr::new(),
+        "https://src.fedoraproject.org",
+        copr_ref,
+        packages,
+        branch,
+        verbose,
+    )
+}
+
+/// [`hints`] against `copr`, with specs and patches read from the
+/// dist-git at `distgit`.
+fn hints_on(
+    copr: &sandogasa_copr::Copr,
+    distgit: &str,
+    copr_ref: &str,
+    packages: &[String],
+    branch: &str,
+    verbose: bool,
+) -> (Vec<CoprHint>, Vec<(Option<String>, String)>) {
     let mut gaps = Vec::new();
     let Some((owner, project)) = copr_ref.split_once('/') else {
         gaps.push((None, format!("{copr_ref} is not <owner>/<project>")));
         return (Vec::new(), gaps);
     };
-    let copr = sandogasa_copr::Copr::new();
     if verbose {
         eprintln!("[ebranch] reading COPR {copr_ref}");
     }
@@ -335,7 +354,7 @@ pub fn hints(
         let copr_version = state.pkg_version.clone().unwrap_or_default();
         let distgit_spec = http
             .get(format!(
-                "https://src.fedoraproject.org/rpms/{package}/raw/{branch}/f/{package}.spec"
+                "{distgit}/rpms/{package}/raw/{branch}/f/{package}.spec"
             ))
             .send()
             .and_then(|r| r.error_for_status())
@@ -359,7 +378,7 @@ pub fn hints(
             carried: Vec::new(),
             unchecked: None,
         };
-        match srpm_of(&copr, owner, project, chroot, state.build_id.unwrap_or(0)) {
+        match srpm_of(copr, owner, project, chroot, state.build_id.unwrap_or(0)) {
             Ok(Some(srpm)) => match tempfile::tempdir()
                 .map_err(|e| e.to_string())
                 .and_then(|dir| unpack(&srpm, dir.path()))
@@ -376,7 +395,7 @@ pub fn hints(
                         ours.iter()
                             .filter_map(|d| {
                                 http.get(format!(
-                                    "https://src.fedoraproject.org/rpms/{package}/raw/{branch}/f/{}",
+                                    "{distgit}/rpms/{package}/raw/{branch}/f/{}",
                                     d.file
                                 ))
                                 .send()
@@ -543,5 +562,150 @@ Patch0: orage-desktop.patch
             Some("https://gitlab.xfce.org/apps/orage/-/commit/1ad84821")
         );
         assert_eq!(patch_header("just a diff\n"), (None, None, None));
+    }
+
+    /// One mock server standing in for both COPR and dist-git: COPR's
+    /// monitor lists `listed`, build 7's SRPM is gone, and dist-git has
+    /// `specs` (`package`, spec text) on f45.
+    fn services(
+        listed: serde_json::Value,
+        specs: &[(&str, &str)],
+    ) -> (tokio::runtime::Runtime, wiremock::MockServer) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api_3/monitor"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "output": "ok",
+                    "packages": listed,
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api_3/build/7"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": 7,
+                    "chroots": ["fedora-45-x86_64"],
+                    "source_package": {"name": "orage", "version": "4.20.0-1", "url": null},
+                })))
+                .mount(&server)
+                .await;
+            for (package, spec) in specs {
+                Mock::given(method("GET"))
+                    .and(path(format!("/rpms/{package}/raw/f45/f/{package}.spec")))
+                    .respond_with(ResponseTemplate::new(200).set_body_string(*spec))
+                    .mount(&server)
+                    .await;
+            }
+        });
+        (rt, server)
+    }
+
+    fn chroot(state: &str, build: Option<u64>, version: &str) -> serde_json::Value {
+        serde_json::json!({"state": state, "status": 1, "build_id": build, "pkg_version": version})
+    }
+
+    #[test]
+    fn a_copr_build_older_than_the_branch_is_flagged() {
+        let listed = serde_json::json!([
+            {"name": "orage", "chroots": {
+                "fedora-45-x86_64": chroot("succeeded", Some(7), "4.20.0-1"),
+                "fedora-rawhide-x86_64": chroot("failed", Some(8), "4.21.0-1"),
+            }},
+            {"name": "never-built", "chroots": {
+                "fedora-45-x86_64": chroot("failed", Some(9), "1-1"),
+            }},
+            {"name": "not-asked", "chroots": {
+                "fedora-45-x86_64": chroot("succeeded", Some(10), "1-1"),
+            }},
+        ]);
+        let spec = "Name: orage\nVersion: 4.20.1\nRelease: 1\n";
+        let (_rt, server) = services(listed, &[("orage", spec)]);
+        let copr = sandogasa_copr::Copr::with_base_url(&server.uri());
+        let packages = ["orage", "never-built", "absent"].map(String::from);
+        let (hints, gaps) = hints_on(
+            &copr,
+            &server.uri(),
+            "mcrha/libical-4.x",
+            &packages,
+            "f45",
+            false,
+        );
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert_eq!(
+            hints,
+            [CoprHint {
+                package: "orage".into(),
+                copr_version: "4.20.0-1".into(),
+                branch_version: Some("4.20.1".into()),
+                older: true,
+                carried: Vec::new(),
+                unchecked: Some("SRPM no longer available".into()),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_dist_git_spec_that_cannot_be_read_is_a_gap() {
+        let listed = serde_json::json!([
+            {"name": "orage", "chroots": {
+                "fedora-45-x86_64": chroot("succeeded", Some(7), "4.20.0-1"),
+            }},
+        ]);
+        let (_rt, server) = services(listed, &[]);
+        let copr = sandogasa_copr::Copr::with_base_url(&server.uri());
+        let (hints, gaps) = hints_on(
+            &copr,
+            &server.uri(),
+            "mcrha/libical-4.x",
+            &["orage".to_string()],
+            "f45",
+            true,
+        );
+        assert!(hints.is_empty());
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].0.as_deref(), Some("orage"));
+        assert!(gaps[0].1.starts_with("dist-git spec:"), "{gaps:?}");
+    }
+
+    #[test]
+    fn a_copr_that_cannot_be_read_is_one_gap() {
+        let (hints, gaps) = hints("no-slash", &["orage".to_string()], "f45", false);
+        assert!(hints.is_empty());
+        assert_eq!(
+            gaps,
+            [(None, "no-slash is not <owner>/<project>".to_string())]
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+        let copr = sandogasa_copr::Copr::with_base_url(&server.uri());
+        let (hints, gaps) = hints_on(
+            &copr,
+            &server.uri(),
+            "nobody/nothing",
+            &["orage".to_string()],
+            "f45",
+            false,
+        );
+        assert!(hints.is_empty());
+        assert_eq!(gaps.len(), 1);
+        assert!(gaps[0].1.starts_with("COPR nobody/nothing:"), "{gaps:?}");
+    }
+
+    #[test]
+    fn version_of_drops_the_epoch_and_release() {
+        assert_eq!(version_of("2:4.20.1-3.fc45"), "4.20.1");
+        assert_eq!(version_of("4.20.1-3"), "4.20.1");
+        assert_eq!(version_of("4.20.1"), "4.20.1");
     }
 }

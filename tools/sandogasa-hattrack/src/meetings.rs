@@ -193,6 +193,81 @@ fn attendance_summary(r: &Report) -> String {
     s
 }
 
+/// The human-readable `meetings` report.
+fn render(r: &Report, window: &Window) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Meetings: {} in '{}' ({})\n",
+        r.username,
+        r.topic,
+        window.label()
+    );
+    let _ = writeln!(out, "  Matrix IDs: {}", r.matrix_ids.join(", "));
+    let mut summary = attendance_summary(r);
+    if let Some(first) = summary.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    match &r.last_attended {
+        Some(d) => {
+            let _ = writeln!(out, "  {summary} meeting(s); last attended {d}\n");
+        }
+        None => {
+            let _ = writeln!(out, "  {summary} meeting(s)\n");
+        }
+    }
+    for m in &r.meetings {
+        if m.present {
+            let _ = writeln!(out, "  {}  present  ({} line(s) said)", m.date, m.lines);
+        } else {
+            let _ = writeln!(out, "  {}  absent", m.date);
+        }
+    }
+    out
+}
+
+/// The `last-seen` entry for `topic` from a year of meetings, or from
+/// why they could not be read.
+fn last_seen(
+    username: &str,
+    topic: &str,
+    since: DateTime<Utc>,
+    rows: Result<Vec<MeetingRow>, String>,
+) -> ServiceLastSeen {
+    let service = "Meetings".to_string();
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) => {
+            return ServiceLastSeen {
+                service,
+                error: Some(e),
+                ..Default::default()
+            };
+        }
+    };
+    let r = report(username, topic, since, Vec::new(), rows);
+    match &r.last_attended {
+        Some(d) => ServiceLastSeen {
+            service,
+            last_active: Some(format!("{d}T00:00:00+00:00")),
+            detail: Some(format!(
+                "{topic}: {} in the last year",
+                attendance_summary(&r)
+            )),
+            ..Default::default()
+        },
+        None => ServiceLastSeen {
+            service,
+            detail: Some(format!(
+                "{topic}: attended none of {} in the last year",
+                r.total
+            )),
+            ..Default::default()
+        },
+    }
+}
+
 /// The `meetings` subcommand.
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_meetings(
@@ -227,24 +302,8 @@ pub async fn cmd_meetings(
     let r = report(username, topic, since, ids, rows);
     if json {
         println!("{}", serde_json::to_string_pretty(&r)?);
-        return Ok(());
-    }
-    println!("Meetings: {username} in '{topic}' ({})\n", window.label());
-    println!("  Matrix IDs: {}", r.matrix_ids.join(", "));
-    let mut summary = attendance_summary(&r);
-    if let Some(first) = summary.get_mut(..1) {
-        first.make_ascii_uppercase();
-    }
-    match &r.last_attended {
-        Some(d) => println!("  {summary} meeting(s); last attended {d}\n"),
-        None => println!("  {summary} meeting(s)\n"),
-    }
-    for m in &r.meetings {
-        if m.present {
-            println!("  {}  present  ({} line(s) said)", m.date, m.lines);
-        } else {
-            println!("  {}  absent", m.date);
-        }
+    } else {
+        print!("{}", render(&r, &window));
     }
     Ok(())
 }
@@ -271,42 +330,10 @@ pub async fn check_meetings(
             now,
         )
     })
-    .await;
-    let service = "Meetings".to_string();
-    match result {
-        Ok(Ok(rows)) => {
-            let r = report(username, topic, since, Vec::new(), rows);
-            match &r.last_attended {
-                Some(d) => ServiceLastSeen {
-                    service,
-                    last_active: Some(format!("{d}T00:00:00+00:00")),
-                    detail: Some(format!(
-                        "{topic}: {} in the last year",
-                        attendance_summary(&r)
-                    )),
-                    ..Default::default()
-                },
-                None => ServiceLastSeen {
-                    service,
-                    detail: Some(format!(
-                        "{topic}: attended none of {} in the last year",
-                        r.total
-                    )),
-                    ..Default::default()
-                },
-            }
-        }
-        Ok(Err(e)) => ServiceLastSeen {
-            service,
-            error: Some(e),
-            ..Default::default()
-        },
-        Err(e) => ServiceLastSeen {
-            service,
-            error: Some(e.to_string()),
-            ..Default::default()
-        },
-    }
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r);
+    last_seen(username, topic, since, result)
 }
 
 #[cfg(test)]
@@ -393,5 +420,175 @@ mod tests {
                 "@x:example.org"
             ]
         );
+    }
+
+    /// `(datetime, topic, [(matrix id, lines said)])`.
+    type MeetingFixture<'a> = (&'a str, &'a str, &'a [(&'a str, u32)]);
+
+    /// A meetbot whose search for `fesco` answers `meetings`
+    /// (`(datetime, topic)`), each with minutes listing `present`
+    /// (`(matrix id, lines)`).
+    fn meetbot(meetings: &[MeetingFixture]) -> (tokio::runtime::Runtime, wiremock::MockServer) {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let mut found = Vec::new();
+        for (i, (at, topic, present)) in meetings.iter().enumerate() {
+            let base = format!("https://meetbot-raw.fedoraproject.org/m/{topic}.{i}");
+            found.push(serde_json::json!({
+                "channel": "m",
+                "datetime": at,
+                "topic": topic,
+                "url": {"logs": format!("{base}.log.html"), "summary": format!("{base}.html")},
+            }));
+            let mut minutes = String::from("People Present (lines said)\n---\n");
+            for (id, lines) in *present {
+                minutes.push_str(&format!("* {id} ({lines})\n"));
+            }
+            rt.block_on(
+                Mock::given(method("GET"))
+                    .and(path(format!("/m/{topic}.{i}.txt")))
+                    .respond_with(ResponseTemplate::new(200).set_body_string(minutes))
+                    .mount(&server),
+            );
+        }
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path("/fragedpt/"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(found))
+                .mount(&server),
+        );
+        (rt, server)
+    }
+
+    fn at(s: &str) -> DateTime<Utc> {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn meetings_in_the_window_are_read_newest_first_one_a_day() {
+        let me: &[(&str, u32)] = &[("@me:fedora.im", 4), ("@other:fedora.im", 9)];
+        let alt: &[(&str, u32)] = &[("@me:matrix.org", 2)];
+        let none: &[(&str, u32)] = &[("@other:fedora.im", 1)];
+        let (_rt, server) = meetbot(&[
+            ("2026-06-01T15:00:00", "fesco", me),
+            // A second meeting the same day is not counted again.
+            ("2026-06-01T18:00:00", "fesco", none),
+            ("2026-06-08T15:00:00", "fesco", none),
+            ("2026-06-15T15:00:00", "fesco", alt),
+            // Outside the window, and another topic the search matched.
+            ("2026-05-01T15:00:00", "fesco", me),
+            ("2026-06-10T15:00:00", "fesco-extra", me),
+        ]);
+        let ids = matrix_ids("me", &[], &["@me:matrix.org".to_string()]);
+        let rows = fetch(
+            &Meetbot::with_base_url(&server.uri()),
+            "fesco",
+            &ids,
+            at("2026-05-20T00:00:00Z"),
+            at("2026-06-20T00:00:00Z"),
+        )
+        .unwrap();
+        let got: Vec<(&str, bool, u32)> = rows
+            .iter()
+            .map(|r| (r.date.as_str(), r.present, r.lines))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("2026-06-15", true, 2),
+                ("2026-06-08", false, 0),
+                ("2026-06-01", false, 0),
+            ],
+            "the later of the two 2026-06-01 meetings is the one read"
+        );
+        assert!(rows[0].minutes_url.starts_with(&server.uri()));
+    }
+
+    #[test]
+    fn a_failed_search_says_so() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+        let err = fetch(
+            &Meetbot::with_base_url(&server.uri()),
+            "fesco",
+            &[],
+            at("2026-05-20T00:00:00Z"),
+            at("2026-06-20T00:00:00Z"),
+        )
+        .unwrap_err();
+        assert!(err.starts_with("meetbot search failed"), "{err}");
+    }
+
+    #[test]
+    fn matrix_ids_start_with_fedora_im_and_drop_duplicates() {
+        let fas = ["@me:fedora.im".to_string(), "@me:matrix.org".to_string()];
+        let extra = ["@me:matrix.org".to_string(), "@me:example.org".to_string()];
+        assert_eq!(
+            matrix_ids("me", &fas, &extra),
+            ["@me:fedora.im", "@me:matrix.org", "@me:example.org"]
+        );
+    }
+
+    #[test]
+    fn a_window_is_days_back_or_a_date() {
+        let now = at("2026-06-20T12:00:00Z");
+        assert_eq!(Window::Days(30).start(now), at("2026-05-21T12:00:00Z"));
+        assert_eq!(Window::Days(30).label(), "last 30 days");
+        let since = Window::Since("2026-01-01".parse().unwrap());
+        assert_eq!(since.start(now), at("2026-01-01T00:00:00Z"));
+        assert_eq!(since.label(), "since 2026-01-01");
+    }
+
+    #[test]
+    fn the_report_lists_each_meeting_under_the_summary() {
+        let since = at("2026-06-01T00:00:00Z");
+        let rows = vec![row("2026-06-15", 0), row("2026-06-08", 3)];
+        let r = report("me", "fesco", since, vec!["@me:fedora.im".into()], rows);
+        assert_eq!(
+            render(&r, &Window::Days(30)),
+            "Meetings: me in 'fesco' (last 30 days)\n\n\
+             \x20 Matrix IDs: @me:fedora.im\n\
+             \x20 Attended 1 of 2 meeting(s); last attended 2026-06-08\n\n\
+             \x20 2026-06-15  absent\n\
+             \x20 2026-06-08  present  (3 line(s) said)\n"
+        );
+        let r = report("me", "fesco", since, vec![], vec![row("2026-06-08", 0)]);
+        assert!(render(&r, &Window::Days(30)).contains("  Attended 0 of 1 meeting(s)\n\n"));
+    }
+
+    #[test]
+    fn last_seen_is_the_newest_attended_meeting() {
+        let since = at("2025-06-20T00:00:00Z");
+        let seen = last_seen(
+            "me",
+            "fesco",
+            since,
+            Ok(vec![row("2026-06-15", 0), row("2026-06-08", 3)]),
+        );
+        assert_eq!(seen.service, "Meetings");
+        assert_eq!(
+            seen.last_active.as_deref(),
+            Some("2026-06-08T00:00:00+00:00")
+        );
+        assert_eq!(
+            seen.detail.as_deref(),
+            Some("fesco: attended 1 of 2 in the last year")
+        );
+        let never = last_seen("me", "fesco", since, Ok(vec![row("2026-06-08", 0)]));
+        assert_eq!(never.last_active, None);
+        assert_eq!(
+            never.detail.as_deref(),
+            Some("fesco: attended none of 1 in the last year")
+        );
+        let failed = last_seen("me", "fesco", since, Err("meetbot down".into()));
+        assert_eq!(failed.error.as_deref(), Some("meetbot down"));
     }
 }

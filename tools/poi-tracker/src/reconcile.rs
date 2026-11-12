@@ -753,4 +753,202 @@ mod tests {
         }
         assert!(!out.contains("nothing changed"));
     }
+
+    /// app-a (keep, owned) needs crate-c (owned); crate-c's
+    /// BuildRequires need tool-t (not owned); lib-l (owned) is
+    /// unreachable, and old-keep is a root nothing reaches any more.
+    fn graph() -> deps::DepsGraph {
+        let mut g = deps::DepsGraph {
+            roots: vec!["app-a".into(), "old-keep".into()],
+            ..Default::default()
+        };
+        for (b, s) in [
+            ("app-a", "app-a"),
+            ("crate-c-devel", "crate-c"),
+            ("src:crate-c", "crate-c"),
+            ("tool-t", "tool-t"),
+            ("old-keep", "old-keep"),
+        ] {
+            g.binary_sources.insert(b.into(), s.into());
+        }
+        for (cap, requirer, binary, source) in [
+            ("crate(c)", "app-a", "crate-c-devel", "crate-c"),
+            ("tool-t", "src:crate-c", "tool-t", "tool-t"),
+        ] {
+            g.requirers
+                .entry(cap.into())
+                .or_default()
+                .insert(requirer.into());
+            g.providers
+                .entry(cap.into())
+                .or_default()
+                .insert(deps::GraphProvider {
+                    binary: binary.into(),
+                    source: source.into(),
+                    repoid: "rawhide".into(),
+                });
+        }
+        g
+    }
+
+    fn inventory(path: &std::path::Path, names: &[&str]) {
+        let mut toml =
+            String::from("[inventory]\nname = \"t\"\ndescription = \"t\"\nmaintainer = \"me\"\n");
+        for n in names {
+            toml.push_str(&format!("\n[[package]]\nname = \"{n}\"\n"));
+        }
+        std::fs::write(path, toml).unwrap();
+    }
+
+    /// A workspace in a temporary directory: `keeps` kept, `owned`
+    /// owned, one closure over [`graph`] (`graph = false` leaves the
+    /// graph unwritten), with a derived and a closure inventory.
+    fn workspace(
+        keeps: &[&str],
+        owned: &[&str],
+        graph_written: bool,
+    ) -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        inventory(&d.join("keeps.toml"), keeps);
+        inventory(&d.join("owned.toml"), owned);
+        if graph_written {
+            std::fs::write(
+                d.join("graph.json"),
+                serde_json::to_vec_pretty(&graph()).unwrap(),
+            )
+            .unwrap();
+        }
+        let file = d.join("kondo.toml");
+        std::fs::write(
+            &file,
+            "owned = \"owned.toml\"\n\
+             [[closure]]\n\
+             name = \"ours\"\n\
+             keeps = [\"keeps.toml\"]\n\
+             derived = \"derived.toml\"\n\
+             closure = \"closure.toml\"\n\
+             graph = \"graph.json\"\n\
+             branch = \"rawhide\"\n\
+             from = [\"rawhide\"]\n",
+        )
+        .unwrap();
+        let (ws, _) = Workspace::find(Some(file.to_str().unwrap()))
+            .unwrap()
+            .unwrap();
+        (dir, ws)
+    }
+
+    fn options(ws: &Workspace, dry_run: bool) -> Options<'_> {
+        Options {
+            ws,
+            into: None,
+            yes: true,
+            json: true,
+            verbose: false,
+            dry_run,
+        }
+    }
+
+    fn names(dir: &tempfile::TempDir, file: &str) -> Vec<String> {
+        names_of(dir.path().join(file).to_str().unwrap())
+            .unwrap()
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn reconcile_recomputes_and_writes_the_derived_and_closure_inventories() {
+        let (dir, ws) = workspace(&["app-a"], &["app-a", "crate-c", "lib-l"], true);
+        let report = run(&options(&ws, false)).unwrap();
+        let c = &report.closures[0];
+        assert_eq!(c.skipped, None);
+        assert!(c.new_keeps.is_empty(), "app-a was walked: {c:?}");
+        assert_eq!(c.derived_added, ["crate-c"]);
+        assert_eq!(c.closure_added, ["tool-t"]);
+        assert_eq!(c.dropped_keeps, ["old-keep"]);
+        assert_eq!(names(&dir, "derived.toml"), ["crate-c"]);
+        assert_eq!(names(&dir, "closure.toml"), ["tool-t"]);
+        // Nothing justifies lib-l: it goes to the triage.
+        assert_eq!(report.triage_candidates, ["lib-l"]);
+        assert!(report.watched.is_empty());
+        // A second pass finds nothing new to say.
+        let again = run(&options(&ws, false)).unwrap();
+        let c = &again.closures[0];
+        assert!(
+            c.derived_added.is_empty() && c.closure_added.is_empty(),
+            "{c:?}"
+        );
+        assert!(format_closure(c).contains("former keeps nothing reaches now (1): old-keep"));
+    }
+
+    #[test]
+    fn a_dry_run_lists_new_keeps_without_walking_or_writing() {
+        // lib-l is a keep the graph never walked: a dry run lists it
+        // rather than asking fedrq.
+        let (dir, ws) = workspace(&["app-a", "lib-l"], &["app-a", "crate-c", "lib-l"], true);
+        let report = run(&options(&ws, true)).unwrap();
+        let c = &report.closures[0];
+        assert_eq!(c.new_keeps, ["lib-l"]);
+        assert_eq!(c.derived_added, ["crate-c"]);
+        assert!(!dir.path().join("derived.toml").exists());
+        assert!(!dir.path().join("closure.toml").exists());
+        let text = format_closure(c);
+        assert!(
+            text.contains("new or never-walked keeps walked (1): lib-l"),
+            "{text}"
+        );
+        assert!(
+            text.contains("0 capabilities answered from the graph"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_retired_root_is_parked_not_dropped() {
+        let (dir, mut ws) = workspace(&["app-a"], &["app-a", "crate-c"], true);
+        inventory(&dir.path().join("retired.toml"), &["old-keep"]);
+        ws.retired = vec!["retired.toml".into()];
+        let report = run(&options(&ws, true)).unwrap();
+        assert!(report.closures[0].dropped_keeps.is_empty());
+    }
+
+    #[test]
+    fn a_closure_without_its_graph_is_skipped_with_how_to_make_one() {
+        let (_dir, ws) = workspace(&["app-a"], &["app-a"], false);
+        let report = run(&options(&ws, false)).unwrap();
+        let skipped = report.closures[0].skipped.as_deref().unwrap();
+        assert!(skipped.contains("does not exist yet"), "{skipped}");
+        assert!(
+            skipped.contains("poi-tracker --closure ours deps"),
+            "{skipped}"
+        );
+
+        let (_dir, mut ws) = workspace(&["app-a"], &["app-a"], true);
+        ws.closures[0].graph = None;
+        let report = run(&options(&ws, false)).unwrap();
+        let skipped = report.closures[0].skipped.as_deref().unwrap();
+        assert!(skipped.contains("no graph in the workspace"), "{skipped}");
+    }
+
+    #[test]
+    fn reconcile_needs_an_owned_inventory() {
+        let (_dir, mut ws) = workspace(&["app-a"], &["app-a"], true);
+        ws.owned = None;
+        let err = run(&options(&ws, false)).unwrap_err();
+        assert!(err.contains("no `owned` inventory"), "{err}");
+    }
+
+    #[test]
+    fn walk_filters_default_to_epel_and_the_centos_stream_base() {
+        let (_dir, mut ws) = workspace(&["app-a"], &["app-a"], true);
+        let (from, base) = walk_filters(&ws.closures[0]);
+        assert_eq!(from.into_iter().collect::<Vec<_>>(), ["rawhide"]);
+        assert_eq!(base, ["fedrq-centos-stream-"]);
+        ws.closures[0].from.clear();
+        ws.closures[0].base_repo = vec!["fedrq-almalinux-".into()];
+        let (from, base) = walk_filters(&ws.closures[0]);
+        assert_eq!(from.into_iter().collect::<Vec<_>>(), ["epel"]);
+        assert_eq!(base, ["fedrq-almalinux-"]);
+    }
 }
