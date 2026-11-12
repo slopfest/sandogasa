@@ -1361,6 +1361,34 @@ fn input_identity(kind: &check_update::InputKind) -> String {
     }
 }
 
+/// Drop from `planned` every input naming a build in `refused`
+/// (`(nvr, why)`), saying why for each; whether any was dropped.
+fn drop_refused_inputs(
+    planned: &mut Vec<(&String, Option<String>, Option<UpdateSource>)>,
+    refused: &[(String, String)],
+) -> bool {
+    let before = planned.len();
+    planned.retain(|(input, _, source)| {
+        let Some(UpdateSource::Builds(nvrs)) = source else {
+            return true;
+        };
+        let whys: Vec<&str> = refused
+            .iter()
+            .filter(|(nvr, _)| nvrs.contains(nvr))
+            .map(|(_, why)| why.as_str())
+            .collect();
+        if whys.is_empty() {
+            return true;
+        }
+        eprintln!("error: not checking {input}:");
+        for why in whys {
+            eprintln!("  - {why}");
+        }
+        false
+    });
+    planned.len() < before
+}
+
 /// A review comment held back until the RPM Fusion bug exists.
 ///
 /// The comment has to name the counterpart and link its rebuild
@@ -2176,6 +2204,31 @@ fn main() -> ExitCode {
         } else {
             None
         };
+        // A build named on the command line has to exist and have
+        // finished before anything describes it or offers to submit it:
+        // one Koji does not have used to be checked as an update to a
+        // version never built (#137). Asked once for every input, after
+        // the flags and notes are known to be usable and before logging
+        // in to Bodhi; an input naming such a build is dropped, the
+        // others still run, and the run fails at the end.
+        let named: Vec<String> = planned
+            .iter()
+            .filter_map(|(_, _, source)| match source {
+                Some(UpdateSource::Builds(nvrs)) => Some(nvrs.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let refused = if named.is_empty() {
+            Vec::new()
+        } else {
+            eprintln!("Looking up {} build(s) in Koji…", named.len());
+            check_update::refused_builds(&named, a.koji_profile.as_deref())
+        };
+        let refused_inputs = drop_refused_inputs(&mut planned, &refused);
+        if planned.is_empty() {
+            return ExitCode::FAILURE;
+        }
         // Validate the bodhi session up front (logging in if
         // needed) so a missing session doesn't surface only after
         // the analysis has run for minutes.
@@ -2224,7 +2277,11 @@ fn main() -> ExitCode {
         let mut comments: Vec<PendingComment> = Vec::new();
         // Counterpart pairings already named on stdout this run.
         let mut announced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        let mut overall = ExitCode::SUCCESS;
+        let mut overall = if refused_inputs {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
         // A failure stops the batch but does not abandon it: the
         // loop breaks rather than returning, so whatever was already
         // submitted still gets its RPM Fusion bug filed below. An
@@ -3563,5 +3620,26 @@ mod tests {
             concat!(env!("CARGO_MANIFEST_DIR"), "/man/ebranch.1"),
             env!("CARGO_PKG_VERSION"),
         );
+    }
+
+    #[test]
+    fn an_input_naming_a_refused_build_is_dropped_and_the_others_kept() {
+        use sandogasa_bodhi::models::UpdateSource;
+        let (good, bad, tag) = (
+            "lua-moonscript-0.8.0-1.fc45".to_string(),
+            "lua-moonscript-0.8.0-1.fc43".to_string(),
+            "epel9-build-side-1".to_string(),
+        );
+        let mut planned = vec![
+            (&good, None, Some(UpdateSource::Builds(vec![good.clone()]))),
+            (&bad, None, Some(UpdateSource::Builds(vec![bad.clone()]))),
+            (&tag, None, Some(UpdateSource::FromTag(tag.clone()))),
+        ];
+        let refused = vec![(bad.clone(), format!("{bad} is not a Koji build"))];
+        assert!(super::drop_refused_inputs(&mut planned, &refused));
+        let left: Vec<&str> = planned.iter().map(|(i, _, _)| i.as_str()).collect();
+        assert_eq!(left, [good.as_str(), tag.as_str()]);
+        assert!(!super::drop_refused_inputs(&mut planned, &[]));
+        assert_eq!(planned.len(), 2);
     }
 }

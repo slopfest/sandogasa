@@ -1074,6 +1074,11 @@ ebranch check-update sandogasa-0.27.1-1.{fc43,fc44,fc45,el9.next,el10_4} \
     --submit --type enhancement --notes-file relnotes.md
 ```
 
+Every named build must be a completed Koji build: one Koji does not
+have or refuses to look up, or one still building, failed, canceled or
+deleted, is reported before anything is checked, and its update is
+left out while the others run.
+
 ### Keeping an update in step with RPM Fusion
 
 RPM Fusion rebuilds some Fedora packages with the codecs Fedora has to

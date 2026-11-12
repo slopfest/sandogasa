@@ -27,6 +27,17 @@ pub const TASK_ASSIGNED: i64 = 4;
 /// Task state: failed.
 pub const TASK_FAILED: i64 = 5;
 
+/// Build state: still building.
+pub const BUILD_BUILDING: i64 = 0;
+/// Build state: complete.
+pub const BUILD_COMPLETE: i64 = 1;
+/// Build state: deleted.
+pub const BUILD_DELETED: i64 = 2;
+/// Build state: failed.
+pub const BUILD_FAILED: i64 = 3;
+/// Build state: canceled.
+pub const BUILD_CANCELED: i64 = 4;
+
 /// Filters for `listTasks` (the subset the tools need).
 #[derive(Debug, Clone, Default)]
 pub struct ListTasksOpts {
@@ -178,6 +189,22 @@ impl HubClient {
             .multicall(&calls)?
             .into_iter()
             .map(|r| r.map(|v| changelog_text(&v)))
+            .collect())
+    }
+
+    /// Each build's state ([`BUILD_COMPLETE`] and the other `BUILD_*`
+    /// values), asked in one `multiCall` of `getBuild`. One result per
+    /// NVR, in order: `None` for a build the hub does not know.
+    pub fn builds_state(&self, nvrs: &[String]) -> Result<Vec<Result<Option<i64>, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = nvrs
+            .iter()
+            .map(|nvr| ("getBuild", vec![Value::String(nvr.clone())]))
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| r.map(|v| v.get("state").and_then(Value::as_int)))
             .collect())
     }
 
@@ -801,6 +828,46 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].as_ref().unwrap(), &["libical-4.0.7-1.fc46.x86_64"]);
         assert!(matches!(got[1], Err(Error::Fault { code: 1000, .. })));
+    }
+
+    #[test]
+    fn build_states_come_back_per_build_from_one_multicall() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = block_on(MockServer::start());
+        // getBuild answers nil for a build it does not know.
+        let build = |state: i64| {
+            format!(
+                "<value><array><data><value><struct>\
+                 <member><name>nvr</name><value><string>x-1-1</string></value></member>\
+                 <member><name>state</name><value><int>{state}</int></value></member>\
+                 </struct></value></data></array></value>"
+            )
+        };
+        let body = response(&format!(
+            "{}{}<value><array><data><value><nil/></value></data></array></value>",
+            build(BUILD_COMPLETE),
+            build(BUILD_FAILED),
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("<methodName>multiCall</methodName>"))
+                .and(body_string_contains("getBuild"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        let nvrs = ["done-1-1", "broke-1-1", "nope-1-1"].map(String::from);
+        let got: Vec<Option<i64>> = hub
+            .builds_state(&nvrs)
+            .unwrap()
+            .into_iter()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(got, [Some(BUILD_COMPLETE), Some(BUILD_FAILED), None]);
     }
 
     #[test]

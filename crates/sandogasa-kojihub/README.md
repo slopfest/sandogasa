@@ -30,6 +30,9 @@ credentials and no `koji` CLI required (contrast with
   - `list_hosts()` / `list_channels()` — id → name pairs.
   - `builds_rpm_nvras(nvrs)` — each build's binary RPMs as NVRAs,
     through one `multiCall` of `listBuildRPMs`.
+  - `builds_state(nvrs)` — each build's state (`hub::BUILD_COMPLETE`
+    and the other `BUILD_*` values), or none for a build the hub does
+    not know, through one `multiCall` of `getBuild`.
   - `rpms_deps(nvras, dep_type)` — each RPM's requires, provides,
     obsoletes or conflicts (`RpmDeps`, name and version), through one
     `multiCall` of `getRPMDeps`.

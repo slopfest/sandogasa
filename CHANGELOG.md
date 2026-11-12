@@ -21,6 +21,25 @@ Reference citations are checked against local clones of both by
 `tools/dbranch/scripts/verify-citations.sh`, which first reports clones
 that are out of date and offers to fast-forward them. Resolves #139.
 
+### ebranch check-update refuses builds Koji does not have
+
+`ebranch check-update` given a build Koji does not have went on to
+check it: the only sign was a warning that the local repo could not be
+downloaded, and the report then described an update to a version that
+was never built and, with `--submit`, offered to submit it. Builds
+named on the command line are now looked up in one request to the Koji
+hub before anything is checked. One Koji does not have or refuses to
+look up, or one still building, failed, canceled or deleted, is
+reported with what to do,
+and its update is left out; the other inputs still run, and the run
+exits non-zero. Where the hub cannot be asked, the `koji` CLI is; if
+that fails too, a warning says so and the builds are checked as before.
+
+sandogasa-kojihub gains `HubClient::builds_state`, each build's state
+through one `multiCall` of `getBuild`, with the `hub::BUILD_*` state
+constants, and sandogasa-koji gains `build_state`, the same for one
+build through `koji call getBuild`. Fixes #137.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

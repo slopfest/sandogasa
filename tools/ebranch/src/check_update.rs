@@ -1027,6 +1027,26 @@ pub(crate) trait KojiQuery: Sync {
     fn histories(&self, _target: &str, packages: &[String]) -> Vec<PackageHistory> {
         vec![PackageHistory::default(); packages.len()]
     }
+
+    /// What Koji says about each of `nvrs`, in order. Defaults to not
+    /// asked, for a test that does not care.
+    fn builds_state(&self, nvrs: &[String]) -> Vec<BuildLookup> {
+        nvrs.iter()
+            .map(|_| BuildLookup::Unasked("not asked".to_string()))
+            .collect()
+    }
+}
+
+/// What Koji said about a build named on the command line.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum BuildLookup {
+    /// Its state (`sandogasa_kojihub::hub::BUILD_*`), or `None` for a
+    /// build Koji does not have.
+    State(Option<i64>),
+    /// Koji refused to look it up, as for a malformed NVR.
+    Fault(String),
+    /// Koji could not be asked.
+    Unasked(String),
 }
 
 /// How many calls one Koji `multiCall` carries.
@@ -1122,6 +1142,17 @@ impl KojiQuery for KojiCli {
         self.histories_on_hub(target, packages)
             .unwrap_or_else(|| vec![PackageHistory::default(); packages.len()])
     }
+
+    fn builds_state(&self, nvrs: &[String]) -> Vec<BuildLookup> {
+        let cli = |nvr: &str| match sandogasa_koji::build_state(nvr, self.profile.as_deref()) {
+            Ok(state) => BuildLookup::State(state),
+            Err(e) => BuildLookup::Unasked(koji_error_summary(&e)),
+        };
+        match self.hub() {
+            Some(hub) => builds_state_on_hub(&hub, nvrs, &cli),
+            None => nvrs.par_iter().map(|n| cli(n)).collect(),
+        }
+    }
 }
 
 impl KojiCli {
@@ -1147,6 +1178,67 @@ impl KojiCli {
         sandogasa_kojihub::config::hub_url(self.profile.as_deref().unwrap_or("koji"))
             .map(|url| sandogasa_kojihub::HubClient::new(&url))
     }
+}
+
+/// [`KojiQuery::builds_state`] from `hub`, a chunk of builds per
+/// `multiCall`. A chunk the hub could not answer is asked of `cli` one
+/// build at a time; a fault on one build is Koji refusing that NVR.
+fn builds_state_on_hub(
+    hub: &sandogasa_kojihub::HubClient,
+    nvrs: &[String],
+    cli: &(dyn Fn(&str) -> BuildLookup + Sync),
+) -> Vec<BuildLookup> {
+    nvrs.chunks(MULTICALL_CHUNK)
+        .flat_map(
+            |chunk| match sandogasa_kojihub::retry(2, || hub.builds_state(chunk)) {
+                Ok(results) => results
+                    .into_iter()
+                    .map(|r| match r {
+                        Ok(state) => BuildLookup::State(state),
+                        Err(e) => BuildLookup::Fault(e.to_string()),
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => chunk.par_iter().map(|n| cli(n)).collect(),
+            },
+        )
+        .collect()
+}
+
+/// [`refused_builds`] against any [`KojiQuery`].
+pub(crate) fn refused_builds_with(koji: &dyn KojiQuery, nvrs: &[String]) -> Vec<(String, String)> {
+    use sandogasa_kojihub::hub::{
+        BUILD_BUILDING, BUILD_CANCELED, BUILD_COMPLETE, BUILD_DELETED, BUILD_FAILED,
+    };
+    let mut refused = Vec::new();
+    let mut unasked = Vec::new();
+    for (nvr, lookup) in nvrs.iter().zip(koji.builds_state(nvrs)) {
+        let why = match lookup {
+            BuildLookup::State(Some(BUILD_COMPLETE)) => continue,
+            BuildLookup::State(None) => {
+                "is not a Koji build: check the NVR, or whether it has finished building".into()
+            }
+            BuildLookup::State(Some(BUILD_BUILDING)) => {
+                "is still building in Koji: check it again once it has finished".into()
+            }
+            BuildLookup::State(Some(BUILD_FAILED)) => "failed to build in Koji".into(),
+            BuildLookup::State(Some(BUILD_CANCELED)) => "was canceled in Koji".into(),
+            BuildLookup::State(Some(BUILD_DELETED)) => "was deleted from Koji".into(),
+            BuildLookup::State(Some(_)) => "is not a completed Koji build".into(),
+            BuildLookup::Fault(e) => format!("could not be looked up in Koji: {e}"),
+            BuildLookup::Unasked(e) => {
+                unasked.push(format!("{nvr} ({e})"));
+                continue;
+            }
+        };
+        refused.push((nvr.clone(), format!("{nvr} {why}")));
+    }
+    if !unasked.is_empty() {
+        eprintln!("warning: could not ask Koji whether these builds exist; checking them anyway:");
+        for line in unasked {
+            eprintln!("  - {line}");
+        }
+    }
+    refused
 }
 
 /// The package names of binary RPMs given as NVRAs, as
@@ -1181,7 +1273,12 @@ fn koji_error_summary(err: &str) -> String {
         .lines()
         .find_map(|l| l.trim().strip_prefix("koji: error:"))
     {
-        Some(reason) => format!("koji list-tagged failed: {}", reason.trim()),
+        Some(reason) => {
+            // Keep the command that failed (`koji list-tagged`,
+            // `koji call`), which the wrapper names before "failed:".
+            let command = err.split_once(" failed:").map_or("koji", |(c, _)| c);
+            format!("{command} failed: {}", reason.trim())
+        }
         None => err.to_string(),
     }
 }
@@ -1190,6 +1287,18 @@ fn koji_error_summary(err: &str) -> String {
 /// the fate of every side tag once its update has gone stable.
 fn is_no_such_tag(err: &str) -> bool {
     err.contains("No such tag")
+}
+
+/// The builds among `nvrs` that must not be checked or submitted, each
+/// with why: one Koji does not have, one it refuses to look up, or one
+/// that has not completed (#137). Asked in one request for all of them,
+/// before any analysis. A build Koji could not be asked about is not
+/// refused: a warning says so, and it is checked as before.
+pub fn refused_builds(nvrs: &[String], koji_profile: Option<&str>) -> Vec<(String, String)> {
+    let koji = KojiCli {
+        profile: koji_profile.map(str::to_string),
+    };
+    refused_builds_with(&koji, nvrs)
 }
 
 /// Run the check-update analysis.
@@ -5415,6 +5524,13 @@ mod tests {
         let other = "koji list-tagged failed: connection refused";
         assert_eq!(koji_error_summary(other), other);
         assert!(!is_no_such_tag(other));
+        // The command is whichever one failed.
+        let call = "koji call failed: Usage: koji [global-options] command\n\
+                    koji: error: no configuration for profile name: nope";
+        assert_eq!(
+            koji_error_summary(call),
+            "koji call failed: no configuration for profile name: nope"
+        );
     }
 
     #[test]
@@ -6486,6 +6602,154 @@ mod tests {
                 .iter()
                 .any(|(b, r)| b.as_deref() == Some("c10s") && r.as_deref() == Some("@epel")),
             "the stable view follows the branch asked for: {asked:?}"
+        );
+    }
+
+    /// A Koji that answers each build's state from a table; a build not
+    /// in it could not be asked about.
+    struct StateKoji(BTreeMap<&'static str, BuildLookup>);
+
+    impl KojiQuery for StateKoji {
+        fn list_tagged(&self, _: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn external_repos(&self, _: &str) -> Option<Vec<String>> {
+            None
+        }
+        fn build_rpms(&self, _: &str) -> Vec<String> {
+            vec![]
+        }
+        fn builds_state(&self, nvrs: &[String]) -> Vec<BuildLookup> {
+            nvrs.iter()
+                .map(|n| {
+                    self.0
+                        .get(n.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| BuildLookup::Unasked("hub down".to_string()))
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn builds_koji_lacks_or_has_not_finished_are_refused() {
+        use BuildLookup::{Fault, State};
+        use sandogasa_kojihub::hub::{
+            BUILD_BUILDING, BUILD_CANCELED, BUILD_COMPLETE, BUILD_DELETED, BUILD_FAILED,
+        };
+        let koji = StateKoji(BTreeMap::from([
+            ("lua-moonscript-0.8.0-1.fc45", State(Some(BUILD_COMPLETE))),
+            ("lua-moonscript-0.8.0-1.fc43", State(None)),
+            ("a-1-1.fc44", State(Some(BUILD_BUILDING))),
+            ("b-1-1.fc44", State(Some(BUILD_FAILED))),
+            ("c-1-1.fc44", State(Some(BUILD_CANCELED))),
+            ("d-1-1.fc44", State(Some(BUILD_DELETED))),
+            ("e-1-1.fc44", State(Some(99))),
+            ("f 1", Fault("invalid format".to_string())),
+        ]));
+        let nvrs: Vec<String> = [
+            "lua-moonscript-0.8.0-1.fc45",
+            "lua-moonscript-0.8.0-1.fc43",
+            "a-1-1.fc44",
+            "b-1-1.fc44",
+            "c-1-1.fc44",
+            "d-1-1.fc44",
+            "e-1-1.fc44",
+            "f 1",
+            // Koji could not be asked: checked anyway, not refused.
+            "unasked-1-1.fc44",
+        ]
+        .map(String::from)
+        .to_vec();
+        let refused = refused_builds_with(&koji, &nvrs);
+        let got: Vec<&str> = refused.iter().map(|(_, why)| why.as_str()).collect();
+        assert_eq!(
+            got,
+            [
+                "lua-moonscript-0.8.0-1.fc43 is not a Koji build: check the NVR, \
+                 or whether it has finished building",
+                "a-1-1.fc44 is still building in Koji: check it again once it has finished",
+                "b-1-1.fc44 failed to build in Koji",
+                "c-1-1.fc44 was canceled in Koji",
+                "d-1-1.fc44 was deleted from Koji",
+                "e-1-1.fc44 is not a completed Koji build",
+                "f 1 could not be looked up in Koji: invalid format",
+            ]
+        );
+        assert_eq!(refused[0].0, "lua-moonscript-0.8.0-1.fc43");
+    }
+
+    #[test]
+    fn builds_go_unchecked_when_koji_is_not_asked() {
+        let nvrs = vec!["x-1-1.fc44".to_string()];
+        assert!(refused_builds_with(&FakeKoji::default(), &nvrs).is_empty());
+    }
+
+    /// Start a mock Koji hub answering every XML-RPC call with `body`.
+    fn mock_hub(body: String) -> (tokio::runtime::Runtime, wiremock::MockServer) {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .mount(&server),
+        );
+        (rt, server)
+    }
+
+    #[test]
+    fn build_states_from_the_hub_tell_a_refused_nvr_from_an_unknown_build() {
+        let body = "<?xml version='1.0'?><methodResponse><params><param>\
+             <value><array><data>\
+             <value><array><data><value><struct>\
+             <member><name>state</name><value><int>1</int></value></member>\
+             </struct></value></data></array></value>\
+             <value><array><data><value><nil/></value></data></array></value>\
+             <value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>invalid format</string></value></member>\
+             </struct></value>\
+             </data></array></value>\
+             </param></params></methodResponse>"
+            .to_string();
+        let (_rt, server) = mock_hub(body);
+        let hub = sandogasa_kojihub::HubClient::new(&server.uri());
+        let nvrs = ["done-1-1", "nope-1-1", "bad nvr"].map(String::from);
+        let cli = |_: &str| -> BuildLookup { panic!("the hub answered; the CLI is not asked") };
+        let got = builds_state_on_hub(&hub, &nvrs, &cli);
+        assert_eq!(got[0], BuildLookup::State(Some(1)));
+        assert_eq!(got[1], BuildLookup::State(None));
+        assert!(
+            matches!(&got[2], BuildLookup::Fault(e) if e.contains("invalid format")),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn build_states_the_hub_cannot_answer_are_asked_of_the_cli() {
+        // A fault for the whole multiCall: the hub answered nothing per
+        // build, and a fault is not retried.
+        let body = "<?xml version='1.0'?><methodResponse><fault><value><struct>\
+             <member><name>faultCode</name><value><int>1</int></value></member>\
+             <member><name>faultString</name><value><string>overloaded</string></value></member>\
+             </struct></value></fault></methodResponse>"
+            .to_string();
+        let (_rt, server) = mock_hub(body);
+        let hub = sandogasa_kojihub::HubClient::new(&server.uri());
+        let nvrs = ["a-1-1", "b-1-1"].map(String::from);
+        let cli = |nvr: &str| BuildLookup::Unasked(format!("cli asked about {nvr}"));
+        let got = builds_state_on_hub(&hub, &nvrs, &cli);
+        assert_eq!(
+            got,
+            [
+                BuildLookup::Unasked("cli asked about a-1-1".to_string()),
+                BuildLookup::Unasked("cli asked about b-1-1".to_string()),
+            ]
         );
     }
 }

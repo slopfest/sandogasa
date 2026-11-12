@@ -732,6 +732,29 @@ pub fn build_creation_date(
     Ok(None)
 }
 
+/// A build's state as Koji numbers it (0 building, 1 complete, 2
+/// deleted, 3 failed, 4 canceled), or `None` for a build Koji does not
+/// have. Wraps `koji call --json-output getBuild <nvr>`.
+pub fn build_state(nvr: &str, profile: Option<&str>) -> Result<Option<i64>, String> {
+    let stdout = run_koji(profile, &["call", "--json-output", "getBuild", "--", nvr])?;
+    parse_build_state(&stdout)
+}
+
+/// The state in `koji call --json-output getBuild`'s answer: `null`
+/// for a build Koji does not have.
+pub fn parse_build_state(stdout: &str) -> Result<Option<i64>, String> {
+    let answer: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("koji getBuild answered something that is not JSON: {e}"))?;
+    if answer.is_null() {
+        return Ok(None);
+    }
+    answer
+        .get("state")
+        .and_then(serde_json::Value::as_i64)
+        .map(Some)
+        .ok_or_else(|| "koji getBuild answered a build without a state".to_string())
+}
+
 /// List binary RPM names for a build via `koji buildinfo`.
 ///
 /// Parses the RPMs section, returning binary package names
@@ -1180,5 +1203,16 @@ Thu May  7 11:33:13 2026 PackageKit-1.2.8-9.el10 owner changed to ckelley
             Some("99e0f170abcd")
         );
         assert_eq!(parse_build_source_commit("State: COMPLETE\n"), None);
+    }
+
+    #[test]
+    fn build_state_reads_getbuild_json() {
+        assert_eq!(parse_build_state("null\n"), Ok(None));
+        assert_eq!(
+            parse_build_state(r#"{"nvr": "x-1-1", "state": 1}"#),
+            Ok(Some(1))
+        );
+        assert!(parse_build_state(r#"{"nvr": "x-1-1"}"#).is_err());
+        assert!(parse_build_state("GenericError").is_err());
     }
 }
