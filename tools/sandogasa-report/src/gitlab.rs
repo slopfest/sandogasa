@@ -1033,4 +1033,204 @@ mod tests {
             "GITLAB_TOKEN_SALSA_DEBIAN_ORG"
         );
     }
+
+    /// A GitLab with one user, `me` (id 7), whose events in February
+    /// 2026 touch `grp/app` (10), `grp/lib` (30) and `other/x` (20),
+    /// with the MRs, tags, commits and releases those projects list.
+    fn mock_gitlab() -> (tokio::runtime::Runtime, wiremock::MockServer) {
+        use serde_json::json;
+        use wiremock::matchers::{method, path, path_regex, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let at = "2026-02-15T10:00:00Z";
+        let ev = |id: u64, project: u64, action: &str, extra: serde_json::Value| {
+            let mut e = json!({"id": id, "project_id": project, "action_name": action,
+                               "created_at": at});
+            e.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            e
+        };
+        let mr = |iid: u64, title: &str| json!({"target_type": "MergeRequest", "target_iid": iid, "target_title": title});
+        let events = json!([
+            ev(1, 10, "opened", mr(5, "Fix the build")),
+            ev(2, 10, "merged", mr(6, "Bump")),
+            ev(3, 10, "approved", mr(7, "Docs")),
+            ev(
+                4,
+                10,
+                "commented on",
+                json!({"target_title": "Docs",
+                "note": {"noteable_type": "MergeRequest", "noteable_iid": 7}})
+            ),
+            ev(
+                5,
+                10,
+                "commented on",
+                json!({"target_title": "Docs",
+                "note": {"noteable_type": "MergeRequest", "noteable_iid": 7}})
+            ),
+            ev(
+                6,
+                10,
+                "pushed to",
+                json!({"push_data":
+                {"commit_count": 3, "ref_type": "branch", "ref": "main"}})
+            ),
+            ev(
+                7,
+                10,
+                "pushed new",
+                json!({"push_data":
+                {"commit_count": 0, "ref_type": "tag", "ref": "v1.0"}})
+            ),
+            // A batched tag push names no tag: the tags API does.
+            ev(
+                8,
+                30,
+                "pushed new",
+                json!({"push_data":
+                {"commit_count": 0, "ref_type": "tag", "ref": null}})
+            ),
+            // Outside the group, and outside the window.
+            ev(9, 20, "opened", mr(1, "Elsewhere")),
+            json!({"id": 10, "project_id": 10, "action_name": "opened",
+                   "target_type": "MergeRequest", "target_iid": 99,
+                   "target_title": "Old", "created_at": "2025-06-01T00:00:00Z"}),
+        ]);
+        let get = |p: &str, body: serde_json::Value| {
+            Mock::given(method("GET"))
+                .and(path(p.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        };
+        rt.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v4/users"))
+                .and(query_param("username", "me"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!([{"id": 7, "username": "me"}])),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v4/users"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                .mount(&server)
+                .await;
+            get("/api/v4/users/7/events", events).mount(&server).await;
+            for (id, p) in [(10, "grp/app"), (20, "other/x"), (30, "grp/lib")] {
+                get(
+                    &format!("/api/v4/projects/{id}"),
+                    json!({"id": id, "path_with_namespace": p, "web_url": "https://x"}),
+                )
+                .mount(&server)
+                .await;
+            }
+            Mock::given(method("GET"))
+                .and(path_regex("/merge_requests/5$"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": 500, "iid": 5, "title": "Fix the build", "state": "merged",
+                    "web_url": "https://x", "source_branch": "fix", "target_branch": "main",
+                })))
+                .mount(&server)
+                .await;
+            get(
+                "/api/v4/projects/10/repository/tags",
+                json!([{"name": "v1.0", "created_at": "2026-02-15T10:00:00Z"}]),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v4/projects/30/repository/tags",
+                json!([
+                    {"name": "v2.0", "created_at": "2026-02-16T10:00:00Z"},
+                    {"name": "v0.1", "created_at": null},
+                    {"name": "v1.9", "created_at": "2025-01-01T00:00:00Z"},
+                ]),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v4/projects/10/repository/commits",
+                json!([{"id": "a"}, {"id": "b"}]),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v4/projects/10/releases",
+                json!([
+                    {"tag_name": "v1.0", "name": "One", "released_at": "2026-02-16T00:00:00Z",
+                     "author": {"id": 7, "username": "me"},
+                     "_links": {"self": "https://x/grp/app/-/releases/v1.0"}},
+                    {"tag_name": "v0.9", "released_at": "2026-02-16T00:00:00Z",
+                     "author": {"id": 8, "username": "someone-else"}},
+                ]),
+            )
+            .mount(&server)
+            .await;
+        });
+        (rt, server)
+    }
+
+    #[test]
+    fn a_report_gathers_a_users_gitlab_activity_in_the_group() {
+        let (_rt, server) = mock_gitlab();
+        let cfg = GitlabConfig {
+            instance: server.uri(),
+            group: Some("grp".to_string()),
+        };
+        let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
+        let since = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+        let until = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
+        let r = gitlab_report(&cfg, "me", since, until, &tokens, true).unwrap();
+
+        let mrs = |v: &[MrRef]| -> Vec<(String, u64)> {
+            v.iter().map(|m| (m.project.clone(), m.iid)).collect()
+        };
+        assert_eq!(mrs(&r.opened_mrs), [("grp/app".to_string(), 5)]);
+        assert_eq!(r.opened_mrs[0].state, "merged");
+        assert!(r.opened_mrs[0].merged);
+        assert_eq!(mrs(&r.merged_mrs), [("grp/app".to_string(), 6)]);
+        assert_eq!(mrs(&r.approved_mrs), [("grp/app".to_string(), 7)]);
+        assert_eq!(mrs(&r.commented_mrs), [("grp/app".to_string(), 7)]);
+        assert_eq!(r.commits_pushed.get("grp/app"), Some(&3));
+        assert_eq!(r.commits_authored.get("grp/app"), Some(&2));
+        let tags: Vec<(&str, &str)> = r
+            .tags_pushed
+            .iter()
+            .map(|t| (t.project.as_str(), t.tag.as_str()))
+            .collect();
+        assert_eq!(tags, [("grp/app", "v1.0"), ("grp/lib", "v2.0")]);
+        let releases: Vec<(&str, &str, &str)> = r
+            .releases_published
+            .iter()
+            .map(|x| (x.project.as_str(), x.tag.as_str(), x.url.as_str()))
+            .collect();
+        assert_eq!(
+            releases,
+            [("grp/app", "v1.0", "https://x/grp/app/-/releases/v1.0")]
+        );
+        let text = format_markdown(&r, 2);
+        assert!(text.contains("grp/app"), "{text}");
+    }
+
+    #[test]
+    fn a_user_gitlab_does_not_know_is_an_error() {
+        let (_rt, server) = mock_gitlab();
+        let cfg = GitlabConfig {
+            instance: server.uri(),
+            group: None,
+        };
+        let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
+        let day = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+        let err = gitlab_report(&cfg, "nobody", day, day, &tokens, false).unwrap_err();
+        assert!(
+            err.contains("GitLab user lookup") || err.contains("not found"),
+            "{err}"
+        );
+    }
 }

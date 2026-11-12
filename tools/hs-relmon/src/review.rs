@@ -26,10 +26,7 @@
 use std::cmp::Ordering;
 use std::io::{BufRead, Write};
 
-use sandogasa_koji::{
-    build_info_with_changelog, list_tagged, list_tagged_nvrs, parse_nvr, parse_nvr_name, tag_build,
-    untag_build,
-};
+use sandogasa_koji::{parse_nvr, parse_nvr_name};
 
 use crate::prune_tags::{self, KOJI_PROFILE};
 use crate::rpmvercmp::compare_evr;
@@ -141,6 +138,48 @@ pub fn filter_skipped(items: Vec<ReviewItem>, skip: &[String]) -> Vec<ReviewItem
         .collect()
 }
 
+/// What the review asks of the hub, and the two changes it makes.
+/// Behind a trait so a test can answer from tables and see the tag
+/// operations without running `koji`.
+pub(crate) trait Hub {
+    /// Every build in `tag`, not only the latest of each package.
+    fn all_tagged(&self, tag: &str) -> Result<Vec<String>, String>;
+    /// The latest build of each package in `tag`.
+    fn latest_tagged(&self, tag: &str) -> Result<Vec<String>, String>;
+    /// `koji buildinfo --changelog` of `nvr`.
+    fn build_info(&self, nvr: &str) -> Result<String, String>;
+    fn tag(&self, tag: &str, nvr: &str) -> Result<(), String>;
+    fn untag(&self, tag: &str, nvr: &str) -> Result<(), String>;
+}
+
+/// The hub a real run talks to: CBS, through the `koji` CLI.
+struct CbsCli;
+
+impl Hub for CbsCli {
+    fn all_tagged(&self, tag: &str) -> Result<Vec<String>, String> {
+        sandogasa_koji::list_tagged_nvrs(tag, Some(KOJI_PROFILE))
+    }
+
+    fn latest_tagged(&self, tag: &str) -> Result<Vec<String>, String> {
+        Ok(sandogasa_koji::list_tagged(tag, Some(KOJI_PROFILE), None)?
+            .into_iter()
+            .map(|b| b.nvr)
+            .collect())
+    }
+
+    fn build_info(&self, nvr: &str) -> Result<String, String> {
+        sandogasa_koji::build_info_with_changelog(nvr, Some(KOJI_PROFILE))
+    }
+
+    fn tag(&self, tag: &str, nvr: &str) -> Result<(), String> {
+        sandogasa_koji::tag_build(tag, nvr, Some(KOJI_PROFILE))
+    }
+
+    fn untag(&self, tag: &str, nvr: &str) -> Result<(), String> {
+        sandogasa_koji::untag_build(tag, nvr, Some(KOJI_PROFILE))
+    }
+}
+
 /// Run the review flow.
 pub fn run(
     repositories: &[String],
@@ -150,15 +189,37 @@ pub fn run(
     dry_run: bool,
     verbose: bool,
 ) -> Result<(), String> {
-    let profile = Some(KOJI_PROFILE);
-    let target = classify_target(target_arg);
-
     let testing_tags: Vec<String> = prune_tags::candidate_tags(repositories)
         .into_iter()
         .filter(|t| t.ends_with("-testing"))
         .collect();
+    run_with(
+        &CbsCli,
+        &testing_tags,
+        target_arg,
+        skip,
+        changelog_lines,
+        dry_run,
+        verbose,
+        &mut prompt_karma,
+    )
+}
 
-    let collected = collect_items(&testing_tags, &target, profile, verbose);
+/// [`run`] over `testing_tags` on `hub`, taking each verdict from
+/// `karma` (`None` ends the review, as end of input does).
+#[allow(clippy::too_many_arguments)]
+fn run_with(
+    hub: &dyn Hub,
+    testing_tags: &[String],
+    target_arg: Option<&str>,
+    skip: &[String],
+    changelog_lines: usize,
+    dry_run: bool,
+    verbose: bool,
+    karma: &mut dyn FnMut() -> Result<Option<Karma>, String>,
+) -> Result<(), String> {
+    let target = classify_target(target_arg);
+    let collected = collect_items(hub, testing_tags, &target, verbose);
     let before = collected.len();
     let items = filter_skipped(collected, skip);
     if verbose && items.len() < before {
@@ -186,8 +247,8 @@ pub fn run(
     let mut rejected = 0usize;
     let mut skipped = 0usize;
     for (i, item) in items.iter().enumerate() {
-        print_item(item, i + 1, total, profile, changelog_lines);
-        let karma = match prompt_karma()? {
+        print_item(hub, item, i + 1, total, changelog_lines);
+        let verdict = match karma()? {
             Some(k) => k,
             None => {
                 // EOF — stop the loop.
@@ -195,13 +256,13 @@ pub fn run(
                 break;
             }
         };
-        match karma {
+        match verdict {
             Karma::Promote => {
-                apply_promote(item, profile)?;
+                apply_promote(hub, item)?;
                 promoted += 1;
             }
             Karma::Reject => {
-                apply_reject(item, profile)?;
+                apply_reject(hub, item)?;
                 rejected += 1;
             }
             Karma::Skip => {
@@ -222,9 +283,9 @@ pub fn run(
 /// this hub, transient failure) are skipped with a verbose
 /// warning.
 fn collect_items(
+    hub: &dyn Hub,
     testing_tags: &[String],
     target: &Target,
-    profile: Option<&str>,
     verbose: bool,
 ) -> Vec<ReviewItem> {
     let mut items: Vec<ReviewItem> = Vec::new();
@@ -236,7 +297,7 @@ fn collect_items(
             Target::Nvr(nvr) => {
                 // Exact NVR may be an older, non-latest build, so
                 // check the full (non-`--latest`) tag listing.
-                match list_tagged_nvrs(tag, profile) {
+                match hub.all_tagged(tag) {
                     Ok(all) if all.iter().any(|n| n == nvr) => {
                         items.push(ReviewItem {
                             testing_tag: tag.clone(),
@@ -257,11 +318,8 @@ fn collect_items(
                     Target::Package(p) => Some(p.as_str()),
                     _ => None,
                 };
-                match list_tagged(tag, profile, None) {
-                    Ok(builds) => {
-                        let nvrs: Vec<String> = builds.into_iter().map(|b| b.nvr).collect();
-                        items.extend(items_from_latest(tag, &nvrs, pkg));
-                    }
+                match hub.latest_tagged(tag) {
+                    Ok(nvrs) => items.extend(items_from_latest(tag, &nvrs, pkg)),
                     Err(e) => {
                         if verbose {
                             eprintln!("[hs-relmon] {tag}: skipped ({e})");
@@ -279,18 +337,12 @@ fn collect_items(
 /// the testing build is older, then the build's metadata and the
 /// changelog entries newer than the released build (or, for a
 /// brand-new package, the first `changelog_lines` lines).
-fn print_item(
-    item: &ReviewItem,
-    idx: usize,
-    total: usize,
-    profile: Option<&str>,
-    changelog_lines: usize,
-) {
+fn print_item(hub: &dyn Hub, item: &ReviewItem, idx: usize, total: usize, changelog_lines: usize) {
     println!("\n{}", "=".repeat(60));
     println!("[{idx}/{total}] {} ({})", item.nvr, item.testing_tag);
 
     let released_nvr = parse_nvr_name(&item.nvr)
-        .and_then(|name| current_release_nvr(&item.release_tag, name, profile));
+        .and_then(|name| current_release_nvr(hub, &item.release_tag, name));
 
     // A build that isn't strictly newer than what's released has
     // no changes worth reviewing — warn and skip the changelog,
@@ -315,7 +367,7 @@ fn print_item(
     }
     println!("{}", "-".repeat(60));
 
-    let testing_info = match build_info_with_changelog(&item.nvr, profile) {
+    let testing_info = match hub.build_info(&item.nvr) {
         Ok(info) => info,
         Err(e) => {
             eprintln!("(could not fetch build info: {e})");
@@ -337,7 +389,7 @@ fn print_item(
     // changelog at `changelog_lines`.
     let released_info = released_nvr
         .as_deref()
-        .and_then(|nvr| build_info_with_changelog(nvr, profile).ok());
+        .and_then(|nvr| hub.build_info(nvr).ok());
     let testing_cl = changelog_section(&testing_info).unwrap_or("");
     let released_cl = released_info.as_deref().and_then(changelog_section);
     println!("\nChangelog:");
@@ -350,12 +402,11 @@ fn print_item(
 
 /// The latest NVR of `package` currently in `release_tag`, if
 /// any. Best-effort: errors and absence both map to `None`.
-fn current_release_nvr(release_tag: &str, package: &str, profile: Option<&str>) -> Option<String> {
-    let builds = list_tagged(release_tag, profile, None).ok()?;
-    builds
+fn current_release_nvr(hub: &dyn Hub, release_tag: &str, package: &str) -> Option<String> {
+    hub.latest_tagged(release_tag)
+        .ok()?
         .into_iter()
-        .find(|b| parse_nvr_name(&b.nvr) == Some(package))
-        .map(|b| b.nvr)
+        .find(|nvr| parse_nvr_name(nvr) == Some(package))
 }
 
 /// The `version-release` of an NVR, for version comparison.
@@ -450,7 +501,7 @@ pub fn changelog_since(
     }
 }
 
-fn apply_promote(item: &ReviewItem, profile: Option<&str>) -> Result<(), String> {
+fn apply_promote(hub: &dyn Hub, item: &ReviewItem) -> Result<(), String> {
     // The same step as `cbspkg promote` (sandogasa-cbs), so the two
     // cannot drift: tag into -release, untag from -testing.
     let (collection, _) = sandogasa_cbs::Collection::from_tag(&item.testing_tag)
@@ -466,12 +517,12 @@ fn apply_promote(item: &ReviewItem, profile: Option<&str>) -> Result<(), String>
         let (verb, tag) = (argv[1].as_str(), argv[2].as_str());
         match verb {
             "tag-build" => {
-                tag_build(tag, &item.nvr, profile)
+                hub.tag(tag, &item.nvr)
                     .map_err(|e| format!("tag-build {tag} {}: {e}", item.nvr))?;
                 eprintln!("tagged {} into {tag}", item.nvr);
             }
             "untag-build" => {
-                untag_build(tag, &item.nvr, profile)
+                hub.untag(tag, &item.nvr)
                     .map_err(|e| format!("untag-build {tag} {}: {e}", item.nvr))?;
                 eprintln!("untagged {} from {tag}", item.nvr);
             }
@@ -481,8 +532,8 @@ fn apply_promote(item: &ReviewItem, profile: Option<&str>) -> Result<(), String>
     Ok(())
 }
 
-fn apply_reject(item: &ReviewItem, profile: Option<&str>) -> Result<(), String> {
-    untag_build(&item.testing_tag, &item.nvr, profile)
+fn apply_reject(hub: &dyn Hub, item: &ReviewItem) -> Result<(), String> {
+    hub.untag(&item.testing_tag, &item.nvr)
         .map_err(|e| format!("untag-build {} {}: {e}", item.testing_tag, item.nvr))?;
     eprintln!("untagged {} from {}", item.nvr, item.testing_tag);
     Ok(())
@@ -741,5 +792,166 @@ Changelog:
         let cl = "* Mon Apr 20 2026 Petr - 2.92-8\n- Fix DHCP reply";
         let since = changelog_since(cl, Some(cl), 20);
         assert!(since.contains("no changelog entries since"));
+    }
+
+    const TESTING: &str = "hyperscale10s-packages-main-testing";
+    const RELEASE: &str = "hyperscale10s-packages-main-release";
+
+    /// A hub answering from tables, recording the tag operations.
+    #[derive(Default)]
+    struct FakeHub {
+        tagged: std::collections::BTreeMap<String, Vec<String>>,
+        info: std::collections::BTreeMap<String, String>,
+        ops: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl FakeHub {
+        fn new(testing: &[&str], release: &[&str]) -> Self {
+            let mut hub = Self::default();
+            hub.tagged.insert(
+                TESTING.into(),
+                testing.iter().map(|s| s.to_string()).collect(),
+            );
+            hub.tagged.insert(
+                RELEASE.into(),
+                release.iter().map(|s| s.to_string()).collect(),
+            );
+            hub
+        }
+    }
+
+    impl Hub for FakeHub {
+        fn all_tagged(&self, tag: &str) -> Result<Vec<String>, String> {
+            self.tagged
+                .get(tag)
+                .cloned()
+                .ok_or_else(|| format!("No such tag: {tag}"))
+        }
+        fn latest_tagged(&self, tag: &str) -> Result<Vec<String>, String> {
+            self.all_tagged(tag)
+        }
+        fn build_info(&self, nvr: &str) -> Result<String, String> {
+            self.info
+                .get(nvr)
+                .cloned()
+                .ok_or_else(|| format!("No such build: {nvr}"))
+        }
+        fn tag(&self, tag: &str, nvr: &str) -> Result<(), String> {
+            self.ops.borrow_mut().push(format!("tag {tag} {nvr}"));
+            Ok(())
+        }
+        fn untag(&self, tag: &str, nvr: &str) -> Result<(), String> {
+            self.ops.borrow_mut().push(format!("untag {tag} {nvr}"));
+            Ok(())
+        }
+    }
+
+    /// Run the review over the testing tag, answering `verdicts` in
+    /// order and then end of input.
+    fn review(hub: &FakeHub, target: Option<&str>, verdicts: &[Karma], dry_run: bool) {
+        let mut answers = verdicts.iter().copied();
+        let mut karma = || Ok(answers.next());
+        run_with(
+            hub,
+            &[TESTING.to_string(), "missing-testing".to_string()],
+            target,
+            &[],
+            DEFAULT_CHANGELOG_LINES,
+            dry_run,
+            true,
+            &mut karma,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn promoting_tags_into_release_and_rejecting_untags_from_testing() {
+        let mut hub = FakeHub::new(
+            &[
+                "dnsmasq-2.92rel2-9.hs.el10",
+                "foo-1.0-1.hs.el10",
+                "bar-2-1.hs.el10",
+            ],
+            &["dnsmasq-2.92-8.hs.el10"],
+        );
+        hub.info
+            .insert("dnsmasq-2.92rel2-9.hs.el10".into(), SAMPLE_BUILDINFO.into());
+        review(
+            &hub,
+            None,
+            &[Karma::Promote, Karma::Reject, Karma::Skip],
+            false,
+        );
+        assert_eq!(
+            hub.ops.borrow().as_slice(),
+            [
+                format!("tag {RELEASE} dnsmasq-2.92rel2-9.hs.el10"),
+                format!("untag {TESTING} dnsmasq-2.92rel2-9.hs.el10"),
+                format!("untag {TESTING} foo-1.0-1.hs.el10"),
+            ]
+        );
+    }
+
+    #[test]
+    fn quitting_or_running_out_of_input_stops_the_review() {
+        let hub = FakeHub::new(&["foo-1.0-1.hs.el10", "bar-2-1.hs.el10"], &[]);
+        review(&hub, None, &[Karma::Quit], false);
+        review(&hub, None, &[], false);
+        assert!(hub.ops.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_dry_run_lists_without_asking_or_changing_anything() {
+        let hub = FakeHub::new(&["foo-1.0-1.hs.el10"], &[]);
+        review(&hub, Some("foo"), &[Karma::Promote], true);
+        assert!(hub.ops.borrow().is_empty());
+        // Nothing matches: nothing to review.
+        review(&hub, Some("nothing-1-1.hs.el10"), &[Karma::Promote], false);
+        assert!(hub.ops.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_exact_nvr_is_found_wherever_it_is_tagged_for_testing() {
+        let hub = FakeHub::new(&["foo-1.0-1.hs.el10", "foo-0.9-1.hs.el10"], &[]);
+        let items = collect_items(
+            &hub,
+            &[TESTING.to_string(), "missing-testing".to_string()],
+            &Target::Nvr("foo-0.9-1.hs.el10".into()),
+            true,
+        );
+        assert_eq!(
+            items,
+            [ReviewItem {
+                testing_tag: TESTING.into(),
+                release_tag: RELEASE.into(),
+                nvr: "foo-0.9-1.hs.el10".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_build_not_newer_than_the_release_is_reviewed_without_a_changelog() {
+        let mut hub = FakeHub::new(&["foo-1.0-1.hs.el10"], &["foo-1.0-1.hs.el10"]);
+        hub.info
+            .insert("foo-1.0-1.hs.el10".into(), SAMPLE_BUILDINFO.into());
+        review(&hub, None, &[Karma::Skip], false);
+        assert!(hub.ops.borrow().is_empty());
+        assert_eq!(
+            current_release_nvr(&hub, RELEASE, "foo").as_deref(),
+            Some("foo-1.0-1.hs.el10")
+        );
+        assert_eq!(current_release_nvr(&hub, "missing-release", "foo"), None);
+    }
+
+    #[test]
+    fn promoting_from_a_tag_no_sig_owns_is_an_error() {
+        let hub = FakeHub::default();
+        let item = ReviewItem {
+            testing_tag: "not-a-sig-tag".into(),
+            release_tag: "not-a-sig-tag".into(),
+            nvr: "foo-1-1".into(),
+        };
+        let err = apply_promote(&hub, &item).unwrap_err();
+        assert!(err.contains("is not a SIG's -testing tag"), "{err}");
     }
 }

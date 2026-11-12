@@ -624,4 +624,198 @@ mod tests {
 
         assert!(bugs_for_branch(&bugs, "epel9").is_empty());
     }
+
+    /// A bug on Fedora rawhide as Bugzilla answers it.
+    fn bz_bug(id: u64, component: &str, status: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "summary": format!("{component}-2.0 is available"),
+            "status": status,
+            "resolution": "",
+            "product": "Fedora",
+            "version": ["rawhide"],
+            "component": [component],
+            "severity": "unspecified",
+            "priority": "unspecified",
+            "assigned_to": "nobody@fedoraproject.org",
+            "creator": RELEASE_MONITORING_REPORTER,
+            "creation_time": "2026-01-01T00:00:00Z",
+            "last_change_time": "2026-01-01T00:00:00Z",
+        })
+    }
+
+    /// One mock server for dist-git and Bugzilla: `dead` is retired on
+    /// rawhide, everything else is live, and every bug search answers
+    /// `bugs`. A PUT to a bug answers `put_status`.
+    async fn services(
+        dead: &str,
+        bugs: Vec<serde_json::Value>,
+        put_status: u16,
+    ) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path, path_regex};
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/rpms/{dead}/raw/rawhide/f/dead.package")))
+            .respond_with(ResponseTemplate::new(200).set_body_string("retired"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/rpms/.*/dead.package$"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(move |r: &Request| {
+                ResponseTemplate::new(200).set_body_json(sandogasa_bugzilla::test_support::answer(
+                    &bugs,
+                    r.url.query(),
+                ))
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path_regex("^/rest/bug/[0-9]+$"))
+            .respond_with(
+                ResponseTemplate::new(put_status).set_body_json(serde_json::json!({"bugs": []})),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn inventory(names: &[&str]) -> Inventory {
+        let mut toml =
+            String::from("[inventory]\nname = \"t\"\ndescription = \"t\"\nmaintainer = \"t\"\n");
+        for name in names {
+            toml.push_str(&format!("\n[[package]]\nname = \"{name}\"\n"));
+        }
+        sandogasa_inventory::parse(&toml).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_plans_closing_the_open_bugs_of_retired_packages() {
+        let bugs = vec![
+            bz_bug(1, "dead-pkg", "NEW"),
+            bz_bug(2, "dead-pkg", "CLOSED"),
+        ];
+        let server = services("dead-pkg", bugs, 200).await;
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory(&["dead-pkg", "live-pkg"]),
+            &bz,
+            &dg,
+            &["rawhide".to_string()],
+            false,
+            &crate::WalkFilterArgs::default(),
+            None,
+            false,
+            None,
+            true,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.packages_checked, 2);
+        assert_eq!(report.packages_retired, 1);
+        assert_eq!(report.closes_planned, 1, "the closed bug is left alone");
+        assert_eq!(report.closes_applied, 0);
+        let checks: Vec<(&str, bool)> = report
+            .checks
+            .iter()
+            .map(|c| (c.package.as_str(), c.retired))
+            .collect();
+        assert_eq!(checks, [("dead-pkg", true), ("live-pkg", false)]);
+    }
+
+    #[tokio::test]
+    async fn a_batch_run_with_yes_closes_the_bugs_it_found() {
+        let bugs = vec![bz_bug(1, "dead-pkg", "NEW"), bz_bug(3, "live-pkg", "NEW")];
+        let server = services("dead-pkg", bugs, 200).await;
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory(&["dead-pkg", "live-pkg"]),
+            &bz,
+            &dg,
+            &["rawhide".to_string()],
+            false,
+            &crate::WalkFilterArgs::default(),
+            Some("me@example.org"),
+            false,
+            None,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!((report.closes_planned, report.closes_applied), (1, 1));
+        assert_eq!(report.failures, 0);
+    }
+
+    #[tokio::test]
+    async fn a_close_bugzilla_refuses_is_counted_as_failed() {
+        let server = services("dead-pkg", vec![bz_bug(1, "dead-pkg", "NEW")], 500).await;
+        let bz = BzClient::new(&server.uri()).with_retry_backoff(std::time::Duration::ZERO);
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory(&["dead-pkg"]),
+            &bz,
+            &dg,
+            &["rawhide".to_string()],
+            false,
+            &crate::WalkFilterArgs::default(),
+            None,
+            false,
+            None,
+            false,
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!((report.closes_applied, report.failures), (0, 1));
+    }
+
+    #[tokio::test]
+    async fn a_retired_package_without_open_bugs_closes_nothing() {
+        let server = services("dead-pkg", vec![], 200).await;
+        let bz = BzClient::new(&server.uri());
+        let dg = DistGitClient::with_base_url(&server.uri());
+        let report = run(
+            &inventory(&["dead-pkg"]),
+            &bz,
+            &dg,
+            &["rawhide".to_string()],
+            true,
+            &crate::WalkFilterArgs::default(),
+            None,
+            false,
+            None,
+            false,
+            true,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!((report.packages_retired, report.closes_planned), (1, 0));
+    }
+
+    #[test]
+    fn the_tally_groups_closes_by_package() {
+        let close = |id: u64, component: &str| BugClose {
+            bug_id: id,
+            component: component.into(),
+            branch: "rawhide".into(),
+            summary: String::new(),
+            current_status: "NEW".into(),
+        };
+        // Printing only: it must not panic on several packages.
+        print_tally(&[close(1, "a"), close(2, "b"), close(3, "a")]);
+        print_package_closes("a", &[close(1, "a")]);
+    }
 }
