@@ -6093,9 +6093,18 @@ mod tests {
     #[derive(Default)]
     struct FakeKoji {
         tagged: BTreeMap<String, Result<Vec<String>, String>>,
+        rpms: BTreeMap<String, Vec<String>>,
     }
 
     impl FakeKoji {
+        fn rpms(mut self, nvr: &str, names: &[&str]) -> Self {
+            self.rpms.insert(
+                nvr.to_string(),
+                names.iter().map(|n| n.to_string()).collect(),
+            );
+            self
+        }
+
         fn tag(mut self, tag: &str, nvrs: &[&str]) -> Self {
             self.tagged.insert(
                 tag.to_string(),
@@ -6125,8 +6134,8 @@ mod tests {
             None
         }
 
-        fn build_rpms(&self, _nvr: &str) -> Vec<String> {
-            Vec::new()
+        fn build_rpms(&self, nvr: &str) -> Vec<String> {
+            self.rpms.get(nvr).cloned().unwrap_or_default()
         }
     }
 
@@ -6751,5 +6760,383 @@ mod tests {
                 BuildLookup::Unasked("cli asked about b-1-1".to_string()),
             ]
         );
+    }
+
+    /// One package in a [`TableRepo`]: its source, version-release, and
+    /// each binary with what it provides and requires.
+    struct TablePkg {
+        source: &'static str,
+        vr: (&'static str, &'static str),
+        binaries: Vec<(&'static str, Vec<&'static str>, Vec<&'static str>)>,
+        build_requires: Vec<&'static str>,
+    }
+
+    /// A repository answering from a table of packages, as fedrq would
+    /// over the same metadata, at the capability-name level.
+    struct TableRepo(Vec<TablePkg>);
+
+    impl TableRepo {
+        fn binary(&self, name: &str) -> Option<(&TablePkg, &[&'static str], &[&'static str])> {
+            self.0.iter().find_map(|p| {
+                p.binaries
+                    .iter()
+                    .find(|(b, _, _)| *b == name)
+                    .map(|(_, prov, req)| (p, prov.as_slice(), req.as_slice()))
+            })
+        }
+        fn source(&self, name: &str) -> Option<&TablePkg> {
+            self.0.iter().find(|p| p.source == name)
+        }
+        fn owned(v: &[&str]) -> Vec<String> {
+            v.iter().map(|s| s.to_string()).collect()
+        }
+    }
+
+    impl RepoQuery for TableRepo {
+        fn repolist(&self) -> Result<Vec<String>, String> {
+            Ok(vec!["table".to_string()])
+        }
+        fn src_nvrs(&self, packages: &[String]) -> Result<Vec<String>, String> {
+            Ok(packages
+                .iter()
+                .filter_map(|n| self.source(n))
+                .map(|p| format!("{}-{}-{}", p.source, p.vr.0, p.vr.1))
+                .collect())
+        }
+        fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, String> {
+            Ok(self
+                .source(srpm)
+                .map(|p| p.binaries.iter().map(|b| b.0.to_string()).collect())
+                .unwrap_or_default())
+        }
+        fn subpkgs_nvrs(&self, srpm: &str) -> Result<Vec<(String, String, String)>, String> {
+            Ok(self
+                .source(srpm)
+                .map(|p| {
+                    p.binaries
+                        .iter()
+                        .map(|b| (b.0.to_string(), p.vr.0.to_string(), p.vr.1.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default())
+        }
+        fn pkgs_source_vr(&self, names: &[&str]) -> Result<Vec<(String, String)>, String> {
+            Ok(names
+                .iter()
+                .filter_map(|n| self.binary(n))
+                .map(|(p, _, _)| (p.source.to_string(), format!("{}-{}", p.vr.0, p.vr.1)))
+                .collect())
+        }
+        fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, String> {
+            Ok(self
+                .source(srpm)
+                .map(|p| p.binaries.iter().flat_map(|b| Self::owned(&b.1)).collect())
+                .unwrap_or_default())
+        }
+        fn pkg_provides(&self, name: &str) -> Result<Vec<String>, String> {
+            Ok(self
+                .binary(name)
+                .map(|(_, prov, _)| Self::owned(prov))
+                .unwrap_or_default())
+        }
+        fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, String> {
+            let cap = provide_name(capability);
+            Ok(self
+                .0
+                .iter()
+                .flat_map(|p| p.binaries.iter())
+                .find(|(_, prov, _)| prov.iter().any(|x| provide_name(x) == cap))
+                .map(|(_, prov, _)| Self::owned(prov))
+                .unwrap_or_default())
+        }
+        fn pkg_requires(&self, name: &str) -> Result<Vec<String>, String> {
+            Ok(self
+                .binary(name)
+                .map(|(_, _, req)| Self::owned(req))
+                .unwrap_or_default())
+        }
+        fn subpkgs_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+            Ok(self
+                .source(srpm)
+                .map(|p| p.binaries.iter().flat_map(|b| Self::owned(&b.2)).collect())
+                .unwrap_or_default())
+        }
+        fn src_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
+            Ok(self
+                .source(srpm)
+                .map(|p| Self::owned(&p.build_requires))
+                .unwrap_or_default())
+        }
+        fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, String> {
+            let caps: BTreeSet<&str> = packages.iter().map(|c| provide_name(c)).collect();
+            Ok(self
+                .0
+                .iter()
+                .filter(|p| {
+                    p.binaries
+                        .iter()
+                        .flat_map(|b| b.2.iter())
+                        .chain(p.build_requires.iter())
+                        .any(|r| caps.contains(provide_name(r)))
+                })
+                .map(|p| p.source.to_string())
+                .collect())
+        }
+        fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String> {
+            let cap = provide_name(dep);
+            Ok(self
+                .0
+                .iter()
+                .filter(|p| {
+                    p.binaries
+                        .iter()
+                        .any(|b| b.1.iter().any(|x| provide_name(x) == cap))
+                })
+                .map(|p| p.source.to_string())
+                .collect())
+        }
+    }
+
+    /// The views by repo class: the stable repo for none, the update
+    /// for `new_class`, and an empty repo for any other.
+    struct TableRepos {
+        new_class: &'static str,
+        new: fn() -> TableRepo,
+    }
+
+    impl Repos for TableRepos {
+        fn view(
+            &self,
+            _branch: Option<&str>,
+            repo: Option<&str>,
+        ) -> Box<dyn RepoQuery + Send + Sync> {
+            Box::new(match repo {
+                None => stable_f45(),
+                Some(r) if r.starts_with(self.new_class) => (self.new)(),
+                Some(_) => TableRepo(vec![]),
+            })
+        }
+    }
+
+    /// libfoo 1.0 on f45, what depends on it, and a compat package
+    /// still providing the old soname for one of them.
+    fn stable_f45() -> TableRepo {
+        TableRepo(vec![
+            TablePkg {
+                source: "libfoo",
+                vr: ("1.0", "1.fc45"),
+                binaries: vec![(
+                    "libfoo",
+                    vec!["libfoo = 1.0-1.fc45", "libfoo.so.1()(64bit)"],
+                    vec![],
+                )],
+                build_requires: vec![],
+            },
+            TablePkg {
+                source: "app",
+                vr: ("1", "1.fc45"),
+                binaries: vec![("app", vec!["app = 1-1.fc45"], vec!["libfoo.so.1()(64bit)"])],
+                build_requires: vec![],
+            },
+            TablePkg {
+                source: "tool",
+                vr: ("1", "1.fc45"),
+                binaries: vec![("tool", vec!["tool = 1-1.fc45"], vec!["libfoo"])],
+                build_requires: vec!["libfoo-devel"],
+            },
+            TablePkg {
+                source: "other",
+                vr: ("1", "1.fc45"),
+                binaries: vec![(
+                    "other",
+                    vec!["other = 1-1.fc45"],
+                    vec!["libbar.so.1()(64bit)"],
+                )],
+                build_requires: vec![],
+            },
+            TablePkg {
+                source: "bar-compat",
+                vr: ("1", "1.fc45"),
+                binaries: vec![("bar-compat", vec!["libbar.so.1()(64bit)"], vec![])],
+                build_requires: vec![],
+            },
+        ])
+    }
+
+    /// libfoo 2.0 in @testing: a new soname, and a requirement nothing
+    /// provides.
+    fn testing_f45() -> TableRepo {
+        TableRepo(vec![TablePkg {
+            source: "libfoo",
+            vr: ("2.0", "1.fc45"),
+            binaries: vec![(
+                "libfoo",
+                vec!["libfoo = 2.0-1.fc45", "libfoo.so.2()(64bit)"],
+                vec![
+                    "libfoo.so.2()(64bit)",
+                    "libmissing.so.3()(64bit)",
+                    "rpmlib(PayloadIsZstd)",
+                ],
+            )],
+            build_requires: vec![],
+        }])
+    }
+
+    #[test]
+    fn an_update_in_testing_is_checked_against_its_reverse_dependencies() {
+        let koji = FakeKoji::default();
+        let mut info = update_info(None, &["libfoo-2.0-1.fc45"], Some("f45"));
+        info.status = "testing".into();
+        let bodhi = FakeBodhi(info);
+        let repos = TableRepos {
+            new_class: "@testing",
+            new: testing_f45,
+        };
+        let report = check_update_with(
+            "FEDORA-2026-0123456789",
+            &CheckUpdateOptions {
+                verbose: true,
+                ..Default::default()
+            },
+            &Services {
+                koji: &koji,
+                bodhi: &bodhi,
+                repos: &repos,
+                update_repo: &NoDownload,
+            },
+        )
+        .expect("the check runs");
+        assert!(report.full_analysis);
+        assert_eq!(report.updated_packages, ["libfoo"]);
+        assert_eq!(report.changes[0].old.as_deref(), Some("1.0-1.fc45"));
+        assert_eq!(report.changes[0].new, "2.0-1.fc45");
+        // The old soname is gone, the package's own provide moved on.
+        let changed: Vec<&str> = report
+            .changed_provides
+            .iter()
+            .map(|c| c.old.as_str())
+            .collect();
+        assert!(changed.contains(&"libfoo.so.1()(64bit)"), "{changed:?}");
+        // app needed the old soname; tool only needs libfoo by name.
+        assert_eq!(report.reverse_deps["app"].status, "broken");
+        assert_eq!(report.reverse_deps["tool"].status, "ok");
+        assert!(!report.reverse_deps.contains_key("other"));
+        // The new build needs something nothing provides; its own
+        // provides and rpmlib() are satisfied.
+        let unsatisfied: Vec<&str> = report
+            .installability_issues
+            .iter()
+            .map(|u| u.dep.as_str())
+            .collect();
+        assert_eq!(unsatisfied, ["libmissing.so.3()(64bit)"]);
+
+        let out = render_report(&report, true);
+        assert!(out.contains("app"), "{out}");
+        assert!(out.contains("libmissing.so.3()(64bit)"), "{out}");
+    }
+
+    /// The same libfoo 2.0 as [`testing_f45`], in an older build: what a
+    /// side tag's lagging repodata serves.
+    fn stale_side_tag_f45() -> TableRepo {
+        let mut repo = testing_f45();
+        repo.0[0].vr = ("2.0", "0.1.fc45");
+        repo
+    }
+
+    fn analysis(
+        input: &str,
+        koji: &FakeKoji,
+        repos: &TableRepos,
+        update: &dyn UpdateRepoBuilder,
+    ) -> CheckUpdateReport {
+        check_update_with(
+            input,
+            &CheckUpdateOptions {
+                branch: Some("f45".to_string()),
+                verbose: true,
+                ..Default::default()
+            },
+            &Services {
+                koji,
+                bodhi: &NoBodhi,
+                repos,
+                update_repo: update,
+            },
+        )
+        .expect("the check runs")
+    }
+
+    #[test]
+    fn a_side_tag_is_compared_through_koji_and_its_repodata() {
+        let tag = "f45-build-side-4242";
+        let koji = FakeKoji::default()
+            .tag(tag, &["libfoo-2.0-1.fc45"])
+            .rpms("libfoo-2.0-1.fc45", &["libfoo", "libfoo-debuginfo"]);
+        let repos = TableRepos {
+            new_class: "@koji:",
+            new: testing_f45,
+        };
+        let report = analysis(tag, &koji, &repos, &NoDownload);
+        assert!(report.full_analysis);
+        assert!(
+            report.stale_side_tag.is_empty(),
+            "{:?}",
+            report.stale_side_tag
+        );
+        assert_eq!(report.reverse_deps["app"].status, "broken");
+        assert_eq!(report.reverse_deps["tool"].status, "ok");
+
+        // Repodata serving an older build than koji's is reported, not
+        // compared as if it were the update.
+        let repos = TableRepos {
+            new_class: "@koji:",
+            new: stale_side_tag_f45,
+        };
+        let report = analysis(tag, &koji, &repos, &NoDownload);
+        assert_eq!(report.stale_side_tag.len(), 1, "{report:?}");
+    }
+
+    /// A local repository that "downloads" into a fixed directory.
+    struct LocalDownload;
+
+    impl UpdateRepoBuilder for LocalDownload {
+        fn build(
+            &self,
+            _alias: Option<&str>,
+            _nvrs: &[String],
+            _profile: Option<&str>,
+            _verbose: bool,
+        ) -> Result<PathBuf, String> {
+            Ok(PathBuf::from("/nonexistent/ebranch-test-repo"))
+        }
+    }
+
+    #[test]
+    fn builds_fedrq_cannot_see_are_compared_through_a_local_repo() {
+        let koji = FakeKoji::default().rpms("libfoo-2.0-1.fc45", &["libfoo"]);
+        let repos = TableRepos {
+            new_class: "@baseurl:file:///nonexistent/ebranch-test-repo",
+            new: testing_f45,
+        };
+        let report = analysis("libfoo-2.0-1.fc45", &koji, &repos, &LocalDownload);
+        assert!(report.full_analysis);
+        assert_eq!(report.reverse_deps["app"].status, "broken");
+        assert_eq!(report.skip_reason, None);
+    }
+
+    #[test]
+    fn without_a_source_for_the_new_provides_reverse_deps_are_only_listed() {
+        let koji = FakeKoji::default();
+        let repos = TableRepos {
+            new_class: "@nothing",
+            new: testing_f45,
+        };
+        let report = analysis("libfoo-2.0-1.fc45", &koji, &repos, &NoDownload);
+        assert!(!report.full_analysis);
+        assert!(report.skip_reason.is_some());
+        // Listed by what requires the update's binaries by name.
+        assert_eq!(report.reverse_deps["tool"].status, "unknown");
+        let out = render_report(&report, true);
+        assert!(out.contains("tool"), "{out}");
     }
 }
