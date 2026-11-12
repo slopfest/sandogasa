@@ -85,6 +85,11 @@ pub struct Finding {
     /// for themselves is a finding they have to take on trust.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// The documents the check's rule comes from, so that when
+    /// dbranch and the Debian documentation disagree, it is clear
+    /// which one moved. Looked up by `check`; see [`crate::cite`].
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub sources: &'static [crate::cite::Citation],
 }
 
 impl Finding {
@@ -94,6 +99,7 @@ impl Finding {
             severity,
             message,
             command: None,
+            sources: crate::cite::for_check(check),
         }
     }
 
@@ -2084,8 +2090,39 @@ pub fn render_styled(findings: &[Finding], colour: bool) -> String {
                 false => out.push_str(&format!("{wrapped}\n")),
             }
         }
+        for line in source_lines(finding.sources) {
+            match colour {
+                true => out.push_str(&format!("{}{line}{}\n", dim.render(), dim.render_reset())),
+                false => out.push_str(&format!("{line}\n")),
+            }
+        }
     }
     out
+}
+
+/// The lines naming where a finding's rule comes from: each source
+/// wrapped under `see:`, its address on a line of its own so it can
+/// be copied whole, and any known divergence after it.
+fn source_lines(sources: &[crate::cite::Citation]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for citation in sources {
+        let text = sandogasa_cli::wrap_prefixed(&citation.source.text(), "", 69);
+        for (at, line) in text.lines().enumerate() {
+            match at {
+                0 => lines.push(format!("    see: {line}")),
+                _ => lines.push(format!("         {line}")),
+            }
+        }
+        if let Some(url) = citation.source.url() {
+            lines.push(format!("         {url}"));
+        }
+        if let Some(diverges) = citation.diverges {
+            let text =
+                sandogasa_cli::wrap_prefixed(&format!("dbranch differs: {diverges}"), "", 69);
+            lines.extend(text.lines().map(|l| format!("         {l}")));
+        }
+    }
+    lines
 }
 
 /// [`render_styled`] without colour, which is what a test reads.
@@ -3212,6 +3249,97 @@ mod tests {
         // carrying a null for a reader to special-case.
         let bare = render_json(&[Finding::new("b", Severity::Note, "x".into())]).unwrap();
         assert!(!bare.contains("command"), "{bare}");
+    }
+
+    #[test]
+    fn a_finding_names_where_its_rule_comes_from() {
+        let finding = Finding::new("stale-changelog-version", Severity::Blocker, "stale".into())
+            .with_command("head -1 debian/changelog".into());
+        let text = render(&[finding]);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[1], "    head -1 debian/changelog");
+        assert_eq!(
+            lines[2],
+            "    see: Debian Policy 4.4, Debian changelog: debian/changelog"
+        );
+        assert_eq!(
+            lines[3],
+            "         https://www.debian.org/doc/debian-policy/ch-source.html#s-dpkgchangelog"
+        );
+    }
+
+    #[test]
+    fn colour_touches_only_the_label_the_command_and_the_sources() {
+        let finding = Finding::new("stale-build", Severity::Warning, "old build".into())
+            .with_command("head -1 debian/changelog".into());
+        let text = render_styled(&[finding], true);
+        let plain: String = {
+            // Strip SGR sequences to compare against the plain render.
+            let mut out = String::new();
+            let mut chars = text.chars();
+            while let Some(c) = chars.next() {
+                if c == '\u{1b}' {
+                    for c in chars.by_ref() {
+                        if c == 'm' {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                out.push(c);
+            }
+            out
+        };
+        assert_ne!(text, plain, "colour adds escape codes");
+        assert_eq!(
+            plain,
+            render(&[
+                Finding::new("stale-build", Severity::Warning, "old build".into())
+                    .with_command("head -1 debian/changelog".into())
+            ])
+        );
+        assert!(
+            plain.contains("    see: dbranch's own practice:"),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn a_long_source_wraps_and_a_divergence_follows_its_address() {
+        let sources = [crate::cite::Citation {
+            source: crate::cite::Source::Practice {
+                why: "a reason long enough that it cannot fit on the one line \
+                      the report gives it, so it wraps under the label",
+            },
+            diverges: Some("the document says otherwise, see #1"),
+        }];
+        let lines = source_lines(&sources);
+        assert!(
+            lines[0].starts_with("    see: dbranch's own practice:"),
+            "{lines:?}"
+        );
+        assert!(lines[1].starts_with("         "), "{lines:?}");
+        assert_eq!(
+            lines.last().unwrap(),
+            "         dbranch differs: the document says otherwise, see #1"
+        );
+        assert!(lines.iter().all(|l| l.len() <= 78), "{lines:?}");
+    }
+
+    #[test]
+    fn the_json_document_carries_the_sources() {
+        let finding = Finding::new("patch-not-exported", Severity::Warning, "copied".into());
+        let json: serde_json::Value =
+            serde_json::from_str(&render_json(&[finding]).unwrap()).unwrap();
+        let sources = json[0]["sources"].as_array().expect("sources listed");
+        assert_eq!(sources[0]["cite"], "gbp-pq(1)");
+        assert_eq!(
+            sources[0]["url"],
+            "https://manpages.debian.org/unstable/gbp-pq.1"
+        );
+        // A check the table does not know carries no key at all.
+        let bare = render_json(&[Finding::new("b", Severity::Note, "x".into())]).unwrap();
+        assert!(!bare.contains("sources"), "{bare}");
     }
 
     #[test]

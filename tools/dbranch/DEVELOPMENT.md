@@ -1001,6 +1001,63 @@ is that a host which already has the package installed can mask the
 finding, so a clean machine or a container is the honest place to run
 it.
 
+
+## Checks cite their sources
+
+Every check's slug has an entry in `src/cite.rs` naming the documents
+its rule comes from, and `dbranch check` prints them under each
+finding. The Debian documents lag behind practice: the Developer's
+Reference still recommends deborphan (6.9.7), which was removed from
+Debian in April 2024 (#1065312). When dbranch and a document disagree,
+the citation is what shows which one moved, and the disagreement then
+belongs in a bug against the document or a patch to it, not in silent
+drift.
+
+Rules for new checks:
+
+- **Every reportable slug has a table entry.** A test reads the slugs
+  out of `check.rs` and fails on one with no entry, and on an entry no
+  check reports any more.
+- **Cite the most specific source there is.** A Policy or Developer's
+  Reference section by number, title and label; a man page narrowed
+  with `under` to the option or heading that applies.
+- **A check no document backs says so.** `Source::Practice` with a
+  one-line reason. Those entries are the list of rules dbranch holds
+  on its own, and so the first candidates for a documentation patch.
+- **A known disagreement goes in `diverges`**, with the bug or patch
+  that should settle it, and is printed with the citation.
+- **BTS severities and tags are cited from the web,** at
+  https://www.debian.org/Bugs/Developer#severities and `#tags`. The
+  debbugs repository only has placeholders for them, filled with
+  generic defaults; Debian's definitions are site configuration on
+  bugs.debian.org.
+
+Policy and Developer's Reference citations are checked against local
+clones by an ignored test, which numbers the sections the way Sphinx
+does (`src/rstdoc.rs`) and compares number, title and chapter by label.
+Run it through the script, which first reports clones last fetched
+more than `DBRANCH_DOCS_MAX_AGE_DAYS` (14) days ago or behind their
+upstream, and at a terminal offers to refresh them:
+
+    tools/dbranch/scripts/verify-citations.sh POLICY_CLONE DEVREF_CLONE
+
+The refresh only fetches the upstream remote and only fast-forwards a
+clean default branch, so a fork remote and local branches kept for
+documentation patches are never touched. A fetch time comes from
+`FETCH_HEAD` only when the last fetch was from the upstream's remote
+(fetching a fork rewrites it too), and otherwise from the reflog's own
+timestamps (not `%ct`, which is the commit's date); a fresh clone
+records itself in `<remote>/HEAD`'s reflog, not the branch's. A clone
+still stale when the test has run fails the run: a citation checked
+against it proves nothing. Citations a clone cannot answer for (DEPs,
+man pages, manuals) are listed as not checked rather than fetched, and
+a manual with no public copy, such as Lintian's, is cited by where it
+is installed rather than linked with a `file://` address that only
+works on some machines.
+
+Run it when Policy or the Developer's Reference has a new release, and
+whenever a citation is added or changed.
+
 ## A test gives git an identity through one variable, not seven
 
 `GIT_CONFIG_COUNT` with a key and value per setting needs seven

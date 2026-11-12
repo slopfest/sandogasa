@@ -8,6 +8,7 @@
 pub mod autopkgtest;
 pub mod changelog;
 pub mod check;
+pub mod cite;
 pub mod control;
 pub mod copyright;
 pub mod dep3;
@@ -17,6 +18,7 @@ pub mod git;
 pub mod host;
 pub mod plan;
 pub mod rebuild;
+pub mod rstdoc;
 pub mod salsaci;
 pub mod ui;
 pub mod upstream;

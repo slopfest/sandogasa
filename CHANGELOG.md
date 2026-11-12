@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### dbranch check names the document behind each finding
+
+A finding from `dbranch check` said what was wrong and how to see it,
+but not where the rule came from, so when dbranch and the Debian
+documentation disagreed there was no telling which had moved. The
+documents do lag: the Developer's Reference still recommends
+deborphan, removed from Debian in April 2024. Each finding now ends
+with a `see:` line per source, with a link: a Debian Policy or
+Developer's Reference section, a DEP, a man page or a manual. A check
+no document backs is cited as dbranch's own practice, with the
+reason, and a known disagreement with a document is printed with the
+bug that should settle it. `--json` carries the same as a `sources`
+array on each finding.
+
+A test fails when a check has no citation. Policy and Developer's
+Reference citations are checked against local clones of both by
+`tools/dbranch/scripts/verify-citations.sh`, which first reports clones
+that are out of date and offers to fast-forward them. Resolves #139.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

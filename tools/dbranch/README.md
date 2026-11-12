@@ -235,11 +235,15 @@ it extracts each package and invokes every `/usr/bin` entry with
 failure rather than a user's first impression.
 
 Every finding carries a command that shows the same thing, so a report
-can be checked rather than believed. Nothing is written. The exit
+can be checked rather than believed, and a `see:` line naming where its
+rule comes from: a Debian Policy or Developer's Reference section, a
+DEP, a man page or a manual, with a link. A check that no document
+backs says so, as dbranch's own practice, with the reason. Nothing is
+written. The exit
 status is non-zero when a finding would block a sponsor — a program
 that does not start, packaging describing a different source, a patch
 that no longer applies — and `--json` prints the findings as a
-document for another tool to read.
+document for another tool to read, each with its `sources`.
 
 `clone <url> [<dir>]` starts a
 package from upstream's git rather than from tarballs (gbp's "upstream
