@@ -47,6 +47,10 @@ man: ## Regenerate every tool's man page from its clap definition
 findings: ## Render FINDINGS to HTML and PDF (SRC=... for another file)
 	scripts/render-findings.sh $(SRC)
 
+.PHONY: talks
+talks: ## Compile the talks under talks/ to PDF (TALK=talks/<name> for one)
+	scripts/build-talks.sh $(TALK)
+
 .PHONY: cov
 cov: ## Report test coverage, failing under 85% lines
 	$(CARGO) cov
