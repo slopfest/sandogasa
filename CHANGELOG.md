@@ -233,6 +233,15 @@ filled them in.
 
 sandogasa-jira's `IssueFields` gains `description`.
 
+### cpu-sig-tracker sync-updates lists updates in testing first
+
+The SIG site listed each release's updates in one table, testing and
+released mixed, with the stage in a last Status column, so the updates
+that most need testers were easy to miss. `sync-updates` now writes an
+"In testing" table first, across releases, with a Release column, then
+a "Released" section with one table per release, newest first, without
+the Status column.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

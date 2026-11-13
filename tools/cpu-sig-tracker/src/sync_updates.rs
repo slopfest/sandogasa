@@ -3,9 +3,11 @@
 //! `sync-updates` subcommand: the list of updates on the SIG's site.
 //!
 //! Writes the Markdown table the Proposed Updates site includes
-//! (`docs/content/updates-list.md`): one section per release, newest
-//! first, one row per open tracking issue with a build in the SIG's
-//! `-testing` or `-release` tag. The file is current state, rewritten
+//! (`docs/content/updates-list.md`): one row per open tracking issue
+//! with a build in the SIG's `-testing` or `-release` tag. The updates
+//! in testing come first, in one table across releases, since those
+//! are the ones that need testers; then a section per release, newest
+//! first, of the released ones. The file is current state, rewritten
 //! whole on every run and free of timestamps, so it changes in git only
 //! when the state does.
 //!
@@ -64,15 +66,6 @@ pub enum Stage {
     Testing,
     /// In its `-release` tag.
     Released,
-}
-
-impl Stage {
-    fn as_str(self) -> &'static str {
-        match self {
-            Stage::Testing => "testing",
-            Stage::Released => "released",
-        }
-    }
 }
 
 /// One row of the list.
@@ -153,41 +146,85 @@ pub fn mr_iid(url: &str) -> Option<u64> {
 }
 
 /// The file's contents for `sections` of (release, updates), linking
-/// Jira issues under `jira_site`.
+/// Jira issues under `jira_site`: first one table of the updates in
+/// testing, across releases, as those are the ones that need testers;
+/// then each release's released updates.
 pub fn render(sections: &[Section], jira_site: &str) -> String {
+    // Case-insensitively: PackageKit among the p's, not first. A sort
+    // that keeps the sections' order, newest release first, within a
+    // package.
+    fn sorted<'a>(mut updates: Vec<(&'a str, &'a Update)>) -> Vec<(&'a str, &'a Update)> {
+        updates.sort_by_key(|(_, u)| (u.package.to_ascii_lowercase(), u.package.clone()));
+        updates
+    }
+    let cells = |u: &Update| {
+        let mr =
+            u.mr.as_ref()
+                .map(|(iid, url)| format!("[!{iid}]({url})"))
+                .unwrap_or_default();
+        let jira = u
+            .jira
+            .iter()
+            .map(|k| format!("[{k}]({jira_site}/browse/{k})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "`{}` | {} | {} | {mr} | {jira} |",
+            u.nvr,
+            u.kind.as_deref().unwrap_or(""),
+            u.cves.join(", "),
+        )
+    };
     let mut o = String::new();
     o.push_str(HEADER);
     o.push('\n');
-    for (release, updates) in sections {
-        o.push_str(&format!("\n# {}\n\n", release_heading(release)));
-        if updates.is_empty() {
-            o.push_str("No updates at the moment.\n");
-            continue;
-        }
-        o.push_str("| Package | Build | Type | Fixes | Merge request | Jira | Status |\n");
+
+    o.push_str("\n# In testing\n\n");
+    let testing = sorted(
+        sections
+            .iter()
+            .flat_map(|(release, updates)| updates.iter().map(move |u| (release.as_str(), u)))
+            .filter(|(_, u)| u.stage == Stage::Testing)
+            .collect(),
+    );
+    if testing.is_empty() {
+        o.push_str("No updates in testing at the moment.\n");
+    } else {
+        o.push_str("| Package | Release | Build | Type | Fixes | Merge request | Jira |\n");
         o.push_str("|---|---|---|---|---|---|---|\n");
-        let mut sorted: Vec<&Update> = updates.iter().collect();
-        // Case-insensitively: PackageKit among the p's, not first.
-        sorted.sort_by_key(|u| (u.package.to_ascii_lowercase(), u.package.clone()));
-        for u in sorted {
-            let mr =
-                u.mr.as_ref()
-                    .map(|(iid, url)| format!("[!{iid}]({url})"))
-                    .unwrap_or_default();
-            let jira = u
-                .jira
-                .iter()
-                .map(|k| format!("[{k}]({jira_site}/browse/{k})"))
-                .collect::<Vec<_>>()
-                .join(", ");
+        for (release, u) in testing {
             o.push_str(&format!(
-                "| [{}]({}) | `{}` | {} | {} | {mr} | {jira} | {} |\n",
+                "| [{}]({}) | {} | {}\n",
                 u.package,
                 u.issue_url,
-                u.nvr,
-                u.kind.as_deref().unwrap_or(""),
-                u.cves.join(", "),
-                u.stage.as_str()
+                release_heading(release),
+                cells(u)
+            ));
+        }
+    }
+
+    o.push_str("\n# Released\n");
+    for (release, updates) in sections {
+        o.push_str(&format!("\n## {}\n\n", release_heading(release)));
+        let released = sorted(
+            updates
+                .iter()
+                .filter(|u| u.stage == Stage::Released)
+                .map(|u| (release.as_str(), u))
+                .collect(),
+        );
+        if released.is_empty() {
+            o.push_str("No released updates at the moment.\n");
+            continue;
+        }
+        o.push_str("| Package | Build | Type | Fixes | Merge request | Jira |\n");
+        o.push_str("|---|---|---|---|---|---|\n");
+        for (_, u) in released {
+            o.push_str(&format!(
+                "| [{}]({}) | {}\n",
+                u.package,
+                u.issue_url,
+                cells(u)
             ));
         }
     }
@@ -489,7 +526,9 @@ mod tests {
     }
 
     #[test]
-    fn the_list_is_sorted_and_an_empty_release_says_so() {
+    fn testing_updates_come_first_then_each_releases_released_ones() {
+        let mut zlib9 = update("zlib", Stage::Testing);
+        zlib9.nvr = "zlib-1.0-1~proposed.el9".into();
         let sections = vec![
             (
                 "c10s".to_string(),
@@ -497,35 +536,59 @@ mod tests {
                     update("zlib", Stage::Testing),
                     update("openssl", Stage::Released),
                     update("PackageKit", Stage::Released),
+                    update("bash", Stage::Testing),
                 ],
             ),
-            ("c9s".to_string(), vec![]),
+            ("c9s".to_string(), vec![zlib9]),
         ];
         let site = "https://redhat.atlassian.net";
         let text = render(&sections, site);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], HEADER);
-        assert_eq!(lines[2], "# CentOS Stream 10");
+        assert_eq!(lines[2], "# In testing");
         assert_eq!(
             lines[4],
-            "| Package | Build | Type | Fixes | Merge request | Jira | Status |"
+            "| Package | Release | Build | Type | Fixes | Merge request | Jira |"
+        );
+        // Every release's, by package, newest release first.
+        assert!(lines[6].starts_with("| [bash]"), "{text}");
+        assert!(
+            lines[7].starts_with(
+                "| [zlib](https://gitlab.com/CentOS/proposed_updates/rpms/zlib/-/issues/1) \
+                 | CentOS Stream 10 | `zlib-1.0-1~proposed.el10` |"
+            ),
+            "{text}"
+        );
+        assert!(
+            lines[8].contains("| CentOS Stream 9 | `zlib-1.0-1~proposed.el9` |"),
+            "{text}"
+        );
+        assert_eq!(lines[10], "# Released");
+        assert_eq!(lines[12], "## CentOS Stream 10");
+        assert_eq!(
+            lines[14],
+            "| Package | Build | Type | Fixes | Merge request | Jira |"
         );
         assert_eq!(
-            lines[6],
+            lines[16],
             "| [openssl](https://gitlab.com/CentOS/proposed_updates/rpms/openssl/-/issues/1) \
              | `openssl-1.0-1~proposed.el10` | security | CVE-2025-1234 \
              | [!123](https://gitlab.com/redhat/centos-stream/rpms/openssl/-/merge_requests/123) \
-             | [RHEL-12345](https://redhat.atlassian.net/browse/RHEL-12345) | released |"
+             | [RHEL-12345](https://redhat.atlassian.net/browse/RHEL-12345) |"
         );
-        assert!(lines[7].starts_with("| [PackageKit]"), "{text}");
-        assert!(lines[8].starts_with("| [zlib]"), "{text}");
-        assert!(lines[8].ends_with("| testing |"), "{text}");
+        assert!(lines[17].starts_with("| [PackageKit]"), "{text}");
         assert!(
-            text.ends_with("# CentOS Stream 9\n\nNo updates at the moment.\n"),
+            text.ends_with("## CentOS Stream 9\n\nNo released updates at the moment.\n"),
             "{text}"
         );
         // The same state renders the same file: no timestamps.
         assert_eq!(render(&sections, site), text);
+
+        let none = render(&[("c10s".to_string(), vec![])], site);
+        assert!(
+            none.contains("# In testing\n\nNo updates in testing at the moment.\n"),
+            "{none}"
+        );
     }
 
     #[test]

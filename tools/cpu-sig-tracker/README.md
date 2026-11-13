@@ -522,13 +522,16 @@ issues so their dates can be backfilled after the fact.
 cpu-sig-tracker sync-updates --file docs/content/updates-list.md [--dry-run]
 ```
 
-Writes the list of updates the Proposed Updates site includes: one
-section per release, newest first (`# CentOS Stream 10`, then 9), and
-in each a table of the open tracking issues with a build in the SIG's
-`-release` (`released`) or `-testing` (`testing`) tag, sorted by
-package. Each row links the tracking issue and names the build, the
-type label, the CVEs, the upstream merge request and the Jira issues. A
-release with none reads "No updates at the moment."
+Writes the list of updates the Proposed Updates site includes, one row
+per open tracking issue with a build in the SIG's `-testing` or
+`-release` tag. `# In testing` comes first: one table of the updates in
+testing across releases, with a Release column, sorted by package. Then
+`# Released`, with a section per release, newest first
+(`## CentOS Stream 10`, then 9), each a table of its released updates.
+Each row links the tracking issue and names the build, the type label,
+the CVEs, the upstream merge request and the Jira issues. An empty
+table reads "No updates in testing at the moment." or "No released
+updates at the moment."
 
 The file is rewritten whole on each run and carries no timestamps, so
 it changes only when the state does; `--dry-run` shows the lines that
