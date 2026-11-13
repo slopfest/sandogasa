@@ -258,6 +258,14 @@ it has to be chosen, and `status --refresh` does not add `security` to
 an issue that has it. `status` and `sync-updates` now take the type
 labels from one list, so both know it.
 
+### cbspkg asks testers to react to a testing build's comment
+
+A build reaching `-testing` got a comment on its tracking issue that
+said so, but nothing there asked anyone to try it, and the SIG had no
+record of who had. The comment now ends by asking testers to react with
+👍 if it works or 👎 if it does not, and to comment on what broke. Each
+build gets its own comment, so its reactions are its own. Refs #144.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

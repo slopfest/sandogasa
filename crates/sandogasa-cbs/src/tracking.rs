@@ -161,7 +161,16 @@ pub fn stage_note(
         ),
         _ => format!("\n\n{paragraph}"),
     };
-    format!("{what}{from}\n\n{}", stage_marker(nvr, stage))
+    // Testers react to this comment, so a reaction belongs to this
+    // build: a rebuild gets a comment, and reactions, of its own.
+    let invite = match stage {
+        Stage::Testing => {
+            "\n\nTested it? React to this comment with 👍 if it works or 👎 if it \
+             does not, and comment on what broke."
+        }
+        _ => "",
+    };
+    format!("{what}{from}{invite}\n\n{}", stage_marker(nvr, stage))
 }
 
 /// The scoped label for a build at `stage`, if the stage has one.
@@ -247,6 +256,9 @@ mod tests {
             &[],
         );
         assert!(release.contains("untagged from `proposed_updates10s-packages-main-testing`"));
+        // Testers are asked to react to a testing build's comment only.
+        assert!(testing.contains("React to this comment with 👍 if it works"));
+        assert!(!release.contains("React to this comment"));
         assert!(
             stage_note(nvr, Stage::Release, "r", None, &Provenance::Unknown, &[])
                 .ends_with(&stage_marker(nvr, Stage::Release))

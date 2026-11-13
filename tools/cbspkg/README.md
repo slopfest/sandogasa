@@ -214,8 +214,9 @@ The build's tracking issue, in the package's SIG repo, is updated:
   it asks for, as a rebuild of an older version is not what it is
   about; of several open, the newest version the build reaches.
 
-It gets a comment saying where the build went and, for a Proposed
-Update, what it was built from: the merge request's head, or the head
+It gets a comment saying where the build went, inviting testers, for a
+`-testing` build, to react with 👍 or 👎 and to comment on what broke,
+and, for a Proposed Update, what it was built from: the merge request's head, or the head
 with SIG-only commits on top, each listed with its subject, or a commit
 that lacks the merge request's current head. It also gets the scoped
 label `stage::testing` or `stage::release` when the project or the
