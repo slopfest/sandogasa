@@ -191,7 +191,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     // with the promotion and confirmed with it.
     let base = crate::config::gitlab_base();
     let token = crate::config::gitlab_token();
-    if checkout.sig == sandogasa_cbs::Sig::ProposedUpdates {
+    if crate::notify::covers(checkout.sig) {
         ui.step("Find the tracking issue to tell, through GitLab's API");
     }
     let notices = crate::notify::plan(

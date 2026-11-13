@@ -10,6 +10,10 @@
 //! (`c10s-proposed-RHEL-306261`), so a build of the branch finds its
 //! issue without asking anything else.
 //!
+//! A Hyperscale package has one open `rfe::new-version` issue at a
+//! time, filed by hs-relmon and titled `<package>-<version> is
+//! available`; a build at or past that version is what it asks for.
+//!
 //! What is said is a comment, ending in a marker a person does not see,
 //! so a rerun can tell it was said already; and a scoped label, one of
 //! `stage::testing` and `stage::release`, so the SIG's issue lists show
@@ -35,6 +39,18 @@ pub fn tracks_proposed_branch(labels: &[String], description: &str, branch: &str
             .is_some_and(|rest| rest.contains(&link))
     });
     labels.iter().any(|l| l == release) && names_key
+}
+
+/// The version a Hyperscale `rfe::new-version` issue asks for, from its
+/// title as hs-relmon writes it: `7.1` of `ethtool-7.1 is available`.
+pub fn requested_version<'a>(title: &'a str, package: &str) -> Option<&'a str> {
+    title
+        .strip_suffix(" is available")?
+        .strip_prefix(package)?
+        .strip_prefix('-')
+        // A version, not the rest of a longer name: `rust-foo` is not
+        // asked for by `rust-foo-bar-1.2 is available`.
+        .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// The release of the SIG branch `branch` (`c10s` of
@@ -266,6 +282,25 @@ mod tests {
                 "- **MR**: [Backport [CVE-1](x) fix](https://gitlab.com/r/-/merge_requests/32) — opened"
             ),
             Some("https://gitlab.com/r/-/merge_requests/32")
+        );
+    }
+
+    #[test]
+    fn a_hyperscale_issue_asks_for_a_version_in_its_title() {
+        assert_eq!(
+            requested_version("ethtool-7.1 is available", "ethtool"),
+            Some("7.1")
+        );
+        assert_eq!(
+            requested_version("rust-foo-bar-1.2.3 is available", "rust-foo-bar"),
+            Some("1.2.3")
+        );
+        assert_eq!(requested_version("ethtool-7.1 is available", "eth"), None);
+        assert_eq!(requested_version("ethtool- is available", "ethtool"), None);
+        assert_eq!(requested_version("Rebase ethtool", "ethtool"), None);
+        assert_eq!(
+            requested_version("rust-foo-bar-1.2 is available", "rust-foo"),
+            None
         );
     }
 }

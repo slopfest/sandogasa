@@ -6,15 +6,19 @@
 //! part of what is confirmed, and posted once the write is done. A
 //! failure here is a warning: the build has moved either way.
 //!
-//! For now, Proposed Updates' tracking issues, which cpu-sig-tracker
-//! files; see `sandogasa_cbs::tracking` for how one is found.
+//! The tracking issues are Proposed Updates', which cpu-sig-tracker
+//! files per merge request, and Hyperscale's `rfe::new-version` ones,
+//! which hs-relmon files per package; see `sandogasa_cbs::tracking` for
+//! how one is found.
 
 use std::path::Path;
 use std::process::Command;
 
+use std::cmp::Ordering;
+
 use sandogasa_cbs::tracking::{
-    Provenance, proposed_release, stage_label, stage_note, stage_noted, tracked_mr_url,
-    tracks_proposed_branch,
+    Provenance, proposed_release, requested_version, stage_label, stage_note, stage_noted,
+    tracked_mr_url, tracks_proposed_branch,
 };
 use sandogasa_cbs::{Sig, Stage};
 use sandogasa_gitlab::{Client, IssueUpdate};
@@ -36,6 +40,9 @@ pub struct Notice {
     pub label: Option<&'static str>,
     /// The `stage::` label the stage has but nothing defines yet.
     pub missing_label: Option<&'static str>,
+    /// The version the issue asks for, for a Hyperscale one: a build of
+    /// an older version is not what it is about, and is not told of.
+    pub at_least: Option<String>,
 }
 
 /// The SIG branch of a package being promoted, and its checkout.
@@ -74,19 +81,36 @@ pub fn plan(
         repo,
         dry_run,
     } = *on;
-    if sig != Sig::ProposedUpdates || steps.is_empty() {
+    if steps.is_empty() {
         return Vec::new();
     }
-    let Some(release) = proposed_release(branch) else {
-        return Vec::new();
+    // Which issues to read, and which of them is this branch's.
+    let labels = match sig {
+        // The release's issues only: GitLab ANDs the labels.
+        Sig::ProposedUpdates => match proposed_release(branch) {
+            Some(release) => format!("cpu-sig-tracker,{release}"),
+            None => return Vec::new(),
+        },
+        Sig::Hyperscale => "rfe::new-version".to_string(),
+        // A SIG whose tracking issues this does not know.
+        _ => return Vec::new(),
+    };
+    let tracks = |i: &sandogasa_gitlab::Issue| match sig {
+        Sig::ProposedUpdates => {
+            tracks_proposed_branch(&i.labels, i.description.as_deref().unwrap_or(""), branch)
+        }
+        Sig::Hyperscale => requested_version(&i.title, package).is_some(),
+        _ => false,
     };
     let path = format!("{}/{package}", sig.gitlab_group());
+    let nvrs: Vec<&str> = steps.iter().map(|(nvr, _, _)| nvr.as_str()).collect();
     let read = Client::new(base, &path, token.unwrap_or("")).and_then(|client| {
-        // The release's issues only: GitLab ANDs the labels.
-        let issues = client.list_issues(&format!("cpu-sig-tracker,{release}"), Some("opened"))?;
-        let Some(issue) = issues.into_iter().find(|i| {
-            tracks_proposed_branch(&i.labels, i.description.as_deref().unwrap_or(""), branch)
-        }) else {
+        let issues: Vec<sandogasa_gitlab::Issue> = client
+            .list_issues(&labels, Some("opened"))?
+            .into_iter()
+            .filter(|i| tracks(i))
+            .collect();
+        let Some(issue) = pick_issue(issues, sig, package, &nvrs) else {
             return Ok(None);
         };
         let notes = client.issue_notes(issue.iid)?;
@@ -103,9 +127,24 @@ pub fn plan(
             return Vec::new();
         }
     };
+    let at_least = match sig {
+        Sig::Hyperscale => requested_version(&issue.title, package).map(str::to_string),
+        _ => None,
+    };
     let pending: Vec<&(String, Stage, Vec<Vec<String>>)> = steps
         .iter()
         .filter(|(nvr, stage, _)| {
+            // A build's NVR is a stand-in until it is built.
+            if let Some(v) = &at_least
+                && !nvr.starts_with('<')
+                && !reaches(nvr, v)
+            {
+                println!(
+                    "{nvr} is older than the {v} {} asks for: nothing to tell.",
+                    issue.web_url
+                );
+                return false;
+            }
             let told = stage_noted(notes.iter().map(|n| n.body.as_str()), nvr, *stage);
             if told {
                 println!(
@@ -183,6 +222,7 @@ pub fn plan(
             ),
             label: stage_label(*stage),
             missing_label: None,
+            at_least: at_least.clone(),
         });
     }
     // Which stage labels exist, read only when one is wanted.
@@ -237,6 +277,16 @@ pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String
         .filter(|n| {
             done.iter()
                 .any(|(nvr, stage)| *nvr == n.nvr && *stage == n.stage)
+        })
+        .filter(|n| match &n.at_least {
+            Some(v) if !reaches(&n.nvr, v) => {
+                println!(
+                    "{} is older than the {v} {} asks for: it is not told.",
+                    n.nvr, n.issue_url
+                );
+                false
+            }
+            _ => true,
         })
         .collect();
     if notices.is_empty() {
@@ -294,6 +344,56 @@ pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String
             ),
         }
     }
+}
+
+/// Whether there are tracking issues for `sig` to tell: Proposed
+/// Updates' and Hyperscale's.
+pub fn covers(sig: Sig) -> bool {
+    matches!(sig, Sig::ProposedUpdates | Sig::Hyperscale)
+}
+
+/// Which of `issues`, each tracking the branch, to tell of `nvrs`. A
+/// Proposed Update has one per branch. Hyperscale may have several
+/// `rfe::new-version` issues open, one per version hs-relmon saw: the
+/// one asking for the newest version the builds reach, else the first.
+fn pick_issue(
+    issues: Vec<sandogasa_gitlab::Issue>,
+    sig: Sig,
+    package: &str,
+    nvrs: &[&str],
+) -> Option<sandogasa_gitlab::Issue> {
+    if sig != Sig::Hyperscale || issues.len() < 2 {
+        return issues.into_iter().next();
+    }
+    let reached = |i: &sandogasa_gitlab::Issue| {
+        requested_version(&i.title, package)
+            .filter(|v| nvrs.iter().any(|nvr| reaches(nvr, v)))
+            .map(str::to_string)
+    };
+    let best = issues
+        .iter()
+        .enumerate()
+        .filter_map(|(n, i)| Some((reached(i)?, n)))
+        .max_by(|a, b| sandogasa_rpmvercmp::rpmvercmp(&a.0, &b.0))
+        .map(|(_, n)| n)
+        .unwrap_or(0);
+    issues.into_iter().nth(best)
+}
+
+/// The version of an NVR: `7.1` of `ethtool-7.1-1.hs.el9`. A build's
+/// stand-in, `<the build in …>`, has none.
+fn version_of(nvr: &str) -> Option<&str> {
+    if nvr.starts_with('<') {
+        return None;
+    }
+    let mut parts = nvr.rsplitn(3, '-');
+    let (_release, version, _name) = (parts.next()?, parts.next()?, parts.next()?);
+    Some(version)
+}
+
+/// Whether `nvr` is at or past `version`.
+fn reaches(nvr: &str, version: &str) -> bool {
+    version_of(nvr).is_some_and(|v| sandogasa_rpmvercmp::rpmvercmp(v, version) != Ordering::Less)
 }
 
 /// A tracked merge request: where its commits are fetched from, and its
@@ -859,5 +959,125 @@ mod tests {
         };
         let notices = plan(&url, Some("t"), &dry, &steps, &built);
         assert!(!notices[0].note.contains("Built from"));
+    }
+
+    #[test]
+    fn a_version_is_reached_by_itself_and_later_ones() {
+        assert_eq!(version_of("ethtool-7.1-1.hs.el9"), Some("7.1"));
+        assert_eq!(version_of("rust-foo-bar-1.2.3-2.el10"), Some("1.2.3"));
+        assert_eq!(version_of("ethtool"), None);
+        assert!(reaches("ethtool-7.1-1.hs.el9", "7.1"));
+        assert!(reaches("ethtool-7.10-1.hs.el9", "7.9"));
+        assert!(!reaches("ethtool-7.0-3.hs.el9", "7.1"));
+        assert!(!reaches("<the build in hyperscale9s-packages-main>", "7.1"));
+    }
+
+    /// ethtool's Hyperscale issue asks for 7.1: a 7.1 build is told of,
+    /// a 7.0 rebuild is not, and a build not yet made is planned with
+    /// its stand-in, to be checked once it has its NVR.
+    #[test]
+    fn a_hyperscale_build_is_told_to_its_new_version_issue() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fethtool";
+        server
+            .mock("GET", format!("{path}/issues").as_str())
+            .match_query(mockito::Matcher::UrlEncoded(
+                "labels".into(),
+                "rfe::new-version".into(),
+            ))
+            .with_status(200)
+            .with_body(
+                serde_json::json!([{
+                    "iid": 2, "title": "ethtool-7.1 is available", "state": "opened",
+                    "web_url": "h2", "labels": ["rfe::new-version"],
+                    "description": "```\nethtool  Upstream  7.1\n```",
+                }])
+                .to_string(),
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/issues/2/notes").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        server
+            .mock("GET", format!("{path}/labels").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let tag = "hyperscale9s-packages-main-testing";
+        let step = |nvr: &str| {
+            (
+                nvr.to_string(),
+                Stage::Testing,
+                vec![["cbs", "tag-build", tag, nvr].map(String::from).to_vec()],
+            )
+        };
+        let on = Branch {
+            sig: Sig::Hyperscale,
+            package: "ethtool",
+            branch: "c9s-hs",
+            repo: Path::new("."),
+            dry_run: true,
+        };
+        let steps = [
+            step("ethtool-7.1-1.hs.el9"),
+            step("ethtool-7.0-3.hs.el9"),
+            step("<the build in hyperscale9s-packages-main>"),
+        ];
+        let notices = plan(&server.url(), None, &on, &steps, &none);
+        let nvrs: Vec<&str> = notices.iter().map(|n| n.nvr.as_str()).collect();
+        assert_eq!(
+            nvrs,
+            [
+                "ethtool-7.1-1.hs.el9",
+                "<the build in hyperscale9s-packages-main>"
+            ]
+        );
+        assert_eq!(notices[0].issue_url, "h2");
+        assert_eq!(notices[0].at_least.as_deref(), Some("7.1"));
+        assert!(!notices[0].note.contains("Built from"));
+        // No stage label in the Hyperscale group yet: said, not set.
+        assert_eq!(notices[0].missing_label, Some("stage::testing"));
+
+        // The build turned out older than asked for: not posted.
+        let posts = server
+            .mock("POST", mockito::Matcher::Any)
+            .with_status(201)
+            .expect(0)
+            .create();
+        let older = Notice {
+            nvr: "ethtool-7.0-4.hs.el9".to_string(),
+            ..notices.into_iter().nth(1).unwrap()
+        };
+        let done = [(older.nvr.clone(), Stage::Testing)];
+        post(&server.url(), Some("t"), &[older], &done);
+        posts.assert();
+    }
+
+    #[test]
+    fn of_several_new_version_issues_the_newest_the_build_reaches_is_told() {
+        let issue = |iid: u64, version: &str| -> sandogasa_gitlab::Issue {
+            serde_json::from_value(serde_json::json!({
+                "iid": iid, "title": format!("ethtool-{version} is available"),
+                "state": "opened", "web_url": format!("h{iid}"),
+            }))
+            .unwrap()
+        };
+        let open = || vec![issue(3, "7.2"), issue(1, "7.0"), issue(2, "7.1")];
+        let pick = |nvrs: &[&str]| {
+            pick_issue(open(), Sig::Hyperscale, "ethtool", nvrs)
+                .unwrap()
+                .iid
+        };
+        assert_eq!(pick(&["ethtool-7.1-1.hs.el9"]), 2);
+        assert_eq!(pick(&["ethtool-7.2-1.hs.el9"]), 3);
+        // Reaching none, or a build not made yet: the first.
+        assert_eq!(pick(&["ethtool-6.9-1.hs.el9"]), 3);
+        assert_eq!(pick(&["<the build in hyperscale9s-packages-main>"]), 3);
+        assert!(pick_issue(Vec::new(), Sig::Hyperscale, "ethtool", &[]).is_none());
+        assert!(covers(Sig::Hyperscale) && covers(Sig::ProposedUpdates));
     }
 }

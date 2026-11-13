@@ -147,9 +147,12 @@ does, after asking; scratch builds need them too.
 
 The build is confirmed at a terminal and refused without one, after the
 CBS login is checked; the confirmation shows the exact `cbs build`
-command. Once it is done, `build` names the `cbspkg promote` (and the
-`cbs tag-build` it comes to) that offers it for testing. `--explain` and
-`--dry-run` show each command.
+command, and the comment the package's tracking issue will get once the
+build is done, as for `promote` below. To know the build it tells of,
+`build` starts it with `cbs build --nowait` and waits with
+`cbs watch-task`, then reads the build's NVR from its task; the comment
+is posted with that NVR once the build has succeeded. Builds left
+running with `--nowait`, and scratch builds, are not told of.
 
 ### `config`
 
@@ -200,20 +203,27 @@ Promoting to `-release` also untags the build from `-testing`, so a
 released build is not left in testing as well. A build released before
 that, and still in `-testing`, is promoted again to finish the untag.
 
-For a Proposed Update, the build's tracking issue is told: the open
-cpu-sig-tracker issue in the SIG's repo carrying the branch's release
-label (`c10s`) and whose `JIRA` line names its RHEL issue
-(`RHEL-306261`), as the branch `c10s-proposed-RHEL-306261` does. It
-gets a comment saying where the build went and what it was built from:
-the merge request's head, or the head with SIG-only commits on top,
-each listed with its subject, or a commit that lacks the merge
-request's current head. It also gets the scoped label
-`stage::testing` or `stage::release` when the project or the SIG's
-group has that label, and the status `In progress` if it was still
-`To do`. Each comment ends in a hidden marker, so a promotion the issue
-was told of already is not told again, and a build that reached its
-stage is told of even when a later `cbs` command fails. Posting needs
-the GitLab token from `cbspkg config` or `GITLAB_TOKEN`, and the
+The build's tracking issue is told, in the package's SIG repo:
+
+- for a Proposed Update, the open cpu-sig-tracker issue carrying the
+  branch's release label (`c10s`) and whose `JIRA` line names its RHEL
+  issue (`RHEL-306261`), as the branch `c10s-proposed-RHEL-306261`
+  does;
+- for Hyperscale, the open `rfe::new-version` issue hs-relmon filed,
+  `ethtool-7.1 is available`, when the build is at or past the version
+  it asks for, as a rebuild of an older version is not what it is
+  about; of several open, the newest version the build reaches.
+
+It gets a comment saying where the build went and, for a Proposed
+Update, what it was built from: the merge request's head, or the head
+with SIG-only commits on top, each listed with its subject, or a commit
+that lacks the merge request's current head. It also gets the scoped
+label `stage::testing` or `stage::release` when the project or the
+SIG's group has that label, and the status `In progress` if it was
+still `To do`. Each comment ends in a hidden marker, so a promotion the
+issue was told of already is not told again, and a build that reached
+its stage is told of even when a later `cbs` command fails. Posting
+needs the GitLab token from `cbspkg config` or `GITLAB_TOKEN`, and the
 confirmation says when there is none; a failure posting is a warning,
 as the build has moved by then.
 

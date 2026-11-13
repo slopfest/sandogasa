@@ -16,6 +16,7 @@ sandogasa-cbs = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["explain", "http"] }
 sandogasa-config = { workspace = true }
 sandogasa-gitlab = { workspace = true }
+sandogasa-rpmvercmp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

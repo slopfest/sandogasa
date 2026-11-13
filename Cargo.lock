@@ -135,6 +135,7 @@ dependencies = [
  "sandogasa-cli",
  "sandogasa-config",
  "sandogasa-gitlab",
+ "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
  "serial_test",

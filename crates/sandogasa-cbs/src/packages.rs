@@ -139,6 +139,33 @@ pub fn build_commit(nvr: &str) -> Result<Option<String>, String> {
     Ok(source_commit(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// The build a finished build task made, from the `Build: <nvr> (<id>)`
+/// line `koji taskinfo` prints.
+pub fn task_build_of(taskinfo: &str) -> Option<String> {
+    taskinfo
+        .lines()
+        .find_map(|l| l.strip_prefix("Build:"))?
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+}
+
+/// The build CBS task `task` made, if it made one.
+pub fn task_build(task: &str) -> Result<Option<String>, String> {
+    let out = Command::new("koji")
+        .args(["--profile", PROFILE, "taskinfo", task])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run koji: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "koji taskinfo {task}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(task_build_of(&String::from_utf8_lossy(&out.stdout)))
+}
+
 /// The newest build of `package` in `tag`, if it has one.
 pub fn latest(tag: &str, package: &str) -> Option<String> {
     let out = Command::new("koji")
@@ -262,6 +289,35 @@ mod tests {
                 .unwrap_err()
                 .contains("cannot run koji")
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_tasks_build_is_read_from_koji() {
+        let t = FakeTools::new();
+        t.fake(
+            "koji",
+            &[
+                (
+                    "--profile cbs taskinfo 6093703",
+                    "Task: 6093703\nType: build\nBuild: git-2.52.1-1~proposed.el10 (80253)\nLog Files:",
+                ),
+                ("taskinfo 2", "Task: 2\nType: buildArch"),
+                ("taskinfo", "!GenericError: No such task"),
+            ],
+        );
+        assert_eq!(
+            task_build("6093703").unwrap().as_deref(),
+            Some("git-2.52.1-1~proposed.el10")
+        );
+        assert_eq!(task_build("2").unwrap(), None);
+        assert!(
+            task_build("3")
+                .unwrap_err()
+                .contains("taskinfo 3: GenericError")
+        );
+        std::fs::remove_file(t.tmp.path().join("bin/koji")).unwrap();
+        assert!(task_build("2").unwrap_err().contains("cannot run koji"));
     }
 
     #[test]

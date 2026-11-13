@@ -160,6 +160,31 @@ sandogasa-cbs gains `packages::build_commit` and `source_commit`, the
 commit a CBS build was made from, and `tracking::Provenance` and
 `tracked_mr_url`.
 
+### cbspkg updates Proposed Updates and Hyperscale tracking issues on build
+
+A tracking issue was only updated once a build was promoted, so the
+build itself, and what it was made from, went unrecorded until then.
+And only Proposed Updates' issues were updated: Hyperscale's were not,
+by either `build` or `promote`. `cbspkg build` now shows the comment
+with the build it confirms and, once a build it waited for has
+succeeded, posts it with the build's NVR, read from its CBS task, and
+what it was built from, as `promote` does. To have the task, such a
+build is started with `cbs build --nowait` and waited for with
+`cbs watch-task`. Builds left running with `--nowait`, and scratch
+builds, get no comment.
+
+Both `build` and `promote` now update either SIG's tracking issue:
+
+- Proposed Updates: the cpu-sig-tracker issue for the branch's release
+  and RHEL issue, as `promote` did already
+- Hyperscale, new: the open `rfe::new-version` issue hs-relmon filed
+  for the package (`ethtool-7.1 is available`), when the build is at or
+  past the version it asks for; of several open, the newest version
+  the build reaches
+
+sandogasa-cbs gains `tracking::requested_version` and
+`packages::task_build`. Refs #144.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

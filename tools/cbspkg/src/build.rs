@@ -159,6 +159,60 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The builds made into each of `collections`, by the task started for
+/// it (`tasks`, in the same order), which names it exactly; without
+/// tasks, the newest in each `-candidate`.
+fn builds_of<'a>(
+    collections: &'a [Collection],
+    tasks: &[String],
+    package: &str,
+) -> Vec<(&'a Collection, String)> {
+    collections
+        .iter()
+        .enumerate()
+        .filter_map(|(n, collection)| {
+            let nvr = match tasks.get(n) {
+                Some(task) => sandogasa_cbs::packages::task_build(task)
+                    .map_err(|e| eprintln!("warning: cannot read task {task}'s build ({e})"))
+                    .ok()
+                    .flatten(),
+                None if tasks.is_empty() => latest(&collection.tag(Stage::Candidate), package),
+                None => None,
+            }?;
+            Some((collection, nvr))
+        })
+        .collect()
+}
+
+/// Tell the tracking issue of `built`, the builds just made from
+/// `commit`: planned again with their NVRs, so what the issue was told
+/// already is checked against them, and the comments name them.
+fn tell_built(
+    base: &str,
+    token: Option<&str>,
+    on: &crate::notify::Branch,
+    commit: &str,
+    built: &[(&Collection, String)],
+) {
+    if built.is_empty() {
+        return;
+    }
+    let steps: Vec<(String, Stage, Vec<Vec<String>>)> = built
+        .iter()
+        .map(|(c, nvr)| {
+            let tag = c.tag(Stage::Candidate);
+            let argv = ["cbs", "tag-build", &tag, nvr].map(String::from).to_vec();
+            (nvr.clone(), Stage::Candidate, vec![argv])
+        })
+        .collect();
+    let notices = crate::notify::plan(base, token, on, &steps, &|_| Ok(Some(commit.to_string())));
+    let done: Vec<(String, Stage)> = built
+        .iter()
+        .map(|(_, nvr)| (nvr.clone(), Stage::Candidate))
+        .collect();
+    crate::notify::post(base, token, &notices, &done);
+}
+
 /// Find the SIG's remote and the branch's commit: the branch itself or,
 /// when it is only on the SIG's remote (after `sig-repo` made no local
 /// branch), the remote's.
@@ -272,9 +326,13 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     {
         return Ok(());
     }
+    // The tracking issue is told of a build cbspkg waits for, which it
+    // knows by its task.
+    let tells = !args.scratch && !args.nowait && crate::notify::covers(checkout.sig);
     // Several builds run at once: each started with --nowait, then
-    // waited on together. One waits as it runs, unless asked not to.
-    let together = checkout.collections.len() > 1 || args.nowait;
+    // waited on together. One waits as it runs, unless asked not to, or
+    // its task is wanted for its NVR.
+    let together = checkout.collections.len() > 1 || args.nowait || tells;
     let flags = BuildFlags {
         scratch: args.scratch,
         background: args.background,
@@ -290,11 +348,58 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         "a build"
     };
+    // The cheap checks first: the CBS login and a terminal to confirm
+    // at, before any GitLab request.
     if !args.dry_run {
         sandogasa_cbs::login::ensure_login("cbspkg", true, args.explain)?;
         if !std::io::stdin().is_terminal() {
             return Err("building in CBS is confirmed at a terminal; run it in one".into());
         }
+    }
+    // What the tracking issue will be told, shown with what is
+    // confirmed: with a stand-in for each build's NVR, until its task
+    // names it.
+    let base = crate::config::gitlab_base();
+    let token = crate::config::gitlab_token();
+    let stand_ins: Vec<String> = checkout
+        .collections
+        .iter()
+        .map(|c| format!("<the build in {}>", c.prefix()))
+        .collect();
+    let preview = if tells {
+        ui.step("Find the tracking issue to tell, through GitLab's API");
+        let steps: Vec<(String, Stage, Vec<Vec<String>>)> = checkout
+            .collections
+            .iter()
+            .zip(&stand_ins)
+            .map(|(c, nvr)| {
+                let tag = c.tag(Stage::Candidate);
+                let argv = ["cbs", "tag-build", &tag, nvr].map(String::from).to_vec();
+                (nvr.clone(), Stage::Candidate, vec![argv])
+            })
+            .collect();
+        crate::notify::plan(
+            &base,
+            token.as_deref(),
+            &crate::notify::Branch {
+                sig: checkout.sig,
+                package,
+                branch,
+                repo: &repo,
+                dry_run: args.dry_run,
+            },
+            &steps,
+            &|_| Ok(Some(commit.clone())),
+        )
+    } else {
+        Vec::new()
+    };
+    if args.nowait && !args.scratch && crate::notify::covers(checkout.sig) {
+        println!(
+            "Builds left running are not told to the tracking issue: cbspkg is not there when they end."
+        );
+    }
+    if !args.dry_run {
         // The exact commands, whatever the narration: what would
         // otherwise be pieced together from shell history.
         // Set apart from the login check and the steps above.
@@ -311,12 +416,15 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
                 sandogasa_cli::explain::command_line(&watch_argv(&["<tasks>".into()]))
             );
         }
+        for notice in &preview {
+            print!("{}", crate::notify::describe(notice, token.is_some()));
+        }
         if !sandogasa_cli::confirm(&format!("Start {kind}?"), true)? {
             println!("Nothing built.");
             return Ok(());
         }
     }
-    let mut tasks = Vec::new();
+    let mut tasks: Vec<String> = Vec::new();
     for (collection, argv) in &builds {
         ui.step(&format!(
             "Start {kind} of {package} in {}, which puts it in {}",
@@ -380,16 +488,32 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         ui.step("Wait for the builds, which run at the same time");
         ui.run_required(&watch, &repo)?;
     }
+    if args.dry_run {
+        // After the steps, where a real run tells the issue.
+        for notice in &preview {
+            ui.step("Tell the tracking issue, through GitLab's API");
+            print!("{}", crate::notify::describe(notice, token.is_some()));
+        }
+    }
     if !args.scratch && !args.dry_run {
         // Set apart from the build's own output, which ends just above.
         println!();
-        for collection in &checkout.collections {
-            if let Some(nvr) = latest(&collection.tag(Stage::Candidate), package) {
-                println!(
-                    "Next, to offer {nvr} for testing: cbspkg promote (cbs tag-build {} {nvr})",
-                    collection.tag(Stage::Testing)
-                );
-            }
+        let built = builds_of(&checkout.collections, &tasks, package);
+        for (collection, nvr) in &built {
+            println!(
+                "Next, to offer {nvr} for testing: cbspkg promote (cbs tag-build {} {nvr})",
+                collection.tag(Stage::Testing)
+            );
+        }
+        if tells {
+            let on = crate::notify::Branch {
+                sig: checkout.sig,
+                package,
+                branch,
+                repo: &repo,
+                dry_run: false,
+            };
+            tell_built(&base, token.as_deref(), &on, &commit, &built);
         }
     }
     Ok(())
@@ -649,5 +773,73 @@ mod tests {
             watch_argv(&["5531001".into(), "5531002".into()]),
             ["cbs", "watch-task", "5531001", "5531002"]
         );
+    }
+
+    /// A Hyperscale build of ethtool 7.1, named by its task: the issue
+    /// asking for 7.1 is told, once, with the build's NVR.
+    #[test]
+    #[serial_test::serial]
+    fn a_finished_build_is_named_by_its_task_and_told() {
+        let f = Fixture::hyperscale("ethtool", "c9s-hs");
+        f.fake(
+            "koji",
+            &[
+                ("taskinfo 101", "Task: 101\nBuild: ethtool-7.1-1.hs.el9 (5)"),
+                ("taskinfo", "!GenericError: No such task"),
+                ("list-tagged", "ethtool-7.0-1.hs.el9  t  someone"),
+            ],
+        );
+        let checkout = resolve(&f.repo, None, None, None).unwrap();
+        let tasks = vec!["101".to_string()];
+        let built = builds_of(&checkout.collections, &tasks, "ethtool");
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0].1, "ethtool-7.1-1.hs.el9");
+        // No task: the newest in -candidate.
+        let newest = builds_of(&checkout.collections, &[], "ethtool");
+        assert_eq!(newest[0].1, "ethtool-7.0-1.hs.el9");
+        // A task that names no build: nothing.
+        assert!(builds_of(&checkout.collections, &["102".to_string()], "ethtool").is_empty());
+
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fethtool";
+        server
+            .mock("GET", format!("{path}/issues").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                r#"[{"iid": 2, "title": "ethtool-7.1 is available", "state": "opened",
+                     "web_url": "h2", "labels": ["rfe::new-version"]}]"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/issues/2/notes").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let comment = server
+            .mock("POST", format!("{path}/issues/2/notes").as_str())
+            .match_body(mockito::Matcher::Regex(
+                "ethtool-7.1-1.hs.el9` is built: tagged into".into(),
+            ))
+            .with_status(201)
+            .with_body(r#"{"id": 1, "body": "b"}"#)
+            .expect(1)
+            .create();
+        server
+            .mock("POST", "/api/graphql")
+            .with_status(200)
+            .with_body(r#"{"data": {"project": {"workItems": {"nodes": []}}}}"#)
+            .create();
+        let on = crate::notify::Branch {
+            sig: checkout.sig,
+            package: "ethtool",
+            branch: "c9s-hs",
+            repo: &f.repo,
+            dry_run: false,
+        };
+        tell_built(&server.url(), Some("t"), &on, "abc123", &built);
+        comment.assert();
+        tell_built(&server.url(), Some("t"), &on, "abc123", &[]);
     }
 }
