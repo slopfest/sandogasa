@@ -55,9 +55,41 @@ pub fn stage_noted<'a>(mut notes: impl Iterator<Item = &'a str>, nvr: &str, stag
     notes.any(|n| n.contains(&marker))
 }
 
+/// What a build was made from, against its merge request's head.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Provenance {
+    /// Not known: no commit in the build's source, or no head to compare.
+    Unknown,
+    /// Exactly the merge request's head (its short id).
+    Head(String),
+    /// The head plus SIG-only commits on top, each `<short id> <subject>`.
+    Carried(String, Vec<String>),
+    /// A commit that does not contain the merge request's current head.
+    Apart(String),
+}
+
+/// The URL on an issue's `- **MR**: [title](url)` line, as
+/// cpu-sig-tracker writes it.
+pub fn tracked_mr_url(description: &str) -> Option<&str> {
+    description.lines().find_map(|l| {
+        let rest = l.trim_start().strip_prefix("- **MR**:")?;
+        // The link's target, not a `](` inside the title.
+        let at = rest.find("](http")? + 2;
+        rest[at..].split(')').next().filter(|u| !u.is_empty())
+    })
+}
+
 /// The comment for `nvr` reaching `stage`, by being tagged into `tag`,
-/// and for a release, untagged from `untagged` (`-testing`), if it was.
-pub fn stage_note(nvr: &str, stage: Stage, tag: &str, untagged: Option<&str>) -> String {
+/// and for a release, untagged from `untagged` (`-testing`), if it was;
+/// with what it was built from, so SIG-only commits that never go to
+/// CentOS Stream are on record where the update is tracked.
+pub fn stage_note(
+    nvr: &str,
+    stage: Stage,
+    tag: &str,
+    untagged: Option<&str>,
+    built_from: &Provenance,
+) -> String {
     let what = match (stage, untagged) {
         (Stage::Release, Some(testing)) => {
             format!("`{nvr}` is released: tagged into `{tag}` and untagged from `{testing}`.")
@@ -66,7 +98,27 @@ pub fn stage_note(nvr: &str, stage: Stage, tag: &str, untagged: Option<&str>) ->
         (Stage::Testing, _) => format!("`{nvr}` is ready for testing: tagged into `{tag}`."),
         (Stage::Candidate, _) => format!("`{nvr}` is built: tagged into `{tag}`."),
     };
-    format!("{what}\n\n{}", stage_marker(nvr, stage))
+    let from = match built_from {
+        Provenance::Unknown => String::new(),
+        Provenance::Head(commit) => {
+            format!("\n\nBuilt from `{commit}`, the merge request's head.")
+        }
+        Provenance::Carried(commit, carried) => {
+            let mut s = format!(
+                "\n\nBuilt from `{commit}`: the merge request's head and these SIG-only \
+                 commits, which are not part of the merge request:\n"
+            );
+            for line in carried {
+                let (id, subject) = line.split_once(' ').unwrap_or((line, ""));
+                s.push_str(&format!("\n- `{id}` {subject}"));
+            }
+            s
+        }
+        Provenance::Apart(commit) => format!(
+            "\n\nBuilt from `{commit}`, which does not contain the merge request's current head."
+        ),
+    };
+    format!("{what}{from}\n\n{}", stage_marker(nvr, stage))
 }
 
 /// The scoped label for a build at `stage`, if the stage has one.
@@ -137,6 +189,7 @@ mod tests {
             Stage::Testing,
             "proposed_updates10s-packages-main-testing",
             None,
+            &Provenance::Unknown,
         );
         assert!(testing.starts_with(&format!(
             "`{nvr}` is ready for testing: tagged into `proposed_updates10s-packages-main-testing`."
@@ -146,13 +199,16 @@ mod tests {
             Stage::Release,
             "proposed_updates10s-packages-main-release",
             Some("proposed_updates10s-packages-main-testing"),
+            &Provenance::Unknown,
         );
         assert!(release.contains("untagged from `proposed_updates10s-packages-main-testing`"));
         assert!(
-            stage_note(nvr, Stage::Release, "r", None)
+            stage_note(nvr, Stage::Release, "r", None, &Provenance::Unknown)
                 .ends_with(&stage_marker(nvr, Stage::Release))
         );
-        assert!(stage_note(nvr, Stage::Candidate, "c", None).contains("is built"));
+        assert!(
+            stage_note(nvr, Stage::Candidate, "c", None, &Provenance::Unknown).contains("is built")
+        );
         let notes = ["set status to **In progress**", testing.as_str()];
         assert!(stage_noted(notes.into_iter(), nvr, Stage::Testing));
         assert!(!stage_noted(notes.into_iter(), nvr, Stage::Release));
@@ -168,5 +224,48 @@ mod tests {
         assert_eq!(stage_label(Stage::Testing), Some("stage::testing"));
         assert_eq!(stage_label(Stage::Release), Some("stage::release"));
         assert_eq!(stage_label(Stage::Candidate), None);
+    }
+
+    #[test]
+    fn a_comment_says_what_the_build_was_made_from() {
+        let nvr = "git-2.52.1-1~proposed.el9";
+        let note = |from: &Provenance| stage_note(nvr, Stage::Testing, "t", None, from);
+        assert!(
+            note(&Provenance::Head("7315dba".into()))
+                .contains("Built from `7315dba`, the merge request's head.")
+        );
+        let carried = note(&Provenance::Carried(
+            "fb3be7c".into(),
+            vec!["fb3be7c Pin Ruby 3 for CBS's el9 buildroot".into()],
+        ));
+        assert!(
+            carried.contains("SIG-only commits, which are not part of the merge request"),
+            "{carried}"
+        );
+        assert!(
+            carried.contains("\n- `fb3be7c` Pin Ruby 3 for CBS's el9 buildroot\n"),
+            "{carried}"
+        );
+        assert!(carried.ends_with(&stage_marker(nvr, Stage::Testing)));
+        assert!(
+            note(&Provenance::Apart("0123456".into()))
+                .contains("does not contain the merge request's current head")
+        );
+        assert!(!note(&Provenance::Unknown).contains("Built from"));
+    }
+
+    #[test]
+    fn the_merge_request_is_read_from_the_issues_mr_line() {
+        assert_eq!(
+            tracked_mr_url(DESCRIPTION),
+            Some("https://gitlab.com/redhat/centos-stream/rpms/git/-/merge_requests/32")
+        );
+        assert_eq!(tracked_mr_url("- **JIRA**: [RHEL-1](j)"), None);
+        assert_eq!(
+            tracked_mr_url(
+                "- **MR**: [Backport [CVE-1](x) fix](https://gitlab.com/r/-/merge_requests/32) — opened"
+            ),
+            Some("https://gitlab.com/r/-/merge_requests/32")
+        );
     }
 }

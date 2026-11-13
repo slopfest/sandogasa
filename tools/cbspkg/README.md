@@ -204,7 +204,10 @@ For a Proposed Update, the build's tracking issue is told: the open
 cpu-sig-tracker issue in the SIG's repo carrying the branch's release
 label (`c10s`) and whose `JIRA` line names its RHEL issue
 (`RHEL-306261`), as the branch `c10s-proposed-RHEL-306261` does. It
-gets a comment saying where the build went, the scoped label
+gets a comment saying where the build went and what it was built from:
+the merge request's head, or the head with SIG-only commits on top,
+each listed with its subject, or a commit that lacks the merge
+request's current head. It also gets the scoped label
 `stage::testing` or `stage::release` when the project or the SIG's
 group has that label, and the status `In progress` if it was still
 `To do`. Each comment ends in a hidden marker, so a promotion the issue
@@ -304,6 +307,15 @@ request:
 The run then checks out the newest branch it carried, the newest
 Stream release's, unless the checkout has uncommitted changes, which
 it leaves where they are.
+
+A SIG branch can carry SIG-only commits on top of the merge request's
+head, ones that must never go to CentOS Stream, such as a BuildRequires
+pin working around CBS's buildroots. A branch the merge request's head
+is inside of is left as it is, and the run lists the commits it carries
+on top. When the merge request has moved on and the branch has commits
+its new head lacks, nothing is pushed, since that would take a force
+push: the run lists them, says how to rebase them onto the new head by
+hand, carries on with the rest, and fails at the end.
 
 Run again for the same merge request, `sig-repo` asks the SIG's repo
 (`git ls-remote`) whether the branch is at the merge request's head

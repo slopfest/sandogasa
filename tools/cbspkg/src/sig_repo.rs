@@ -838,6 +838,14 @@ fn ensure_default_branch(
 }
 
 /// Push the merge request's commits to the SIG's repo as its branch.
+///
+/// A SIG branch is the merge request's head plus any SIG-only commits
+/// on top, which never go to CentOS Stream: a BuildRequires pin working
+/// around CBS's buildroots, say. So a branch the head is inside of is
+/// carried already, and is left as it is. When the merge request has
+/// moved on and the branch has commits its new head lacks, nothing is
+/// pushed, as that would need a force push: the commits are listed, and
+/// the branch's name is returned, to be rebased by hand.
 fn push_change(
     ui: &Ui,
     repo: &Path,
@@ -845,11 +853,12 @@ fn push_change(
     path: &str,
     package: &str,
     change: &Change,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
     let argv = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
     let remote = ensure_sig_remote(ui, repo, base, Sig::ProposedUpdates, path)?;
     let stream = format!("{base}/{}.git", sandogasa_cbs::stream_project(package));
     let mr_ref = format!("refs/merge-requests/{}/head", change.iid);
+    let tracking = format!("refs/remotes/{remote}/{}", change.branch);
     // Already there, from an earlier run: nothing to fetch or push. The
     // check reads the SIG's branch, changing nothing.
     let branch_ref = format!("refs/heads/{}", change.branch);
@@ -870,16 +879,83 @@ fn push_change(
         );
         // The remote-tracking branch the local one tracks, if this
         // checkout has never fetched it.
-        let tracking = format!("refs/remotes/{remote}/{}", change.branch);
         if git(repo, &["rev-parse", "--verify", "--quiet", &tracking]).is_err() {
             ui.run_required(&argv(&["git", "fetch", &remote, &change.branch]), repo)?;
         }
-        return track_locally(ui, repo, &remote, &change.branch);
+        track_locally(ui, repo, &remote, &change.branch)?;
+        return Ok(None);
+    }
+    let on_sig_already = on_sig.as_deref().is_some_and(|l| !l.trim().is_empty());
+    if on_sig_already {
+        // Reading the SIG's branch, to see whether the head is in it.
+        ui.step(&format!(
+            "Fetch {path}'s {}, to see whether it carries the merge request's head with \
+             SIG-only commits on top",
+            change.branch
+        ));
+        ui.show_command(&argv(&["git", "fetch", &remote, &change.branch]));
+        if let Err(e) = git(repo, &["fetch", "--quiet", &remote, &change.branch]) {
+            println!(
+                "Could not fetch {} from {path} ({e}), so nothing is pushed.",
+                change.branch
+            );
+            return Ok(Some(change.branch.clone()));
+        }
+        if let Some(head) = change.head.as_deref()
+            && git(repo, &["merge-base", "--is-ancestor", head, &tracking]).is_ok()
+        {
+            let carried = git(
+                repo,
+                &["log", "--format=%h %s", &format!("{head}..{tracking}")],
+            )?;
+            println!(
+                "{} in {path} is the merge request's head with {} SIG-only commit(s) on top:",
+                change.branch,
+                carried.lines().count()
+            );
+            for line in carried.lines() {
+                println!("  {line}");
+            }
+            track_locally(ui, repo, &remote, &change.branch)?;
+            return Ok(None);
+        }
     }
     ui.step(&format!(
         "Fetch the merge request's commits from CentOS Stream ({mr_ref})"
     ));
-    ui.run_required(&argv(&["git", "fetch", &stream, &mr_ref]), repo)?;
+    // Fetched for real in a dry run too: it changes only FETCH_HEAD, and
+    // says whether the push would have to drop SIG-only commits.
+    ui.show_command(&argv(&["git", "fetch", &stream, &mr_ref]));
+    if let Err(e) = git(repo, &["fetch", "--quiet", &stream, &mr_ref]) {
+        println!("Could not fetch {mr_ref} from CentOS Stream ({e}), so nothing is pushed.");
+        return Ok(Some(change.branch.clone()));
+    }
+    if on_sig_already {
+        let lacking = git(
+            repo,
+            &["log", "--format=%h %s", &format!("FETCH_HEAD..{tracking}")],
+        )?;
+        if !lacking.is_empty() {
+            println!(
+                "{} in {path} has commits the merge request's head does not:",
+                change.branch
+            );
+            for line in lacking.lines() {
+                println!("  {line}");
+            }
+            println!(
+                "They are SIG-only commits, or the merge request's earlier commits if it was \
+                 rewritten. Pushing its head would drop them, which takes a force push, so \
+                 nothing is pushed. By hand, after `git fetch {stream} {mr_ref}`: if they are \
+                 only the merge request's, `git push --force-with-lease {remote} \
+                 FETCH_HEAD:refs/heads/{branch}`; if any are SIG-only, `git checkout {branch} \
+                 && git rebase -i FETCH_HEAD`, keeping only those, then \
+                 `git push --force-with-lease {remote} {branch}`.",
+                branch = change.branch
+            );
+            return Ok(Some(change.branch.clone()));
+        }
+    }
     ui.step(&format!(
         "Push them to the SIG's repo as {}. --no-verify skips CentOS Stream's pre-push hook, \
          which checks the spec against the working tree's sources file rather than the \
@@ -902,7 +978,8 @@ fn push_change(
     if !ui.dry_run {
         println!("Pushed the merge request to {path} as {}.", change.branch);
     }
-    track_locally(ui, repo, &remote, &change.branch)
+    track_locally(ui, repo, &remote, &change.branch)?;
+    Ok(None)
 }
 
 /// A local `branch` tracking `remote`'s, for the cbspkg commands that
@@ -1130,6 +1207,9 @@ pub fn run_configured(
     if changes.is_empty() && in_checkout {
         ensure_sig_remote(&ui, &repo, base, sig, &path)?;
     }
+    // Branches whose SIG-only commits need rebasing by hand: the rest
+    // of the run goes on, and it fails at the end.
+    let mut stuck: Vec<String> = Vec::new();
     for change in &changes {
         if clone && args.dry_run {
             println!(
@@ -1138,12 +1218,19 @@ pub fn run_configured(
                 repo.display(),
                 change.branch
             );
-        } else {
-            push_change(&ui, &repo, base, &path, &package, change)?;
+        } else if let Some(branch) = push_change(&ui, &repo, base, &path, &package, change)? {
+            stuck.push(branch);
         }
     }
+    // A branch left as it was, for rebasing by hand, is not the newest
+    // carried: it lacks the merge request's head.
+    let carried: Vec<Change> = changes
+        .iter()
+        .filter(|c| !stuck.contains(&c.branch))
+        .cloned()
+        .collect();
     let pushed =
-        newest_carried(sig, &changes).or_else(|| changes.last().map(|c| c.branch.as_str()));
+        newest_carried(sig, &carried).or_else(|| carried.last().map(|c| c.branch.as_str()));
     let current = ensure_default_branch(&ui, args, base, token.as_deref(), sig, &path, pushed)?;
     if !created {
         ensure_merge_method(
@@ -1162,22 +1249,30 @@ pub fn run_configured(
         check_out_newest(&ui, &repo, sig, newest)?;
     }
     // The tracking issue next, unless the SIG has one for it.
-    let Some(issues) = issues else {
-        return Ok(());
-    };
-    if !changes.is_empty() {
-        println!();
-    }
-    for change in &changes {
-        match tracking_issue(&issues, &change.mr_url) {
-            Some(i) => println!("{} is already tracked in {}.", change.branch, i.web_url),
-            None => println!(
-                "Next, the SIG's tracking issue for {}: cpu-sig-tracker file-issue {}",
-                change.branch, change.mr_url
-            ),
+    if let Some(issues) = issues {
+        if !changes.is_empty() {
+            println!();
+        }
+        for change in &changes {
+            match tracking_issue(&issues, &change.mr_url) {
+                Some(i) => println!("{} is already tracked in {}.", change.branch, i.web_url),
+                None => println!(
+                    "Next, the SIG's tracking issue for {}: cpu-sig-tracker file-issue {}",
+                    change.branch, change.mr_url
+                ),
+            }
         }
     }
-    Ok(())
+    if stuck.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "not pushed, as the SIG branch has commits the merge request's head lacks, or could \
+             not be read: {}",
+            stuck.join(", ")
+        )
+        .into())
+    }
 }
 
 #[cfg(test)]
@@ -2149,6 +2244,117 @@ mod tests {
             err.contains("cannot read CentOS/proposed_updates/rpms/rsync's tracking issues"),
             "{err}"
         );
+    }
+
+    /// A SIG branch carrying a SIG-only commit on top of the merge
+    /// request's head (git's c9s pin for CBS's buildroot) is left as it
+    /// is. Once the merge request moves on without that commit, nothing
+    /// is pushed, and the run says to rebase by hand.
+    #[test]
+    #[serial_test::serial]
+    fn a_sig_only_commit_on_top_of_the_merge_request_is_carried() {
+        use crate::test_support::{Fixture, git};
+        let fx = Fixture::proposed("c10s", &[]);
+        let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
+        let stream_root = fx.tmp.path().join("stream");
+        let stream = stream_root.join("redhat/centos-stream/rpms/rsync.git");
+        std::fs::create_dir_all(&stream).unwrap();
+        git(&stream, &["init", "--quiet", "--bare"]);
+        fx.git(&[
+            "config",
+            &format!("url.{}/.insteadOf", stream_root.display()),
+            &format!("{}/", server.url()),
+        ]);
+        let mr_commit = |message: &str, file: &str| {
+            std::fs::write(fx.repo.join(file), format!("{message}\n")).unwrap();
+            fx.git(&["add", "."]);
+            fx.git(&["commit", "--quiet", "-m", message]);
+            let head = fx.git(&["rev-parse", "HEAD"]);
+            fx.git(&[
+                "push",
+                "--quiet",
+                "--force",
+                &stream.display().to_string(),
+                "HEAD:refs/merge-requests/7/head",
+            ]);
+            head
+        };
+        fx.git(&["checkout", "--quiet", "-b", "mr", "c10s"]);
+        let head = mr_commit("Fix CVE", "fix.patch");
+        let url = server.url();
+        let mr_url = format!("{url}/redhat/centos-stream/rpms/rsync/-/merge_requests/7");
+        let serve_mr = |server: &mut mockito::Server, sha: &str| {
+            server
+                .mock(
+                    "GET",
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
+                )
+                .match_query(mockito::Matcher::Any)
+                .with_status(200)
+                .with_body(
+                    serde_json::json!([{
+                        "iid": 7, "title": "Fix CVE", "state": "opened",
+                        "web_url": mr_url, "source_branch": "fix", "target_branch": "c10s",
+                        "description": "Resolves: RHEL-303721\n", "sha": sha,
+                    }])
+                    .to_string(),
+                )
+                .create()
+        };
+        let mr = serve_mr(&mut server, &head);
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "c10s-proposed-RHEL-303721"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"[{"name": "c10s-proposed-RHEL-303721"}]"#)
+            .create();
+        let branch = "c10s-proposed-RHEL-303721";
+        let mut run = args(&mr_url, None);
+        run.repo = Some(fx.repo.clone());
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+
+        // The SIG-only pin, on top of the merge request's head.
+        fx.git(&["checkout", "--quiet", branch]);
+        std::fs::write(fx.repo.join("pin"), "ruby(release) < 3.1\n").unwrap();
+        fx.git(&["add", "pin"]);
+        fx.git(&[
+            "commit",
+            "--quiet",
+            "-m",
+            "Pin Ruby 3 for CBS's el9 buildroot",
+        ]);
+        let pinned = fx.git(&["rev-parse", "HEAD"]);
+        fx.git(&["push", "--quiet", "sig", branch]);
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+        let on_sig = |fx: &Fixture| fx.git(&["ls-remote", "sig", &format!("refs/heads/{branch}")]);
+        assert!(on_sig(&fx).starts_with(&pinned), "{}", on_sig(&fx));
+
+        // The merge request moves on without the pin.
+        fx.git(&["checkout", "--quiet", "mr"]);
+        let moved = mr_commit("Fix CVE, take 2", "fix2.patch");
+        mr.remove();
+        serve_mr(&mut server, &moved);
+        fx.git(&["checkout", "--quiet", branch]);
+        let err = run_with(&run, &server.url(), Some("t".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("has commits the merge request's head lacks"),
+            "{err}"
+        );
+        assert!(err.contains(branch), "{err}");
+        assert!(on_sig(&fx).starts_with(&pinned), "{}", on_sig(&fx));
     }
 
     /// `run` reads the config, warning about one that does not parse,

@@ -197,10 +197,15 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     let notices = crate::notify::plan(
         &base,
         token.as_deref(),
-        checkout.sig,
-        package,
-        &checkout.branch,
+        &crate::notify::Branch {
+            sig: checkout.sig,
+            package,
+            branch: &checkout.branch,
+            repo: &repo,
+            dry_run: args.dry_run,
+        },
         &steps,
+        &sandogasa_cbs::packages::build_commit,
     );
 
     if !args.dry_run {

@@ -110,6 +110,35 @@ pub fn tags_of(nvr: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// The commit a build was made from: the `#<sha>` ending the `Source:`
+/// line `koji buildinfo` prints, as for
+/// `git+https://gitlab.com/CentOS/proposed_updates/rpms/git.git#a879194…`.
+pub fn source_commit(buildinfo: &str) -> Option<String> {
+    let source = buildinfo
+        .lines()
+        .find_map(|l| l.strip_prefix("Source:"))?
+        .trim();
+    let (_, commit) = source.rsplit_once('#')?;
+    (!commit.is_empty() && commit.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| commit.to_string())
+}
+
+/// The commit `nvr` was built from in CBS, if its source names one.
+pub fn build_commit(nvr: &str) -> Result<Option<String>, String> {
+    let out = Command::new("koji")
+        .args(["--profile", PROFILE, "buildinfo", nvr])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run koji: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "koji buildinfo {nvr}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(source_commit(&String::from_utf8_lossy(&out.stdout)))
+}
+
 /// The newest build of `package` in `tag`, if it has one.
 pub fn latest(tag: &str, package: &str) -> Option<String> {
     let out = Command::new("koji")
@@ -201,6 +230,38 @@ mod tests {
         );
         std::fs::remove_file(t.tmp.path().join("bin/koji")).unwrap();
         assert!(tags_of("xz-1").unwrap_err().contains("cannot run koji"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_builds_commit_is_read_from_koji() {
+        let t = FakeTools::new();
+        t.fake(
+            "koji",
+            &[
+                (
+                    "--profile cbs buildinfo git-2.52.1-1~proposed.el10",
+                    "BUILD: git-2.52.1-1~proposed.el10 [80253]\nSource: git+https://gitlab.com/CentOS/proposed_updates/rpms/git.git#a87919483542fccf5821e798aa061e51f6501ede",
+                ),
+                ("buildinfo xz-1", "BUILD: xz-1\nSource: cli-build/xz.src.rpm"),
+                ("buildinfo", "!GenericError: No such build"),
+            ],
+        );
+        assert_eq!(
+            build_commit("git-2.52.1-1~proposed.el10")
+                .unwrap()
+                .as_deref(),
+            Some("a87919483542fccf5821e798aa061e51f6501ede")
+        );
+        assert_eq!(build_commit("xz-1").unwrap(), None);
+        let err = build_commit("xz-2").unwrap_err();
+        assert!(err.contains("buildinfo xz-2: GenericError"), "{err}");
+        std::fs::remove_file(t.tmp.path().join("bin/koji")).unwrap();
+        assert!(
+            build_commit("xz-1")
+                .unwrap_err()
+                .contains("cannot run koji")
+        );
     }
 
     #[test]
@@ -355,5 +416,23 @@ mod tests {
             .join(" "),
             "cbs add-pkg --owner=salimma proposed_updates10s-packages-main-candidate rsync"
         );
+    }
+
+    #[test]
+    fn a_builds_commit_is_read_from_its_source() {
+        let info = "BUILD: git-2.52.1-1~proposed.el10 [80253]\nState: COMPLETE\n\
+            Source: git+https://gitlab.com/CentOS/proposed_updates/rpms/git.git#a87919483542fccf5821e798aa061e51f6501ede\n\
+            Volume: DEFAULT\n";
+        assert_eq!(
+            source_commit(info).as_deref(),
+            Some("a87919483542fccf5821e798aa061e51f6501ede")
+        );
+        // An SRPM build, or no source at all, names no commit.
+        assert_eq!(
+            source_commit("Source: cli-build/1700000000.1.abc/git.src.rpm\n"),
+            None
+        );
+        assert_eq!(source_commit("Source: x.git#main\n"), None);
+        assert_eq!(source_commit("State: COMPLETE\n"), None);
     }
 }

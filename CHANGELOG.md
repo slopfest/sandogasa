@@ -135,6 +135,31 @@ issue, the comment and its marker, the stage labels), and
 sandogasa-gitlab `Client::label_names`, a project's labels with its
 groups'. Refs #144.
 
+### cbspkg carries SIG-only commits, and says so on the tracking issue
+
+A Proposed Update sometimes needs a commit CentOS Stream must never
+get: the git 2.52.1 update for c9s failed in CBS because the el9
+buildroot pulled in Ruby 4.0 from a module stream (CentOS infra
+tracker #2016), and the fix is a BuildRequires pin on the SIG branch
+alone. `sig-repo` then failed on that branch, as pushing the merge
+request over it would have needed a force push. A SIG branch is now
+the merge request's head plus any SIG-only commits on top: `sig-repo`
+leaves such a branch as it is and lists what it carries. When the
+branch has commits the merge request's head lacks, SIG-only ones or
+the merge request's own before it was rewritten, it pushes nothing,
+since that takes a force push, says how to do it by hand for either
+case, and fails once the rest of the run is done.
+
+`promote`'s comment on the tracking issue now says what the build was
+made from, read from the build's source in CBS: the merge request's
+head, the head with each SIG-only commit listed, or a commit that does
+not contain the merge request's current head. What ships beyond the
+merge request is then on record where the update is tracked.
+
+sandogasa-cbs gains `packages::build_commit` and `source_commit`, the
+commit a CBS build was made from, and `tracking::Provenance` and
+`tracked_mr_url`.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own
