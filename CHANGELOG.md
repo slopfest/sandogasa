@@ -114,6 +114,27 @@ every page: GitLab answers 20 issues at a time, so cpu-sig-tracker's
 `list-issues`, `ping`, `status`, `timeline` and `untag` missed a
 project's issues past the twentieth. Resolves #143.
 
+### cbspkg promote tells the Proposed Update's tracking issue
+
+A Proposed Update's tracking issue said nothing about its build once
+the merge request was carried: whoever followed it had to look in CBS
+to learn that the fix had reached `-testing` or been released.
+`cbspkg promote` now finds the update's open tracking issue, by the
+branch's release label and RHEL issue, shows the comment it will post
+with the promotion it confirms, and once the build is tagged, posts it,
+sets the scoped label `stage::testing` or `stage::release` where the
+SIG's group has it, and moves a `To do` issue to `In progress`. A
+hidden marker in each comment keeps a rerun from saying it twice, and a
+build that moved is told of even when a later `cbs` command fails,
+since a rerun would find nothing left to promote. Without a GitLab
+token, the confirmation says the issue will not be told. Builds,
+untags and Hyperscale's issues are to follow (#144).
+
+sandogasa-cbs gains the `tracking` module (matching a branch to its
+issue, the comment and its marker, the stage labels), and
+sandogasa-gitlab `Client::label_names`, a project's labels with its
+groups'. Refs #144.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

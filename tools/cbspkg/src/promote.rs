@@ -179,12 +179,31 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     if steps.is_empty() {
         return Ok(());
     }
-
+    // The cheap checks first: the CBS login and a terminal to confirm
+    // at, before any GitLab request.
     if !args.dry_run {
         sandogasa_cbs::login::ensure_login("cbspkg", true, args.explain)?;
         if !std::io::stdin().is_terminal() {
             return Err("promoting in CBS is confirmed at a terminal; run it in one".into());
         }
+    }
+    // The tracking issue is read next, so what it will be told is shown
+    // with the promotion and confirmed with it.
+    let base = crate::config::gitlab_base();
+    let token = crate::config::gitlab_token();
+    if checkout.sig == sandogasa_cbs::Sig::ProposedUpdates {
+        ui.step("Find the tracking issue to tell, through GitLab's API");
+    }
+    let notices = crate::notify::plan(
+        &base,
+        token.as_deref(),
+        checkout.sig,
+        package,
+        &checkout.branch,
+        &steps,
+    );
+
+    if !args.dry_run {
         // Set apart from the login check and the steps above.
         println!();
         for (nvr, to, argvs) in &steps {
@@ -193,12 +212,41 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
                 println!("  {}", sandogasa_cli::explain::command_line(argv));
             }
         }
+        for notice in &notices {
+            print!("{}", crate::notify::describe(notice, token.is_some()));
+        }
         if !sandogasa_cli::confirm("Promote?", true)? {
             println!("Nothing changed.");
             return Ok(());
         }
     }
-    for (nvr, to, argvs) in &steps {
+    // What got where, so a failure partway still tells the issue of the
+    // builds that moved: a rerun would find them promoted, with nothing
+    // left to do and so nothing to tell.
+    let mut done: Vec<(String, Stage)> = Vec::new();
+    let moved = promote_all(&ui, &repo, &steps, args.dry_run, &mut done);
+    if args.dry_run {
+        // After the steps, where a real run tells the issue.
+        for notice in &notices {
+            ui.step("Tell the tracking issue, through GitLab's API");
+            print!("{}", crate::notify::describe(notice, token.is_some()));
+        }
+    } else {
+        crate::notify::post(&base, token.as_deref(), &notices, &done);
+    }
+    moved
+}
+
+/// Run each step's `cbs` commands, recording in `done` each build that
+/// got through all of its own.
+fn promote_all(
+    ui: &Ui,
+    repo: &std::path::Path,
+    steps: &[(String, Stage, Vec<Vec<String>>)],
+    dry_run: bool,
+    done: &mut Vec<(String, Stage)>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for (nvr, to, argvs) in steps {
         for argv in argvs {
             let what = if argv[1] == "untag-build" {
                 format!("Untag {nvr} from {}, as it is released", argv[2])
@@ -206,9 +254,10 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
                 format!("Tag {nvr} into {}", argv[2])
             };
             ui.step(&what);
-            ui.run_required(argv, &repo)?;
+            ui.run_required(argv, repo)?;
         }
-        if !args.dry_run {
+        done.push((nvr.clone(), *to));
+        if !dry_run {
             match to {
                 Stage::Testing => {
                     println!("\n{nvr} is in -testing. Once it has been tested: cbspkg promote")

@@ -9,6 +9,7 @@ mod build;
 mod config;
 mod configure;
 mod local;
+mod notify;
 mod promote;
 mod sig_repo;
 #[cfg(test)]

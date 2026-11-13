@@ -200,10 +200,25 @@ Promoting to `-release` also untags the build from `-testing`, so a
 released build is not left in testing as well. A build released before
 that, and still in `-testing`, is promoted again to finish the untag.
 
+For a Proposed Update, the build's tracking issue is told: the open
+cpu-sig-tracker issue in the SIG's repo carrying the branch's release
+label (`c10s`) and whose `JIRA` line names its RHEL issue
+(`RHEL-306261`), as the branch `c10s-proposed-RHEL-306261` does. It
+gets a comment saying where the build went, the scoped label
+`stage::testing` or `stage::release` when the project or the SIG's
+group has that label, and the status `In progress` if it was still
+`To do`. Each comment ends in a hidden marker, so a promotion the issue
+was told of already is not told again, and a build that reached its
+stage is told of even when a later `cbs` command fails. Posting needs
+the GitLab token from `cbspkg config` or `GITLAB_TOKEN`, and the
+confirmation says when there is none; a failure posting is a warning,
+as the build has moved by then.
+
 Each `cbs tag-build` and `cbs untag-build` is shown in the confirmation,
-which is asked at a terminal after the CBS login is checked, and
-refused without one. `--explain` and `--dry-run` show each step's
-command.
+with the comment the tracking issue will get, which is asked at a
+terminal after the CBS login is checked, and refused without one.
+`--explain` and `--dry-run` show each step's command, and `--dry-run`
+the comment.
 
 ### `sig-repo`
 

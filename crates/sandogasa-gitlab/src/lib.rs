@@ -833,6 +833,22 @@ impl Client {
         Ok(blocking_json_ok(resp, &format!("GitLab POST {url}"))?)
     }
 
+    /// The names of the labels the project's issues can take: its own
+    /// and its groups', every page of them.
+    pub fn label_names(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let url = format!("{}/labels", self.project_url());
+        let labels: Vec<serde_json::Value> = get_all_pages(
+            &self.http,
+            &url,
+            &[("include_ancestor_groups", "true")],
+            &[],
+        )?;
+        Ok(labels
+            .iter()
+            .filter_map(|l| l["name"].as_str().map(str::to_string))
+            .collect())
+    }
+
     /// List issues matching a label and optional state, every page of
     /// them: GitLab answers 20 at a time unless asked for more.
     pub fn list_issues(
@@ -2228,6 +2244,27 @@ mod tests {
         list.assert();
         post.assert();
         issue_list.assert();
+    }
+
+    #[test]
+    fn label_names_include_the_groups() {
+        let mut server = mockito::Server::new();
+        let read = server
+            .mock(
+                "GET",
+                "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fgit/labels",
+            )
+            .match_query(mockito::Matcher::UrlEncoded(
+                "include_ancestor_groups".into(),
+                "true".into(),
+            ))
+            .with_status(200)
+            .with_body(r#"[{"id": 1, "name": "c10s"}, {"id": 2, "name": "stage::testing"}]"#)
+            .expect(1)
+            .create();
+        let sig = Client::new(&server.url(), "CentOS/proposed_updates/rpms/git", "t").unwrap();
+        assert_eq!(sig.label_names().unwrap(), ["c10s", "stage::testing"]);
+        read.assert();
     }
 
     #[test]
