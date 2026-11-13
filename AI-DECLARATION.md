@@ -16,3 +16,4 @@ This format is based on [AI-DECLARATION.md](https://ai-declaration.md/en/0.1.2).
 - Claude Code Opus and Fable models were used throughout
 - Design mostly human-driven
 - All features underwent manual testing, no commits without approval
+- The logo (`assets/icon.png`) was generated with Meta AI

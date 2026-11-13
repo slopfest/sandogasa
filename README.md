@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.svg" width="128" height="128" alt="sandogasa logo">
+  <img src="assets/icon.png" width="128" height="128" alt="sandogasa logo">
 </p>
 
 # sandogasa
