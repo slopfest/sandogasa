@@ -99,6 +99,9 @@ pub struct Row {
     /// Currently-tagged NVR in the proposed_updates Koji tag.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proposed_updates_nvr: Option<String>,
+    /// Currently-tagged NVR in the proposed_updates `-testing` tag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_updates_testing_nvr: Option<String>,
     /// Current CentOS Stream NVR for the same release.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_nvr: Option<String>,
@@ -217,17 +220,12 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
         }
         let pu_nvrs = fetch_proposed_updates_nvrs(release, args.verbose);
 
-        // Testing-tag NVRs are only needed for the work-item
-        // status reconciliation in --refresh, so skip the extra
-        // Koji call otherwise.
-        let testing_nvrs = if args.refresh {
-            if args.verbose {
-                eprintln!("[cpu-sig-tracker] fetching testing tag for {release}");
-            }
-            fetch_proposed_updates_testing_nvrs(release, args.verbose)
-        } else {
-            HashMap::new()
-        };
+        // A build only in -testing is the SIG's build as much as one
+        // in -release: it is in the testing repository.
+        if args.verbose {
+            eprintln!("[cpu-sig-tracker] fetching testing tag for {release}");
+        }
+        let testing_nvrs = fetch_proposed_updates_testing_nvrs(release, args.verbose);
 
         if args.verbose {
             eprintln!("[cpu-sig-tracker] fetching Stream NVRs for {release}");
@@ -266,13 +264,26 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             let jira_resolved = matches!(outcome, Outcome::Fixed | Outcome::Declined);
 
             let pu_nvr = pu_nvrs.get(package).cloned();
+            let testing_nvr = testing_nvrs.get(package).cloned();
+            // The build to judge: the one in -testing when there is no
+            // -release one or it is newer, as a rebuild waiting for
+            // testers is; else the released one.
+            let testing_shown = testing_is_current(pu_nvr.as_deref(), testing_nvr.as_deref());
+            let sig_nvr = if testing_shown {
+                testing_nvr.clone()
+            } else {
+                pu_nvr.clone()
+            };
+            // The build the issue's start date is taken from: the
+            // released one, else the one in testing.
+            let dated_nvr = crate::builds::sig_build(pu_nvr.as_deref(), testing_nvr.as_deref());
             let stream_nvr = stream_nvrs.get(package).cloned();
 
             let suggestion = if issue.state == "closed" {
                 // Closed issue with a lingering pu build: an untag once
                 // RHEL has the fix, a question otherwise (the blktrace
                 // issues were closed on an inactivity "Done").
-                match (pu_nvr.is_some(), unsettled_suggestion(outcome)) {
+                match (sig_nvr.is_some(), unsettled_suggestion(outcome)) {
                     (false, _) => "—",
                     (true, Some(s)) if !jira_keys.is_empty() => s,
                     (true, _) => "untag-candidate",
@@ -280,11 +291,14 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             } else {
                 match unsettled_suggestion(outcome) {
                     Some(s) if !jira_keys.is_empty() => s,
-                    _ => suggest_next_action(
-                        jira_keys.first().map(String::as_str),
-                        outcome == Outcome::Fixed,
-                        pu_nvr.as_deref(),
-                        stream_nvr.as_deref(),
+                    _ => in_testing(
+                        suggest_next_action(
+                            jira_keys.first().map(String::as_str),
+                            outcome == Outcome::Fixed,
+                            sig_nvr.as_deref(),
+                            stream_nvr.as_deref(),
+                        ),
+                        testing_shown,
                     ),
                 }
             };
@@ -292,12 +306,12 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             // it (crate::landed): stock's patches outrank Jira either
             // way (#89). Asked while the SIG still ships a build, and on
             // a refresh, for the day it landed (#92).
-            let landed = (pu_nvr.is_some() || args.refresh).then(|| {
+            let landed = (sig_nvr.is_some() || args.refresh).then(|| {
                 crate::landed::landed(
                     &issue,
                     package,
                     release,
-                    pu_nvr.as_deref(),
+                    sig_nvr.as_deref(),
                     stream_nvr.as_deref(),
                     crate::landed::JiraFacts {
                         fixed: (outcome == Outcome::Fixed).then_some("every RHEL issue is fixed"),
@@ -306,7 +320,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     args.verbose,
                 )
             });
-            let shipped = landed.as_ref().filter(|_| pu_nvr.is_some());
+            let shipped = landed.as_ref().filter(|_| sig_nvr.is_some());
             let suggestion = shipped.and_then(landed_suggestion).unwrap_or(suggestion);
             let landed_note = shipped.and_then(|l| l.by.clone().or(l.doubt.clone()));
             // The day it was fixed: what the issue records, else what the
@@ -370,8 +384,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         maybe_refresh_dates(
                             &project,
                             &issue,
-                            package,
-                            release,
+                            dated_nvr.as_deref(),
                             fix_date,
                             args.verbose,
                         );
@@ -449,7 +462,13 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         has_build,
                         args.verbose,
                     );
-                    maybe_refresh_dates(&project, &issue, package, release, fix_date, args.verbose);
+                    maybe_refresh_dates(
+                        &project,
+                        &issue,
+                        dated_nvr.as_deref(),
+                        fix_date,
+                        args.verbose,
+                    );
                 } else if !drift_reasons.is_empty() {
                     eprintln!(
                         "skipped {}: {}, and no MR URL found",
@@ -482,6 +501,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                 jira,
                 jira_resolved,
                 proposed_updates_nvr: pu_nvr,
+                proposed_updates_testing_nvr: testing_nvr,
                 stream_nvr,
                 suggestion,
                 landed: landed_note,
@@ -879,12 +899,12 @@ fn maybe_refresh_work_item_status(
 fn maybe_refresh_dates(
     project_path: &str,
     issue: &gitlab::Issue,
-    package: &str,
-    release: &str,
+    build: Option<&str>,
     fix_date: Option<chrono::NaiveDate>,
     verbose: bool,
 ) {
-    let desired_start = crate::file_issue::find_build_start_date(package, release, verbose)
+    let desired_start = build
+        .and_then(|nvr| crate::file_issue::build_start_date(nvr, verbose))
         .or_else(|| {
             issue
                 .created_at
@@ -1353,6 +1373,17 @@ pub(crate) fn fetch_stream_nvrs(
     }
 }
 
+/// `suggestion` for a build that is only in `-testing` (`testing_only`):
+/// "in-testing" where a released one would be "in-progress", since what
+/// it waits for is testers and a promotion, not only the merge request.
+fn in_testing(suggestion: &'static str, testing_only: bool) -> &'static str {
+    if testing_only && suggestion == "in-progress" {
+        "in-testing"
+    } else {
+        suggestion
+    }
+}
+
 fn suggest_next_action(
     jira_key: Option<&str>,
     jira_resolved: bool,
@@ -1362,7 +1393,7 @@ fn suggest_next_action(
     if jira_key.is_none() {
         return "no-jira";
     }
-    // Package has no build tagged into proposed_updates -release
+    // Package has no build in proposed_updates -release or -testing
     // — either it was already untagged (retire the issue) or it
     // hasn't been tagged yet (MR in flight, build pending).
     if pu_nvr.is_none() {
@@ -1424,6 +1455,35 @@ pub(crate) fn vr_of_nvr(nvr: &str) -> Option<String> {
     Some(format!("{v}-{r}"))
 }
 
+/// What the table shows for a value it does not have.
+const NONE_SHOWN: &str = "—";
+
+/// Whether the SIG's `-testing` build is the one to show and judge:
+/// there is no `-release` one, or it is newer, as a rebuild waiting for
+/// testers is.
+fn testing_is_current(released: Option<&str>, testing: Option<&str>) -> bool {
+    match (released, testing) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(_), Some(_)) => stream_newer_than_proposed(released, testing),
+    }
+}
+
+/// The CURRENT cell: the version-release of the SIG's build, the one
+/// in `-testing` marked so ([`testing_is_current`]).
+fn current_vr(r: &Row) -> String {
+    let released = r.proposed_updates_nvr.as_deref();
+    let testing = r.proposed_updates_testing_nvr.as_deref();
+    if testing_is_current(released, testing) {
+        testing
+            .and_then(vr_of_nvr)
+            .map(|vr| format!("{vr} (testing)"))
+    } else {
+        released.and_then(vr_of_nvr)
+    }
+    .unwrap_or_else(|| NONE_SHOWN.to_string())
+}
+
 fn print_human(rows: &[Row]) {
     const H_REL: &str = "RELEASE";
     const H_PKG: &str = "PACKAGE";
@@ -1433,7 +1493,7 @@ fn print_human(rows: &[Row]) {
     const H_STREAM: &str = "STREAM";
     const H_SUG: &str = "SUGGESTION";
     const H_ISSUE: &str = "ISSUE";
-    const UNKNOWN: &str = "—";
+    const UNKNOWN: &str = NONE_SHOWN;
 
     let rel_width = col_width(H_REL, rows.iter().map(|r| r.release.as_str()));
     let pkg_width = col_width(H_PKG, rows.iter().map(|r| r.package.as_str()));
@@ -1454,15 +1514,7 @@ fn print_human(rows: &[Row]) {
     let jira_width = col_width(H_JIRA, keys.iter().map(|s| s.as_str()));
     let states: Vec<String> = rows.iter().map(format_jira_state).collect();
     let state_width = col_width(H_STATE, states.iter().map(|s| s.as_str()));
-    let cur_vrs: Vec<String> = rows
-        .iter()
-        .map(|r| {
-            r.proposed_updates_nvr
-                .as_deref()
-                .and_then(vr_of_nvr)
-                .unwrap_or_else(|| UNKNOWN.to_string())
-        })
-        .collect();
+    let cur_vrs: Vec<String> = rows.iter().map(current_vr).collect();
     let cur_width = col_width(H_CUR, cur_vrs.iter().map(|s| s.as_str()));
     let stream_vrs: Vec<String> = rows
         .iter()
@@ -2180,6 +2232,52 @@ mod tests {
     }
 
     #[test]
+    fn a_build_only_in_testing_is_current_and_in_testing() {
+        let mut r = Row {
+            release: "c10s".into(),
+            package: "git".into(),
+            issue_state: "opened".into(),
+            issue_url: "u".into(),
+            mr_url: None,
+            jira: vec![],
+            jira_resolved: false,
+            proposed_updates_nvr: None,
+            proposed_updates_testing_nvr: Some("git-2.52.1-1~proposed.el10".into()),
+            stream_nvr: None,
+            suggestion: "in-testing",
+            landed: None,
+        };
+        assert_eq!(current_vr(&r), "2.52.1-1~proposed.el10 (testing)");
+        // A rebuild in testing, newer than the released build, is the
+        // one shown; an older one in testing is not.
+        r.proposed_updates_nvr = Some("git-2.52.0-1~proposed.el10".into());
+        assert_eq!(current_vr(&r), "2.52.1-1~proposed.el10 (testing)");
+        r.proposed_updates_nvr = Some("git-2.52.1-2~proposed.el10".into());
+        assert_eq!(current_vr(&r), "2.52.1-2~proposed.el10");
+        r.proposed_updates_nvr = Some("git-2.52.1-1~proposed.el10".into());
+        assert_eq!(current_vr(&r), "2.52.1-1~proposed.el10");
+        assert!(!testing_is_current(Some("a-1-1"), None));
+        r.proposed_updates_nvr = None;
+        r.proposed_updates_testing_nvr = None;
+        assert_eq!(current_vr(&r), NONE_SHOWN);
+
+        // A testing-only build waits for testers, not only the MR; a
+        // fixed or outdated one is untagged or rebased as a released
+        // one would be.
+        let git = Some("git-2.52.1-1~proposed.el10");
+        let next = |resolved, stream| {
+            in_testing(
+                suggest_next_action(Some("RHEL-1"), resolved, git, stream),
+                true,
+            )
+        };
+        assert_eq!(next(false, None), "in-testing");
+        assert_eq!(next(true, None), "untag-candidate");
+        assert_eq!(next(false, Some("git-2.53.0-1.el10")), "rebase");
+        assert_eq!(in_testing("in-progress", false), "in-progress");
+    }
+
+    #[test]
     fn format_jira_state_with_resolution() {
         let r = Row {
             release: "c10s".into(),
@@ -2196,6 +2294,7 @@ mod tests {
             }],
             jira_resolved: true,
             proposed_updates_nvr: None,
+            proposed_updates_testing_nvr: None,
             stream_nvr: None,
             suggestion: "untag-candidate",
             landed: None,
@@ -2220,6 +2319,7 @@ mod tests {
             }],
             jira_resolved: false,
             proposed_updates_nvr: None,
+            proposed_updates_testing_nvr: None,
             stream_nvr: None,
             suggestion: "in-progress",
             landed: None,
@@ -2246,6 +2346,7 @@ mod tests {
             }],
             jira_resolved: true,
             proposed_updates_nvr: None,
+            proposed_updates_testing_nvr: None,
             stream_nvr: None,
             suggestion: "—",
             landed: None,
@@ -2264,6 +2365,7 @@ mod tests {
             jira: vec![],
             jira_resolved: false,
             proposed_updates_nvr: None,
+            proposed_updates_testing_nvr: None,
             stream_nvr: None,
             suggestion: "no-jira",
             landed: None,

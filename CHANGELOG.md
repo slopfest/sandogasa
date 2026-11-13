@@ -274,6 +274,34 @@ site listed them in the order its RHEL issue named them
 `status --refresh` and `sync-updates` now sort them by year, then by
 number; refresh also sorts the CVE lines an issue already has.
 
+### cpu-sig-tracker status sees builds in -testing, and dates builds again
+
+`status` showed git's 2.52.1 builds, both in the SIG's `-testing` tag,
+with no current build (`—`) and the suggestion `not-yet-tagged`: it
+read only the `-release` tag, and a build only in testing looked like
+none at all. It now takes the `-testing` build when there is no
+`-release` one, or when it is newer, as a rebuild waiting for testers
+is. It shows that build as `<version-release> (testing)`, suggests
+`in-testing` where a released build would be `in-progress`, and checks
+whether stock carries its change, as for a released one (so rsync's
+testing builds now say `not-in-stock`). `--json` gains
+`proposed_updates_testing_nvr`.
+
+`status --refresh` and `file-issue` also set a tracking issue's start
+date to the day they ran, not the day its build was made: the koji
+client in use no longer prints the `Creation time:` line of
+`koji buildinfo` that the date was read from, and the fallback was
+today. The date is now read from `koji call getBuild`'s JSON, which
+does not change with the client's text, and is taken from the build
+`status` found: refresh no longer lists both tags again for each issue,
+and no longer takes the first build of the package in a tag, which
+could be an older one. The day is the build's in UTC; a date taken
+from the old text, in the client's local time, may move by one day at
+the next refresh. fedora-cve-triage read a
+build's date the same way, for the day a fix first reached Fedora
+(a snapshot bundled before it cannot have the fix), and is fixed with
+it. sandogasa-koji gains `parse_build_creation_date`.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

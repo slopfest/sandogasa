@@ -708,36 +708,52 @@ pub fn list_tags(pattern: &str, profile: Option<&str>) -> Result<Vec<String>, St
         .collect())
 }
 
-/// Parse the build's creation date from `koji buildinfo`.
-///
-/// Looks for a `Creation time: YYYY-MM-DD HH:MM:SS` line and
-/// returns the date portion. Returns `Ok(None)` if the line
-/// isn't present or can't be parsed — callers should treat
-/// that as "unknown date" rather than an error.
+/// The day `nvr` was built (its creation time, in UTC), or `None` for
+/// a build Koji does not have or gives no time for. Wraps
+/// `koji call --json-output getBuild <nvr>`: `koji buildinfo`'s text
+/// changes between koji releases, and the one in use no longer prints
+/// a `Creation time:` line.
 pub fn build_creation_date(
     nvr: &str,
     profile: Option<&str>,
 ) -> Result<Option<chrono::NaiveDate>, String> {
-    let stdout = run_koji(profile, &["buildinfo", "--", nvr])?;
-    for line in stdout.lines() {
-        if let Some(rest) = line.strip_prefix("Creation time:") {
-            let value = rest.trim();
-            // Parse `YYYY-MM-DD HH:MM:SS` — take the date part.
-            let date_part = value.split_whitespace().next().unwrap_or("");
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d") {
-                return Ok(Some(date));
-            }
-        }
+    parse_build_creation_date(&get_build(nvr, profile)?)
+}
+
+/// The day in `koji call --json-output getBuild`'s answer: from
+/// `creation_ts`, else `creation_time`'s date. `None` for `null` (no
+/// such build) or a build without either.
+pub fn parse_build_creation_date(stdout: &str) -> Result<Option<chrono::NaiveDate>, String> {
+    let answer: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|e| format!("koji getBuild answered something that is not JSON: {e}"))?;
+    if answer.is_null() {
+        return Ok(None);
     }
-    Ok(None)
+    if let Some(ts) = answer
+        .get("creation_ts")
+        .and_then(serde_json::Value::as_f64)
+        && let Some(at) = chrono::DateTime::from_timestamp(ts as i64, 0)
+    {
+        return Ok(Some(at.date_naive()));
+    }
+    Ok(answer
+        .get("creation_time")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|t| t.get(..10))
+        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()))
 }
 
 /// A build's state as Koji numbers it (0 building, 1 complete, 2
 /// deleted, 3 failed, 4 canceled), or `None` for a build Koji does not
 /// have. Wraps `koji call --json-output getBuild <nvr>`.
 pub fn build_state(nvr: &str, profile: Option<&str>) -> Result<Option<i64>, String> {
-    let stdout = run_koji(profile, &["call", "--json-output", "getBuild", "--", nvr])?;
-    parse_build_state(&stdout)
+    parse_build_state(&get_build(nvr, profile)?)
+}
+
+/// `koji call --json-output getBuild <nvr>`'s answer, for the parsers
+/// of its fields.
+fn get_build(nvr: &str, profile: Option<&str>) -> Result<String, String> {
+    run_koji(profile, &["call", "--json-output", "getBuild", "--", nvr])
 }
 
 /// The state in `koji call --json-output getBuild`'s answer: `null`
@@ -1214,5 +1230,30 @@ Thu May  7 11:33:13 2026 PackageKit-1.2.8-9.el10 owner changed to ckelley
         );
         assert!(parse_build_state(r#"{"nvr": "x-1-1"}"#).is_err());
         assert!(parse_build_state("GenericError").is_err());
+    }
+
+    #[test]
+    fn a_builds_creation_day_is_read_from_get_build() {
+        let day = |y, m, d| Some(chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap());
+        // As CBS answers for git-2.52.1-1~proposed.el10.
+        assert_eq!(
+            parse_build_creation_date(
+                r#"{"creation_time": "2026-11-13 11:26:39.765156+00:00",
+                    "creation_ts": 1794569199.765156}"#
+            ),
+            Ok(day(2026, 11, 13))
+        );
+        // Late in the day UTC is still that day.
+        assert_eq!(
+            parse_build_creation_date(r#"{"creation_ts": 1794614399.5}"#),
+            Ok(day(2026, 11, 13))
+        );
+        assert_eq!(
+            parse_build_creation_date(r#"{"creation_time": "2026-10-01 08:00:00+00:00"}"#),
+            Ok(day(2026, 10, 1))
+        );
+        assert_eq!(parse_build_creation_date("null"), Ok(None));
+        assert_eq!(parse_build_creation_date(r#"{"nvr": "x-1-1"}"#), Ok(None));
+        assert!(parse_build_creation_date("GenericError").is_err());
     }
 }

@@ -376,7 +376,10 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     // retrospective the SIG cares about). Goes via the GraphQL
     // workItemUpdate mutation; REST PUT /issues ignores
     // start_date on work items.
-    if let Some(date) = find_build_start_date(package, &release, args.verbose) {
+    if let Some(date) = sig_build
+        .as_deref()
+        .and_then(|nvr| build_start_date(nvr, args.verbose))
+    {
         let formatted = date.format("%Y-%m-%d").to_string();
         if let Err(e) = tracking_client.set_work_item_dates(issue.iid, Some(&formatted), None) {
             eprintln!("warning: could not set start_date: {e}");
@@ -391,57 +394,42 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-/// Look up the package's latest build across the release's
-/// `-release` and `-testing` Koji tags and return its creation
-/// date. `-release` wins when both are populated; `-testing`
-/// is the fallback for packages whose first build hasn't been
-/// promoted yet.
+/// The day the SIG's build of `package` for `release` was made: its
+/// newest build in `-release`, else in `-testing`, read as `status`
+/// reads them. For a caller that has not read the tags already.
 pub(crate) fn find_build_start_date(
     package: &str,
     release: &str,
     verbose: bool,
 ) -> Option<chrono::NaiveDate> {
-    for tag_fn in [
-        crate::dump_inventory::proposed_updates_tag as fn(&str) -> Result<String, String>,
-        crate::dump_inventory::proposed_updates_testing_tag as fn(&str) -> Result<String, String>,
-    ] {
-        let tag = match tag_fn(release) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        if verbose {
-            eprintln!("[cpu-sig-tracker] checking {tag} for {package}");
+    let nvr = crate::builds::sig_build(
+        crate::status::fetch_proposed_updates_nvrs(release, verbose)
+            .get(package)
+            .map(String::as_str),
+        crate::status::fetch_proposed_updates_testing_nvrs(release, verbose)
+            .get(package)
+            .map(String::as_str),
+    )?;
+    build_start_date(&nvr, verbose)
+}
+
+/// The day `nvr` was made, from Koji, as a tracking issue's start date.
+pub(crate) fn build_start_date(nvr: &str, verbose: bool) -> Option<chrono::NaiveDate> {
+    match sandogasa_koji::build_creation_date(nvr, Some(KOJI_PROFILE)) {
+        Ok(Some(date)) => Some(date),
+        Ok(None) => {
+            if verbose {
+                eprintln!("[cpu-sig-tracker] koji getBuild {nvr} gave no creation time");
+            }
+            None
         }
-        let nvrs = match sandogasa_koji::list_tagged_nvrs(&tag, Some(KOJI_PROFILE)) {
-            Ok(v) => v,
-            Err(e) => {
-                if verbose {
-                    eprintln!("[cpu-sig-tracker] koji list-tagged {tag} failed: {e}");
-                }
-                continue;
+        Err(e) => {
+            if verbose {
+                eprintln!("[cpu-sig-tracker] koji getBuild {nvr} failed: {e}");
             }
-        };
-        let Some(nvr) = nvrs
-            .iter()
-            .find(|n| sandogasa_koji::parse_nvr_name(n) == Some(package))
-        else {
-            continue;
-        };
-        match sandogasa_koji::build_creation_date(nvr, Some(KOJI_PROFILE)) {
-            Ok(Some(date)) => return Some(date),
-            Ok(None) => {
-                if verbose {
-                    eprintln!("[cpu-sig-tracker] koji buildinfo {nvr} produced no creation time",);
-                }
-            }
-            Err(e) => {
-                if verbose {
-                    eprintln!("[cpu-sig-tracker] koji buildinfo {nvr} failed: {e}");
-                }
-            }
+            None
         }
     }
-    None
 }
 
 const KOJI_PROFILE: &str = "cbs";
@@ -1198,16 +1186,19 @@ mod tests {
             dir.path(),
             "koji",
             &[
-                // Koji list for start_date discovery — package
-                // is in -release, with a canned NVR.
+                // The SIG's builds: xz in -release.
                 (
-                    "list-tagged --quiet -- proposed_updates10s-packages-main-release",
-                    "xz-5.6.4-1~proposed.el10\n",
+                    "list-tagged --latest -- proposed_updates10s-packages-main-release",
+                    "Build  Tag  Built by\n-----  ---  --------\n\
+                     xz-5.6.4-1~proposed.el10  proposed_updates10s-packages-main-release  me\n",
                 ),
-                // buildinfo for the date.
+                // getBuild for the start date, both fields as CBS sends
+                // them: 2026-04-22 10:11:12.5 UTC.
                 (
-                    "buildinfo -- xz-5.6.4-1~proposed.el10",
-                    "BUILD: xz-5.6.4-1~proposed.el10\nCreation time: 2026-04-22 10:11:12\n",
+                    "call --json-output getBuild -- xz-5.6.4-1~proposed.el10",
+                    r#"{"nvr": "xz-5.6.4-1~proposed.el10",
+                        "creation_time": "2026-04-22 10:11:12.500000+00:00",
+                        "creation_ts": 1776852672.5}"#,
                 ),
             ],
         );
@@ -1239,6 +1230,19 @@ mod tests {
             verbose: false,
         };
         run_inner(&args).expect("file-issue succeeds");
+        // The start date is the build's creation day, from getBuild.
+        let requests = runtime.block_on(server.received_requests()).unwrap();
+        let start_dates: Vec<String> = requests
+            .iter()
+            .filter_map(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
+            .filter_map(|b| b.get("query")?.as_str().map(str::to_string))
+            .filter(|q| q.contains("startDate:"))
+            .collect();
+        assert_eq!(start_dates.len(), 1, "{start_dates:?}");
+        assert!(
+            start_dates[0].contains(r#"startDate: "2026-04-22""#),
+            "{start_dates:?}"
+        );
     }
 
     /// rsync's first run: no SIG repo yet, so nothing is asked of Jira

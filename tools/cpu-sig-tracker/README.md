@@ -468,11 +468,15 @@ cpu-sig-tracker status -i inventory.toml \
 
 Per-package report of every active tracking issue in the inventory's
 releases: JIRA keys + statuses (every issue the update resolves, one
-JIRA line each in the tracking issue), currently-tagged NVR, current Stream
-NVR, and a suggested next action (`in-progress`, `rebase`,
-`untag-candidate`, `retire-issue`, `not-yet-tagged`, `awaiting-stock`,
-`not-in-stock`, `jira-declined`, `jira-unverified`, `no-jira`, or `—`
-once closed with no build tagged).
+JIRA line each in the tracking issue), the SIG's build (its `-release`
+one, or its `-testing` one, marked `(testing)`, when there is no
+`-release` one or it is newer; `--json` gives both,
+`proposed_updates_nvr` and `proposed_updates_testing_nvr`), current
+Stream NVR, and a suggested next action (`in-progress`, `in-testing`
+for a build only in `-testing`, `rebase`, `untag-candidate`,
+`retire-issue`, `not-yet-tagged`, `awaiting-stock`, `not-in-stock`,
+`jira-declined`, `jira-unverified`, `no-jira`, or `—` once closed with
+no build tagged).
 
 While the SIG still ships a build, whether the change is in stock is
 judged as `untag` and `retire` judge it, from stock's patches first:
