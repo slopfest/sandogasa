@@ -48,7 +48,7 @@ findings: ## Render FINDINGS to HTML and PDF (SRC=... for another file)
 	scripts/render-findings.sh $(SRC)
 
 .PHONY: cov
-cov: ## Report test coverage, failing under 82.5% lines
+cov: ## Report test coverage, failing under 85% lines
 	$(CARGO) cov
 
 .PHONY: cov-crate
