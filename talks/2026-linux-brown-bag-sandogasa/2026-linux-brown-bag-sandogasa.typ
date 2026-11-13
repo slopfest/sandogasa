@@ -118,6 +118,9 @@ here; each has a README and a man page under `tools/<name>/` at
   - available while the merge request waits for Red Hat's maintainers
   - one branch per fix: `c10s-proposed-RHEL-303721`
 - Both build in CBS with the same tag scheme, so cbspkg serves both
+- Docs:
+  #link("https://sigs.centos.org/hyperscale/")[sigs.centos.org/hyperscale],
+  #link("https://sigs.centos.org/proposed_updates/")[sigs.centos.org/proposed_updates]
 
 = CentOS Proposed Updates
 
