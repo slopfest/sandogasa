@@ -136,7 +136,12 @@ severity (Red Hat's rating first, then NVD's and GitHub's), linking
 Red Hat's page for it, which lists the advisories that fix it, and
 NVD's. A change fixing a CVE is filed as `security` unless `--type`
 says otherwise; at a terminal, a `--type` that disagrees is confirmed,
-defaulting to `security`. The RHEL issues' Jira priority becomes a
+defaulting to `security`. Without a CVE, the type is asked at a
+terminal (`security`, `bugfix`, `enhancement`, `arch-enablement` or
+`undefined`, with no default), and `--type` is required without one.
+`undefined` is for an update that fits none, such as one naming an
+advisory it does not really fix; it is a label of its own, so
+`status --refresh` leaves the type alone. The RHEL issues' Jira priority becomes a
 `priority::` label (`priority::blocker`, `::critical`, `::major`,
 `::normal`, `::minor`; the most urgent of them). The issue is assigned
 to you (the GitLab token's user) with `--assign`; at a terminal you are

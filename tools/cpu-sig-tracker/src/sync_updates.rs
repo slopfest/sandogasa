@@ -26,6 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use crate::file_issue::TYPE_LABELS;
 use crate::gitlab;
 use crate::utils::{gitlab_base, jira_base};
 
@@ -34,9 +35,6 @@ const GROUP: &str = "CentOS/proposed_updates/rpms";
 
 /// Label the tool puts on the tracking issues it files.
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-
-/// The type labels a tracking issue can carry.
-const TYPE_LABELS: [&str; 4] = ["arch-enablement", "bugfix", "enhancement", "security"];
 
 /// Releases always given a section, with or without updates.
 const RELEASES: [&str; 2] = ["c10s", "c9s"];

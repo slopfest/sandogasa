@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-11-11 "sandogasa 0.28.1" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-11-13 "sandogasa 0.28.1" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates SIG package state across Koji, GitLab and JIRA
 .SH SYNOPSIS
@@ -78,7 +78,7 @@ Free\-form context note prepended to the issue body as a lead paragraph before t
 Override the release auto\-derived from the MR target branch (e.g. `c10s`)
 .TP
 \fB\-\-type\fR \fI<ISSUE_TYPE>\fR
-Apply one of the proposed_updates type labels: enhancement, bugfix, arch\-enablement, security
+The update\*(Aqs type label (default: security when it fixes a CVE; asked otherwise, and required without a terminal)
 .br
 
 .br
@@ -92,6 +92,8 @@ bugfix
 arch\-enablement
 .IP \(bu 2
 security
+.IP \(bu 2
+undefined
 .RE
 .SH WRITING
 .TP
@@ -164,6 +166,8 @@ bugfix
 arch\-enablement
 .IP \(bu 2
 security
+.IP \(bu 2
+undefined
 .RE
 .TP
 \fB\-\-upstream\fR \fI<URL>\fR

@@ -18,8 +18,13 @@ use crate::utils::{format_jira_lines, format_mr_line};
 /// `status` can identify them.
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
 
-/// Issue-type labels already defined in the proposed_updates
-/// GitLab group. Passed through `--type`.
+/// Issue-type labels defined in the proposed_updates GitLab group.
+/// Passed through `--type`. `Undefined` is for an update that fits
+/// none, as Bodhi's "unspecified": one naming an advisory it does not
+/// really fix, say, as when upstream only deprecated the unsafe code.
+/// It is a label of its own, so it is only ever chosen, and `status
+/// --refresh` does not take an issue without a type label for one
+/// that was never given a type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum IssueType {
     Enhancement,
@@ -27,7 +32,27 @@ pub enum IssueType {
     #[value(name = "arch-enablement")]
     ArchEnablement,
     Security,
+    Undefined,
 }
+
+/// Every type, in the order they are offered.
+const ISSUE_TYPES: [IssueType; 5] = [
+    IssueType::Security,
+    IssueType::Bugfix,
+    IssueType::Enhancement,
+    IssueType::ArchEnablement,
+    IssueType::Undefined,
+];
+
+/// The type labels, for the readers of an issue's type: `status
+/// --refresh` and `sync-updates`.
+pub const TYPE_LABELS: [&str; 5] = [
+    "arch-enablement",
+    "bugfix",
+    "enhancement",
+    "security",
+    "undefined",
+];
 
 impl IssueType {
     fn label(self) -> &'static str {
@@ -36,6 +61,7 @@ impl IssueType {
             IssueType::Bugfix => "bugfix",
             IssueType::ArchEnablement => "arch-enablement",
             IssueType::Security => "security",
+            IssueType::Undefined => "undefined",
         }
     }
 }
@@ -83,8 +109,8 @@ pub struct FileIssueArgs {
     #[arg(long, help_heading = "Issue")]
     pub release: Option<String>,
 
-    /// Apply one of the proposed_updates type labels:
-    /// enhancement, bugfix, arch-enablement, security.
+    /// The update's type label (default: security when it fixes a CVE;
+    /// asked otherwise, and required without a terminal)
     #[arg(long = "type", value_enum, help_heading = "Issue")]
     pub issue_type: Option<IssueType>,
 
@@ -253,7 +279,15 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         ),
         interactive,
     );
-    let issue_type = resolve_type(args.issue_type, &cves, interactive);
+    let issue_type = resolve_type(args.issue_type, &cves, interactive, &ask_type).or_else(|e| {
+        // A dry run shows the rest; the type is settled when filing.
+        if args.dry_run {
+            eprintln!("note: {e}");
+            Ok(None)
+        } else {
+            Err(e)
+        }
+    })?;
 
     let body = format_body(&BodyFields {
         release: &release,
@@ -539,16 +573,30 @@ fn fetch_jira_info(key: &str, verbose: bool) -> Option<JiraSeen> {
 /// evidence of `security`: with no `--type` it is used, and an explicit
 /// type that disagrees is confirmed at a terminal (`interactive`),
 /// defaulting to the evidence; without one the explicit type is kept
-/// and the disagreement reported (#98).
+/// and the disagreement reported (#98). With no CVE and no `--type`,
+/// the type is asked at a terminal (`ask`), and is an error without
+/// one: every update has a type, `undefined` included, chosen rather
+/// than left out. A dry run goes on without one.
 fn resolve_type(
     explicit: Option<IssueType>,
     cves: &[String],
     interactive: bool,
-) -> Option<IssueType> {
+    ask: &dyn Fn() -> Option<IssueType>,
+) -> Result<Option<IssueType>, String> {
     if cves.is_empty() {
-        return explicit;
+        return match explicit {
+            Some(t) => Ok(Some(t)),
+            None if interactive => ask()
+                .map(Some)
+                .ok_or_else(|| "no type chosen; pass --type".to_string()),
+            None => Err(format!(
+                "the change fixes no CVE that its merge request or RHEL issues name, so \
+                 its type is not known: pass --type ({})",
+                ISSUE_TYPES.map(IssueType::label).join(", ")
+            )),
+        };
     }
-    match explicit {
+    Ok(match explicit {
         None => {
             eprintln!("type: security, as the change fixes {}", cves.join(", "));
             Some(IssueType::Security)
@@ -573,7 +621,45 @@ fn resolve_type(
                 explicit
             }
         }
+    })
+}
+
+/// Ask for the type at the terminal, until one is picked; `None` at the
+/// end of input.
+fn ask_type() -> Option<IssueType> {
+    use std::io::Write;
+    let mut err = std::io::stderr();
+    let _ = writeln!(
+        err,
+        "The change fixes no CVE it names. What type of update is it?"
+    );
+    for (i, t) in ISSUE_TYPES.iter().enumerate() {
+        let _ = writeln!(err, "  {}) {}", i + 1, t.label());
     }
+    loop {
+        let _ = write!(err, "Type [1-{}]: ", ISSUE_TYPES.len());
+        let _ = err.flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        if let Some(t) = pick_type(&line) {
+            return Some(t);
+        }
+    }
+}
+
+/// The type an answer picks: its number in [`ISSUE_TYPES`] or its
+/// label. An empty answer picks none, so `undefined` is never a
+/// default.
+fn pick_type(answer: &str) -> Option<IssueType> {
+    let answer = answer.trim();
+    if let Ok(n) = answer.parse::<usize>() {
+        return n.checked_sub(1).and_then(|i| ISSUE_TYPES.get(i).copied());
+    }
+    ISSUE_TYPES
+        .into_iter()
+        .find(|t| t.label().eq_ignore_ascii_case(answer))
 }
 
 /// A build line's value: the flag's when given, else `derived` (what
@@ -1227,18 +1313,54 @@ mod tests {
     }
 
     #[test]
-    fn a_cve_makes_it_a_security_update_unless_a_type_was_given() {
-        let cves = vec!["CVE-2026-119741".to_string()];
-        assert_eq!(resolve_type(None, &cves, false), Some(IssueType::Security));
-        assert_eq!(resolve_type(None, &[], false), None);
-        // Without a terminal, an explicit type that disagrees is kept.
+    fn without_a_cve_the_type_is_given_or_asked_and_never_assumed() {
+        let never = || -> Option<IssueType> { panic!("not asked") };
         assert_eq!(
-            resolve_type(Some(IssueType::Bugfix), &cves, false),
-            Some(IssueType::Bugfix)
+            resolve_type(Some(IssueType::Undefined), &[], true, &never),
+            Ok(Some(IssueType::Undefined))
+        );
+        let err = resolve_type(None, &[], false, &never).unwrap_err();
+        assert!(
+            err.contains("pass --type (security, bugfix, enhancement, arch-enablement, undefined)"),
+            "{err}"
         );
         assert_eq!(
-            resolve_type(Some(IssueType::Security), &cves, false),
-            Some(IssueType::Security)
+            resolve_type(None, &[], true, &|| Some(IssueType::Bugfix)),
+            Ok(Some(IssueType::Bugfix))
+        );
+        assert!(resolve_type(None, &[], true, &|| None).is_err());
+        // Answers: a number or a label; nothing else, an empty one
+        // included, picks a type.
+        assert_eq!(pick_type("1\n"), Some(IssueType::Security));
+        assert_eq!(pick_type("5"), Some(IssueType::Undefined));
+        assert_eq!(pick_type(" Undefined \n"), Some(IssueType::Undefined));
+        assert_eq!(
+            pick_type("arch-enablement"),
+            Some(IssueType::ArchEnablement)
+        );
+        for none in ["", "\n", "0", "6", "unspecified"] {
+            assert_eq!(pick_type(none), None, "{none:?}");
+        }
+        assert_eq!(IssueType::Undefined.label(), "undefined");
+        assert!(ISSUE_TYPES.iter().all(|t| TYPE_LABELS.contains(&t.label())));
+    }
+
+    #[test]
+    fn a_cve_makes_it_a_security_update_unless_a_type_was_given() {
+        let cves = vec!["CVE-2026-119741".to_string()];
+        let never = || -> Option<IssueType> { panic!("not asked") };
+        assert_eq!(
+            resolve_type(None, &cves, false, &never),
+            Ok(Some(IssueType::Security))
+        );
+        // Without a terminal, an explicit type that disagrees is kept.
+        assert_eq!(
+            resolve_type(Some(IssueType::Bugfix), &cves, false, &never),
+            Ok(Some(IssueType::Bugfix))
+        );
+        assert_eq!(
+            resolve_type(Some(IssueType::Security), &cves, false, &never),
+            Ok(Some(IssueType::Security))
         );
         assert!(!wants_assignment(false, false));
         assert!(wants_assignment(true, false));

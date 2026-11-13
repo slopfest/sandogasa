@@ -242,6 +242,22 @@ that most need testers were easy to miss. `sync-updates` now writes an
 a "Released" section with one table per release, newest first, without
 the Status column.
 
+### cpu-sig-tracker file-issue asks for the update's type
+
+`file-issue` filed an update that fixes no CVE it could find without
+any type label unless `--type` was given, and the SIG site listed it
+with no type. Every update has a type: without a CVE, `file-issue` now
+asks for it at a terminal, offering each type with no default, and
+refuses without a terminal unless `--type` is given. A dry run notes
+the missing type and goes on.
+
+The new type `undefined`, like Bodhi's "unspecified", is for an update
+that fits none: one naming an advisory it does not really fix, as when
+upstream only deprecated the unsafe code. It is a label of its own, so
+it has to be chosen, and `status --refresh` does not add `security` to
+an issue that has it. `status` and `sync-updates` now take the type
+labels from one list, so both know it.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

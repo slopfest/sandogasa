@@ -973,7 +973,7 @@ fn label_changes(
         Some(p) => crate::triage::priority_change(labels, p),
         None => (Vec::new(), Vec::new()),
     };
-    let typed = ["security", "bugfix", "enhancement", "arch-enablement"]
+    let typed = crate::file_issue::TYPE_LABELS
         .iter()
         .any(|t| labels.iter().any(|l| l == t));
     if fixes_cve && !typed {
