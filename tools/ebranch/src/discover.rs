@@ -354,51 +354,51 @@ pub async fn candidates(
     }
 }
 
-/// The dist tag an NVR was built with, which says the release it is
-/// for: `el10_4` in `sandogasa-0.28.1-2.el10_4`, `el9.next` for EPEL
-/// Next, `fc46`. `None` when the release carries none.
-fn dist_tag(nvr: &str) -> Option<&str> {
-    let (_, release) = nvr.rsplit_once('-')?;
-    let mut found = None;
-    let mut at = 0;
-    for segment in release.split('.') {
-        let tagged = ["el", "fc"].iter().any(|p| {
-            segment
-                .strip_prefix(p)
-                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-        });
-        if tagged {
-            found = Some(at);
-        }
-        at += segment.len() + 1;
-    }
-    found.map(|start| &release[start..])
-}
-
-/// The bugs another live update for the same release as `ours` (the
-/// update's builds) carries, each with which one. That update closes
-/// them itself: Bodhi keeps an older update on its way to stable live
-/// alongside a newer one (sandogasa 0.28.0's went stable while 0.28.1's
-/// went to testing), so proposing them again only repeats them. An
-/// obsoleted or unpushed update closes nothing, and an update holding
-/// any of `ours` is this update itself, being revisited: neither counts.
+/// The bugs another live update for the same release carries, each
+/// with which one. That update closes them itself: Bodhi keeps an older
+/// update on its way to stable live alongside a newer one (sandogasa
+/// 0.28.0's went stable while 0.28.1's went to testing), so proposing
+/// them again only repeats them.
+///
+/// Live means pending, in testing, or still being put together in its
+/// side tag, and set to close its bugs: one that leaves them open, or a
+/// stable one whose bug is open nonetheless, closes nothing. The release
+/// is the one Bodhi gives the update, matched against `dist_branch` as
+/// check-update matches it; without one, the dist tag of its builds
+/// against `ours` (this update's builds). This update itself, being
+/// revisited, does not count: `own_alias`, or an update holding any of
+/// `ours`.
 pub fn carried_elsewhere(
     updates: &[sandogasa_bodhi::models::Update],
     ours: &[String],
+    own_alias: Option<&str>,
+    dist_branch: &str,
 ) -> BTreeMap<u64, String> {
-    let releases: Vec<&str> = ours.iter().filter_map(|n| dist_tag(n)).collect();
+    use crate::check_update::dist_tag;
+    let our_tags: Vec<&str> = ours.iter().filter_map(|n| dist_tag(n)).collect();
     let mut carried = BTreeMap::new();
     for update in updates {
-        if !matches!(update.status.as_str(), "pending" | "testing" | "stable") {
+        let live = matches!(
+            update.status.as_str(),
+            "pending" | "testing" | "side_tag_active"
+        );
+        if !live || !update.close_bugs || own_alias == Some(update.alias.as_str()) {
             continue;
         }
         if update.builds.iter().any(|b| ours.contains(&b.nvr)) {
             continue;
         }
-        let same_release = update
-            .builds
-            .iter()
-            .any(|b| dist_tag(&b.nvr).is_some_and(|d| releases.contains(&d)));
+        let same_release = match &update.release {
+            Some(r) => crate::check_update::release_is_for(
+                r.branch.as_deref().unwrap_or(""),
+                &r.name,
+                dist_branch,
+            ),
+            None => update
+                .builds
+                .iter()
+                .any(|b| dist_tag(&b.nvr).is_some_and(|d| our_tags.contains(&d))),
+        };
         if !same_release {
             continue;
         }
@@ -811,38 +811,47 @@ mod tests {
         serde_json::from_value(serde_json::json!({
             "alias": alias,
             "status": status,
+            "close_bugs": true,
             "builds": nvrs.iter().map(|n| serde_json::json!({"nvr": n})).collect::<Vec<_>>(),
             "bugs": bugs.iter().map(|b| serde_json::json!({"bug_id": b})).collect::<Vec<_>>(),
         }))
         .unwrap()
     }
 
-    #[test]
-    fn dist_tag_is_the_release_s_dist_part() {
-        assert_eq!(dist_tag("sandogasa-0.28.1-2.el10_4"), Some("el10_4"));
-        assert_eq!(dist_tag("sandogasa-0.28.1-1.fc46"), Some("fc46"));
-        assert_eq!(dist_tag("foo-1.0-0.1.rc1.fc46"), Some("fc46"));
-        assert_eq!(dist_tag("foo-1.0-1.el9.next"), Some("el9.next"));
-        assert_eq!(dist_tag("foo-1.0-1"), None);
-        assert_eq!(dist_tag("foo"), None);
+    fn on_release(
+        mut u: sandogasa_bodhi::models::Update,
+        name: &str,
+        branch: &str,
+    ) -> sandogasa_bodhi::models::Update {
+        u.release =
+            serde_json::from_value(serde_json::json!({"name": name, "branch": branch})).ok();
+        u
     }
 
     #[test]
     fn a_bug_on_a_live_update_for_the_same_release_is_carried() {
         let ours = vec!["sandogasa-0.28.1-2.el10_4".to_string()];
         let updates = [
-            update(
-                "FEDORA-EPEL-2026-aaaa",
-                "testing",
-                &["sandogasa-0.28.0-1.el10_4"],
-                &[2569815],
+            on_release(
+                update(
+                    "FEDORA-EPEL-2026-aaaa",
+                    "testing",
+                    &["sandogasa-0.28.0-1.el10_4"],
+                    &[2569815],
+                ),
+                "EPEL-10.4",
+                "epel10",
             ),
-            // Another release's update closes nothing here.
-            update(
-                "FEDORA-2026-bbbb",
-                "testing",
-                &["sandogasa-0.28.0-1.fc46"],
-                &[2572044],
+            // Another release's update, by Bodhi's release.
+            on_release(
+                update(
+                    "FEDORA-EPEL-2026-bbbb",
+                    "testing",
+                    &["sandogasa-0.28.0-1.el10_3"],
+                    &[2572044],
+                ),
+                "EPEL-10.3",
+                "epel10",
             ),
             // An obsoleted update handed its bugs on.
             update(
@@ -851,22 +860,61 @@ mod tests {
                 &["sandogasa-0.27.9-1.el10_4"],
                 &[2500000],
             ),
-            // This update itself, being revisited.
+            // This update itself, by its builds and by its alias.
             update(
                 "FEDORA-EPEL-2026-dddd",
                 "pending",
                 &["sandogasa-0.28.1-2.el10_4"],
                 &[2572045],
             ),
+            update(
+                "FEDORA-EPEL-2026-eeee",
+                "testing",
+                &["sandogasa-0.28.1-3.el10_4"],
+                &[2572046],
+            ),
+            // Stable, yet its bug is open: it did not close it.
+            update(
+                "FEDORA-EPEL-2026-ffff",
+                "stable",
+                &["sandogasa-0.27.0-1.el10_4"],
+                &[2400000],
+            ),
+            // Being put together in its side tag: it will close it.
+            update(
+                "FEDORA-EPEL-2026-gggg",
+                "side_tag_active",
+                &["rust-foo-1-1.el10_4"],
+                &[2572047],
+            ),
         ];
-        let carried = carried_elsewhere(&updates, &ours);
+        let carried = carried_elsewhere(&updates, &ours, Some("FEDORA-EPEL-2026-eeee"), "epel10.4");
         assert_eq!(
             carried.into_iter().collect::<Vec<_>>(),
-            vec![(
-                2569815,
-                "on FEDORA-EPEL-2026-aaaa (testing) already".to_string()
-            )]
+            vec![
+                (
+                    2569815,
+                    "on FEDORA-EPEL-2026-aaaa (testing) already".to_string()
+                ),
+                (
+                    2572047,
+                    "on FEDORA-EPEL-2026-gggg (side_tag_active) already".to_string()
+                ),
+            ]
         );
+    }
+
+    #[test]
+    fn an_update_that_leaves_its_bugs_open_carries_none() {
+        let ours = vec!["sandogasa-0.28.1-1.fc46".to_string()];
+        let mut open = update(
+            "FEDORA-2026-aaaa",
+            "testing",
+            &["sandogasa-0.28.0-1.fc46"],
+            &[1],
+        );
+        open.close_bugs = false;
+        assert!(carried_elsewhere(&[open], &ours, None, "rawhide").is_empty());
     }
 
     #[test]

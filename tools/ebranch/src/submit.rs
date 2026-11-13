@@ -298,6 +298,7 @@ pub(crate) async fn gather_bugs(
     bodhi: &BodhiClient,
     report: &crate::check_update::CheckUpdateReport,
     already_listed: &[u64],
+    own_alias: Option<&str>,
     koji_profile: Option<&str>,
     verbose: bool,
 ) -> crate::discover::Proposal {
@@ -381,7 +382,12 @@ pub(crate) async fn gather_bugs(
                         started.elapsed().as_secs_f64()
                     );
                 }
-                let carried = crate::discover::carried_elsewhere(&updates, &nvrs);
+                let carried = crate::discover::carried_elsewhere(
+                    &updates,
+                    &nvrs,
+                    own_alias,
+                    report.dist_branch(),
+                );
                 crate::discover::set_aside_carried(&mut proposal, &carried);
             }
             Err(e) => eprintln!(
@@ -412,7 +418,16 @@ async fn propose_bugs(
         already_met,
         closed,
         elsewhere,
-    } = gather_bugs(bz, bodhi, report, already_listed, koji_profile, verbose).await;
+    } = gather_bugs(
+        bz,
+        bodhi,
+        report,
+        already_listed,
+        None,
+        koji_profile,
+        verbose,
+    )
+    .await;
     if !already_met.is_empty() {
         eprintln!("\nLeft off, already met before this update (theirs to close):");
         for c in &already_met {
@@ -966,6 +981,7 @@ mod tests {
                     "updates": [{
                         "alias": "FEDORA-2026-0280000000",
                         "status": "testing",
+                        "close_bugs": true,
                         "builds": [{"nvr": "sandogasa-0.28.0-1.fc46"}],
                         "bugs": [{"bug_id": 2569815}],
                     }],
@@ -991,7 +1007,7 @@ mod tests {
         }];
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
         let bodhi = BodhiClient::with_base_url(&server.uri());
-        gather_bugs(&bz, &bodhi, &report, &[], None, true).await
+        gather_bugs(&bz, &bodhi, &report, &[], None, None, true).await
     }
 
     #[tokio::test]

@@ -904,7 +904,7 @@ pub(crate) trait BodhiQuery: Sync {
 /// `dist_branch` ships to: by branch, or by name without its hyphen, as
 /// EPEL 10's minors share the `epel10` branch and only the name
 /// (`EPEL-10.4`) says which one it is (#124).
-fn release_is_for(branch: &str, name: &str, dist_branch: &str) -> bool {
+pub(crate) fn release_is_for(branch: &str, name: &str, dist_branch: &str) -> bool {
     branch == dist_branch || name.replace('-', "").eq_ignore_ascii_case(dist_branch)
 }
 

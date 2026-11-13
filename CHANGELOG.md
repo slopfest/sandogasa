@@ -49,14 +49,18 @@ release, on its way to stable, already had the first. Bodhi kept that
 update live alongside the new one, so it would close its own bug. The
 proposal, in check-update and update-bugs alike, now asks Bodhi in one
 request which updates carry the bugs it found. A bug that another
-update for the same release has, pending, in testing or stable, is left
-off and listed apart with that update's name. An update for another
-release, or one obsoleted or unpushed, does not count. When Bodhi
-cannot be asked, a warning says so and every bug is proposed as
-before.
+update for the same Bodhi release has is left off and listed apart
+with that update's name, when that update is pending, in testing or
+still in its side tag, and set to close its bugs. An update for
+another release, one obsoleted, unpushed or stable, one that leaves
+its bugs open, and in update-bugs the update being revisited, do not
+count. When Bodhi cannot be asked, a warning says so and every bug is
+proposed as before.
 
 sandogasa-bodhi gains `BodhiClient::updates_for_bugs`, the updates
-carrying any of a list of bugs, in one paginated query.
+carrying any of a list of bugs. It and `updates_for_builds` ask about
+50 at a time, so a long list stays within what a URL can carry, and
+return each update once.
 
 ### cbspkg sig-repo can take over a Proposed Update with no checkout yet
 

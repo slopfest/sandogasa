@@ -403,6 +403,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
         &bodhi,
         report,
         &[],
+        Some(&update.alias),
         opts.koji_profile.as_deref(),
         opts.verbose,
     ));
@@ -928,6 +929,7 @@ mod tests {
                     "updates": [{
                         "alias": "FEDORA-2026-0280000000",
                         "status": "testing",
+                        "close_bugs": true,
                         "builds": [{"nvr": "sandogasa-0.28.0-1.fc46"}],
                         "bugs": [{"bug_id": 2569815}],
                     }],

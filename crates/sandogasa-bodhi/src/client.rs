@@ -213,69 +213,61 @@ impl BodhiClient {
     }
 
     /// The updates any of `nvrs` is in, whatever their status, in one
-    /// query (paginated) rather than one per build: Bodhi takes the
-    /// `builds` parameter repeated. Each update lists its builds, which
-    /// is how a caller matches it back to the NVRs it asked about.
+    /// query (paginated) per 50 builds rather than one per build: Bodhi
+    /// takes the `builds` parameter repeated. Each update lists its
+    /// builds, which is how a caller matches it back to the NVRs it asked
+    /// about.
     pub async fn updates_for_builds(&self, nvrs: &[String]) -> Result<Vec<Update>, reqwest::Error> {
-        let mut all_updates = Vec::new();
-        if nvrs.is_empty() {
-            return Ok(all_updates);
-        }
-        let mut page = 1;
-        loop {
-            let mut query: Vec<(&str, String)> =
-                nvrs.iter().map(|n| ("builds", n.clone())).collect();
-            query.push(("rows_per_page", "100".to_string()));
-            query.push(("page", page.to_string()));
-            let resp: UpdatesResponse = self
-                .client
-                .get(format!("{}/updates/", self.base_url))
-                .query(&query)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            all_updates.extend(resp.updates);
-            if page >= resp.pages {
-                break;
-            }
-            page += 1;
-        }
-        Ok(all_updates)
+        self.updates_where("builds", nvrs).await
     }
 
     /// The updates carrying any of `bug_ids`, whatever their status, in
-    /// one query (paginated): Bodhi takes the `bugs` parameter
-    /// repeated. Each update lists its bugs, which is how a caller
-    /// matches it back to the bugs it asked about.
+    /// one query (paginated) per 50 bugs: Bodhi takes the `bugs`
+    /// parameter repeated. Each update lists its bugs, which is how a
+    /// caller matches it back to the bugs it asked about.
     pub async fn updates_for_bugs(&self, bug_ids: &[u64]) -> Result<Vec<Update>, reqwest::Error> {
-        let mut all_updates = Vec::new();
-        if bug_ids.is_empty() {
-            return Ok(all_updates);
-        }
-        let mut page = 1;
-        loop {
-            let mut query: Vec<(&str, String)> =
-                bug_ids.iter().map(|id| ("bugs", id.to_string())).collect();
-            query.push(("rows_per_page", "100".to_string()));
-            query.push(("page", page.to_string()));
-            let resp: UpdatesResponse = self
-                .client
-                .get(format!("{}/updates/", self.base_url))
-                .query(&query)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            all_updates.extend(resp.updates);
-            if page >= resp.pages {
-                break;
+        let ids: Vec<String> = bug_ids.iter().map(u64::to_string).collect();
+        self.updates_where("bugs", &ids).await
+    }
+
+    /// The updates whose `param` is any of `values`, each once. The
+    /// values go 50 to a query, keeping the URL short enough for any
+    /// proxy on the way, and each query is read page by page.
+    async fn updates_where(
+        &self,
+        param: &str,
+        values: &[String],
+    ) -> Result<Vec<Update>, reqwest::Error> {
+        const PER_QUERY: usize = 50;
+        let mut all: Vec<Update> = Vec::new();
+        for chunk in values.chunks(PER_QUERY) {
+            let mut page = 1;
+            loop {
+                let mut query: Vec<(&str, String)> =
+                    chunk.iter().map(|v| (param, v.clone())).collect();
+                query.push(("rows_per_page", "100".to_string()));
+                query.push(("page", page.to_string()));
+                let resp: UpdatesResponse = self
+                    .client
+                    .get(format!("{}/updates/", self.base_url))
+                    .query(&query)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await?;
+                for update in resp.updates {
+                    if !all.iter().any(|u| u.alias == update.alias) {
+                        all.push(update);
+                    }
+                }
+                if page >= resp.pages {
+                    break;
+                }
+                page += 1;
             }
-            page += 1;
         }
-        Ok(all_updates)
+        Ok(all)
     }
 
     /// Fetch active Fedora and EPEL releases from the Bodhi API.
@@ -791,6 +783,59 @@ mod tests {
         // A failing Bodhi is an error, not an empty list.
         let down = BodhiClient::with_base_url("http://127.0.0.1:9");
         assert!(down.comments_for_user("salimma", 2).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_failing_bodhi_is_an_error_not_an_empty_answer() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&server)
+            .await;
+        assert!(client.updates_for_bugs(&[1]).await.is_err());
+        let nvrs = ["sandogasa-0.28.1-1.fc46".to_string()];
+        assert!(client.updates_for_builds(&nvrs).await.is_err());
+        assert!(client.updates_for_build(&nvrs[0]).await.is_err());
+        assert!(client.update_by_alias("FEDORA-2026-aaaa").await.is_err());
+        assert!(client.active_releases().await.is_err());
+        assert!(
+            client
+                .updates_for_package("sandogasa", "F46", &["testing"])
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_long_bug_list_is_asked_about_fifty_at_a_time() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        // Both queries find the update carrying bugs 1 and 60.
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [{
+                    "alias": "FEDORA-2026-aaaa", "status": "testing",
+                    "bugs": [{"bug_id": 1}, {"bug_id": 60}],
+                }],
+                "page": 1, "pages": 1, "total": 1,
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let ids: Vec<u64> = (1..=60).collect();
+        let updates = client.updates_for_bugs(&ids).await.unwrap();
+        assert_eq!(updates.len(), 1);
+        let asked = server.received_requests().await.unwrap();
+        let bugs_in = |n: usize| {
+            asked[n]
+                .url
+                .query_pairs()
+                .filter(|(k, _)| k == "bugs")
+                .count()
+        };
+        assert_eq!((bugs_in(0), bugs_in(1)), (50, 10));
     }
 
     #[tokio::test]
