@@ -2019,6 +2019,7 @@ version = "0.28.1"
 name = "sandogasa-cbs"
 version = "0.28.1"
 dependencies = [
+ "mockito",
  "sandogasa-cli",
  "sandogasa-kojihub",
  "serial_test",

@@ -148,11 +148,11 @@ does, after asking; scratch builds need them too.
 The build is confirmed at a terminal and refused without one, after the
 CBS login is checked; the confirmation shows the exact `cbs build`
 command, and the comment the package's tracking issue will get once the
-build is done, as for `promote` below. To know the build it tells of,
+build is done, as for `promote` below. To name the build in the comment,
 `build` starts it with `cbs build --nowait` and waits with
 `cbs watch-task`, then reads the build's NVR from its task; the comment
 is posted with that NVR once the build has succeeded. Builds left
-running with `--nowait`, and scratch builds, are not told of.
+running with `--nowait`, and scratch builds, get no comment.
 
 ### `config`
 
@@ -203,7 +203,7 @@ Promoting to `-release` also untags the build from `-testing`, so a
 released build is not left in testing as well. A build released before
 that, and still in `-testing`, is promoted again to finish the untag.
 
-The build's tracking issue is told, in the package's SIG repo:
+The build's tracking issue, in the package's SIG repo, is updated:
 
 - for a Proposed Update, the open cpu-sig-tracker issue carrying the
   branch's release label (`c10s`) and whose `JIRA` line names its RHEL
@@ -220,9 +220,22 @@ with SIG-only commits on top, each listed with its subject, or a commit
 that lacks the merge request's current head. It also gets the scoped
 label `stage::testing` or `stage::release` when the project or the
 SIG's group has that label, and the status `In progress` if it was
-still `To do`. Each comment ends in a hidden marker, so a promotion the
-issue was told of already is not told again, and a build that reached
-its stage is told of even when a later `cbs` command fails. Posting
+still `To do`. A later comment about the same build points to the
+SIG-only commits an earlier one listed, from `build` or the promotion
+before, instead of listing them again; a different list, as after the
+merge request was updated, is listed in full.
+
+A Hyperscale issue is done once every release the SIG carries the
+package for has the version it asks for, or a newer one, released. The
+releases are those the checkout has a SIG branch for (`c9s-hs`,
+`c10s-sig-hyperscale`, its own or a remote's). Promoting the last of
+them to `-release` adds that to the comment, with each release's build,
+sets the issue to `Done` and closes it. While another release is behind
+the issue stays open, and hs-relmon closes it once that one catches up.
+
+Each comment ends in a hidden marker, so a promotion already commented
+on gets no second comment, and a build that reached its stage gets its
+comment even when a later `cbs` command fails. Posting
 needs the GitLab token from `cbspkg config` or `GITLAB_TOKEN`, and the
 confirmation says when there is none; a failure posting is a warning,
 as the build has moved by then.

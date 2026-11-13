@@ -41,9 +41,29 @@ pub struct Notice {
     /// The `stage::` label the stage has but nothing defines yet.
     pub missing_label: Option<&'static str>,
     /// The version the issue asks for, for a Hyperscale one: a build of
-    /// an older version is not what it is about, and is not told of.
+    /// an older version is not what it is about, and gets no comment.
     pub at_least: Option<String>,
+    /// For a Hyperscale release: when to close the issue.
+    pub closing: Option<Closing>,
 }
+
+/// When a Hyperscale issue is done: hs-relmon files one per package,
+/// asking for a version, and it is done once every release the SIG
+/// carries the package for has that version or a newer one released.
+/// The release being promoted counts once it is tagged; a release still
+/// behind leaves the issue open for hs-relmon's next scan to close.
+#[derive(Debug, PartialEq)]
+pub struct Closing {
+    pub package: String,
+    pub version: String,
+    /// The `-release` tag of each release the package has a SIG branch
+    /// for.
+    pub tags: Vec<String>,
+}
+
+/// The newest build of a package in each of some tags, one entry per
+/// tag: [`sandogasa_cbs::packages::latest_in_tags`], or a stand-in.
+pub type LatestIn<'a> = &'a dyn Fn(&[String], &str) -> Result<Vec<Option<String>>, String>;
 
 /// The SIG branch of a package being promoted, and its checkout.
 #[derive(Clone, Copy)]
@@ -119,11 +139,13 @@ pub fn plan(
     let (client, issue, notes) = match read {
         Ok(Some(found)) => found,
         Ok(None) => {
-            println!("{path} has no open tracking issue for {branch}: nothing to tell.");
+            println!("{path} has no open tracking issue for {branch}: no comment to post.");
             return Vec::new();
         }
         Err(e) => {
-            eprintln!("warning: cannot read {path}'s tracking issues ({e}); nothing will be told");
+            eprintln!(
+                "warning: cannot read {path}'s tracking issues ({e}); no comment will be posted"
+            );
             return Vec::new();
         }
     };
@@ -140,7 +162,7 @@ pub fn plan(
                 && !reaches(nvr, v)
             {
                 println!(
-                    "{nvr} is older than the {v} {} asks for: nothing to tell.",
+                    "{nvr} is older than the {v} {} asks for: no comment to post.",
                     issue.web_url
                 );
                 return false;
@@ -191,6 +213,14 @@ pub fn plan(
     {
         fetch_missing(repo, mr, &commits);
     }
+    let earlier: Vec<&str> = notes.iter().map(|n| n.body.as_str()).collect();
+    // The releases a Hyperscale release closes the issue for, read once.
+    let release_tags = if at_least.is_some() && pending.iter().any(|(_, s, _)| *s == Stage::Release)
+    {
+        hyperscale_release_tags(repo)
+    } else {
+        Vec::new()
+    };
     let mut notices = Vec::new();
     for ((nvr, stage, argvs), commit) in pending.into_iter().zip(&commits) {
         let (tag, untagged) = tags_of_step(argvs);
@@ -219,9 +249,18 @@ pub fn plan(
                     (Some(mr), Some(commit)) => provenance(repo, &mr.head, commit),
                     _ => Provenance::Unknown,
                 },
+                &earlier,
             ),
             label: stage_label(*stage),
             missing_label: None,
+            closing: match (&at_least, stage) {
+                (Some(version), Stage::Release) if !release_tags.is_empty() => Some(Closing {
+                    package: package.to_string(),
+                    version: version.clone(),
+                    tags: release_tags.clone(),
+                }),
+                _ => None,
+            },
             at_least: at_least.clone(),
         });
     }
@@ -247,10 +286,10 @@ pub fn plan(
 /// the label; without a token to post with, that it will not be told.
 pub fn describe(notice: &Notice, postable: bool) -> String {
     let mut out = if postable {
-        format!("Then tell {}:\n", notice.issue_url)
+        format!("Then comment on {}:\n", notice.issue_url)
     } else {
         format!(
-            "Without a GitLab token (`cbspkg config`, or GITLAB_TOKEN), {} is not told:\n",
+            "Without a GitLab token (`cbspkg config`, or GITLAB_TOKEN), no comment is posted on {}:\n",
             notice.issue_url
         )
     };
@@ -259,6 +298,14 @@ pub fn describe(notice: &Notice, postable: bool) -> String {
     }
     if let Some(label) = notice.label {
         out.push_str(&format!("  and label it {label}\n"));
+    }
+    if let Some(c) = notice.closing.as_ref().filter(|_| postable) {
+        out.push_str(&format!(
+            "  and close it as Done if {} then {} {} or newer\n",
+            c.tags.join(", "),
+            if c.tags.len() == 1 { "has" } else { "all have" },
+            c.version
+        ));
     }
     if let Some(label) = notice.missing_label {
         out.push_str(&format!(
@@ -270,8 +317,16 @@ pub fn describe(notice: &Notice, postable: bool) -> String {
 }
 
 /// Post the notices of `notices` whose build reached its stage, as
-/// `done` says, warning about each part that fails.
-pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String, Stage)]) {
+/// `done` says, warning about each part that fails. A Hyperscale
+/// release closes its issue when every release has the version
+/// (`latest` reads what they have).
+pub fn post(
+    base: &str,
+    token: Option<&str>,
+    notices: &[Notice],
+    done: &[(String, Stage)],
+    latest: LatestIn,
+) {
     let notices: Vec<&Notice> = notices
         .iter()
         .filter(|n| {
@@ -281,7 +336,7 @@ pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String
         .filter(|n| match &n.at_least {
             Some(v) if !reaches(&n.nvr, v) => {
                 println!(
-                    "{} is older than the {v} {} asks for: it is not told.",
+                    "{} is older than the {v} {} asks for: no comment is posted.",
                     n.nvr, n.issue_url
                 );
                 false
@@ -294,7 +349,7 @@ pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String
     }
     let Some(token) = token else {
         println!(
-            "No GitLab token, so the tracking issue is not told: \
+            "No GitLab token, so the tracking issue is not updated: \
              set one with `cbspkg config` or GITLAB_TOKEN."
         );
         return;
@@ -307,8 +362,18 @@ pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String
                 continue;
             }
         };
-        match client.add_note(notice.iid, &notice.note) {
-            Ok(()) => println!("Told {}.", notice.issue_url),
+        // Closed first, so the comment says it is done only once it is.
+        let done_note = notice
+            .closing
+            .as_ref()
+            .and_then(|c| done_note(c, &notice.issue_url, latest))
+            .filter(|_| close_as_done(&client, notice));
+        let note = match &done_note {
+            Some(para) => with_paragraph(&notice.note, para),
+            None => notice.note.clone(),
+        };
+        match client.add_note(notice.iid, &note) {
+            Ok(()) => println!("Commented on {}.", notice.issue_url),
             Err(e) => {
                 eprintln!("warning: could not comment on {} ({e})", notice.issue_url);
                 continue;
@@ -325,6 +390,9 @@ pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String
                     notice.issue_url
                 );
             }
+        }
+        if done_note.is_some() {
+            continue;
         }
         // A tracked update being promoted is in progress, whatever the
         // issue says; a later status (Done) is left alone.
@@ -350,6 +418,11 @@ pub fn post(base: &str, token: Option<&str>, notices: &[Notice], done: &[(String
 /// Updates' and Hyperscale's.
 pub fn covers(sig: Sig) -> bool {
     matches!(sig, Sig::ProposedUpdates | Sig::Hyperscale)
+}
+
+/// The CBS hub's newest builds, for [`post`].
+pub fn cbs_latest(tags: &[String], package: &str) -> Result<Vec<Option<String>>, String> {
+    sandogasa_cbs::packages::latest_in_tags(tags, package)
 }
 
 /// Which of `issues`, each tracking the branch, to tell of `nvrs`. A
@@ -485,6 +558,116 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The paragraph saying a Hyperscale issue is done, when every tag of
+/// `closing` has its version or newer; `None`, saying why, when one is
+/// behind or cannot be read.
+fn done_note(closing: &Closing, issue_url: &str, latest: LatestIn) -> Option<String> {
+    let found = match latest(&closing.tags, &closing.package) {
+        Ok(found) => found,
+        Err(e) => {
+            eprintln!(
+                "warning: cannot read what the release tags have ({e}); {issue_url} stays open"
+            );
+            return None;
+        }
+    };
+    if found.len() != closing.tags.len() {
+        eprintln!(
+            "warning: the hub answered {} of {} release tags; {issue_url} stays open",
+            found.len(),
+            closing.tags.len()
+        );
+        return None;
+    }
+    let mut lines = Vec::new();
+    for (tag, nvr) in closing.tags.iter().zip(&found) {
+        match nvr {
+            Some(nvr) if reaches(nvr, &closing.version) => {
+                lines.push(format!("- `{tag}`: `{nvr}`"));
+            }
+            Some(nvr) => {
+                println!(
+                    "{issue_url} stays open: {tag} has {nvr}, older than {}.",
+                    closing.version
+                );
+                return None;
+            }
+            None => {
+                println!(
+                    "{issue_url} stays open: {tag} has no build of {}.",
+                    closing.package
+                );
+                return None;
+            }
+        }
+    }
+    Some(format!(
+        "Every release now has {} or newer, so this is done:\n\n{}",
+        closing.version,
+        lines.join("\n")
+    ))
+}
+
+/// `note` with `paragraph` added before its closing marker.
+fn with_paragraph(note: &str, paragraph: &str) -> String {
+    match note.rfind("\n\n<!-- sandogasa:") {
+        Some(at) => format!("{}\n\n{paragraph}{}", &note[..at], &note[at..]),
+        None => format!("{note}\n\n{paragraph}"),
+    }
+}
+
+/// Close the issue of `notice` and set it to Done, warning about each
+/// part that fails; whether it was closed. One left open is hs-relmon's
+/// to close at its next scan.
+fn close_as_done(client: &Client, notice: &Notice) -> bool {
+    let close = IssueUpdate {
+        state_event: Some("close".to_string()),
+        ..Default::default()
+    };
+    if let Err(e) = client.edit_issue(notice.iid, &close) {
+        eprintln!(
+            "warning: could not close {} ({e}); hs-relmon closes it at its next scan",
+            notice.issue_url
+        );
+        return false;
+    }
+    println!("Closed {}.", notice.issue_url);
+    if let Err(e) = client.set_work_item_status(notice.iid, "Done") {
+        eprintln!("warning: could not set {} to Done ({e})", notice.issue_url);
+    }
+    true
+}
+
+/// The `-release` tags of the Hyperscale releases the checkout at `repo`
+/// has a SIG branch for (`c10s-sig-hyperscale`, `c9s-hs`), in its own
+/// branches or its remotes', newest release first; only releases the
+/// SIG still releases for, so an EOL branch does not keep issues open.
+fn hyperscale_release_tags(repo: &Path) -> Vec<String> {
+    let refs = git(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(refname:lstrip=2)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    )
+    .unwrap_or_default();
+    let mut majors: Vec<u32> = refs
+        .lines()
+        // `origin/c10s-sig-hyperscale` is the branch after the remote.
+        .map(|r| r.rsplit('/').next().unwrap_or(r))
+        .filter_map(|b| Sig::Hyperscale.own_branch_major(b))
+        .filter(|m| sandogasa_cbs::HYPERSCALE_MAJORS.contains(m))
+        .collect();
+    majors.sort_unstable_by(|a, b| b.cmp(a));
+    majors.dedup();
+    majors
+        .into_iter()
+        .map(|m| sandogasa_cbs::Collection::new("hyperscale", m, true, "main").tag(Stage::Release))
+        .collect()
+}
+
 /// The tag a promotion's commands tag the build into, and the one they
 /// untag it from, if any: `cbs tag-build <tag> <nvr>`,
 /// `cbs untag-build <tag> <nvr>`.
@@ -517,6 +700,10 @@ mod tests {
     /// A build whose source names no commit.
     fn none(_: &str) -> Result<Option<String>, String> {
         Ok(None)
+    }
+
+    fn no_latest(_: &[String], _: &str) -> Result<Vec<Option<String>>, String> {
+        panic!("only a Hyperscale release reads the release tags")
     }
 
     const PATH: &str = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fgit";
@@ -554,7 +741,14 @@ mod tests {
             )
             .create();
         let earlier = if told {
-            stage_note(NVR, Stage::Testing, TESTING, None, &Provenance::Unknown)
+            stage_note(
+                NVR,
+                Stage::Testing,
+                TESTING,
+                None,
+                &Provenance::Unknown,
+                &[],
+            )
         } else {
             "set status to **In progress**".to_string()
         };
@@ -599,7 +793,7 @@ mod tests {
         assert_eq!(release.missing_label, Some("stage::release"));
         let shown = describe(release, true);
         assert!(
-            shown.starts_with("Then tell u1:\n  > `git-2.52.1-1~proposed.el10` is released"),
+            shown.starts_with("Then comment on u1:\n  > `git-2.52.1-1~proposed.el10` is released"),
             "{shown}"
         );
         assert!(shown.contains("no stage::release label exists"), "{shown}");
@@ -690,7 +884,7 @@ mod tests {
         let comment = server
             .mock("POST", format!("{PATH}/issues/1/notes").as_str())
             .match_body(mockito::Matcher::PartialJson(serde_json::json!({
-                "body": stage_note(NVR, Stage::Testing, TESTING, None, &Provenance::Unknown),
+                "body": stage_note(NVR, Stage::Testing, TESTING, None, &Provenance::Unknown, &[]),
             })))
             .with_status(201)
             .with_body(r#"{"id": 10, "body": "b"}"#)
@@ -715,15 +909,15 @@ mod tests {
             .expect_at_least(2)
             .create();
         // Posted only for a stage the build reached.
-        post(&server.url(), Some("t"), &notices, &[]);
+        post(&server.url(), Some("t"), &notices, &[], &no_latest);
         let done = [(NVR.to_string(), Stage::Testing)];
-        post(&server.url(), Some("t"), &notices, &done);
+        post(&server.url(), Some("t"), &notices, &done, &no_latest);
         comment.assert();
         label.assert();
         graphql.assert();
 
         // Without a token nothing is posted.
-        post(&server.url(), None, &notices, &done);
+        post(&server.url(), None, &notices, &done, &no_latest);
         comment.assert();
     }
 
@@ -1053,8 +1247,196 @@ mod tests {
             ..notices.into_iter().nth(1).unwrap()
         };
         let done = [(older.nvr.clone(), Stage::Testing)];
-        post(&server.url(), Some("t"), &[older], &done);
+        post(&server.url(), Some("t"), &[older], &done, &no_latest);
         posts.assert();
+    }
+
+    /// ethtool 7.1 released to Hyperscale 10, with the checkout having
+    /// branches for 9 and 10: the issue closes only once 9 has it too.
+    #[test]
+    fn a_hyperscale_release_closes_the_issue_once_every_release_has_the_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let git = |args: &[&str]| crate::test_support::git(repo, args);
+        git(&["init", "--quiet", "-b", "c10s-sig-hyperscale"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "Update to 7.1",
+        ]);
+        // A remote's branch counts, a mirrored Stream one does not.
+        git(&["update-ref", "refs/remotes/origin/c9s-hs", "HEAD"]);
+        git(&["branch", "c10s"]);
+        git(&["branch", "c8s-sig-hyperscale"]);
+        let r10 = "hyperscale10s-packages-main-release";
+        let r9 = "hyperscale9s-packages-main-release";
+        assert_eq!(hyperscale_release_tags(repo), [r10, r9]);
+        assert!(hyperscale_release_tags(Path::new("/nonexistent")).is_empty());
+
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fethtool";
+        server
+            .mock("GET", format!("{path}/issues").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                serde_json::json!([{
+                    "iid": 2, "title": "ethtool-7.1 is available", "state": "opened",
+                    "web_url": "h2", "labels": ["rfe::new-version"],
+                }])
+                .to_string(),
+            )
+            .create();
+        for list in ["issues/2/notes", "labels"] {
+            server
+                .mock("GET", format!("{path}/{list}").as_str())
+                .match_query(mockito::Matcher::Any)
+                .with_status(200)
+                .with_body("[]")
+                .create();
+        }
+        let nvr = "ethtool-7.1-1.hs.el10";
+        let steps = [(
+            nvr.to_string(),
+            Stage::Release,
+            vec![
+                ["cbs", "tag-build", r10, nvr].map(String::from).to_vec(),
+                [
+                    "cbs",
+                    "untag-build",
+                    "hyperscale10s-packages-main-testing",
+                    nvr,
+                ]
+                .map(String::from)
+                .to_vec(),
+            ],
+        )];
+        let on = Branch {
+            sig: Sig::Hyperscale,
+            package: "ethtool",
+            branch: "c10s-sig-hyperscale",
+            repo,
+            dry_run: true,
+        };
+        let notices = plan(&server.url(), Some("t"), &on, &steps, &none);
+        assert_eq!(
+            notices[0].closing,
+            Some(Closing {
+                package: "ethtool".into(),
+                version: "7.1".into(),
+                tags: vec![r10.into(), r9.into()],
+            })
+        );
+        assert!(
+            describe(&notices[0], true).contains(&format!(
+                "and close it as Done if {r10}, {r9} then all have 7.1 or newer"
+            )),
+            "{}",
+            describe(&notices[0], true)
+        );
+        assert!(!describe(&notices[0], false).contains("close it"));
+        let done = [(nvr.to_string(), Stage::Release)];
+
+        // Hyperscale 9 is still at 7.0: commented on, left open.
+        let behind = server
+            .mock("POST", format!("{path}/issues/2/notes").as_str())
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "body": notices[0].note,
+            })))
+            .with_status(201)
+            .with_body(r#"{"id": 10, "body": "b"}"#)
+            .expect(4)
+            .create();
+        let graphql = server
+            .mock("POST", "/api/graphql")
+            .with_status(200)
+            .with_body(
+                r#"{"data": {"project": {"workItems": {"nodes": [{"id": "gid://gitlab/WorkItem/5", "widgets": [{"type": "STATUS", "status": {"name": "In progress"}}]}]}}}}"#,
+            )
+            .expect_at_least(1)
+            .create();
+        let close = server
+            .mock("PUT", format!("{path}/issues/2").as_str())
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"state_event": "close"}),
+            ))
+            .with_status(200)
+            .with_body(r#"{"iid": 2, "title": "t", "state": "closed", "web_url": "h2"}"#)
+            .expect(1)
+            .create();
+        let latest = |have9: Option<&'static str>| {
+            move |tags: &[String], package: &str| {
+                assert_eq!(package, "ethtool");
+                assert_eq!(tags.len(), 2);
+                Ok(vec![
+                    Some("ethtool-7.1-1.hs.el10".to_string()),
+                    have9.map(String::from),
+                ])
+            }
+        };
+        post(
+            &server.url(),
+            Some("t"),
+            &notices,
+            &done,
+            &latest(Some("ethtool-7.0-3.hs.el9")),
+        );
+        // Without a build in 9, or with the hub unreadable: the same.
+        post(&server.url(), Some("t"), &notices, &done, &latest(None));
+        post(
+            &server.url(),
+            Some("t"),
+            &notices,
+            &done,
+            &|_: &[String], _: &str| Err("hub down".to_string()),
+        );
+        // An answer for one of the two releases only.
+        post(
+            &server.url(),
+            Some("t"),
+            &notices,
+            &done,
+            &|_: &[String], _: &str| Ok(vec![Some("ethtool-7.1-1.hs.el10".to_string())]),
+        );
+        behind.assert();
+
+        // Hyperscale 9 has 7.2: the comment says so, and the issue is
+        // set to Done and closed.
+        let mut with_done = notices[0].note.clone();
+        let marker = with_done.rfind("\n\n<!-- sandogasa:").unwrap();
+        with_done.insert_str(
+            marker,
+            &format!(
+                "\n\nEvery release now has 7.1 or newer, so this is done:\n\n\
+                 - `{r10}`: `ethtool-7.1-1.hs.el10`\n- `{r9}`: `ethtool-7.2-1.hs.el9`"
+            ),
+        );
+        let caught_up = server
+            .mock("POST", format!("{path}/issues/2/notes").as_str())
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "body": with_done,
+            })))
+            .with_status(201)
+            .with_body(r#"{"id": 11, "body": "b"}"#)
+            .expect(1)
+            .create();
+        post(
+            &server.url(),
+            Some("t"),
+            &notices,
+            &done,
+            &latest(Some("ethtool-7.2-1.hs.el9")),
+        );
+        caught_up.assert();
+        close.assert();
+        graphql.assert();
+        assert_eq!(with_paragraph("no marker", "p"), "no marker\n\np");
     }
 
     #[test]

@@ -187,6 +187,41 @@ pub fn latest(tag: &str, package: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The newest build of `package` in each of `tags`, in one request to
+/// the CBS hub (`koji --profile cbs`'s, else CBS's own): one entry per
+/// tag, `None` where the tag has no build of it.
+pub fn latest_in_tags(tags: &[String], package: &str) -> Result<Vec<Option<String>>, String> {
+    let hub_url =
+        sandogasa_kojihub::config::hub_url(PROFILE).unwrap_or_else(|| crate::HUB_URL.to_string());
+    latest_in_tags_at(&hub_url, tags, package)
+}
+
+/// [`latest_in_tags`], asking the hub at `hub_url`.
+pub fn latest_in_tags_at(
+    hub_url: &str,
+    tags: &[String],
+    package: &str,
+) -> Result<Vec<Option<String>>, String> {
+    let found = sandogasa_kojihub::HubClient::new(hub_url)
+        .latest_in_tags(tags, package)
+        .map_err(|e| e.to_string())?;
+    if found.len() != tags.len() {
+        return Err(format!(
+            "the hub answered {} of {} tags",
+            found.len(),
+            tags.len()
+        ));
+    }
+    found
+        .into_iter()
+        .zip(tags)
+        .map(|(r, tag)| {
+            r.map(|b| b.map(|b| b.nvr))
+                .map_err(|e| format!("{tag}: {e}"))
+        })
+        .collect()
+}
+
 /// The CBS user the login belongs to, as koji's `moshimoshi` greets it.
 pub fn whoami() -> Result<String, String> {
     let out = Command::new("koji")
@@ -237,6 +272,48 @@ mod tests {
     use super::*;
 
     use crate::test_support::FakeTools;
+
+    #[test]
+    fn a_packages_newest_build_is_read_from_each_tag_at_once() {
+        let build = "<value><array><data><value><array><data><value><struct>\
+             <member><name>nvr</name><value><string>ethtool-7.1-1.hs.el10</string></value></member>\
+             </struct></value></data></array></value></data></array></value>";
+        let none = "<value><array><data><value><array><data></data></array></value></data></array></value>";
+        let answer = |inner: &str| {
+            format!(
+                "<?xml version='1.0'?><methodResponse><params><param>\
+                 <value><array><data>{inner}</data></array></value>\
+                 </param></params></methodResponse>"
+            )
+        };
+        let mut server = mockito::Server::new();
+        let hub = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(answer(&format!("{build}{none}")))
+            .expect(1)
+            .create();
+        let url = server.url();
+        let tags = [
+            "hyperscale10s-packages-main-release".to_string(),
+            "hyperscale9s-packages-main-release".to_string(),
+        ];
+        assert_eq!(
+            latest_in_tags_at(&url, &tags, "ethtool").unwrap(),
+            [Some("ethtool-7.1-1.hs.el10".to_string()), None]
+        );
+        hub.assert();
+        // An answer for fewer tags than asked is an error, not "the
+        // rest have none".
+        server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(answer(build))
+            .create();
+        assert!(latest_in_tags_at(&url, &tags, "ethtool").is_err());
+        // A hub that cannot be reached is an error, not "no builds".
+        assert!(latest_in_tags_at("http://127.0.0.1:1", &tags, "ethtool").is_err());
+    }
 
     #[test]
     #[serial_test::serial]

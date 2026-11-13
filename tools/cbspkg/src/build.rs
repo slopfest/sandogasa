@@ -210,7 +210,7 @@ fn tell_built(
         .iter()
         .map(|(_, nvr)| (nvr.clone(), Stage::Candidate))
         .collect();
-    crate::notify::post(base, token, &notices, &done);
+    crate::notify::post(base, token, &notices, &done, &crate::notify::cbs_latest);
 }
 
 /// Find the SIG's remote and the branch's commit: the branch itself or,
@@ -367,7 +367,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         .map(|c| format!("<the build in {}>", c.prefix()))
         .collect();
     let preview = if tells {
-        ui.step("Find the tracking issue to tell, through GitLab's API");
+        ui.step("Find the tracking issue to update, through GitLab's API");
         let steps: Vec<(String, Stage, Vec<Vec<String>>)> = checkout
             .collections
             .iter()
@@ -396,7 +396,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
     if args.nowait && !args.scratch && crate::notify::covers(checkout.sig) {
         println!(
-            "Builds left running are not told to the tracking issue: cbspkg is not there when they end."
+            "Builds left running get no comment on the tracking issue: cbspkg is not there when they end."
         );
     }
     if !args.dry_run {
@@ -491,7 +491,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.dry_run {
         // After the steps, where a real run tells the issue.
         for notice in &preview {
-            ui.step("Tell the tracking issue, through GitLab's API");
+            ui.step("Comment on the tracking issue, through GitLab's API");
             print!("{}", crate::notify::describe(notice, token.is_some()));
         }
     }

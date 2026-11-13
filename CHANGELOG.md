@@ -114,7 +114,7 @@ every page: GitLab answers 20 issues at a time, so cpu-sig-tracker's
 `list-issues`, `ping`, `status`, `timeline` and `untag` missed a
 project's issues past the twentieth. Resolves #143.
 
-### cbspkg promote tells the Proposed Update's tracking issue
+### cbspkg promote comments on the Proposed Update's tracking issue
 
 A Proposed Update's tracking issue said nothing about its build once
 the merge request was carried: whoever followed it had to look in CBS
@@ -125,9 +125,9 @@ with the promotion it confirms, and once the build is tagged, posts it,
 sets the scoped label `stage::testing` or `stage::release` where the
 SIG's group has it, and moves a `To do` issue to `In progress`. A
 hidden marker in each comment keeps a rerun from saying it twice, and a
-build that moved is told of even when a later `cbs` command fails,
-since a rerun would find nothing left to promote. Without a GitLab
-token, the confirmation says the issue will not be told. Builds,
+build that moved gets its comment even when a later `cbs` command
+fails, since a rerun would find nothing left to promote. Without a
+GitLab token, the confirmation says no comment will be posted. Builds,
 untags and Hyperscale's issues are to follow (#144).
 
 sandogasa-cbs gains the `tracking` module (matching a branch to its
@@ -184,6 +184,33 @@ Both `build` and `promote` now update either SIG's tracking issue:
 
 sandogasa-cbs gains `tracking::requested_version` and
 `packages::task_build`. Refs #144.
+
+### cbspkg closes a Hyperscale issue once every release has the version
+
+A Hyperscale `rfe::new-version` issue stayed open after `cbspkg promote`
+released the version it asked for, until hs-relmon's next scan closed
+it. And a Proposed Update's issue got the same list of SIG-only commits
+three times, from `build` and from each promotion.
+
+Promoting a Hyperscale build to `-release` now closes its issue, set to
+`Done`, when every release the SIG carries the package for has the
+version asked for, or a newer one, released: the releases the checkout
+has a SIG branch for (`c9s-hs`, `c10s-sig-hyperscale`). The comment
+names each release's build. While one release is behind, the issue
+stays open for hs-relmon to close once it catches up, as before. The
+confirmation says the issue will be closed if the others have the
+version by then.
+
+A comment about a build whose earlier comment already lists the same
+SIG-only commits now points to that list instead of repeating it. A
+different list, as after the merge request was updated, is listed in
+full, and so is the first list when the build had no comment yet: one
+built by hand, or while GitLab or the token was unavailable.
+
+sandogasa-kojihub gains `HubClient::latest_in_tags`, a package's newest
+build in several tags in one request, and sandogasa-cbs
+`packages::latest_in_tags`, the same against the CBS hub.
+`tracking::stage_note` takes the issue's earlier comments. Refs #144.
 
 ## v0.28.1
 

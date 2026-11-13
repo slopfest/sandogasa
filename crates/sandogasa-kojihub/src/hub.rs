@@ -245,15 +245,39 @@ impl HubClient {
         tag: &str,
         packages: &[String],
     ) -> Result<Vec<Result<Option<LatestBuild>, Error>>, Error> {
-        let calls: Vec<(&str, Vec<Value>)> = packages
+        let pairs: Vec<(&str, &str)> = packages.iter().map(|p| (tag, p.as_str())).collect();
+        self.latest_of(&pairs)
+    }
+
+    /// The newest build of `package` in each of `tags`, as
+    /// [`HubClient::latest_builds`] reads it, in one `multiCall`. One
+    /// result per tag, in order.
+    pub fn latest_in_tags(
+        &self,
+        tags: &[String],
+        package: &str,
+    ) -> Result<Vec<Result<Option<LatestBuild>, Error>>, Error> {
+        let pairs: Vec<(&str, &str)> = tags.iter().map(|t| (t.as_str(), package)).collect();
+        self.latest_of(&pairs)
+    }
+
+    /// `getLatestBuilds` of each `(tag, package)`, in one `multiCall`.
+    fn latest_of(
+        &self,
+        pairs: &[(&str, &str)],
+    ) -> Result<Vec<Result<Option<LatestBuild>, Error>>, Error> {
+        if pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let calls: Vec<(&str, Vec<Value>)> = pairs
             .iter()
-            .map(|p| {
+            .map(|(tag, package)| {
                 (
                     "getLatestBuilds",
                     vec![
                         Value::String(tag.to_string()),
                         Value::Nil,
-                        Value::String(p.clone()),
+                        Value::String(package.to_string()),
                     ],
                 )
             })
@@ -1011,6 +1035,16 @@ mod tests {
         assert_eq!(got[1].as_ref().unwrap(), &None);
         // Nothing asked, nothing sent.
         assert!(hub.latest_builds("t", &[]).unwrap().is_empty());
+        // The same call, one package across tags.
+        let got = hub
+            .latest_in_tags(&["a-release".into(), "b-release".into()], "asterisk")
+            .unwrap();
+        assert_eq!(
+            got[0].as_ref().unwrap().as_ref().unwrap().nvr,
+            "asterisk-24.0.0-3.fc46"
+        );
+        assert_eq!(got[1].as_ref().unwrap(), &None);
+        assert!(hub.latest_in_tags(&[], "asterisk").unwrap().is_empty());
     }
 
     #[test]

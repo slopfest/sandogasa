@@ -35,6 +35,14 @@ pub mod tracking;
 /// that wraps it.
 pub const PROFILE: &str = "cbs";
 
+/// CBS's Koji hub, for a machine whose koji configuration lacks the
+/// `cbs` profile.
+pub const HUB_URL: &str = "https://cbs.centos.org/kojihub";
+
+/// The CentOS Stream majors the Hyperscale SIG still releases for;
+/// `hyperscale8s-*` is EOL. hs-relmon's `EL_TOKENS` lists the same.
+pub const HYPERSCALE_MAJORS: &[u32] = &[9, 10];
+
 /// The merge methods GitLab offers a project, as its API names them:
 /// a merge commit, a merge commit after a rebase, a fast-forward.
 pub const MERGE_METHODS: [&str; 3] = ["ff", "merge", "rebase_merge"];

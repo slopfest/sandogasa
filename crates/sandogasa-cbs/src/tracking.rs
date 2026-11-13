@@ -95,33 +95,15 @@ pub fn tracked_mr_url(description: &str) -> Option<&str> {
     })
 }
 
-/// The comment for `nvr` reaching `stage`, by being tagged into `tag`,
-/// and for a release, untagged from `untagged` (`-testing`), if it was;
-/// with what it was built from, so SIG-only commits that never go to
-/// CentOS Stream are on record where the update is tracked.
-pub fn stage_note(
-    nvr: &str,
-    stage: Stage,
-    tag: &str,
-    untagged: Option<&str>,
-    built_from: &Provenance,
-) -> String {
-    let what = match (stage, untagged) {
-        (Stage::Release, Some(testing)) => {
-            format!("`{nvr}` is released: tagged into `{tag}` and untagged from `{testing}`.")
-        }
-        (Stage::Release, None) => format!("`{nvr}` is released: tagged into `{tag}`."),
-        (Stage::Testing, _) => format!("`{nvr}` is ready for testing: tagged into `{tag}`."),
-        (Stage::Candidate, _) => format!("`{nvr}` is built: tagged into `{tag}`."),
-    };
-    let from = match built_from {
+/// The paragraph saying what a build was made from; empty when that is
+/// not known.
+fn built_from(provenance: &Provenance) -> String {
+    match provenance {
         Provenance::Unknown => String::new(),
-        Provenance::Head(commit) => {
-            format!("\n\nBuilt from `{commit}`, the merge request's head.")
-        }
+        Provenance::Head(commit) => format!("Built from `{commit}`, the merge request's head."),
         Provenance::Carried(commit, carried) => {
             let mut s = format!(
-                "\n\nBuilt from `{commit}`: the merge request's head and these SIG-only \
+                "Built from `{commit}`: the merge request's head and these SIG-only \
                  commits, which are not part of the merge request:\n"
             );
             for line in carried {
@@ -131,8 +113,53 @@ pub fn stage_note(
             s
         }
         Provenance::Apart(commit) => format!(
-            "\n\nBuilt from `{commit}`, which does not contain the merge request's current head."
+            "Built from `{commit}`, which does not contain the merge request's current head."
         ),
+    }
+}
+
+/// The comment for `nvr` reaching `stage`, by being tagged into `tag`,
+/// and for a release, untagged from `untagged` (`-testing`), if it was;
+/// with what it was built from, so SIG-only commits that never go to
+/// CentOS Stream are on record where the update is tracked.
+///
+/// `earlier` are the issue's comments so far. When one of them, about
+/// the same build, lists the same SIG-only commits (`cbspkg build`
+/// posts that list, and `promote` posts again at each stage), the
+/// comment points to it instead of listing them again. A different
+/// list, as after the merge request was updated, is listed in full.
+pub fn stage_note(
+    nvr: &str,
+    stage: Stage,
+    tag: &str,
+    untagged: Option<&str>,
+    built_from_commit: &Provenance,
+    earlier: &[&str],
+) -> String {
+    let what = match (stage, untagged) {
+        (Stage::Release, Some(testing)) => {
+            format!("`{nvr}` is released: tagged into `{tag}` and untagged from `{testing}`.")
+        }
+        (Stage::Release, None) => format!("`{nvr}` is released: tagged into `{tag}`."),
+        (Stage::Testing, _) => format!("`{nvr}` is ready for testing: tagged into `{tag}`."),
+        (Stage::Candidate, _) => format!("`{nvr}` is built: tagged into `{tag}`."),
+    };
+    let paragraph = built_from(built_from_commit);
+    let about_build = format!("<!-- sandogasa: {nvr} reached ");
+    // The whole paragraph, up to the blank line before the marker: a
+    // shorter list is a prefix of a longer one.
+    let whole = format!("{paragraph}\n\n");
+    let listed = matches!(built_from_commit, Provenance::Carried(..))
+        && earlier
+            .iter()
+            .any(|n| n.contains(&about_build) && n.contains(&whole));
+    let from = match built_from_commit {
+        Provenance::Unknown => String::new(),
+        Provenance::Carried(commit, _) if listed => format!(
+            "\n\nBuilt from `{commit}`: the merge request's head and the SIG-only commits \
+             an earlier comment lists."
+        ),
+        _ => format!("\n\n{paragraph}"),
     };
     format!("{what}{from}\n\n{}", stage_marker(nvr, stage))
 }
@@ -206,6 +233,7 @@ mod tests {
             "proposed_updates10s-packages-main-testing",
             None,
             &Provenance::Unknown,
+            &[],
         );
         assert!(testing.starts_with(&format!(
             "`{nvr}` is ready for testing: tagged into `proposed_updates10s-packages-main-testing`."
@@ -216,14 +244,16 @@ mod tests {
             "proposed_updates10s-packages-main-release",
             Some("proposed_updates10s-packages-main-testing"),
             &Provenance::Unknown,
+            &[],
         );
         assert!(release.contains("untagged from `proposed_updates10s-packages-main-testing`"));
         assert!(
-            stage_note(nvr, Stage::Release, "r", None, &Provenance::Unknown)
+            stage_note(nvr, Stage::Release, "r", None, &Provenance::Unknown, &[])
                 .ends_with(&stage_marker(nvr, Stage::Release))
         );
         assert!(
-            stage_note(nvr, Stage::Candidate, "c", None, &Provenance::Unknown).contains("is built")
+            stage_note(nvr, Stage::Candidate, "c", None, &Provenance::Unknown, &[])
+                .contains("is built")
         );
         let notes = ["set status to **In progress**", testing.as_str()];
         assert!(stage_noted(notes.into_iter(), nvr, Stage::Testing));
@@ -245,7 +275,7 @@ mod tests {
     #[test]
     fn a_comment_says_what_the_build_was_made_from() {
         let nvr = "git-2.52.1-1~proposed.el9";
-        let note = |from: &Provenance| stage_note(nvr, Stage::Testing, "t", None, from);
+        let note = |from: &Provenance| stage_note(nvr, Stage::Testing, "t", None, from, &[]);
         assert!(
             note(&Provenance::Head("7315dba".into()))
                 .contains("Built from `7315dba`, the merge request's head.")
@@ -268,6 +298,60 @@ mod tests {
                 .contains("does not contain the merge request's current head")
         );
         assert!(!note(&Provenance::Unknown).contains("Built from"));
+    }
+
+    #[test]
+    fn sig_only_commits_listed_before_are_not_listed_again() {
+        let nvr = "git-2.52.1-1~proposed.el9";
+        let carried = Provenance::Carried(
+            "eb8d270".into(),
+            vec!["eb8d270 Pin the default Ruby for the docs build on CBS".into()],
+        );
+        let built = stage_note(nvr, Stage::Candidate, "c", None, &carried, &[]);
+        let testing = stage_note(nvr, Stage::Testing, "t", None, &carried, &[&built]);
+        assert!(
+            testing.contains("the SIG-only commits an earlier comment lists"),
+            "{testing}"
+        );
+        assert!(!testing.contains("Pin the default Ruby"), "{testing}");
+        assert!(testing.ends_with(&stage_marker(nvr, Stage::Testing)));
+        // A different list, as after the merge request was updated.
+        let rewritten = Provenance::Carried(
+            "eb8d270".into(),
+            vec![
+                "eb8d270 Pin the default Ruby for the docs build on CBS".into(),
+                "1234567 Another".into(),
+            ],
+        );
+        let again = stage_note(nvr, Stage::Testing, "t", None, &rewritten, &[&built]);
+        assert!(again.contains("- `1234567` Another"), "{again}");
+        // A commit of the list went into the merge request: the shorter
+        // list starts the longer one, and is still listed in full.
+        let longer = stage_note(nvr, Stage::Candidate, "c", None, &rewritten, &[]);
+        let shorter = stage_note(nvr, Stage::Testing, "t", None, &carried, &[&longer]);
+        assert!(shorter.contains("Pin the default Ruby"), "{shorter}");
+        // The same list in a comment about another build, or in one
+        // cbspkg did not write.
+        let other = stage_note(
+            "git-2.52.1-2~proposed.el9",
+            Stage::Candidate,
+            "c",
+            None,
+            &carried,
+            &[],
+        );
+        let unmarked = built.replace("<!-- sandogasa:", "<!--");
+        for earlier in [other.as_str(), unmarked.as_str()] {
+            let note = stage_note(nvr, Stage::Testing, "t", None, &carried, &[earlier]);
+            assert!(note.contains("Pin the default Ruby"), "{note}");
+        }
+        // The one-line provenances are repeated as they are.
+        let head = Provenance::Head("7315dba".into());
+        let built = stage_note(nvr, Stage::Candidate, "c", None, &head, &[]);
+        assert!(
+            stage_note(nvr, Stage::Testing, "t", None, &head, &[&built])
+                .contains("Built from `7315dba`, the merge request's head.")
+        );
     }
 
     #[test]

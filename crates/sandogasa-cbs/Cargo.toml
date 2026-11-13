@@ -13,5 +13,6 @@ sandogasa-cli = { workspace = true }
 sandogasa-kojihub = { workspace = true }
 
 [dev-dependencies]
+mockito = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

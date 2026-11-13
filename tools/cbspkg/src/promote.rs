@@ -192,7 +192,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     let base = crate::config::gitlab_base();
     let token = crate::config::gitlab_token();
     if crate::notify::covers(checkout.sig) {
-        ui.step("Find the tracking issue to tell, through GitLab's API");
+        ui.step("Find the tracking issue to update, through GitLab's API");
     }
     let notices = crate::notify::plan(
         &base,
@@ -233,11 +233,17 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.dry_run {
         // After the steps, where a real run tells the issue.
         for notice in &notices {
-            ui.step("Tell the tracking issue, through GitLab's API");
+            ui.step("Comment on the tracking issue, through GitLab's API");
             print!("{}", crate::notify::describe(notice, token.is_some()));
         }
     } else {
-        crate::notify::post(&base, token.as_deref(), &notices, &done);
+        crate::notify::post(
+            &base,
+            token.as_deref(),
+            &notices,
+            &done,
+            &crate::notify::cbs_latest,
+        );
     }
     moved
 }
