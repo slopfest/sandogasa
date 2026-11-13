@@ -54,7 +54,8 @@ pub struct SigRepoArgs {
     #[arg(long, value_enum)]
     pub sig: Option<SigName>,
 
-    /// Create the repo without asking
+    /// Create the repo, and clone it into a -C directory that does not
+    /// exist yet, without asking
     #[arg(short = 'y', long)]
     pub yes: bool,
 }
@@ -186,6 +187,40 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Where a merge request is pushed from: the checkout of the package
+/// at the directory given, or nothing yet, for a clone of the SIG's
+/// repo to be made there.
+#[derive(Debug, PartialEq)]
+enum Checkout {
+    Ready,
+    Clone,
+}
+
+/// Which [`Checkout`] `repo` is for `package`. A directory that does
+/// not exist, or is empty, can be cloned into; any other has to be a
+/// checkout of the package, so a merge request is never pushed from
+/// some other repository the command happened to run in. Checked before
+/// GitLab is changed: git run in a directory that is not there fails
+/// as if git itself were missing.
+fn checkout_of(repo: &Path, package: &str) -> Result<Checkout, String> {
+    let vacant = match std::fs::read_dir(repo) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => return Err(format!("cannot read {}: {e}", repo.display())),
+    };
+    if vacant {
+        return Ok(Checkout::Clone);
+    }
+    if remotes(repo).is_ok_and(|(r, _)| r.package() == Some(package)) {
+        return Ok(Checkout::Ready);
+    }
+    Err(format!(
+        "{} is not a checkout of {package}: run sig-repo in one, or pass -C with one, \
+         or with a directory that does not exist yet to clone the SIG's repo into",
+        repo.display()
+    ))
 }
 
 /// The checkout's remotes, by the part each plays, and every remote's
@@ -768,6 +803,19 @@ pub fn run_configured(
             .ok_or("say which SIG the repo is for: --sig hyperscale or --sig proposed-updates")?;
         (Sig::from(sig), args.target.clone(), None)
     };
+    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    let path = format!("{}/{package}", sig.gitlab_group());
+    let clone = change.is_some() && checkout_of(&repo, &package)? == Checkout::Clone;
+    if clone
+        && !args.dry_run
+        && !confirmed(
+            args,
+            &format!("Clone {path} into {}?", repo.display()),
+            &format!("cloning {path} into {}", repo.display()),
+        )?
+    {
+        return Err(format!("{path} not cloned: pass -C with a checkout of {package}").into());
+    }
     let merge_method = crate::config::merge_method(config, sig)?;
     let created = ensure_repo(
         &ui,
@@ -778,8 +826,22 @@ pub fn run_configured(
         &package,
         merge_method.as_deref(),
     )?;
-    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
-    let path = format!("{}/{package}", sig.gitlab_group());
+    if clone {
+        let host = base.split_once("://").map_or(base, |(_, h)| h);
+        ui.step(&format!(
+            "Clone the SIG's repo into {}, to push the merge request from",
+            repo.display()
+        ));
+        ui.run_required(
+            &[
+                "git".to_string(),
+                "clone".to_string(),
+                format!("git+ssh://git@{host}/{path}.git"),
+                repo.display().to_string(),
+            ],
+            Path::new("."),
+        )?;
+    }
     // In a checkout of the package, the SIG's repo is a remote of it, by
     // its part (#102); outside one there is nothing to add it to.
     let in_checkout = remotes(&repo).is_ok_and(|(r, _)| r.package() == Some(package.as_str()));
@@ -787,7 +849,15 @@ pub fn run_configured(
         ensure_sig_remote(&ui, &repo, base, sig, &path)?;
     }
     if let Some(change) = &change {
-        push_change(&ui, &repo, base, &path, &package, change)?;
+        if clone && args.dry_run {
+            println!(
+                "The merge request would then be pushed from {} as {}.",
+                repo.display(),
+                change.branch
+            );
+        } else {
+            push_change(&ui, &repo, base, &path, &package, change)?;
+        }
     }
     let pushed = change.as_ref().map(|c| c.branch.as_str());
     let current = ensure_default_branch(&ui, args, base, token.as_deref(), sig, &path, pushed)?;
@@ -808,7 +878,7 @@ pub fn run_configured(
             .list_issues("cpu-sig-tracker", Some("opened"))
             .unwrap_or_default();
         match tracking_issue(&issues, &change.mr_url) {
-            Some(i) => println!("\nTracked in {}.", i.web_url),
+            Some(i) => println!("\nAlready tracked in {}.", i.web_url),
             None => println!(
                 "\nNext, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
                 change.mr_url
@@ -1365,6 +1435,128 @@ mod tests {
         run.sig = Some(SigName::Hyperscale);
         let err = run_with(&run, &server.url(), None).unwrap_err();
         assert!(err.to_string().contains("drop --sig"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_merge_request_needs_the_packages_checkout_or_room_for_one() {
+        let fx = crate::test_support::Fixture::proposed("c10s", &[]);
+        assert_eq!(checkout_of(&fx.repo, "rsync"), Ok(Checkout::Ready));
+        let missing = fx.tmp.path().join("rpms/rsync");
+        assert_eq!(checkout_of(&missing, "rsync"), Ok(Checkout::Clone));
+        let empty = fx.tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert_eq!(checkout_of(&empty, "rsync"), Ok(Checkout::Clone));
+        // Another package's checkout, or no checkout at all.
+        let err = checkout_of(&fx.repo, "git").unwrap_err();
+        assert!(err.contains("is not a checkout of git"), "{err}");
+        let err = checkout_of(&fx.tmp.path().join("bin"), "rsync").unwrap_err();
+        assert!(err.contains("a directory that does not exist yet"), "{err}");
+    }
+
+    /// The Proposed Update of the test above, with `-C` naming a
+    /// directory that is not there yet: the SIG's repo is cloned into
+    /// it and the merge request pushed from the clone. A dry run only
+    /// says it would.
+    #[test]
+    #[serial_test::serial]
+    fn a_merge_request_is_pushed_from_a_fresh_clone_of_the_sigs_repo() {
+        use crate::test_support::{Fixture, git};
+        let fx = Fixture::proposed("c10s", &[]);
+        let mut server = mockito::Server::new();
+        let stream_root = fx.tmp.path().join("stream");
+        let stream = stream_root.join("redhat/centos-stream/rpms/rsync.git");
+        std::fs::create_dir_all(&stream).unwrap();
+        git(&stream, &["init", "--quiet", "--bare"]);
+        // Stream by its https URL, the SIG's repo by its SSH one, both
+        // local, for any repository: the clone has no config of its own.
+        let host = server.url().trim_start_matches("http://").to_string();
+        let gitconfig = fx.tmp.path().join("gitconfig");
+        let config = format!(
+            "[url \"{stream}/\"]\n\tinsteadOf = {base}/\n\
+             [url \"{tmp}/host:\"]\n\tinsteadOf = git+ssh://git@{host}/\n",
+            stream = stream_root.display(),
+            base = server.url(),
+            tmp = fx.tmp.path().display(),
+        );
+        std::fs::write(&gitconfig, config).unwrap();
+        // SAFETY: serial test; the fixture restores the variable on drop.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+        fx.git(&["checkout", "--quiet", "-b", "mr"]);
+        std::fs::write(fx.repo.join("fix.patch"), "fix\n").unwrap();
+        fx.git(&["add", "."]);
+        fx.git(&["commit", "--quiet", "-m", "Fix CVE"]);
+        let head = fx.git(&["rev-parse", "HEAD"]);
+        fx.git(&[
+            "push",
+            "--quiet",
+            &stream.display().to_string(),
+            "mr:refs/merge-requests/7/head",
+        ]);
+
+        let mr_url = format!(
+            "{}/redhat/centos-stream/rpms/rsync/-/merge_requests/7",
+            server.url()
+        );
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests/7",
+            )
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "iid": 7, "title": "Fix CVE", "state": "opened",
+                    "web_url": mr_url, "source_branch": "fix", "target_branch": "c10s",
+                    "description": "Resolves: RHEL-303721\n", "sha": head,
+                })
+                .to_string(),
+            )
+            .create();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "c10s-proposed-RHEL-303721"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(r#"[{"name": "c10s-proposed-RHEL-303721"}]"#)
+            .create();
+        let clone = fx.tmp.path().join("rpms/rsync");
+        let mut run = args(&mr_url, None);
+        run.repo = Some(clone.clone());
+
+        // A dry run clones nothing.
+        run.dry_run = true;
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+        assert!(!clone.exists());
+
+        run.dry_run = false;
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+        let branch = "c10s-proposed-RHEL-303721";
+        let on_sig = git(
+            &clone,
+            &["ls-remote", "origin", &format!("refs/heads/{branch}")],
+        );
+        assert!(on_sig.starts_with(&head), "{on_sig}");
+        assert_eq!(
+            git(
+                &clone,
+                &[
+                    "rev-parse",
+                    "--abbrev-ref",
+                    &format!("{branch}@{{upstream}}")
+                ]
+            ),
+            format!("origin/{branch}")
+        );
     }
 
     /// `run` reads the config, warning about one that does not parse,

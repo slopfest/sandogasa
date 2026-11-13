@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cbspkg 1 2026-11-11 "sandogasa 0.28.1" "Sandogasa Manual"
+.TH cbspkg 1 2026-11-13 "sandogasa 0.28.1" "Sandogasa Manual"
 .SH NAME
 cbspkg \- Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedora
 .SH SYNOPSIS
@@ -207,7 +207,7 @@ proposed\-updates
 .RE
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
-Create the repo without asking
+Create the repo, and clone it into a \-C directory that does not exist yet, without asking
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

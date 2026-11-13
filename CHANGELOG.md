@@ -58,6 +58,27 @@ before.
 sandogasa-bodhi gains `BodhiClient::updates_for_bugs`, the updates
 carrying any of a list of bugs, in one paginated query.
 
+### cbspkg sig-repo can take over a Proposed Update with no checkout yet
+
+Picking up a Proposed Update someone else prepared, such as a git CVE
+fix whose author handed over the builds during a CBS outage, starts
+with no checkout of the package. `cbspkg sig-repo -C
+~/src/centos/proposed_updates/rpms/git <MR URL>` then stopped with
+"cannot run git: No such file or directory", though git was
+installed: it was git's working directory that did not exist. Without
+`-C`, sig-repo used the current directory, whatever it was, and could
+have added the SIG's remote to an unrelated repository and pushed from
+it.
+
+For a merge request, the directory is now checked before GitLab is
+touched. One that does not exist, or is empty, gets a clone of the
+SIG's repo, after asking (or with `-y`), and the merge request is
+pushed from it, or, when its branch is there already, tracked by a
+local branch to build from; `--dry-run` only says it would. A
+directory holding anything other than a checkout of the package is
+refused. A tracking issue the SIG has already is reported as "Already
+tracked in", since nothing was filed.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own
