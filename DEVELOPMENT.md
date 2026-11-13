@@ -138,6 +138,15 @@ gate over and over, because then those trees are live caches and each
 iteration becomes a full instrumented rebuild. `cargo clean` is for
 stepping away from the repo, or for running out of space for real.
 
+`target/debug` is the tree `make sweep` keeps, and it grows on its own:
+cargo writes a new copy of each artifact and incremental cache for every
+set of flags (clippy, `--all-features`, `--all-targets`, tests, a new
+toolchain) and never removes the old ones. It reached 160 GB in a week
+in November 2026. `cargo clean --workspace` reclaims it at the cost of
+rebuilding only the workspace's own crates, since the compiled
+dependencies stay; check `du -sh target/*` after a release, and run it
+when `target/debug` is tens of GB.
+
 ## A tool crate's library target is internal, not semver surface
 
 Several tools carry a `src/lib.rs` (dbranch, hs-relmon, koji-lag, …)
