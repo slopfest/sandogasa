@@ -295,6 +295,7 @@ async fn read_changelogs(
 /// Asks nothing; bugs in `already_listed` are not proposed again.
 pub(crate) async fn gather_bugs(
     bz: &sandogasa_bugzilla::BzClient,
+    bodhi: &BodhiClient,
     report: &crate::check_update::CheckUpdateReport,
     already_listed: &[u64],
     koji_profile: Option<&str>,
@@ -312,6 +313,7 @@ pub(crate) async fn gather_bugs(
             candidates: Vec::new(),
             already_met: Vec::new(),
             closed: Vec::new(),
+            elsewhere: Vec::new(),
         };
     }
     // The changelogs, open bugs and CVE fixes take a while on a big
@@ -355,7 +357,7 @@ pub(crate) async fn gather_bugs(
         unsatisfied: &report.installability_issues,
         full_analysis: report.full_analysis,
     };
-    crate::discover::candidates(
+    let mut proposal = crate::discover::candidates(
         bz,
         &changelogs,
         &old_versions,
@@ -363,7 +365,32 @@ pub(crate) async fn gather_bugs(
         already_listed,
         verbose,
     )
-    .await
+    .await;
+    // An older update for the same release may carry some already, the
+    // previous version's update request on the previous version's
+    // update, say.
+    let ids: Vec<u64> = proposal.candidates.iter().map(|c| c.bug_id).collect();
+    if !ids.is_empty() {
+        let started = std::time::Instant::now();
+        match bodhi.updates_for_bugs(&ids).await {
+            Ok(updates) => {
+                if verbose {
+                    eprintln!(
+                        "[bugs] read the {} update(s) carrying the proposed bugs from Bodhi in {:.1}s",
+                        updates.len(),
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+                let carried = crate::discover::carried_elsewhere(&updates, &nvrs);
+                crate::discover::set_aside_carried(&mut proposal, &carried);
+            }
+            Err(e) => eprintln!(
+                "warning: could not ask Bodhi which updates carry the proposed bugs ({e}); \
+                 proposing them all"
+            ),
+        }
+    }
+    proposal
 }
 
 /// Propose bugs the update looks like it closes, and return the ones
@@ -374,6 +401,7 @@ pub(crate) async fn gather_bugs(
 /// being asked. Each candidate is shown with how it was found.
 async fn propose_bugs(
     bz: &sandogasa_bugzilla::BzClient,
+    bodhi: &BodhiClient,
     report: &crate::check_update::CheckUpdateReport,
     already_listed: &[u64],
     koji_profile: Option<&str>,
@@ -383,10 +411,17 @@ async fn propose_bugs(
         candidates,
         already_met,
         closed,
-    } = gather_bugs(bz, report, already_listed, koji_profile, verbose).await;
+        elsewhere,
+    } = gather_bugs(bz, bodhi, report, already_listed, koji_profile, verbose).await;
     if !already_met.is_empty() {
         eprintln!("\nLeft off, already met before this update (theirs to close):");
         for c in &already_met {
+            eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
+        }
+    }
+    if !elsewhere.is_empty() {
+        eprintln!("\nLeft off, another update for this release has them:");
+        for c in &elsewhere {
             eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
         }
     }
@@ -779,6 +814,7 @@ pub fn run(
     if !opts.assume_yes {
         bugs.extend(rt.block_on(propose_bugs(
             &bz,
+            &BodhiClient::new(),
             report,
             &bugs,
             opts.koji_profile.as_deref(),
@@ -878,6 +914,107 @@ mod tests {
             rpmfusion: vec![],
             verbose: false,
         }
+    }
+
+    /// A check of `sandogasa`, new to rawhide so no changelog is read,
+    /// with Bugzilla and Bodhi served by `server`: two update requests
+    /// open, the older one already on the 0.28.0 update for rawhide.
+    async fn proposal_with_an_older_update(
+        server: &wiremock::MockServer,
+        bodhi_status: u16,
+    ) -> crate::discover::Proposal {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, ResponseTemplate};
+        let bug = |id: u64, version: &str| {
+            serde_json::json!({
+                "id": id,
+                "summary": format!("sandogasa-{version} is available"),
+                "component": ["sandogasa"],
+                "status": "NEW",
+                "resolution": "",
+                "product": "Fedora",
+                "version": ["rawhide"],
+                "severity": "unspecified",
+                "priority": "unspecified",
+                "assigned_to": "salimma@fedoraproject.org",
+                "creator": "upstream-release-monitoring@fedoraproject.org",
+                "creation_time": "2026-11-04T00:00:00Z",
+                "last_change_time": "2026-11-04T00:00:00Z",
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .and(query_param("component", "sandogasa"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"bugs": [bug(2569815, "0.28.0"), bug(2572044, "0.28.1")]}),
+            ))
+            .with_priority(1)
+            .mount(server)
+            .await;
+        // The FTBFS and FTI trackers: none.
+        Mock::given(method("GET"))
+            .and(path("/rest/bug"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": []})))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/updates/"))
+            .and(query_param("bugs", "2569815"))
+            .and(query_param("bugs", "2572044"))
+            .respond_with(
+                ResponseTemplate::new(bodhi_status).set_body_json(serde_json::json!({
+                    "updates": [{
+                        "alias": "FEDORA-2026-0280000000",
+                        "status": "testing",
+                        "builds": [{"nvr": "sandogasa-0.28.0-1.fc46"}],
+                        "bugs": [{"bug_id": 2569815}],
+                    }],
+                    "page": 1, "pages": 1, "total": 1,
+                })),
+            )
+            .expect(1)
+            .mount(server)
+            .await;
+        let mut report: crate::check_update::CheckUpdateReport =
+            serde_json::from_value(serde_json::json!({
+                "input": "sandogasa-0.28.1-1.fc46",
+                "branch": "rawhide",
+                "updated_packages": ["sandogasa"],
+                "full_analysis": true,
+                "reverse_deps": {}
+            }))
+            .unwrap();
+        report.changes = vec![crate::check_update::PackageChange {
+            package: "sandogasa".to_string(),
+            old: None,
+            new: "0.28.1-1.fc46".to_string(),
+        }];
+        let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
+        let bodhi = BodhiClient::with_base_url(&server.uri());
+        gather_bugs(&bz, &bodhi, &report, &[], None, true).await
+    }
+
+    #[tokio::test]
+    async fn a_bug_an_older_update_for_the_release_carries_is_left_off() {
+        let server = wiremock::MockServer::start().await;
+        let proposal = proposal_with_an_older_update(&server, 200).await;
+        let ids: Vec<u64> = proposal.candidates.iter().map(|c| c.bug_id).collect();
+        assert_eq!(ids, vec![2572044]);
+        assert_eq!(proposal.elsewhere.len(), 1);
+        assert_eq!(proposal.elsewhere[0].bug_id, 2569815);
+        assert_eq!(
+            proposal.elsewhere[0].source,
+            "on FEDORA-2026-0280000000 (testing) already"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_bodhi_every_bug_is_still_proposed() {
+        let server = wiremock::MockServer::start().await;
+        let proposal = proposal_with_an_older_update(&server, 500).await;
+        let ids: Vec<u64> = proposal.candidates.iter().map(|c| c.bug_id).collect();
+        assert_eq!(ids, vec![2569815, 2572044]);
+        assert!(proposal.elsewhere.is_empty());
     }
 
     #[test]

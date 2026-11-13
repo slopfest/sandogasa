@@ -67,6 +67,9 @@ pub struct Proposal {
     /// Bugs that would be proposed but are closed already, each with
     /// how (#125).
     pub closed: Vec<Candidate>,
+    /// Open bugs that would be proposed, but another update for the
+    /// same release carries already, each naming that update.
+    pub elsewhere: Vec<Candidate>,
 }
 
 /// Why `bug`, open against a package the update builds, was met before
@@ -347,7 +350,80 @@ pub async fn candidates(
         candidates: out,
         already_met,
         closed,
+        elsewhere: Vec::new(),
     }
+}
+
+/// The dist tag an NVR was built with, which says the release it is
+/// for: `el10_4` in `sandogasa-0.28.1-2.el10_4`, `el9.next` for EPEL
+/// Next, `fc46`. `None` when the release carries none.
+fn dist_tag(nvr: &str) -> Option<&str> {
+    let (_, release) = nvr.rsplit_once('-')?;
+    let mut found = None;
+    let mut at = 0;
+    for segment in release.split('.') {
+        let tagged = ["el", "fc"].iter().any(|p| {
+            segment
+                .strip_prefix(p)
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        });
+        if tagged {
+            found = Some(at);
+        }
+        at += segment.len() + 1;
+    }
+    found.map(|start| &release[start..])
+}
+
+/// The bugs another live update for the same release as `ours` (the
+/// update's builds) carries, each with which one. That update closes
+/// them itself: Bodhi keeps an older update on its way to stable live
+/// alongside a newer one (sandogasa 0.28.0's went stable while 0.28.1's
+/// went to testing), so proposing them again only repeats them. An
+/// obsoleted or unpushed update closes nothing, and an update holding
+/// any of `ours` is this update itself, being revisited: neither counts.
+pub fn carried_elsewhere(
+    updates: &[sandogasa_bodhi::models::Update],
+    ours: &[String],
+) -> BTreeMap<u64, String> {
+    let releases: Vec<&str> = ours.iter().filter_map(|n| dist_tag(n)).collect();
+    let mut carried = BTreeMap::new();
+    for update in updates {
+        if !matches!(update.status.as_str(), "pending" | "testing" | "stable") {
+            continue;
+        }
+        if update.builds.iter().any(|b| ours.contains(&b.nvr)) {
+            continue;
+        }
+        let same_release = update
+            .builds
+            .iter()
+            .any(|b| dist_tag(&b.nvr).is_some_and(|d| releases.contains(&d)));
+        if !same_release {
+            continue;
+        }
+        for bug in &update.bugs {
+            carried
+                .entry(bug.bug_id)
+                .or_insert_with(|| format!("on {} ({}) already", update.alias, update.status));
+        }
+    }
+    carried
+}
+
+/// Move the proposed bugs `carried` names out of the proposal, into
+/// [`Proposal::elsewhere`], each saying which update has it.
+pub fn set_aside_carried(proposal: &mut Proposal, carried: &BTreeMap<u64, String>) {
+    let (kept, moved): (Vec<_>, Vec<_>) = std::mem::take(&mut proposal.candidates)
+        .into_iter()
+        .partition(|c| !carried.contains_key(&c.bug_id));
+    proposal.candidates = kept;
+    proposal
+        .elsewhere
+        .extend(moved.into_iter().map(|c| Candidate {
+            source: carried[&c.bug_id].clone(),
+            ..c
+        }));
 }
 
 /// Open bugs against any of the update's packages, as Bugzilla
@@ -724,5 +800,109 @@ mod tests {
             Some("named in widget's new changelog entries")
         );
         assert!(!found.contains_key(&2200001));
+    }
+
+    fn update(
+        alias: &str,
+        status: &str,
+        nvrs: &[&str],
+        bugs: &[u64],
+    ) -> sandogasa_bodhi::models::Update {
+        serde_json::from_value(serde_json::json!({
+            "alias": alias,
+            "status": status,
+            "builds": nvrs.iter().map(|n| serde_json::json!({"nvr": n})).collect::<Vec<_>>(),
+            "bugs": bugs.iter().map(|b| serde_json::json!({"bug_id": b})).collect::<Vec<_>>(),
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn dist_tag_is_the_release_s_dist_part() {
+        assert_eq!(dist_tag("sandogasa-0.28.1-2.el10_4"), Some("el10_4"));
+        assert_eq!(dist_tag("sandogasa-0.28.1-1.fc46"), Some("fc46"));
+        assert_eq!(dist_tag("foo-1.0-0.1.rc1.fc46"), Some("fc46"));
+        assert_eq!(dist_tag("foo-1.0-1.el9.next"), Some("el9.next"));
+        assert_eq!(dist_tag("foo-1.0-1"), None);
+        assert_eq!(dist_tag("foo"), None);
+    }
+
+    #[test]
+    fn a_bug_on_a_live_update_for_the_same_release_is_carried() {
+        let ours = vec!["sandogasa-0.28.1-2.el10_4".to_string()];
+        let updates = [
+            update(
+                "FEDORA-EPEL-2026-aaaa",
+                "testing",
+                &["sandogasa-0.28.0-1.el10_4"],
+                &[2569815],
+            ),
+            // Another release's update closes nothing here.
+            update(
+                "FEDORA-2026-bbbb",
+                "testing",
+                &["sandogasa-0.28.0-1.fc46"],
+                &[2572044],
+            ),
+            // An obsoleted update handed its bugs on.
+            update(
+                "FEDORA-EPEL-2026-cccc",
+                "obsolete",
+                &["sandogasa-0.27.9-1.el10_4"],
+                &[2500000],
+            ),
+            // This update itself, being revisited.
+            update(
+                "FEDORA-EPEL-2026-dddd",
+                "pending",
+                &["sandogasa-0.28.1-2.el10_4"],
+                &[2572045],
+            ),
+        ];
+        let carried = carried_elsewhere(&updates, &ours);
+        assert_eq!(
+            carried.into_iter().collect::<Vec<_>>(),
+            vec![(
+                2569815,
+                "on FEDORA-EPEL-2026-aaaa (testing) already".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_carried_bug_is_set_aside_with_its_update() {
+        let mut proposal = Proposal {
+            candidates: vec![
+                Candidate {
+                    bug_id: 2569815,
+                    summary: "sandogasa-0.28.0 is available".to_string(),
+                    source: "open against sandogasa".to_string(),
+                },
+                Candidate {
+                    bug_id: 2572044,
+                    summary: "sandogasa-0.28.1 is available".to_string(),
+                    source: "open against sandogasa".to_string(),
+                },
+            ],
+            already_met: Vec::new(),
+            closed: Vec::new(),
+            elsewhere: Vec::new(),
+        };
+        let carried = BTreeMap::from([(
+            2569815,
+            "on FEDORA-EPEL-2026-aaaa (testing) already".to_string(),
+        )]);
+        set_aside_carried(&mut proposal, &carried);
+        assert_eq!(proposal.candidates.len(), 1);
+        assert_eq!(proposal.candidates[0].bug_id, 2572044);
+        assert_eq!(proposal.elsewhere.len(), 1);
+        assert_eq!(
+            proposal.elsewhere[0].summary,
+            "sandogasa-0.28.0 is available"
+        );
+        assert_eq!(
+            proposal.elsewhere[0].source,
+            "on FEDORA-EPEL-2026-aaaa (testing) already"
+        );
     }
 }

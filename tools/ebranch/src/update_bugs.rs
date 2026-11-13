@@ -400,6 +400,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
     let report = &kept.curated();
     let proposal = rt.block_on(crate::submit::gather_bugs(
         &bz,
+        &bodhi,
         report,
         &[],
         opts.koji_profile.as_deref(),
@@ -461,6 +462,18 @@ pub fn run(opts: &Options) -> Result<(), String> {
         .into_iter()
         .map(|i| met[i].bug_id)
         .collect();
+    }
+
+    let elsewhere: Vec<&crate::discover::Candidate> = proposal
+        .elsewhere
+        .iter()
+        .filter(|c| !current.contains(&c.bug_id))
+        .collect();
+    if !elsewhere.is_empty() {
+        eprintln!("\nLeft off, another update for this release has them:");
+        for c in &elsewhere {
+            eprintln!("  #{} {} ({})", c.bug_id, c.summary, c.source);
+        }
     }
 
     let new: Vec<&crate::discover::Candidate> = proposal
@@ -863,6 +876,84 @@ mod tests {
             ..opts_at(&server.uri(), dir.path())
         };
         run(&opts).unwrap();
+    }
+
+    #[test]
+    fn a_dry_run_shows_the_proposal_and_takes_nothing_unasked() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+        rt.block_on(async {
+            serve_update(&server, &["sandogasa-0.28.1-1.fc46"], &[], true).await;
+            let bug = |id: u64, version: &str| {
+                serde_json::json!({
+                    "id": id,
+                    "summary": format!("sandogasa-{version} is available"),
+                    "component": ["sandogasa"],
+                    "status": "NEW",
+                    "resolution": "",
+                    "product": "Fedora",
+                    "version": ["rawhide"],
+                    "severity": "unspecified",
+                    "priority": "unspecified",
+                    "assigned_to": "salimma@fedoraproject.org",
+                    "creator": "upstream-release-monitoring@fedoraproject.org",
+                    "creation_time": "2026-11-04T00:00:00Z",
+                    "last_change_time": "2026-11-04T00:00:00Z",
+                })
+            };
+            Mock::given(method("GET"))
+                .and(path("/rest/bug"))
+                .and(query_param("component", "sandogasa"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({"bugs": [bug(2569815, "0.28.0"), bug(2572044, "0.28.1")]}),
+                ))
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/rest/bug"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"bugs": []})),
+                )
+                .mount(&server)
+                .await;
+            // The 0.28.0 update for the same release has the older request.
+            Mock::given(method("GET"))
+                .and(path("/updates/"))
+                .and(query_param("bugs", "2569815"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "updates": [{
+                        "alias": "FEDORA-2026-0280000000",
+                        "status": "testing",
+                        "builds": [{"nvr": "sandogasa-0.28.0-1.fc46"}],
+                        "bugs": [{"bug_id": 2569815}],
+                    }],
+                    "page": 1, "pages": 1, "total": 1,
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            // Nothing may be saved.
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(0)
+                .mount(&server)
+                .await;
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let mut check = KeptCheck::new(
+            &report_of(&[("sandogasa", None, "0.28.1-1.fc46")]),
+            &[],
+            chrono::Utc::now(),
+        );
+        check.nvrs = vec!["sandogasa-0.28.1-1.fc46".to_string()];
+        keep(dir.path(), &["f46-build-side-158330".to_string()], &check).unwrap();
+        // The newer request is proposed but, without a terminal, not
+        // taken, so there is nothing to change.
+        run(&opts_at(&server.uri(), dir.path())).unwrap();
     }
 
     #[test]

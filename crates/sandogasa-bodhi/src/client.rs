@@ -245,6 +245,39 @@ impl BodhiClient {
         Ok(all_updates)
     }
 
+    /// The updates carrying any of `bug_ids`, whatever their status, in
+    /// one query (paginated): Bodhi takes the `bugs` parameter
+    /// repeated. Each update lists its bugs, which is how a caller
+    /// matches it back to the bugs it asked about.
+    pub async fn updates_for_bugs(&self, bug_ids: &[u64]) -> Result<Vec<Update>, reqwest::Error> {
+        let mut all_updates = Vec::new();
+        if bug_ids.is_empty() {
+            return Ok(all_updates);
+        }
+        let mut page = 1;
+        loop {
+            let mut query: Vec<(&str, String)> =
+                bug_ids.iter().map(|id| ("bugs", id.to_string())).collect();
+            query.push(("rows_per_page", "100".to_string()));
+            query.push(("page", page.to_string()));
+            let resp: UpdatesResponse = self
+                .client
+                .get(format!("{}/updates/", self.base_url))
+                .query(&query)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            all_updates.extend(resp.updates);
+            if page >= resp.pages {
+                break;
+            }
+            page += 1;
+        }
+        Ok(all_updates)
+    }
+
     /// Fetch active Fedora and EPEL releases from the Bodhi API.
     ///
     /// Returns releases with state "current", "pending", or "frozen",
@@ -680,6 +713,125 @@ mod tests {
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[1].builds[0].nvr, "bluez-5.88-1.fc46");
         assert!(client.updates_for_builds(&[]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn updates_for_user_pages_until_the_limit_and_reports_progress() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        let page = |n: u64, aliases: &[&str]| {
+            serde_json::json!({
+                "updates": aliases
+                    .iter()
+                    .map(|a| serde_json::json!({"alias": a, "status": "stable"}))
+                    .collect::<Vec<_>>(),
+                "page": n, "pages": 3, "total": 6,
+            })
+        };
+        for (n, aliases) in [
+            (1, ["FEDORA-2026-a", "FEDORA-2026-b"]),
+            (2, ["FEDORA-2026-c", "FEDORA-2026-d"]),
+        ] {
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path("/updates/"))
+                .and(wiremock::matchers::query_param("user", "salimma"))
+                .and(wiremock::matchers::query_param(
+                    "submitted_since",
+                    "2026-10-01",
+                ))
+                .and(wiremock::matchers::query_param(
+                    "submitted_before",
+                    "2026-11-01",
+                ))
+                .and(wiremock::matchers::query_param("rows_per_page", "3"))
+                .and(wiremock::matchers::query_param("page", n.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(page(n, &aliases)))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let mut seen = Vec::new();
+        let updates = client
+            .updates_for_user(
+                "salimma",
+                3,
+                chrono::NaiveDate::from_ymd_opt(2026, 10, 1),
+                chrono::NaiveDate::from_ymd_opt(2026, 11, 1),
+                |page, pages, count| seen.push((page, pages, count)),
+            )
+            .await
+            .unwrap();
+        // The third page is never asked for, and the extra row is cut.
+        let aliases: Vec<&str> = updates.iter().map(|u| u.alias.as_str()).collect();
+        assert_eq!(aliases, ["FEDORA-2026-a", "FEDORA-2026-b", "FEDORA-2026-c"]);
+        assert_eq!(seen, [(1, 3, 2), (2, 3, 4)]);
+    }
+
+    #[tokio::test]
+    async fn comments_for_user_asks_for_the_limit() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/comments/"))
+            .and(wiremock::matchers::query_param("user", "salimma"))
+            .and(wiremock::matchers::query_param("rows_per_page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "comments": [
+                    {"id": 2, "text": "Works for me", "karma": 1},
+                    {"id": 1, "text": "Still broken", "karma": -1},
+                ],
+                "page": 1, "pages": 1, "total": 2,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let comments = client.comments_for_user("salimma", 2).await.unwrap();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[1].karma, -1);
+        // A failing Bodhi is an error, not an empty list.
+        let down = BodhiClient::with_base_url("http://127.0.0.1:9");
+        assert!(down.comments_for_user("salimma", 2).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn updates_for_bugs_asks_about_all_of_them_at_once() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .and(wiremock::matchers::query_param("bugs", "2569815"))
+            .and(wiremock::matchers::query_param("bugs", "2572044"))
+            .and(wiremock::matchers::query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [{
+                    "alias": "FEDORA-EPEL-2026-0123456789", "status": "testing",
+                    "builds": [{"nvr": "sandogasa-0.28.0-1.el10_4"}],
+                    "bugs": [{"bug_id": 2569815}],
+                }],
+                "page": 1, "pages": 2, "total": 2,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .and(wiremock::matchers::query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "updates": [{
+                    "alias": "FEDORA-2026-1ebc714fec", "status": "stable",
+                    "builds": [{"nvr": "sandogasa-0.28.0-1.fc46"}],
+                    "bugs": [{"bug_id": 2569815}],
+                }],
+                "page": 2, "pages": 2, "total": 2,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let updates = client.updates_for_bugs(&[2569815, 2572044]).await.unwrap();
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].bugs[0].bug_id, 2569815);
+        assert_eq!(updates[1].alias, "FEDORA-2026-1ebc714fec");
+        assert!(client.updates_for_bugs(&[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1143,6 +1295,121 @@ mod tests {
 
         let comments = client.comments_for_user("nobody", 1).await.unwrap();
         assert!(comments.is_empty());
+    }
+
+    #[test]
+    fn the_default_client_is_fedora_s_bodhi() {
+        assert_eq!(BodhiClient::default().base_url, BODHI_API_BASE);
+    }
+
+    #[tokio::test]
+    async fn each_query_reads_every_page() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri());
+        for n in [1u64, 2] {
+            Mock::given(method("GET"))
+                .and(wiremock::matchers::path("/updates/"))
+                .and(wiremock::matchers::query_param("page", n.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "updates": [{"alias": format!("FEDORA-2026-{n}"), "status": "stable"}],
+                    "page": n, "pages": 2, "total": 2,
+                })))
+                .mount(&server)
+                .await;
+        }
+        let two = |updates: Vec<Update>| updates.into_iter().map(|u| u.alias).collect::<Vec<_>>();
+        let want = ["FEDORA-2026-1", "FEDORA-2026-2"];
+        assert_eq!(
+            two(client
+                .updates_for_package("sandogasa", "F46", &["testing"])
+                .await
+                .unwrap()),
+            want
+        );
+        assert_eq!(
+            two(client
+                .updates_for_build("sandogasa-0.28.1-1.fc46")
+                .await
+                .unwrap()),
+            want
+        );
+        let nvrs = ["sandogasa-0.28.1-1.fc46".to_string()];
+        assert_eq!(two(client.updates_for_builds(&nvrs).await.unwrap()), want);
+    }
+
+    #[tokio::test]
+    async fn a_refused_login_says_to_log_in_again() {
+        use wiremock::matchers::path;
+
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri())
+            .with_token("tok-expired".to_string())
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/oidc/login-token"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("token expired"))
+            .mount(&server)
+            .await;
+        // Nothing is posted without a session.
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let err = client
+            .comment("FEDORA-2026-94cb04410a", "", 1, &[])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bodhi login failed (HTTP 401"), "{err}");
+        assert!(err.contains("token expired"), "{err}");
+        assert!(err.contains("re-authenticate with the bodhi CLI"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn new_update_from_builds_names_each_build() {
+        use wiremock::matchers::{body_string_contains, path};
+
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri())
+            .with_token("tok-123".to_string())
+            .unwrap();
+        Mock::given(method("GET"))
+            .and(path("/oidc/login-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/csrf"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "csrf_token": "csrf-abc"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/updates/"))
+            .and(body_string_contains("builds=sandogasa-0.28.1-2.el10_4"))
+            .and(body_string_contains("builds=rust-uucore-0.2.0-1.el10_4"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "alias": "FEDORA-EPEL-2026-0281000000",
+                "status": "pending",
+                "builds": [
+                    {"nvr": "sandogasa-0.28.1-2.el10_4"},
+                    {"nvr": "rust-uucore-0.2.0-1.el10_4"}
+                ],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let req = crate::models::NewUpdateFromTag {
+            source: crate::models::UpdateSource::Builds(vec![
+                "sandogasa-0.28.1-2.el10_4".to_string(),
+                "rust-uucore-0.2.0-1.el10_4".to_string(),
+            ]),
+            ..from_tag_request()
+        };
+        let resp = client.new_update_from_tag(&req).await.unwrap();
+        assert_eq!(resp.aliases(), ["FEDORA-EPEL-2026-0281000000"]);
     }
 
     fn from_tag_request() -> crate::models::NewUpdateFromTag {

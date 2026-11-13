@@ -40,6 +40,24 @@ through one `multiCall` of `getBuild`, with the `hub::BUILD_*` state
 constants, and sandogasa-koji gains `build_state`, the same for one
 build through `koji call getBuild`. Fixes #137.
 
+### ebranch leaves off bugs another update for the release already carries
+
+Submitting sandogasa 0.28.1 for EPEL 10.4 with `ebranch check-update
+--submit` proposed both "sandogasa-0.28.0 is available" and
+"sandogasa-0.28.1 is available", though the 0.28.0 update for that
+release, on its way to stable, already had the first. Bodhi kept that
+update live alongside the new one, so it would close its own bug. The
+proposal, in check-update and update-bugs alike, now asks Bodhi in one
+request which updates carry the bugs it found. A bug that another
+update for the same release has, pending, in testing or stable, is left
+off and listed apart with that update's name. An update for another
+release, or one obsoleted or unpushed, does not count. When Bodhi
+cannot be asked, a warning says so and every bug is proposed as
+before.
+
+sandogasa-bodhi gains `BodhiClient::updates_for_bugs`, the updates
+carrying any of a list of bugs, in one paginated query.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own
