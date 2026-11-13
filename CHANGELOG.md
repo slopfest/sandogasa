@@ -79,6 +79,37 @@ directory holding anything other than a checkout of the package is
 refused. A tracking issue the SIG has already is reported as "Already
 tracked in", since nothing was filed.
 
+### cbspkg sig-repo carries a package's Proposed Updates together
+
+A Proposed Update often comes as a pair of CentOS Stream merge
+requests, the same fix for `c9s` and `c10s`, and `sig-repo` took one
+per run, leaving the checkout on whatever branch it was on. It now
+takes several merge request URLs of one package, read from GitLab in
+one request. Given just the package, `cbspkg sig-repo --sig
+proposed-updates git`, it reads the SIG repo's open tracking issues
+and carries every merge request they name, skipping one closed in
+CentOS Stream without being merged. Either way the run ends on the
+newest branch carried, the newest Stream release's, unless the
+checkout has uncommitted changes. Merge requests of different
+packages, or URLs mixed with a package name, are refused.
+
+A merge request a tracking issue names that is gone, closed without
+being merged (often replaced by another for the same branch), or names
+no RHEL issue is listed as skipped rather than ending the run. Run
+outside a checkout of the package, the repo's settings are still seen
+to and only the carrying is left out. A local branch left behind the
+SIG's by an earlier revision of the merge request is not checked out,
+and a checkout git refuses, as for an untracked file the branch has,
+is reported without failing the run. When the tracking issues cannot
+be read, a package-only run stops instead of reporting nothing to
+carry.
+
+sandogasa-gitlab gains `Client::merge_requests`, a project's merge
+requests by iid in one request, and `Client::list_issues` now reads
+every page: GitLab answers 20 issues at a time, so cpu-sig-tracker's
+`list-issues`, `ping`, `status`, `timeline` and `untag` missed a
+project's issues past the twentieth. Resolves #143.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

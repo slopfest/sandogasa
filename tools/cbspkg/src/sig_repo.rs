@@ -31,10 +31,10 @@ pub const MIRRORED_BRANCHES: &str = "^c[0-9]+s$";
 
 #[derive(clap::Args)]
 pub struct SigRepoArgs {
-    /// A CentOS Stream merge request URL (a Proposed Update), or a
-    /// package name
-    #[arg(value_name = "MR_URL|PACKAGE")]
-    pub target: String,
+    /// CentOS Stream merge request URLs (Proposed Updates) of one
+    /// package, or a package name
+    #[arg(value_name = "MR_URL|PACKAGE", required = true, num_args = 1..)]
+    pub targets: Vec<String>,
 
     /// Show each step without doing anything
     #[arg(long)]
@@ -76,6 +76,8 @@ pub struct Change {
     pub branch: String,
     /// The merge request's head commit, when GitLab says.
     pub head: Option<String>,
+    /// GitLab's state for it: `opened`, `merged` or `closed`.
+    pub state: String,
 }
 
 /// How far a pull mirror's update has got, from its `update_status`.
@@ -258,27 +260,208 @@ fn ensure_sig_remote(
     Ok(name.to_string())
 }
 
-/// The change a CentOS Stream merge request carries, read from GitLab.
-fn change_of(base: &str, mr_url: &str) -> Result<(String, Change), Box<dyn std::error::Error>> {
+/// The package a CentOS Stream merge request URL is for, and its
+/// project and iid.
+fn stream_mr(mr_url: &str) -> Result<(String, String, u64), Box<dyn std::error::Error>> {
     let (_, project, iid) = sandogasa_gitlab::parse_mr_url(mr_url)?;
     let package = project
         .strip_prefix("redhat/centos-stream/rpms/")
         .filter(|p| !p.is_empty() && !p.contains('/'))
         .ok_or_else(|| format!("{mr_url} is not a CentOS Stream merge request"))?
         .to_string();
-    let mr = Client::new(base, &project, "")?.merge_request(iid)?;
+    Ok((package, project, iid))
+}
+
+/// The CentOS Stream merge requests at `mr_urls`, all of one package,
+/// read from GitLab in one request: the package, and each URL with its
+/// merge request, `None` for one GitLab does not have.
+#[allow(clippy::type_complexity)]
+fn read_stream_mrs(
+    base: &str,
+    mr_urls: &[String],
+) -> Result<
+    (
+        String,
+        Vec<(String, Option<sandogasa_gitlab::MergeRequest>)>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let mut package: Option<String> = None;
+    let mut project = String::new();
+    let mut wanted: Vec<(String, u64)> = Vec::new();
+    for url in mr_urls {
+        let (p, proj, iid) = stream_mr(url)?;
+        match &package {
+            Some(first) if *first != p => {
+                return Err(format!(
+                    "{url} is a merge request for {p}, not {first}: one package per run"
+                )
+                .into());
+            }
+            Some(_) => {}
+            None => package = Some(p),
+        }
+        project = proj;
+        if !wanted.iter().any(|(_, i)| *i == iid) {
+            wanted.push((url.clone(), iid));
+        }
+    }
+    let package = package.ok_or("no merge request given")?;
+    let iids: Vec<u64> = wanted.iter().map(|(_, i)| *i).collect();
+    let mut mrs = Client::new(base, &project, "")?.merge_requests(&iids)?;
+    let read = wanted
+        .into_iter()
+        .map(|(url, iid)| {
+            let at = mrs.iter().position(|m| m.iid == iid);
+            (url, at.map(|at| mrs.swap_remove(at)))
+        })
+        .collect();
+    Ok((package, read))
+}
+
+/// The change a merge request carries, or why it has none: no
+/// `Resolves: RHEL-…` line to name the SIG's branch after.
+fn change_from(mr: sandogasa_gitlab::MergeRequest) -> Result<Change, String> {
     let key = first_resolved(mr.description.as_deref().unwrap_or("")).ok_or_else(|| {
-        format!("{mr_url} has no `Resolves: RHEL-…` line to name the SIG's branch after")
+        format!(
+            "{} has no `Resolves: RHEL-…` line to name the SIG's branch after",
+            mr.web_url
+        )
     })?;
-    Ok((
-        package,
-        Change {
-            mr_url: mr.web_url,
-            iid,
-            branch: sandogasa_cbs::proposed_branch(&mr.target_branch, &key),
-            head: mr.sha,
-        },
-    ))
+    Ok(Change {
+        branch: sandogasa_cbs::proposed_branch(&mr.target_branch, &key),
+        mr_url: mr.web_url,
+        iid: mr.iid,
+        head: mr.sha,
+        state: mr.state,
+    })
+}
+
+/// `changes`, refused when two would be pushed as the same branch.
+fn distinct(changes: Vec<Change>) -> Result<Vec<Change>, String> {
+    for (n, c) in changes.iter().enumerate() {
+        if let Some(other) = changes[..n].iter().find(|o| o.branch == c.branch) {
+            return Err(format!(
+                "{} and {} would both be pushed as {}",
+                other.mr_url, c.mr_url, c.branch
+            ));
+        }
+    }
+    Ok(changes)
+}
+
+/// The changes the CentOS Stream merge requests at `mr_urls` carry, all
+/// for one package, in the order given. Any one GitLab does not have,
+/// or that names no RHEL issue, is an error.
+fn changes_of(
+    base: &str,
+    mr_urls: &[String],
+) -> Result<(String, Vec<Change>), Box<dyn std::error::Error>> {
+    let (package, read) = read_stream_mrs(base, mr_urls)?;
+    let mut changes = Vec::new();
+    for (url, mr) in read {
+        let mr = mr.ok_or_else(|| format!("{url} is not there"))?;
+        changes.push(change_from(mr)?);
+    }
+    Ok((package, distinct(changes)?))
+}
+
+/// The CentOS Stream merge requests of `package` that `issues` (the
+/// SIG's open tracking issues) name, each URL once, in the order the
+/// issues list them.
+pub fn tracked_mrs(issues: &[sandogasa_gitlab::Issue], base: &str, package: &str) -> Vec<String> {
+    let prefix = format!("{base}/redhat/centos-stream/rpms/{package}/-/merge_requests/");
+    let mut urls: Vec<String> = Vec::new();
+    for issue in issues {
+        let d = issue.description.as_deref().unwrap_or("");
+        for (at, _) in d.match_indices(&prefix) {
+            let digits: String = d[at + prefix.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            let url = format!("{prefix}{digits}");
+            if !digits.is_empty() && !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+    }
+    urls
+}
+
+/// The branch to leave the checkout on: of the branches carried, the
+/// newest Stream release's, the last given of several for it.
+pub fn newest_carried(sig: Sig, changes: &[Change]) -> Option<&str> {
+    changes
+        .iter()
+        .filter_map(|c| Some((sig.own_branch_major(&c.branch)?, c.branch.as_str())))
+        .fold(
+            None,
+            |best: Option<(u32, &str)>, (major, branch)| match best {
+                Some((m, _)) if m > major => best,
+                _ => Some((major, branch)),
+            },
+        )
+        .map(|(_, branch)| branch)
+}
+
+/// Check out `branch` in the checkout at `repo`. Left alone, saying
+/// so: when it is checked out already; when the checkout has
+/// uncommitted changes; when the local branch is behind or apart from
+/// the SIG's, as one left from an earlier revision of the merge request
+/// is; and when git refuses, as it does for an untracked file the branch
+/// has. Everything is pushed by then, so none of these fails the run.
+fn check_out_newest(
+    ui: &Ui,
+    repo: &Path,
+    sig: Sig,
+    branch: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let current = git(repo, &["branch", "--show-current"])?;
+    if current == branch {
+        println!("The checkout is on {branch} already.");
+        return Ok(());
+    }
+    if !git(repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty() {
+        println!(
+            "The checkout has uncommitted changes, so it stays on {current}: \
+             `git checkout {branch}` once they are dealt with."
+        );
+        return Ok(());
+    }
+    if !ui.dry_run {
+        let (remotes, _) = remotes(repo)?;
+        if let Some(remote) = remotes.find(Role::Sig(sig)) {
+            let local = git(repo, &["rev-parse", &format!("refs/heads/{branch}")]);
+            let theirs = git(
+                repo,
+                &[
+                    "rev-parse",
+                    &format!("refs/remotes/{}/{branch}", remote.name),
+                ],
+            );
+            if let (Ok(local), Ok(theirs)) = (local, theirs)
+                && local != theirs
+            {
+                println!(
+                    "The local {branch} is not at {}'s, so the checkout stays on {current}: \
+                     `git checkout {branch} && git merge --ff-only {}/{branch}` to catch it up.",
+                    remote.name, remote.name
+                );
+                return Ok(());
+            }
+        }
+    }
+    ui.step(&format!("Check out {branch}, the newest branch carried"));
+    let code = ui.run_status(
+        &["git", "checkout", "--quiet", branch].map(String::from),
+        repo,
+    )?;
+    match code {
+        _ if ui.dry_run => {}
+        0 => println!("Checked out {branch}."),
+        _ => println!("git would not check out {branch}, so the checkout stays on {current}."),
+    }
+    Ok(())
 }
 
 /// Wait for a new mirror's first update, checking every 3 seconds for
@@ -724,7 +907,7 @@ fn push_change(
 
 /// A local `branch` tracking `remote`'s, for the cbspkg commands that
 /// work from the checked-out branch (add-pkg, build), unless there is
-/// one; the checkout stays where it is.
+/// one. The run checks out the newest of them at the end.
 fn track_locally(
     ui: &Ui,
     repo: &Path,
@@ -767,6 +950,72 @@ fn track_locally(
     Ok(())
 }
 
+/// Whether to clone the SIG's repo into `repo` to push from: no when
+/// it is a checkout of the package, yes when there is nothing there yet
+/// and cloning is agreed to (or only shown, in a dry run). For merge
+/// requests given by URL it is asked before anything on GitLab changes;
+/// for those found in tracking issues, once the repo is known to exist,
+/// since only an existing repo has issues.
+fn confirm_clone(
+    args: &SigRepoArgs,
+    repo: &Path,
+    path: &str,
+    package: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if checkout_of(repo, package)? == Checkout::Ready {
+        return Ok(false);
+    }
+    if !args.dry_run
+        && !confirmed(
+            args,
+            &format!("Clone {path} into {}?", repo.display()),
+            &format!("cloning {path} into {}", repo.display()),
+        )?
+    {
+        return Err(format!("{path} not cloned: pass -C with a checkout of {package}").into());
+    }
+    Ok(true)
+}
+
+/// The changes the merge requests `issues` track for `package` carry.
+/// One that is gone, closed without being merged, or names no RHEL
+/// issue is left out, saying why: a tracking issue outlives a merge
+/// request replaced by another.
+fn tracked_changes(
+    base: &str,
+    path: &str,
+    package: &str,
+    issues: &[sandogasa_gitlab::Issue],
+) -> Result<Vec<Change>, Box<dyn std::error::Error>> {
+    let urls = tracked_mrs(issues, base, package);
+    if urls.is_empty() {
+        println!("{path} has no open tracking issue naming a merge request of {package}.");
+        return Ok(Vec::new());
+    }
+    sandogasa_cli::require_tools(&[("git", "sudo dnf install git-core", Some("--version"))])?;
+    let (_, read) = read_stream_mrs(base, &urls)?;
+    println!("{path}'s tracking issues name:");
+    let mut kept = Vec::new();
+    for (url, mr) in read {
+        let Some(mr) = mr else {
+            println!("  {url} (not there: skipped)");
+            continue;
+        };
+        if mr.state == "closed" {
+            println!("  {url} (closed without being merged in CentOS Stream: skipped)");
+            continue;
+        }
+        match change_from(mr) {
+            Ok(change) => {
+                println!("  {url} ({}, as {})", change.state, change.branch);
+                kept.push(change);
+            }
+            Err(why) => println!("  {url} (skipped: {why})"),
+        }
+    }
+    Ok(distinct(kept)?)
+}
+
 /// `run`, with the GitLab instance and token passed in, and no config.
 #[cfg(test)]
 pub fn run_with(
@@ -789,33 +1038,32 @@ pub fn run_configured(
         dry_run: args.dry_run,
         quiet: false,
     };
-    let is_url = args.target.contains("://");
-    let (sig, package, change) = if is_url {
+    let urls = args.targets.iter().filter(|t| t.contains("://")).count();
+    let (sig, package, mut changes) = if urls > 0 {
+        if urls < args.targets.len() {
+            return Err("give merge request URLs or one package, not both".into());
+        }
         if args.sig.is_some_and(|s| s != SigName::ProposedUpdates) {
             return Err("a CentOS Stream merge request is a Proposed Update: drop --sig".into());
         }
         sandogasa_cli::require_tools(&[("git", "sudo dnf install git-core", Some("--version"))])?;
-        let (package, change) = change_of(base, &args.target)?;
-        (Sig::ProposedUpdates, package, Some(change))
+        let (package, changes) = changes_of(base, &args.targets)?;
+        (Sig::ProposedUpdates, package, changes)
     } else {
+        let [package] = args.targets.as_slice() else {
+            return Err("one package at a time".into());
+        };
         let sig = args
             .sig
             .ok_or("say which SIG the repo is for: --sig hyperscale or --sig proposed-updates")?;
-        (Sig::from(sig), args.target.clone(), None)
+        (Sig::from(sig), package.clone(), Vec::new())
     };
+    // Proposed Updates for the package, by its merge requests, rather
+    // than one by one.
+    let from_issues = urls == 0 && sig == Sig::ProposedUpdates;
     let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
     let path = format!("{}/{package}", sig.gitlab_group());
-    let clone = change.is_some() && checkout_of(&repo, &package)? == Checkout::Clone;
-    if clone
-        && !args.dry_run
-        && !confirmed(
-            args,
-            &format!("Clone {path} into {}?", repo.display()),
-            &format!("cloning {path} into {}", repo.display()),
-        )?
-    {
-        return Err(format!("{path} not cloned: pass -C with a checkout of {package}").into());
-    }
+    let mut clone = !changes.is_empty() && confirm_clone(args, &repo, &path, &package)?;
     let merge_method = crate::config::merge_method(config, sig)?;
     let created = ensure_repo(
         &ui,
@@ -826,6 +1074,40 @@ pub fn run_configured(
         &package,
         merge_method.as_deref(),
     )?;
+    // The SIG's open tracking issues: where a package's merge requests
+    // are found, and what each one carried is reported against. Not
+    // being able to read them is an error when they say what to carry,
+    // and only leaves the report out otherwise.
+    let issues = if from_issues || !changes.is_empty() {
+        match Client::new(base, &path, token.as_deref().unwrap_or(""))?
+            .list_issues("cpu-sig-tracker", Some("opened"))
+        {
+            Ok(issues) => Some(issues),
+            Err(e) if from_issues => {
+                return Err(format!("cannot read {path}'s tracking issues: {e}").into());
+            }
+            Err(e) => {
+                eprintln!("warning: cannot read {path}'s tracking issues ({e})");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if from_issues {
+        changes = tracked_changes(base, &path, &package, issues.as_deref().unwrap_or(&[]))?;
+        // Without a checkout to push from, the repo's settings are still
+        // seen to; only the carrying is left out.
+        if !changes.is_empty() {
+            match checkout_of(&repo, &package) {
+                Ok(_) => clone = confirm_clone(args, &repo, &path, &package)?,
+                Err(why) => {
+                    println!("{why}; the merge requests are not carried.");
+                    changes.clear();
+                }
+            }
+        }
+    }
     if clone {
         let host = base.split_once("://").map_or(base, |(_, h)| h);
         ui.step(&format!(
@@ -845,13 +1127,14 @@ pub fn run_configured(
     // In a checkout of the package, the SIG's repo is a remote of it, by
     // its part (#102); outside one there is nothing to add it to.
     let in_checkout = remotes(&repo).is_ok_and(|(r, _)| r.package() == Some(package.as_str()));
-    if change.is_none() && in_checkout {
+    if changes.is_empty() && in_checkout {
         ensure_sig_remote(&ui, &repo, base, sig, &path)?;
     }
-    if let Some(change) = &change {
+    for change in &changes {
         if clone && args.dry_run {
             println!(
-                "The merge request would then be pushed from {} as {}.",
+                "{} would then be pushed from {} as {}.",
+                change.mr_url,
                 repo.display(),
                 change.branch
             );
@@ -859,7 +1142,8 @@ pub fn run_configured(
             push_change(&ui, &repo, base, &path, &package, change)?;
         }
     }
-    let pushed = change.as_ref().map(|c| c.branch.as_str());
+    let pushed =
+        newest_carried(sig, &changes).or_else(|| changes.last().map(|c| c.branch.as_str()));
     let current = ensure_default_branch(&ui, args, base, token.as_deref(), sig, &path, pushed)?;
     if !created {
         ensure_merge_method(
@@ -872,16 +1156,24 @@ pub fn run_configured(
             merge_method.as_deref(),
         )?;
     }
-    if let Some(change) = change {
-        // The tracking issue next, unless the SIG has one for it.
-        let issues = Client::new(base, &path, token.as_deref().unwrap_or(""))?
-            .list_issues("cpu-sig-tracker", Some("opened"))
-            .unwrap_or_default();
+    if let Some(newest) = pushed
+        && !(clone && args.dry_run)
+    {
+        check_out_newest(&ui, &repo, sig, newest)?;
+    }
+    // The tracking issue next, unless the SIG has one for it.
+    let Some(issues) = issues else {
+        return Ok(());
+    };
+    if !changes.is_empty() {
+        println!();
+    }
+    for change in &changes {
         match tracking_issue(&issues, &change.mr_url) {
-            Some(i) => println!("\nAlready tracked in {}.", i.web_url),
+            Some(i) => println!("{} is already tracked in {}.", change.branch, i.web_url),
             None => println!(
-                "\nNext, the SIG's tracking issue: cpu-sig-tracker file-issue {}",
-                change.mr_url
+                "Next, the SIG's tracking issue for {}: cpu-sig-tracker file-issue {}",
+                change.branch, change.mr_url
             ),
         }
     }
@@ -916,7 +1208,7 @@ mod tests {
 
     fn args(target: &str, sig: Option<SigName>) -> SigRepoArgs {
         SigRepoArgs {
-            target: target.to_string(),
+            targets: vec![target.to_string()],
             dry_run: false,
             explain: false,
             repo: None,
@@ -930,6 +1222,7 @@ mod tests {
     #[test]
     fn a_missing_repo_is_created_as_a_pull_mirror_of_stream() {
         let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
         let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
         server.mock("GET", path).with_status(404).create();
         server
@@ -1033,6 +1326,7 @@ mod tests {
     #[test]
     fn the_repo_is_made_to_open_on_its_newest_sig_branch() {
         let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
         let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
         let project = |default: &str| {
             format!(
@@ -1139,6 +1433,7 @@ mod tests {
     #[test]
     fn a_refused_default_branch_change_is_a_warning() {
         let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
         let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
         server
             .mock("GET", path)
@@ -1304,6 +1599,7 @@ mod tests {
     #[test]
     fn a_configured_merge_method_is_the_one_set() {
         let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
         let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frpm";
         existing_repo(&mut server, "proposed_updates", "merge");
         let set = server
@@ -1384,15 +1680,16 @@ mod tests {
         server
             .mock(
                 "GET",
-                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests/7",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
             )
+            .match_query(mockito::Matcher::Any)
             .with_status(200)
             .with_body(
-                serde_json::json!({
+                serde_json::json!([{
                     "iid": 7, "title": "Fix CVE", "state": "opened",
                     "web_url": mr_url, "source_branch": "fix", "target_branch": "c10s",
                     "description": "Resolves: RHEL-303721\n", "sha": head,
-                })
+                }])
                 .to_string(),
             )
             .create();
@@ -1501,15 +1798,16 @@ mod tests {
         server
             .mock(
                 "GET",
-                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests/7",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
             )
+            .match_query(mockito::Matcher::Any)
             .with_status(200)
             .with_body(
-                serde_json::json!({
+                serde_json::json!([{
                     "iid": 7, "title": "Fix CVE", "state": "opened",
                     "web_url": mr_url, "source_branch": "fix", "target_branch": "c10s",
                     "description": "Resolves: RHEL-303721\n", "sha": head,
-                })
+                }])
                 .to_string(),
             )
             .create();
@@ -1559,6 +1857,300 @@ mod tests {
         );
     }
 
+    /// The SIG repos the tests use, with no tracking issue open.
+    fn no_tracking_issues(server: &mut mockito::Server) {
+        for package in ["rpm", "rsync"] {
+            server
+                .mock(
+                    "GET",
+                    format!("/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2F{package}/issues")
+                        .as_str(),
+                )
+                .match_query(mockito::Matcher::Any)
+                .with_status(200)
+                .with_body("[]")
+                .create();
+        }
+    }
+
+    fn issue(iid: u64, description: &str) -> sandogasa_gitlab::Issue {
+        serde_json::from_value(serde_json::json!({
+            "iid": iid, "title": "t", "description": description,
+            "state": "opened", "web_url": format!("https://gitlab.com/i/{iid}"),
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_packages_merge_requests_are_found_in_its_tracking_issues() {
+        let mr = "https://gitlab.com/redhat/centos-stream/rpms/git/-/merge_requests/";
+        let issues = [
+            issue(2, &format!("Proposed update: {mr}33\nSee also {mr}33.")),
+            issue(
+                1,
+                &format!(
+                    "{mr}32, and rsync's https://gitlab.com/redhat/centos-stream/rpms/rsync/-/merge_requests/7"
+                ),
+            ),
+            issue(3, &format!("{mr} (not filed yet)")),
+        ];
+        assert_eq!(
+            tracked_mrs(&issues, "https://gitlab.com", "git"),
+            [format!("{mr}33"), format!("{mr}32")]
+        );
+        assert!(tracked_mrs(&issues, "https://gitlab.com", "bash").is_empty());
+    }
+
+    fn change(branch: &str) -> Change {
+        Change {
+            mr_url: format!("u/{branch}"),
+            iid: 1,
+            branch: branch.to_string(),
+            head: None,
+            state: "opened".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_newest_branch_carried_is_the_newest_releases_last() {
+        let sig = Sig::ProposedUpdates;
+        let c = |names: &[&str]| names.iter().map(|n| change(n)).collect::<Vec<_>>();
+        assert_eq!(
+            newest_carried(sig, &c(&["c9s-proposed-RHEL-2", "c10s-proposed-RHEL-1"])),
+            Some("c10s-proposed-RHEL-1")
+        );
+        assert_eq!(
+            newest_carried(sig, &c(&["c10s-proposed-RHEL-1", "c9s-proposed-RHEL-2"])),
+            Some("c10s-proposed-RHEL-1")
+        );
+        assert_eq!(
+            newest_carried(sig, &c(&["c10s-proposed-RHEL-1", "c10s-proposed-RHEL-3"])),
+            Some("c10s-proposed-RHEL-3")
+        );
+        assert_eq!(newest_carried(sig, &[]), None);
+    }
+
+    #[test]
+    fn merge_requests_of_one_package_or_a_package_alone() {
+        let stream = "https://gitlab.com/redhat/centos-stream/rpms";
+        let refused = |targets: &[&str]| {
+            let mut run = args(targets[0], None);
+            run.targets = targets.iter().map(|t| t.to_string()).collect();
+            run_with(&run, "http://127.0.0.1:9", None)
+                .unwrap_err()
+                .to_string()
+        };
+        let err = refused(&[
+            &format!("{stream}/git/-/merge_requests/33"),
+            &format!("{stream}/rsync/-/merge_requests/7"),
+        ]);
+        assert!(
+            err.contains("for rsync, not git: one package per run"),
+            "{err}"
+        );
+        let err = refused(&[&format!("{stream}/git/-/merge_requests/33"), "git"]);
+        assert!(err.contains("URLs or one package, not both"), "{err}");
+        let err = refused(&["git", "rsync"]);
+        assert!(err.contains("one package at a time"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn the_newest_branch_is_checked_out_unless_work_is_in_progress() {
+        let fx = crate::test_support::Fixture::proposed("c10s", &[]);
+        fx.git(&["branch", "c10s-proposed-RHEL-1"]);
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: true,
+        };
+        std::fs::write(fx.repo.join("rsync.spec"), "Name: changed\n").unwrap();
+        check_out_newest(&ui, &fx.repo, Sig::ProposedUpdates, "c10s-proposed-RHEL-1").unwrap();
+        assert_eq!(fx.git(&["branch", "--show-current"]), "c10s");
+        fx.git(&["checkout", "--quiet", "--", "rsync.spec"]);
+        check_out_newest(&ui, &fx.repo, Sig::ProposedUpdates, "c10s-proposed-RHEL-1").unwrap();
+        assert_eq!(
+            fx.git(&["branch", "--show-current"]),
+            "c10s-proposed-RHEL-1"
+        );
+        // On it already: nothing to do.
+        check_out_newest(&ui, &fx.repo, Sig::ProposedUpdates, "c10s-proposed-RHEL-1").unwrap();
+        // A local branch behind the SIG's, from an earlier revision, is
+        // not checked out.
+        fx.git(&["checkout", "--quiet", "c10s"]);
+        fx.git(&["commit", "--quiet", "--allow-empty", "-m", "newer"]);
+        fx.git(&["push", "--quiet", "sig", "c10s:c10s-proposed-RHEL-1"]);
+        fx.git(&["fetch", "--quiet", "sig"]);
+        check_out_newest(&ui, &fx.repo, Sig::ProposedUpdates, "c10s-proposed-RHEL-1").unwrap();
+        assert_eq!(fx.git(&["branch", "--show-current"]), "c10s");
+        // An untracked file the branch has makes git refuse: no error.
+        fx.git(&["branch", "--quiet", "-f", "c10s-proposed-RHEL-2", "c10s"]);
+        fx.git(&["checkout", "--quiet", "-b", "other", "c10s~1"]);
+        std::fs::write(fx.repo.join("blocker"), "mine\n").unwrap();
+        fx.git(&["checkout", "--quiet", "c10s-proposed-RHEL-2"]);
+        std::fs::write(fx.repo.join("blocker"), "theirs\n").unwrap();
+        fx.git(&["add", "blocker"]);
+        fx.git(&["commit", "--quiet", "-m", "blocker"]);
+        fx.git(&["checkout", "--quiet", "other"]);
+        std::fs::write(fx.repo.join("blocker"), "mine\n").unwrap();
+        check_out_newest(&ui, &fx.repo, Sig::ProposedUpdates, "c10s-proposed-RHEL-2").unwrap();
+        assert_eq!(fx.git(&["branch", "--show-current"]), "other");
+    }
+
+    /// git's two Proposed Updates, found from the SIG's tracking issues
+    /// rather than named: c9s and c10s are both pushed, a closed merge
+    /// request is skipped, and the checkout ends on the c10s branch.
+    #[test]
+    #[serial_test::serial]
+    fn a_packages_proposed_updates_are_carried_from_its_tracking_issues() {
+        use crate::test_support::{Fixture, git};
+        let fx = Fixture::proposed("c10s", &[]);
+        let mut server = mockito::Server::new();
+        let stream_root = fx.tmp.path().join("stream");
+        let stream = stream_root.join("redhat/centos-stream/rpms/rsync.git");
+        std::fs::create_dir_all(&stream).unwrap();
+        git(&stream, &["init", "--quiet", "--bare"]);
+        fx.git(&[
+            "config",
+            &format!("url.{}/.insteadOf", stream_root.display()),
+            &format!("{}/", server.url()),
+        ]);
+        let mut heads = Vec::new();
+        for (iid, release) in [(6, "c9s"), (7, "c10s")] {
+            fx.git(&["checkout", "--quiet", "-b", &format!("mr{iid}"), "c10s"]);
+            std::fs::write(fx.repo.join("fix.patch"), format!("{release}\n")).unwrap();
+            fx.git(&["add", "."]);
+            fx.git(&["commit", "--quiet", "-m", &format!("Fix CVE in {release}")]);
+            heads.push(fx.git(&["rev-parse", "HEAD"]));
+            fx.git(&[
+                "push",
+                "--quiet",
+                &stream.display().to_string(),
+                &format!("mr{iid}:refs/merge-requests/{iid}/head"),
+            ]);
+        }
+        fx.git(&["checkout", "--quiet", "c10s"]);
+        let url = server.url();
+        let mr = |iid: u64| format!("{url}/redhat/centos-stream/rpms/rsync/-/merge_requests/{iid}");
+        server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Frsync/merge_requests",
+            )
+            .match_query(mockito::Matcher::Regex(
+                "iids%5B%5D=6&iids%5B%5D=7&iids%5B%5D=5&iids%5B%5D=8".into(),
+            ))
+            .with_status(200)
+            .with_body(
+                serde_json::json!([
+                    {"iid": 7, "title": "Fix", "state": "opened", "web_url": mr(7),
+                     "source_branch": "a", "target_branch": "c10s",
+                     "description": "Resolves: RHEL-303721\n", "sha": heads[1]},
+                    {"iid": 6, "title": "Fix", "state": "opened", "web_url": mr(6),
+                     "source_branch": "b", "target_branch": "c9s",
+                     "description": "Resolves: RHEL-303722\n", "sha": heads[0]},
+                    // Replaced by !6: it would be pushed as the same branch.
+                    {"iid": 5, "title": "Old", "state": "closed", "web_url": mr(5),
+                     "source_branch": "c", "target_branch": "c9s",
+                     "description": "Resolves: RHEL-303722\n"},
+                ])
+                .to_string(),
+            )
+            .expect(2)
+            .create();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", format!("{path}/issues").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                serde_json::json!([
+                    {"iid": 2, "title": "c9s", "state": "opened", "web_url": "i2",
+                     "description": format!("Proposed update: {}", mr(6))},
+                    {"iid": 1, "title": "c10s", "state": "opened", "web_url": "i1",
+                     "description": format!("Proposed update: {}", mr(7))},
+                    {"iid": 3, "title": "old", "state": "opened", "web_url": "i3",
+                     "description": format!("Proposed update: {}, then {}", mr(5), mr(8))},
+                ])
+                .to_string(),
+            )
+            .create();
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "c10s-proposed-RHEL-303721"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                r#"[{"name": "c10s-proposed-RHEL-303721"}, {"name": "c9s-proposed-RHEL-303722"}]"#,
+            )
+            .create();
+        let mut run = args("rsync", Some(SigName::ProposedUpdates));
+        // From somewhere that is not a checkout: the repo is seen to,
+        // nothing is carried.
+        run.repo = Some(fx.bin.clone());
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+        assert!(
+            fx.git(&["ls-remote", "sig", "refs/heads/c9s-proposed-RHEL-303722"])
+                .is_empty()
+        );
+        run.repo = Some(fx.repo.clone());
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+
+        for (branch, head) in [
+            ("c9s-proposed-RHEL-303722", &heads[0]),
+            ("c10s-proposed-RHEL-303721", &heads[1]),
+        ] {
+            let on_sig = fx.git(&["ls-remote", "sig", &format!("refs/heads/{branch}")]);
+            assert!(on_sig.starts_with(head.as_str()), "{branch}: {on_sig}");
+        }
+        assert!(
+            fx.git(&["ls-remote", "sig", "refs/heads/c9s-proposed-RHEL-1"])
+                .is_empty()
+        );
+        assert_eq!(
+            fx.git(&["branch", "--show-current"]),
+            "c10s-proposed-RHEL-303721"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn tracking_issues_that_cannot_be_read_stop_a_package_run() {
+        let _fx = crate::test_support::Fixture::proposed("c10s", &[]);
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "c10s"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/issues").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(502)
+            .create();
+        let run = args("rsync", Some(SigName::ProposedUpdates));
+        let err = run_with(&run, &server.url(), Some("t".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cannot read CentOS/proposed_updates/rpms/rsync's tracking issues"),
+            "{err}"
+        );
+    }
+
     /// `run` reads the config, warning about one that does not parse,
     /// and reports a failure as an exit status.
     #[test]
@@ -1583,6 +2175,7 @@ mod tests {
             "git+ssh://git@gitlab.example/redhat/centos-stream/rpms/rsync.git",
         ]);
         let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
         server
             .mock(
                 "GET",
@@ -1609,6 +2202,7 @@ mod tests {
     #[test]
     fn an_existing_mirror_of_every_branch_is_narrowed() {
         let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
         let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
         server
             .mock("GET", path)

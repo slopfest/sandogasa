@@ -208,8 +208,9 @@ command.
 ### `sig-repo`
 
 ```sh
-cbspkg sig-repo <mr-url> [-C DIR] [--explain] [--dry-run] [--yes]
-cbspkg sig-repo <package> --sig hyperscale|proposed-updates [--dry-run] [--yes]
+cbspkg sig-repo <mr-url>… [-C DIR] [--explain] [--dry-run] [--yes]
+cbspkg sig-repo <package> --sig proposed-updates [-C DIR] [--explain] [--dry-run] [--yes]
+cbspkg sig-repo <package> --sig hyperscale [--dry-run] [--yes]
 ```
 
 Makes sure the SIG has its repo for a package. When it is missing, the
@@ -258,9 +259,19 @@ remote `sig-repo` adds is named after the SIG (`proposed_updates`,
 `hyperscale`); in a checkout of the package, it adds the SIG's repo
 when no remote points at it.
 
-Given a CentOS Stream merge request, a Proposed Update, it then
-carries the change to the SIG's repo, from the dist-git checkout (the
-current directory, or `-C`):
+Given CentOS Stream merge requests, Proposed Updates, it then carries
+each change to the SIG's repo. Several merge requests of one package,
+such as the same fix for `c9s` and `c10s`, are carried in one run, all
+read from GitLab in one request. Given only the package and
+`--sig proposed-updates`, it carries the merge requests the SIG repo's
+open tracking issues name, saying which it found, and skipping one
+closed in CentOS Stream without being merged.
+
+The changes are pushed from the dist-git checkout: the current
+directory, or `-C`. A `-C` directory that does not exist yet, or is
+empty, gets a clone of the SIG's repo, after asking (or with `--yes`);
+any other directory must be a checkout of the package. For each merge
+request:
 
 1. The SIG's repo is added as the remote `proposed_updates`, unless a
    remote already points at it.
@@ -275,11 +286,15 @@ current directory, or `-C`):
    `git checkout <branch>` is then the branch `add-pkg` and the other
    cbspkg commands work from.
 
+The run then checks out the newest branch it carried, the newest
+Stream release's, unless the checkout has uncommitted changes, which
+it leaves where they are.
+
 Run again for the same merge request, `sig-repo` asks the SIG's repo
 (`git ls-remote`) whether the branch is at the merge request's head
 already, and skips the fetch and push when it is, pushing only when the
 merge request has moved on. It ends by naming the SIG's tracking issue
-for the merge request, or, when there is none yet, the
+for each merge request, or, when there is none yet, the
 `cpu-sig-tracker file-issue` that files one.
 
 `--explain` narrates each step, with the git commands as they would be

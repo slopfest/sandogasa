@@ -739,6 +739,24 @@ impl Client {
         ))
     }
 
+    /// The merge requests with the internal IDs `iids`, whatever their
+    /// state, in one request (paginated) rather than one per merge
+    /// request: GitLab takes `iids[]` repeated. An iid the project does
+    /// not have is simply missing from the answer.
+    pub fn merge_requests(
+        &self,
+        iids: &[u64],
+    ) -> Result<Vec<MergeRequest>, Box<dyn std::error::Error>> {
+        if iids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let url = format!("{}/merge_requests", self.project_url());
+        let ids: Vec<String> = iids.iter().map(u64::to_string).collect();
+        let mut extra: Vec<(&str, &str)> = ids.iter().map(|i| ("iids[]", i.as_str())).collect();
+        extra.push(("state", "all"));
+        get_all_pages(&self.http, &url, &extra, &[])
+    }
+
     /// The project's open merge requests into `target_branch`, those
     /// mentioning `search` in their title or description when given.
     pub fn open_merge_requests(
@@ -815,7 +833,8 @@ impl Client {
         Ok(blocking_json_ok(resp, &format!("GitLab POST {url}"))?)
     }
 
-    /// List issues matching a label and optional state.
+    /// List issues matching a label and optional state, every page of
+    /// them: GitLab answers 20 at a time unless asked for more.
     pub fn list_issues(
         &self,
         label: &str,
@@ -825,9 +844,7 @@ impl Client {
         if let Some(s) = state {
             query.push(("state", s));
         }
-        let url = self.issues_url();
-        let resp = self.http.get(&url).query(&query).send()?;
-        Ok(blocking_json_ok(resp, &format!("GitLab GET {url}"))?)
+        get_all_pages(&self.http, &self.issues_url(), &query, &[])
     }
 
     /// Every branch of the project, paged a hundred at a time.
@@ -2211,6 +2228,34 @@ mod tests {
         list.assert();
         post.assert();
         issue_list.assert();
+    }
+
+    #[test]
+    fn merge_requests_are_read_by_iid_in_one_request() {
+        let mut server = mockito::Server::new();
+        let read = server
+            .mock(
+                "GET",
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2Fgit/merge_requests",
+            )
+            .match_query(mockito::Matcher::Regex(
+                "iids%5B%5D=32&iids%5B%5D=33&state=all".into(),
+            ))
+            .with_status(200)
+            .with_body(
+                r#"[{"iid": 33, "title": "Update git to 2.52.1", "state": "opened",
+                     "web_url": "u33", "source_branch": "a", "target_branch": "c9s"},
+                    {"iid": 32, "title": "Update git to 2.52.1", "state": "merged",
+                     "web_url": "u32", "source_branch": "b", "target_branch": "c10s"}]"#,
+            )
+            .expect(1)
+            .create();
+        let stream = Client::new(&server.url(), "redhat/centos-stream/rpms/git", "").unwrap();
+        let mrs = stream.merge_requests(&[32, 33]).unwrap();
+        read.assert();
+        assert_eq!(mrs.len(), 2);
+        assert_eq!(mrs[1].state, "merged");
+        assert!(stream.merge_requests(&[]).unwrap().is_empty());
     }
 
     #[test]
