@@ -206,13 +206,15 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         .collect();
     // How urgent it is (#98): the CVEs the change fixes, rated, and the
     // priority Red Hat gave its RHEL issues.
-    let cves = crate::triage::cves_in(
+    let cves = crate::triage::update_cves(
         [mr.title.as_str(), mr.description.as_deref().unwrap_or("")]
             .into_iter()
             .chain(
                 seen.iter()
                     .filter_map(|(_, s)| s.as_ref().map(|s| s.summary.as_str())),
             ),
+        seen.iter()
+            .filter_map(|(_, s)| s.as_ref()?.description.as_deref()),
     );
     let cve_lines = crate::triage::rated_cve_lines(&cves, args.verbose);
     let priority = crate::triage::priority_label(
@@ -519,6 +521,7 @@ struct JiraSeen {
     resolution: Option<String>,
     priority: Option<String>,
     summary: String,
+    description: Option<String>,
 }
 
 fn fetch_jira_info(key: &str, verbose: bool) -> Option<JiraSeen> {
@@ -528,6 +531,7 @@ fn fetch_jira_info(key: &str, verbose: bool) -> Option<JiraSeen> {
         resolution: issue.resolution().map(|s| s.to_string()),
         priority: issue.fields.priority.as_ref().map(|p| p.name.clone()),
         summary: issue.fields.summary.clone(),
+        description: issue.fields.description.clone(),
     })
 }
 

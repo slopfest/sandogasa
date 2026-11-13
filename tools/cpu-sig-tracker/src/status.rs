@@ -384,10 +384,17 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         .iter()
                         .filter_map(|(_, i)| i.as_ref().map(|i| i.summary.as_str()))
                         .collect();
-                    let cves = crate::triage::cves_in(
-                        [mr_title.as_deref().unwrap_or(""), body]
-                            .into_iter()
-                            .chain(summaries.iter().copied()),
+                    let cves = crate::triage::update_cves(
+                        [
+                            mr_title.as_deref().unwrap_or(""),
+                            parsed.mr_description.as_deref().unwrap_or(""),
+                            body,
+                        ]
+                        .into_iter()
+                        .chain(summaries.iter().copied()),
+                        infos
+                            .iter()
+                            .filter_map(|(_, i)| i.as_ref()?.description.as_deref()),
                     );
                     let new_cve_lines = (crate::triage::parse_cve_lines(body).is_empty()
                         && !cves.is_empty())
@@ -507,6 +514,8 @@ pub struct JiraState {
 struct BodyRefs {
     mr_url: Option<String>,
     mr_title: Option<String>,
+    /// The merge request's description, which may name the CVEs it fixes.
+    mr_description: Option<String>,
     mr_state: Option<String>,
     /// The RHEL issues the update resolves.
     jira_keys: Vec<String>,
@@ -610,6 +619,7 @@ fn resolve_body_references(body: &str, verbose: bool, force_mr_fetch: bool) -> B
     BodyRefs {
         mr_url,
         mr_title: mr.as_ref().map(|m| m.title.clone()),
+        mr_description: mr.as_ref().and_then(|m| m.description.clone()),
         mr_state: mr.as_ref().map(|m| m.state.clone()),
         jira_keys,
         structured_mr: structured_mr.is_some(),
@@ -1224,6 +1234,9 @@ struct JiraInfo {
     /// The priority Red Hat set (`Major`), for the issue's label (#98).
     priority: Option<String>,
     summary: String,
+    /// The description, which sets out the CVEs of an update fixing
+    /// several.
+    description: Option<String>,
     resolution: Option<String>,
     resolved: bool,
     resolution_date: Option<chrono::NaiveDate>,
@@ -1244,6 +1257,7 @@ fn fetch_jira(key: &str, verbose: bool) -> Option<JiraInfo> {
         status: issue.status().to_string(),
         priority: issue.fields.priority.as_ref().map(|p| p.name.clone()),
         summary: issue.fields.summary.clone(),
+        description: issue.fields.description.clone(),
         resolution: issue.resolution().map(|s| s.to_string()),
         resolved: issue.is_resolved(),
         resolution_date: issue.resolution_date(),
@@ -2055,6 +2069,7 @@ mod tests {
         let info = |verdict: Verdict, day: u32| JiraInfo {
             priority: None,
             summary: String::new(),
+            description: None,
             status: "Closed".into(),
             resolution: None,
             resolved: !matches!(verdict, Verdict::Open(_)),

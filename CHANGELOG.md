@@ -212,6 +212,27 @@ build in several tags in one request, and sandogasa-cbs
 `packages::latest_in_tags`, the same against the CBS hub.
 `tracking::stage_note` takes the issue's earlier comments. Refs #144.
 
+### cpu-sig-tracker finds the CVEs of an update fixing several
+
+git's 2.52.1 Proposed Update fixes several CVEs, yet its tracking issues
+got no `security` label and no CVE lines, and the SIG site listed it
+with no type and nothing under Fixes. An update fixing several CVEs
+does not name them in its merge request's title, and its merge request
+may only link the upstream advisory; `cpu-sig-tracker jira` sets them
+out in the RHEL issue's description instead, a section per CVE. But
+`file-issue` and `status --refresh` looked for CVEs only in the merge
+request, the tracking issue and the RHEL issues' summaries, which is
+where a single-CVE update names its CVE.
+
+Both now also read the CVEs an RHEL issue's description sets out: the
+`CVE-…:` heading of each section and its NVD link, not a CVE the text
+only mentions. `status --refresh` also reads the merge request's
+description, as `file-issue` did already. `sync-updates` takes the type
+and CVEs from the tracking issue, so it lists them once refresh has
+filled them in.
+
+sandogasa-jira's `IssueFields` gains `description`.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

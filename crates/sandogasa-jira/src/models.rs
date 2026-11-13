@@ -100,6 +100,10 @@ impl Issue {
 #[non_exhaustive]
 pub struct IssueFields {
     pub summary: String,
+    /// The description, as the v2 API gives it (wiki markup text);
+    /// `None` when the issue has none.
+    #[serde(default)]
+    pub description: Option<String>,
     pub status: NamedField,
     #[serde(default)]
     pub resolution: Option<NamedField>,

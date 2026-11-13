@@ -128,7 +128,10 @@ still under embargo: it is then hidden from the public, and from the
 SIG's site, until someone makes it public in GitLab.
 
 How urgent the update is goes on the issue too. Each CVE the merge
-request or its RHEL issues name gets a `- **CVE**:` line with its
+request or its RHEL issues name (the merge request's title or
+description, the RHEL issues' summaries, and the per-CVE sections `jira`
+writes into an RHEL issue's description, which is where an update fixing
+several CVEs names them) gets a `- **CVE**:` line with its
 severity (Red Hat's rating first, then NVD's and GitHub's), linking
 Red Hat's page for it, which lists the advisories that fix it, and
 NVD's. A change fixing a CVE is filed as `security` unless `--type`
@@ -507,7 +510,7 @@ never changes one that has a value, except an expected fix naming a
 `~proposed` build: that is the SIG's own, never stock's, and is
 replaced. It also fills in what `file-issue`
 records about urgency when the issue was filed without it: `- **CVE**:` lines for the
-CVEs its merge request or RHEL issues name, the `security` label when
+CVEs its merge request or RHEL issues name, found as `file-issue` finds them, the `security` label when
 it has no type label, and the `priority::` label for its RHEL issues'
 priority, replacing one that no longer matches.
 `--include-closed` extends the refresh scan to historical tracking

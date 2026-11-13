@@ -28,6 +28,38 @@ pub fn cves_in<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     out
 }
 
+/// The CVEs a RHEL issue's description sets out, as `cpu-sig-tracker
+/// jira` drafts it: a section per CVE, headed `CVE-…:` when there are
+/// several, each ending in the CVE's NVD link. Only those lines count,
+/// so a CVE the text mentions in passing, such as an older one a fix
+/// regressed, is not taken as one the update fixes.
+pub fn described_cves(description: &str) -> Vec<String> {
+    cves_in(description.lines().map(str::trim).filter(|l| {
+        let id = l
+            .strip_prefix("https://nvd.nist.gov/vuln/detail/")
+            .or_else(|| l.strip_suffix(':'));
+        id.is_some_and(|id| crate::sync_updates::cve_ids(id) == [id.to_ascii_uppercase()])
+    }))
+}
+
+/// The CVEs an update fixes: those named in `texts` (the merge request's
+/// title and description, the tracking issue's body, the RHEL issues'
+/// summaries), then those its RHEL issues' `descriptions` set out
+/// ([`described_cves`]), each once. An update fixing several CVEs names
+/// them in its RHEL issue's description, not in a title.
+pub fn update_cves<'a>(
+    texts: impl IntoIterator<Item = &'a str>,
+    descriptions: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut out = cves_in(texts);
+    for id in descriptions.into_iter().flat_map(described_cves) {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
 /// The label for the most urgent of `priorities` (Jira's names):
 /// `priority::critical`. `None` when none is a priority Jira ranks.
 pub fn priority_label<'a>(priorities: impl IntoIterator<Item = &'a str>) -> Option<String> {
@@ -133,6 +165,43 @@ mod tests {
         assert_eq!(parse_cve_lines(&body), ["CVE-2026-119741"]);
         // A CVE named elsewhere in the body is not a CVE line.
         assert!(parse_cve_lines("Fixes CVE-2026-2.\n").is_empty());
+    }
+
+    #[test]
+    fn a_rhel_issues_description_sets_out_the_cves_it_fixes() {
+        // As `jira` drafts it for git's 2.52.1 update (RHEL-306261).
+        let several = "Update git to 2.52.1 to address CVEs announced in https://github.blog/x/\n\
+                       \n\
+                       CVE-2026-111760:\n\
+                       Severity: high (Red Hat: Important (CVSS 3: 8.8))\n\
+                       \n\
+                       https://nvd.nist.gov/vuln/detail/CVE-2026-111760\n\
+                       \n\
+                       CVE-2026-113408:\n\
+                       Severity: medium\n\
+                       \n\
+                       A regression of the fix for CVE-2020-0001.\n\
+                       \n\
+                       https://nvd.nist.gov/vuln/detail/CVE-2026-113408\n";
+        assert_eq!(
+            described_cves(several),
+            ["CVE-2026-111760", "CVE-2026-113408"]
+        );
+        // One CVE: no heading, only its NVD link.
+        assert_eq!(
+            described_cves("Severity: high\n\nhttps://nvd.nist.gov/vuln/detail/CVE-2026-1234\n"),
+            ["CVE-2026-1234"]
+        );
+        // A heading that is not a CVE alone, or prose, is not one.
+        assert!(described_cves("See CVE-2026-1234:\nCVE-2026-1234 is bad").is_empty());
+        assert_eq!(
+            update_cves(["Fix CVE-2026-1234"], [several]),
+            ["CVE-2026-1234", "CVE-2026-111760", "CVE-2026-113408"]
+        );
+        assert_eq!(
+            update_cves(["Fix CVE-2026-111760"], [several]),
+            ["CVE-2026-111760", "CVE-2026-113408"]
+        );
     }
 
     #[test]
