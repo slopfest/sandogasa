@@ -1108,15 +1108,19 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
         .map(|l| format!("{}\n", l.trim_end()))
         .collect();
     // CVE lines (#98) sit under the JIRA ones, as file-issue writes
-    // them: the body's own, else the ones to add.
+    // them: the body's own, sorted by CVE, else the ones to add.
     let cves: String = match a.new_cve_lines {
         Some(lines) => lines.iter().map(|l| format!("{l}\n")).collect(),
-        None => a
-            .original_body
-            .lines()
-            .filter(|l| l.trim_start().starts_with(crate::triage::CVE_LINE))
-            .map(|l| format!("{}\n", l.trim_end()))
-            .collect(),
+        None => {
+            let mut lines: Vec<&str> = a
+                .original_body
+                .lines()
+                .filter(|l| l.trim_start().starts_with(crate::triage::CVE_LINE))
+                .map(str::trim_end)
+                .collect();
+            crate::triage::sort_cve_lines(&mut lines);
+            lines.iter().map(|l| format!("{l}\n")).collect()
+        }
     };
     let metadata = format!(
         "{mr_line}\n\

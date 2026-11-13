@@ -266,6 +266,14 @@ record of who had. The comment now ends by asking testers to react with
 👍 if it works or 👎 if it does not, and to comment on what broke. Each
 build gets its own comment, so its reactions are its own. Refs #144.
 
+### cpu-sig-tracker lists an update's CVEs in order
+
+git's 2.52.1 update fixes six CVEs, and its tracking issues and the SIG
+site listed them in the order its RHEL issue named them
+(CVE-2026-111760 … CVE-2026-105437, CVE-2026-114466). `file-issue`,
+`status --refresh` and `sync-updates` now sort them by year, then by
+number; refresh also sorts the CVE lines an issue already has.
+
 ## v0.28.1
 
 ### ebranch names its bundled-provides cache with a hash of its own

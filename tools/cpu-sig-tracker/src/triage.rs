@@ -42,11 +42,44 @@ pub fn described_cves(description: &str) -> Vec<String> {
     }))
 }
 
+/// `cves` in order of year, then number, compared as numbers:
+/// CVE-2026-9999 before CVE-2026-10000. An id that is not a CVE's
+/// sorts last, as it is.
+pub fn sort_cves(cves: &mut [String]) {
+    let key = |id: &str| {
+        let mut parts = id.strip_prefix("CVE-")?.splitn(2, '-');
+        let year: u32 = parts.next()?.parse().ok()?;
+        let number: u64 = parts.next()?.parse().ok()?;
+        Some((year, number))
+    };
+    cves.sort_by_key(|id| (key(id).is_none(), key(id), id.clone()));
+}
+
+/// CVE lines in the order [`sort_cves`] gives the CVEs they name.
+pub fn sort_cve_lines(lines: &mut [&str]) {
+    let mut keyed: Vec<(String, &str)> = lines
+        .iter()
+        .map(|l| {
+            (
+                parse_cve_lines(l).into_iter().next().unwrap_or_default(),
+                *l,
+            )
+        })
+        .collect();
+    let mut ids: Vec<String> = keyed.iter().map(|(id, _)| id.clone()).collect();
+    sort_cves(&mut ids);
+    keyed.sort_by_key(|(id, _)| ids.iter().position(|i| i == id));
+    for (slot, (_, line)) in lines.iter_mut().zip(keyed) {
+        *slot = line;
+    }
+}
+
 /// The CVEs an update fixes: those named in `texts` (the merge request's
 /// title and description, the tracking issue's body, the RHEL issues'
 /// summaries), then those its RHEL issues' `descriptions` set out
-/// ([`described_cves`]), each once. An update fixing several CVEs names
-/// them in its RHEL issue's description, not in a title.
+/// ([`described_cves`]), each once, sorted ([`sort_cves`]). An update
+/// fixing several CVEs names them in its RHEL issue's description, not
+/// in a title.
 pub fn update_cves<'a>(
     texts: impl IntoIterator<Item = &'a str>,
     descriptions: impl IntoIterator<Item = &'a str>,
@@ -57,6 +90,7 @@ pub fn update_cves<'a>(
             out.push(id);
         }
     }
+    sort_cves(&mut out);
     out
 }
 
@@ -195,13 +229,49 @@ mod tests {
         // A heading that is not a CVE alone, or prose, is not one.
         assert!(described_cves("See CVE-2026-1234:\nCVE-2026-1234 is bad").is_empty());
         assert_eq!(
-            update_cves(["Fix CVE-2026-1234"], [several]),
-            ["CVE-2026-1234", "CVE-2026-111760", "CVE-2026-113408"]
+            update_cves(["Fix CVE-2026-113408"], [several]),
+            ["CVE-2026-111760", "CVE-2026-113408"]
         );
         assert_eq!(
             update_cves(["Fix CVE-2026-111760"], [several]),
             ["CVE-2026-111760", "CVE-2026-113408"]
         );
+    }
+
+    #[test]
+    fn cves_sort_by_year_then_number() {
+        let mut cves: Vec<String> = [
+            "CVE-2026-114466",
+            "CVE-2026-111760",
+            "CVE-2025-99999",
+            "CVE-2026-9999",
+            "not-a-cve",
+            "CVE-2026-105437",
+        ]
+        .map(String::from)
+        .to_vec();
+        sort_cves(&mut cves);
+        assert_eq!(
+            cves,
+            [
+                "CVE-2025-99999",
+                "CVE-2026-9999",
+                "CVE-2026-105437",
+                "CVE-2026-111760",
+                "CVE-2026-114466",
+                "not-a-cve"
+            ]
+        );
+    }
+
+    #[test]
+    fn cve_lines_sort_by_the_cve_they_name() {
+        let a = cve_line("CVE-2026-114466", &[]);
+        let b = cve_line("CVE-2026-105437", &[]);
+        let c = cve_line("CVE-2025-1234", &[]);
+        let mut lines = vec![a.as_str(), b.as_str(), c.as_str()];
+        sort_cve_lines(&mut lines);
+        assert_eq!(lines, [c.as_str(), b.as_str(), a.as_str()]);
     }
 
     #[test]

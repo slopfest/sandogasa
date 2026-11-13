@@ -339,7 +339,8 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
             let mr_url = crate::status::parse_mr_line(body)
                 .map(|(u, _)| u)
                 .or_else(|| crate::status::scan_mr_url_in_body(body));
-            let cves = cve_ids(&format!("{}\n{body}", issue.title));
+            let mut cves = cve_ids(&format!("{}\n{body}", issue.title));
+            crate::triage::sort_cves(&mut cves);
             // Public yet (#80): every CVE disclosed, and the upstream
             // merge request readable anonymously, as an embargoed fix is
             // never sent as a public merge request. A source that cannot
