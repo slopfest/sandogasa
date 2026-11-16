@@ -237,7 +237,9 @@ fn remotes(repo: &Path) -> Result<(Remotes, Vec<String>), String> {
 }
 
 /// The remote for `sig`'s repo, adding it, named after the SIG, when no
-/// remote points at it.
+/// remote points at it, and fetching it, so its branches are there to
+/// check out. A failed fetch is a warning: the remote is in place, and
+/// `git fetch <remote>` can be run again by hand.
 fn ensure_sig_remote(
     ui: &Ui,
     repo: &Path,
@@ -257,6 +259,14 @@ fn ensure_sig_remote(
         &["git", "remote", "add", name, &url].map(String::from),
         repo,
     )?;
+    ui.step(&format!("Fetch `{name}`'s branches"));
+    match ui.run(&["git", "fetch", name].map(String::from), repo) {
+        Ok(true) => {}
+        Ok(false) => eprintln!("warning: could not fetch `{name}`; run `git fetch {name}` later"),
+        Err(e) => {
+            eprintln!("warning: could not fetch `{name}` ({e}); run `git fetch {name}` later")
+        }
+    }
     Ok(name.to_string())
 }
 
@@ -2368,11 +2378,17 @@ mod tests {
     }
 
     /// The SIG's repo is added as a remote named after the SIG to a
-    /// checkout of the package that has none for it.
+    /// checkout of the package that has none for it, and fetched.
     #[test]
     #[serial_test::serial]
     fn a_checkout_of_the_package_gets_the_sigs_repo_as_a_remote() {
         let fx = crate::test_support::Fixture::proposed("c10s", &[]);
+        // The SIG's repo: a local bare one with a branch of its own,
+        // standing in for the ssh URL through url.<base>.insteadOf.
+        let sig_repo = fx.tmp.path().join("sig.git");
+        let sig_path = sig_repo.to_str().unwrap();
+        fx.git(&["init", "--quiet", "--bare", sig_path]);
+        fx.git(&["push", "--quiet", sig_path, "HEAD:refs/heads/c10s-sig"]);
         fx.git(&["remote", "remove", "sig"]);
         fx.git(&[
             "remote",
@@ -2393,13 +2409,25 @@ mod tests {
                     "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h"}"#,
             )
             .create();
+        let host = server.url().replace("http://", "");
+        let url = format!("git+ssh://git@{host}/CentOS/proposed_updates/rpms/rsync.git");
+        fx.git(&["config", &format!("url.{sig_path}.insteadOf"), &url]);
         let mut run = args("rsync", Some(SigName::ProposedUpdates));
         run.repo = Some(fx.repo.clone());
         run_with(&run, &server.url(), None).unwrap();
-        let host = server.url().replace("http://", "");
-        assert_eq!(
-            fx.git(&["remote", "get-url", "proposed_updates"]),
-            format!("git+ssh://git@{host}/CentOS/proposed_updates/rpms/rsync.git")
+        // get-url would apply insteadOf: the configured URL is the ssh one.
+        assert_eq!(fx.git(&["config", "remote.proposed_updates.url"]), url);
+        assert!(
+            git(
+                &fx.repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "refs/remotes/proposed_updates/c10s-sig"
+                ]
+            )
+            .is_ok(),
+            "the new remote's branch was not fetched"
         );
     }
 

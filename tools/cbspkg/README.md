@@ -299,7 +299,7 @@ name: CentOS Stream's repo, a SIG's, or a personal fork
 (`<user>/centos_rpms_<package>`), so `origin` can be any of them. A
 remote `sig-repo` adds is named after the SIG (`proposed_updates`,
 `hyperscale`); in a checkout of the package, it adds the SIG's repo
-when no remote points at it.
+when no remote points at it, and fetches that remote.
 
 Given CentOS Stream merge requests, Proposed Updates, it then carries
 each change to the SIG's repo. Several merge requests of one package,

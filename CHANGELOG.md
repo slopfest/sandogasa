@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### cbspkg sig-repo fetches the remote it adds
+
+When `cbspkg sig-repo` added a SIG's repo as a remote to a package
+checkout (blktrace's), the remote's branches were not there to check
+out until `git fetch` was run by hand. It now fetches the remote it
+added, and only that one. A failed fetch is a warning: the remote is
+in place, and the fetch can be run again.
+
 ### dbranch check names the document behind each finding
 
 A finding from `dbranch check` said what was wrong and how to see it,
