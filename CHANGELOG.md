@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cpu-sig-tracker ping sees a rebuild in -testing
+
+`ping` still told blktrace c10s to "rebuild with a higher release"
+after the rebuild, `1.3.0-14~proposed.el10`, was in `-testing`: it
+compared only the `-release` build with stock. It now takes the
+`-testing` build as the SIG's when it is newer, as `status` does: a
+rebuild there that stock has not passed is no rebase-build, the report
+names it to promote once tested, and the `-release` build it replaces
+is not announced. `--json` gains `fix_in_testing`.
+
 ### cbspkg no longer warns about a config file it does not need
 
 On a Hyperscale checkout, every `cbspkg` command that works out the

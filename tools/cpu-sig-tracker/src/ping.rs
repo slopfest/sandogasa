@@ -229,6 +229,10 @@ pub struct Assessment {
     /// Whether the tracking issue still has to be told the build is
     /// behind stock (`rebase-build` only).
     pub tell_issue_behind: bool,
+    /// The SIG's `-testing` build that replaces a `-release` one stock
+    /// has passed: the rebuild is done, and waits to be promoted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_in_testing: Option<String>,
     /// Builds to announce, and where.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub announce: Vec<Announce>,
@@ -362,9 +366,17 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
         f.landed_evidence.map(str::to_string)
     };
     let landed = landed_by.is_some();
-    let build_behind = !landed && stream_newer_than_proposed(f.release_nvr, f.stream_nvr);
-    let release_collision =
-        build_behind && stream_shares_release_number(f.release_nvr, f.stream_nvr);
+    // The SIG's build is the -testing one when it is newer than the
+    // -release one, as a rebuild waiting for testers is.
+    let current = current_build(f.release_nvr, f.testing_nvr);
+    let build_behind = !landed && stream_newer_than_proposed(current, f.stream_nvr);
+    let release_collision = build_behind && stream_shares_release_number(current, f.stream_nvr);
+    let fix_in_testing = (!landed
+        && !build_behind
+        && current != f.release_nvr
+        && stream_newer_than_proposed(f.release_nvr, f.stream_nvr))
+    .then(|| current.map(str::to_string))
+    .flatten();
     let rebase_said = ours(f.mr_notes, me, &format!("{REBASE_MARKER}{} -->", f.sha)).is_some();
     let ping_due = match pinged_at {
         None => true,
@@ -409,7 +421,10 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
     // NVR in both tags is announced as released only.
     let mut announce = Vec::new();
     if matches!(f.mr_state, "opened" | "none") && !build_behind && !landed {
-        let stages = [(f.release_nvr, "release"), (f.testing_nvr, "testing")];
+        // A -release build a -testing one replaces is behind stock:
+        // not news.
+        let release = f.release_nvr.filter(|_| fix_in_testing.is_none());
+        let stages = [(release, "release"), (f.testing_nvr, "testing")];
         for (nvr, stage) in stages {
             let Some(nvr) = nvr else { continue };
             if stage == "testing" && f.release_nvr == Some(nvr) {
@@ -433,11 +448,22 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
         landed_by,
         release_collision,
         tell_issue_behind,
+        fix_in_testing,
         announce,
         last_activity,
         quiet_days,
         pinged_at,
         last_response,
+    }
+}
+
+/// The SIG's current build: the `-testing` one when it is newer than
+/// the `-release` one, or when there is no `-release` one.
+fn current_build<'a>(release: Option<&'a str>, testing: Option<&'a str>) -> Option<&'a str> {
+    if crate::status::testing_is_current(release, testing) {
+        testing
+    } else {
+        release
     }
 }
 
@@ -921,7 +947,7 @@ pub fn render(rows: &[Row]) -> String {
                  change (no trace of it in stock's history), so {} sorts below it; rebuild \
                  with a higher release{}",
                 r.stream_nvr.as_deref().unwrap_or("?"),
-                r.release_nvr.as_deref().unwrap_or("?"),
+                current_build(r.release_nvr.as_deref(), r.testing_nvr.as_deref()).unwrap_or("?"),
                 if a.tell_issue_behind {
                     format!(
                         "; {}",
@@ -934,7 +960,7 @@ pub fn render(rows: &[Row]) -> String {
             Action::RebaseBuild => format!(
                 "rebase-build — SIG: stock {} is past {}{}",
                 r.stream_nvr.as_deref().unwrap_or("?"),
-                r.release_nvr.as_deref().unwrap_or("?"),
+                current_build(r.release_nvr.as_deref(), r.testing_nvr.as_deref()).unwrap_or("?"),
                 if a.tell_issue_behind {
                     format!(
                         "; {}",
@@ -1001,6 +1027,14 @@ pub fn render(rows: &[Row]) -> String {
             "{} {}: {link}\n    {what}{quiet}",
             r.package, r.release
         ));
+        if let Some(fix) = &a.fix_in_testing {
+            out.push(format!(
+                "    SIG: {fix} in -testing replaces {}, which stock {} is past: promote it \
+                 once tested",
+                r.release_nvr.as_deref().unwrap_or("?"),
+                r.stream_nvr.as_deref().unwrap_or("?"),
+            ));
+        }
         for an in &a.announce {
             let mut where_ = Vec::new();
             if an.to_mr {
@@ -1230,6 +1264,43 @@ mod tests {
             assess(&f, ME, at(NOW), W).tell_issue_behind,
             "stock moving again is news again"
         );
+    }
+
+    /// blktrace c10s: stock took `-13` without the change, and the SIG's
+    /// rebuild `-14` is in -testing while `-13` is still released. The
+    /// rebuild is done; what is left is promoting it.
+    #[test]
+    fn a_rebuild_in_testing_is_the_sigs_build_not_a_rebuild_to_do() {
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.stream_nvr = Some("PackageKit-1.2.8-9.el10");
+        f.testing_nvr = Some("PackageKit-1.2.8-10~proposed.el10");
+        let a = assess(&f, ME, at(NOW), W);
+        assert_ne!(a.action, Action::RebaseBuild);
+        assert!(!a.release_collision && !a.tell_issue_behind);
+        assert_eq!(
+            a.fix_in_testing.as_deref(),
+            Some("PackageKit-1.2.8-10~proposed.el10")
+        );
+        // The rebuild is announced; the build it replaces is not.
+        let stages: Vec<_> = a
+            .announce
+            .iter()
+            .map(|x| (x.nvr.as_str(), x.stage))
+            .collect();
+        assert_eq!(stages, [("PackageKit-1.2.8-10~proposed.el10", "testing")]);
+        // A -testing rebuild stock has passed as well: still a rebuild,
+        // named by the newer build.
+        f.stream_nvr = Some("PackageKit-1.2.8-11.el10");
+        let a = assess(&f, ME, at(NOW), W);
+        assert_eq!(a.action, Action::RebaseBuild);
+        assert_eq!(a.fix_in_testing, None);
+        // An older build in -testing changes nothing.
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.stream_nvr = Some("PackageKit-1.2.8-9.el10");
+        f.testing_nvr = Some("PackageKit-1.2.8-8~proposed.el10");
+        let a = assess(&f, ME, at(NOW), W);
+        assert_eq!(a.action, Action::RebaseBuild);
+        assert_eq!(a.fix_in_testing, None);
     }
 
     #[test]
@@ -1576,7 +1647,7 @@ mod tests {
 
     #[test]
     fn render_names_the_action_the_owner_and_the_last_response() {
-        let row = Row {
+        let mut row = Row {
             release: "c10s".into(),
             package: "PackageKit".into(),
             issue_url: "https://t/3".into(),
@@ -1595,6 +1666,7 @@ mod tests {
                 landed_by: None,
                 release_collision: false,
                 tell_issue_behind: true,
+                fix_in_testing: None,
                 announce: vec![],
                 last_activity: at("2025-12-14T20:38:23Z"),
                 quiet_days: 281,
@@ -1608,12 +1680,25 @@ mod tests {
             posted: vec![],
             pending: vec![],
         };
-        let text = render(&[row]);
+        let text = render(std::slice::from_ref(&row));
         assert!(
             text.contains(
                 "rebase-build — SIG: stock PackageKit-1.2.8-9.el10 is past \
                  PackageKit-1.2.8-9~proposed.el10; to post note on the tracking issue; \
                  quiet 281 days (since 2025-12-14); GitLab: mergeable"
+            ),
+            "{text}"
+        );
+        // A rebuild waiting in -testing is named, to promote once tested.
+        row.testing_nvr = Some("PackageKit-1.2.8-10~proposed.el10".into());
+        row.assessment.action = Action::Ping;
+        row.assessment.fix_in_testing = Some("PackageKit-1.2.8-10~proposed.el10".into());
+        let text = render(&[row]);
+        assert!(
+            text.contains(
+                "SIG: PackageKit-1.2.8-10~proposed.el10 in -testing replaces \
+                 PackageKit-1.2.8-9~proposed.el10, which stock PackageKit-1.2.8-9.el10 is \
+                 past: promote it once tested"
             ),
             "{text}"
         );

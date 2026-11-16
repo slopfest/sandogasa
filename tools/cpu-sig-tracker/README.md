@@ -332,7 +332,10 @@ for the next person:
   stock build, and nothing goes upstream until the rebuild. When stock
   reached the SIG's release number without the change, the SIG's
   `~proposed` build sorts below stock and installs nowhere, and the
-  note says to rebuild with a higher release.
+  note says to rebuild with a higher release. The SIG's build is its
+  `-testing` one when that is newer than its `-release` one: a rebuild
+  waiting there that stock has not passed is no rebase-build, and the
+  report names it, to promote once tested.
 - **no MR yet** — the tracking issue names no merge request: nothing
   upstream to nudge, while builds are still announced on the issue.
 - **rebase-mr** — the MR no longer merges cleanly. A note on the *MR*,

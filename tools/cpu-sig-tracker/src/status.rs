@@ -1461,7 +1461,7 @@ const NONE_SHOWN: &str = "—";
 /// Whether the SIG's `-testing` build is the one to show and judge:
 /// there is no `-release` one, or it is newer, as a rebuild waiting for
 /// testers is.
-fn testing_is_current(released: Option<&str>, testing: Option<&str>) -> bool {
+pub(crate) fn testing_is_current(released: Option<&str>, testing: Option<&str>) -> bool {
     match (released, testing) {
         (_, None) => false,
         (None, Some(_)) => true,
