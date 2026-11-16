@@ -14,8 +14,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sandogasa_cbs::Stage;
 use sandogasa_cbs::packages::{furthest_stage, latest, promote_argvs, tags_of};
+use sandogasa_cbs::{Collection, PROFILE, Stage};
 use sandogasa_cli::explain::Ui;
 
 use crate::add_pkg::resolve;
@@ -126,6 +126,8 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Which build, where it is, and what promoting it takes, per
     // collection. Reading changes nothing, so a dry run does it too.
     let mut steps: Vec<(String, Stage, Vec<Vec<String>>)> = Vec::new();
+    // Where each build goes, to find the older builds it replaces there.
+    let mut moves: Vec<(&Collection, String, Stage)> = Vec::new();
     // The collections a named build turned out not to be in: fine for
     // some, as a build is made for one variant, but not for all.
     let mut lacking: Vec<String> = Vec::new();
@@ -170,6 +172,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         };
         steps.push((nvr.clone(), to, promote_argvs(collection, &nvr, to, &tags)));
+        moves.push((collection, nvr, to));
     }
     if let Some(nvr) = &args.nvr
         && lacking.len() == checkout.collections.len()
@@ -179,6 +182,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     if steps.is_empty() {
         return Ok(());
     }
+    let replaced = superseded(&ui, package, &moves);
     // The cheap checks first: the CBS login and a terminal to confirm
     // at, before any GitLab request.
     if !args.dry_run {
@@ -220,6 +224,12 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         for notice in &notices {
             print!("{}", crate::notify::describe(notice, token.is_some()));
         }
+        if !replaced.is_empty() {
+            println!("Then, asked separately, the older builds they replace:");
+            for argv in &replaced {
+                println!("  {}", sandogasa_cli::explain::command_line(argv));
+            }
+        }
         if !sandogasa_cli::confirm("Promote?", true)? {
             println!("Nothing changed.");
             return Ok(());
@@ -230,6 +240,10 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     // left to do and so nothing to tell.
     let mut done: Vec<(String, Stage)> = Vec::new();
     let moved = promote_all(&ui, &repo, &steps, args.dry_run, &mut done);
+    // Only once the builds replacing them are in place.
+    if moved.is_ok() {
+        untag_superseded(&ui, &repo, &replaced, args.dry_run)?;
+    }
     if args.dry_run {
         // After the steps, where a real run tells the issue.
         for notice in &notices {
@@ -246,6 +260,132 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     moved
+}
+
+/// The commands untagging the builds of `package` that each move in
+/// `moves` (collection, build, stage) replaces: the older builds in the
+/// stage it moves into, and for a release in `-testing` too, so that
+/// superseded builds do not pile up there. `-candidate` keeps the build
+/// history. The tags are read side by side; one that cannot be read is
+/// a warning, and its builds are left alone.
+fn superseded(ui: &Ui, package: &str, moves: &[(&Collection, String, Stage)]) -> Vec<Vec<String>> {
+    let mut wanted: Vec<(String, &str)> = Vec::new();
+    for (collection, nvr, to) in moves {
+        let stages: &[Stage] = match to {
+            Stage::Release => &[Stage::Release, Stage::Testing],
+            _ => &[Stage::Testing],
+        };
+        for stage in stages {
+            wanted.push((collection.tag(*stage), nvr.as_str()));
+        }
+    }
+    ui.step(&format!(
+        "Find older builds of {package} the promoted ones replace"
+    ));
+    for (tag, _) in &wanted {
+        ui.show_command(&["cbs", "list-tagged", tag, package].map(String::from));
+    }
+    let listed: Vec<Result<Vec<String>, String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = wanted
+            .iter()
+            .map(|(tag, _)| s.spawn(move || tagged(tag, package)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| Err("koji panicked".into())))
+            .collect()
+    });
+    let mut argvs = Vec::new();
+    for ((tag, nvr), builds) in wanted.iter().zip(listed) {
+        let builds = match builds {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("warning: {e}; older builds there are left tagged");
+                continue;
+            }
+        };
+        for old in older_than(&builds, nvr, package) {
+            argvs.push(["cbs", "untag-build", tag, &old].map(String::from).to_vec());
+        }
+    }
+    argvs
+}
+
+/// The builds among `builds` of `package` older than `nvr`: the name
+/// is the NVR less its last two fields, so `blktrace-tools` is not
+/// `blktrace`.
+pub fn older_than(builds: &[String], nvr: &str, package: &str) -> Vec<String> {
+    let split = |nvr: &str| -> Option<(String, String)> {
+        let mut parts = nvr.rsplitn(3, '-');
+        let (release, version, name) = (parts.next()?, parts.next()?, parts.next()?);
+        Some((name.to_string(), format!("{version}-{release}")))
+    };
+    let Some((name, vr)) = split(nvr).filter(|(n, _)| n == package) else {
+        return Vec::new();
+    };
+    builds
+        .iter()
+        .filter(|b| {
+            split(b).is_some_and(|(n, other)| {
+                n == name
+                    && sandogasa_rpmvercmp::compare_evr(&other, &vr) == std::cmp::Ordering::Less
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Every build of `package` in `tag`.
+fn tagged(tag: &str, package: &str) -> Result<Vec<String>, String> {
+    let out = std::process::Command::new("koji")
+        .args(["--profile", PROFILE, "list-tagged", "--quiet", tag, package])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot run koji: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "koji list-tagged {tag} {package}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Offer to untag the superseded builds (`argvs`), after the promotion,
+/// confirmed on their own at a terminal; a dry run shows the commands.
+/// A failed untag is a warning: the promotion is done.
+fn untag_superseded(
+    ui: &Ui,
+    repo: &std::path::Path,
+    argvs: &[Vec<String>],
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if argvs.is_empty() {
+        return Ok(());
+    }
+    if !dry_run && !sandogasa_cli::confirm("Untag the older builds they replace?", true)? {
+        println!("Older builds left tagged.");
+        return Ok(());
+    }
+    for argv in argvs {
+        ui.step(&format!(
+            "Untag {} from {}, as a newer build replaces it",
+            argv[3], argv[2]
+        ));
+        if !ui.run(argv, repo).unwrap_or(false) {
+            eprintln!(
+                "warning: could not untag {} from {}; run `{}` by hand",
+                argv[3],
+                argv[2],
+                sandogasa_cli::explain::command_line(argv)
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Run each step's `cbs` commands, recording in `done` each build that
@@ -313,6 +453,85 @@ mod tests {
                 ("list-tags", tags),
             ],
         );
+    }
+
+    #[test]
+    fn only_older_builds_of_the_package_are_superseded() {
+        let builds: Vec<String> = [
+            "blktrace-1.3.0-13~proposed.el10",
+            "blktrace-1.3.0-14~proposed.el10",
+            "blktrace-1.3.0-15~proposed.el10",
+            "blktrace-tools-1.0-1.el10",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            older_than(&builds, "blktrace-1.3.0-14~proposed.el10", "blktrace"),
+            ["blktrace-1.3.0-13~proposed.el10"]
+        );
+        assert!(older_than(&builds, "other-1-1", "blktrace").is_empty());
+    }
+
+    /// blktrace c10s: -14 released while -13 is in -testing and
+    /// -release. Both copies of -13 are untagged; -candidate keeps it.
+    #[test]
+    #[serial_test::serial]
+    fn a_release_untags_the_builds_it_replaces_from_testing_and_release() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        let old = "rsync-3.2.7-4~proposed.el10";
+        f.fake(
+            "koji",
+            &[
+                ("--help", ""),
+                ("list-tags", TESTING),
+                (
+                    &format!("list-tagged --quiet {TESTING}"),
+                    &format!("{NVR}  {TESTING}  me\n{old}  {TESTING}  me"),
+                ),
+                (
+                    &format!("list-tagged --quiet {RELEASE}"),
+                    &format!("{old}  {RELEASE}  me"),
+                ),
+            ],
+        );
+        let moves_collections = crate::add_pkg::resolve(&f.repo, None, None, None)
+            .unwrap()
+            .collections;
+        let moves = [(&moves_collections[0], NVR.to_string(), Stage::Release)];
+        let ui = Ui {
+            explain: false,
+            dry_run: true,
+            quiet: false,
+        };
+        let argvs = superseded(&ui, "rsync", &moves);
+        let lines: Vec<String> = argvs
+            .iter()
+            .map(|a| sandogasa_cli::explain::command_line(a))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                format!("cbs untag-build {RELEASE} {old}"),
+                format!("cbs untag-build {TESTING} {old}"),
+            ]
+        );
+        // A tag that cannot be read leaves its builds alone.
+        f.fake("koji", &[("--help", ""), ("list-tagged", "!no such tag")]);
+        assert!(superseded(&ui, "rsync", &moves).is_empty());
+        // And the dry run shows the whole promotion.
+        f.fake(
+            "koji",
+            &[
+                ("--help", ""),
+                ("list-tags", TESTING),
+                (
+                    &format!("list-tagged --quiet {TESTING}"),
+                    &format!("{NVR}  {TESTING}  me\n{old}  {TESTING}  me"),
+                ),
+                ("list-tagged --quiet", ""),
+            ],
+        );
+        run_inner(&dry_run(Some(NVR), Some(To::Release), &f)).unwrap();
     }
 
     #[test]

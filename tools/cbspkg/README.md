@@ -218,6 +218,12 @@ Promoting to `-release` also untags the build from `-testing`, so a
 released build is not left in testing as well. A build released before
 that, and still in `-testing`, is promoted again to finish the untag.
 
+Older builds of the package that the promoted one replaces are then
+offered for untagging, in a question of their own (default yes): those
+in the stage it moves into, and for a release those in `-testing` too.
+`-candidate` keeps every build. `--dry-run` shows the untags; a tag
+that cannot be read leaves its builds alone, with a warning.
+
 The build's tracking issue, in the package's SIG repo, is updated:
 
 - for a Proposed Update, the open cpu-sig-tracker issue carrying the

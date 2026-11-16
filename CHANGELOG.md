@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### cbspkg promote untags the older builds a promotion replaces
+
+`cbspkg promote` untagged the promoted build from `-testing` on
+release, but left the builds it replaced where they were: promoting
+blktrace's `1.3.0-14~proposed.el10` left `1.3.0-13~proposed.el10` in
+`-testing`, and would have left it in `-release`, although `-13`
+sorts below stock. Superseded builds piled up in both. After a
+promotion, `promote` now offers to untag the package's older builds
+from the stage the build moved into, and on release from `-testing`
+as well, confirmed on their own; `-candidate` keeps the build history.
+
 ### cpu-sig-tracker ping sees a rebuild in -testing
 
 `ping` still told blktrace c10s to "rebuild with a higher release"
