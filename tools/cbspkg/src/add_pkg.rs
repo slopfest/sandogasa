@@ -254,7 +254,10 @@ pub fn resolve(
             // goes by its branch.
             let hyperscale = sig == Sig::Hyperscale
                 && collections.iter().all(|c| c.sig == Sig::Hyperscale.name());
-            let configured = match crate::config::load() {
+            // No config file is the usual case: `cbspkg config` keeps
+            // the token in the keyring, so a file is written only for
+            // other settings (#149).
+            let configured = match crate::config::load_or_default() {
                 Ok(_) if !hyperscale => None,
                 Ok(c) => c
                     .packages

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cbspkg no longer warns about a config file it does not need
+
+On a Hyperscale checkout, every `cbspkg` command that works out the
+collections warned "cannot read ~/.config/cbspkg/config.toml (...
+file not found. Run 'config' to set up.); going by the branch alone",
+even after `cbspkg config`, which keeps the GitLab token in the
+keyring and so may write no file at all. A missing file now means the
+defaults, as it already did for `sig-repo`; one that does not parse
+is still reported (#149).
+
 ### cbspkg verrel, srpm and mockbuild count %autorelease from history
 
 `cbspkg verrel`, `srpm` and `mockbuild`, new in v0.28.1, gave every
