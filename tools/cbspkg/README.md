@@ -75,11 +75,13 @@ cargo install cbspkg
 login (`~/.centos.cert`, from `centos-cert`). `srpm`, `mockbuild` and
 `verrel` need `koji` with the `cbs` profile, to read CBS, and
 `rpm-build`; `mockbuild` needs `mock` and mock-centos-sig-configs.
-`build` also needs `rpm-build`, for a Stream collection `fedrq`, and
-for a spec using `%autorelease` or `%autochangelog` `rpmautospec`, to
-check the build's Release against its changelog and stock CentOS Stream. `sig-repo` needs `git`. Creating a repo needs a GitLab token with the
-`api` scope, from `GITLAB_TOKEN` or `cbspkg config`, belonging to an
-account with the Maintainer role in the SIG's group.
+`build` also needs `rpm-build`, and `fedrq` for a Stream collection, to
+check the build's Release against its changelog and stock CentOS Stream.
+`build`, `srpm`, `mockbuild` and `verrel` need `rpmautospec` for a spec
+using `%autorelease` or `%autochangelog`. `sig-repo` needs `git`.
+Creating a repo needs a GitLab token with the `api` scope, from
+`GITLAB_TOKEN` or `cbspkg config`, belonging to an account with the
+Maintainer role in the SIG's group.
 
 ## Commands
 
@@ -384,7 +386,10 @@ checkout lacks is fetched from the SIG lookaside first, checked against
 its sha512; one the checkout has with another sum is an error, not
 replaced. A branch building into several collections gets an SRPM for
 each. The spec and sources are the working tree's, so `--branch` must
-name the branch checked out, as all three commands require.
+name the branch checked out, as all three commands require. A spec
+using `%autorelease` or `%autochangelog` is read, and its SRPM built,
+from a copy that `rpmautospec process-distgit` fills in from the
+branch's history, as fedpkg, centpkg and CBS do.
 
 ### `upload-sources`
 

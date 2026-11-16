@@ -132,7 +132,10 @@ pub struct Verrel {
 struct Prepared {
     repo: PathBuf,
     checkout: Checkout,
+    /// The spec to read: the checkout's, or, when it uses rpmautospec,
+    /// a copy with its release filled in, kept in `_processed`.
     spec: String,
+    _processed: Option<tempfile::TempDir>,
     collections: Vec<(Collection, Vec<(String, String)>)>,
 }
 
@@ -481,10 +484,24 @@ fn prepare(ui: &Ui, target: &Target<'_>) -> Result<Prepared, Box<dyn std::error:
         .cloned()
         .zip(configs.iter().map(tag_macros))
         .collect();
+    // %autorelease and %autochangelog are filled in from the
+    // checkout's history first, as fedpkg, centpkg and CBS do (#153).
+    let text = std::fs::read_to_string(repo.join(&spec))?;
+    let (spec, processed) = if uses_rpmautospec(&text) {
+        ui.step(&format!(
+            "Fill in {spec}'s %autorelease and %autochangelog from the branch's history"
+        ));
+        let dir = tempfile::tempdir()?;
+        let copy = readable_spec(ui, &std::fs::canonicalize(repo.join(&spec))?, dir.path())?;
+        (copy.display().to_string(), Some(dir))
+    } else {
+        (spec, None)
+    };
     Ok(Prepared {
         repo,
         checkout,
         spec,
+        _processed: processed,
         collections,
     })
 }
@@ -494,22 +511,8 @@ fn verrels(ui: &Ui, p: &Prepared) -> Result<Vec<Verrel>, Box<dyn std::error::Err
     let mut out = Vec::new();
     for (collection, tag) in &p.collections {
         let argv = verrel_argv(&p.spec, &host_macros(tag, collection.major));
-        ui.show_command(&argv);
-        let run = Command::new(&argv[0])
-            .args(&argv[1..])
-            .current_dir(&p.repo)
-            .output()
-            .map_err(|e| format!("cannot run rpmspec: {e}"))?;
-        let text = String::from_utf8_lossy(&run.stdout);
+        let text = rpmspec_query(ui, &p.repo, &argv)?;
         let verrel = text.lines().next().map(str::trim).unwrap_or_default();
-        if !run.status.success() || verrel.is_empty() {
-            return Err(format!(
-                "rpmspec could not read {}: {}",
-                p.spec,
-                String::from_utf8_lossy(&run.stderr).trim()
-            )
-            .into());
-        }
         out.push(Verrel {
             target: collection.target(),
             verrel: verrel.to_string(),
@@ -969,6 +972,60 @@ mod tests {
             for json in [false, true] {
                 assert_eq!(run_verrel(&verrel_args(&f, json)), ExitCode::SUCCESS);
             }
+        }
+
+        /// An %autorelease spec is read as rpmautospec fills it in, not
+        /// as redhat-rpm-config's fallback, which always says 1 (#153).
+        #[test]
+        #[serial_test::serial]
+        fn an_autorelease_spec_is_read_as_rpmautospec_fills_it_in() {
+            let f = fixture(&[]);
+            std::fs::write(f.repo.join("rsync.spec"), "Release: %{autorelease}\n").unwrap();
+            // Without rpmautospec: an error naming it.
+            let err = verrel(&verrel_args(&f, false)).unwrap_err().to_string();
+            assert!(
+                err.contains("missing required tool(s): rpmautospec"),
+                "{err}"
+            );
+            crate::test_support::install_script(
+                &f.bin,
+                "rpmautospec",
+                "[ \"$1\" = --help ] && exit 0\n\
+                 [ \"$1\" = process-distgit ] && sed 's/%{autorelease}/5/' \"$2\" > \"$3\" \
+                 && exit 0\nexit 1\n",
+            );
+            // rpmspec answers only for the filled-in copy, outside the
+            // checkout.
+            f.fake(
+                "rpmspec",
+                &[
+                    ("--version", ""),
+                    (" rsync.spec", "!read the unfilled spec"),
+                    ("dist ~proposed.el10", "3.2.7-5~proposed.el10"),
+                ],
+            );
+            let p = prepare(&ui(false), &target(&f)).unwrap();
+            assert!(
+                std::fs::read_to_string(&p.spec)
+                    .unwrap()
+                    .contains("Release: 5")
+            );
+            assert_eq!(
+                verrels(&ui(false), &p).unwrap()[0].verrel,
+                "3.2.7-5~proposed.el10"
+            );
+            // The SRPM is built from the same copy.
+            let built = srpm(&ui(true), &p).unwrap();
+            assert_eq!(built[0].verrel, "3.2.7-5~proposed.el10");
+            // A process-distgit that fails is an error here: there is no
+            // release to report without it.
+            crate::test_support::install_script(
+                &f.bin,
+                "rpmautospec",
+                "[ \"$1\" = --help ] && exit 0\necho 'bad history' >&2\nexit 1\n",
+            );
+            let err = verrel(&verrel_args(&f, false)).unwrap_err().to_string();
+            assert!(err.contains("bad history"), "{err}");
         }
 
         #[test]

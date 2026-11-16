@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### cbspkg verrel, srpm and mockbuild count %autorelease from history
+
+`cbspkg verrel`, `srpm` and `mockbuild`, new in v0.28.1, gave every
+spec using `%autorelease` release 1, whatever its history: `verrel`
+printed `-1` where CBS builds `-N`, and `srpm` and `mockbuild` built
+`-1` packages. They read the spec as it is, and without rpmautospec
+`%autorelease` falls back to redhat-rpm-config's `1%{?dist}`.
+Hyperscale's Fedora backports use it, as Fedora recommends. They now
+read, and build from, a copy that `rpmautospec process-distgit` fills
+in from the branch's history, as fedpkg, centpkg and CBS do, and need
+`rpmautospec` for such a spec. `cbspkg build` was not affected: CBS
+fills the release in itself (#153).
+
 ### cbspkg build checks the Release before building
 
 blktrace's c10s Proposed Update, `1.3.0-13~proposed.el10`, sorts below
