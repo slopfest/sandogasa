@@ -143,7 +143,7 @@ pub fn run(args: &BuildArgs) -> ExitCode {
 }
 
 /// Run `git` in `repo` to read something, its output trimmed.
-fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .args(args)
         .current_dir(repo)
@@ -265,6 +265,8 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     let mut tools = vec![
         ("git", "sudo dnf install git-core", Some("--version")),
         ("koji", "sudo dnf install koji", Some("--help")),
+        // The Release check (#152).
+        ("rpmspec", "sudo dnf install rpm-build", Some("--version")),
     ];
     if !args.dry_run {
         tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
@@ -272,6 +274,10 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     sandogasa_cli::require_tools(&tools)?;
     let checkout = resolve(&repo, args.branch.as_deref(), None, Some(&args.variants))?;
     let (branch, package) = (&checkout.branch, &checkout.package);
+    // A Stream collection's build is compared with stock's (#152).
+    if checkout.collections.iter().any(|c| c.stream) {
+        sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--help"))])?;
+    }
     let Located {
         remote,
         url,
@@ -309,6 +315,28 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
     let scm = scm_url(&host, &sig_path, &commit);
+
+    // The cheap checks first: the CBS login and a terminal to confirm
+    // at, before the Release check, the uploads and any GitLab request.
+    if !args.dry_run {
+        sandogasa_cbs::login::ensure_login("cbspkg", true, args.explain)?;
+        if !std::io::stdin().is_terminal() {
+            return Err("building in CBS is confirmed at a terminal; run it in one".into());
+        }
+    }
+    // A Release that lags the changelog, or a build that sorts below
+    // stock's, is caught before CBS builds it (#152).
+    if !crate::release_check::check(
+        &ui,
+        &repo,
+        package,
+        &commit,
+        &checkout.collections,
+        args.scratch,
+        std::io::stdin().is_terminal(),
+    )? {
+        return Ok(());
+    }
 
     // CBS fetches the sources from the SIG lookaside, scratch builds
     // too (#99).
@@ -348,14 +376,6 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         "a build"
     };
-    // The cheap checks first: the CBS login and a terminal to confirm
-    // at, before any GitLab request.
-    if !args.dry_run {
-        sandogasa_cbs::login::ensure_login("cbspkg", true, args.explain)?;
-        if !std::io::stdin().is_terminal() {
-            return Err("building in CBS is confirmed at a terminal; run it in one".into());
-        }
-    }
     // What the tracking issue will be told, shown with what is
     // confirmed: with a stand-in for each build's NVR, until its task
     // names it.

@@ -16,12 +16,21 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Write an executable shell script named `name` in `dir`, `body`
+/// after the `#!/bin/sh` line.
+pub fn install_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
 /// Write a shell script named `name` in `dir` that prints the body of
 /// the first case whose needle is a substring of its arguments, and
 /// exits 0. A case whose body starts with `!` prints the rest to
 /// stderr and exits 1 instead. Unmatched calls exit 1.
 pub fn install_fake_bin(dir: &Path, name: &str, cases: &[(&str, &str)]) -> PathBuf {
-    let mut script = String::from("#!/bin/sh\nargs=\"$*\"\n");
+    let mut script = String::from("args=\"$*\"\n");
     for (needle, body) in cases {
         let (out, code) = match body.strip_prefix('!') {
             Some(err) => (format!("cat >&2 <<'__FAKE_EOF__'\n{err}\n__FAKE_EOF__"), 1),
@@ -34,10 +43,7 @@ pub fn install_fake_bin(dir: &Path, name: &str, cases: &[(&str, &str)]) -> PathB
     script.push_str(&format!(
         "echo \"fake-{name}: no match for: $args\" >&2\nexit 1\n",
     ));
-    let path = dir.join(name);
-    std::fs::write(&path, script).unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    install_script(dir, name, &script)
 }
 
 pub use sandogasa_config::test_support::EnvGuard;
@@ -125,7 +131,14 @@ impl Fixture {
         install_fake_bin(&bin, "koji", &[("--help", "")]);
         install_fake_bin(&bin, "cbs", &[("--help", "")]);
         install_fake_bin(&bin, "centpkg", &[("--help", "")]);
-        for name in ["centos-cert", "centos-lookaside-upload-sig", "klist"] {
+        install_fake_bin(&bin, "fedrq", &[("--help", "")]);
+        install_fake_bin(&bin, "rpmspec", &[("--version", "")]);
+        for name in [
+            "centos-cert",
+            "centos-lookaside-upload-sig",
+            "klist",
+            "rpmautospec",
+        ] {
             install_fake_bin(&bin, name, &[]);
         }
 

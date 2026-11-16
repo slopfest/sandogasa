@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### cbspkg build checks the Release before building
+
+blktrace's c10s Proposed Update, `1.3.0-13~proposed.el10`, sorts below
+stock's `1.3.0-13.el10`, so dnf never installed it. Its merge request
+added a `%changelog` entry for 1.3.0-14 but left `Release: 13`, and
+`cbspkg build` built it without a word; it surfaced only later, as
+`cpu-sig-tracker ping`'s rebase-build. `build` now reads the spec in a
+worktree of the commit it builds with `rpmspec`, after `rpmautospec
+process-distgit` fills in `%autorelease` and `%autochangelog` as CBS
+does (Hyperscale's Fedora backports use them), and checks, before
+starting, that Version-Release matches the newest `%changelog` entry,
+and that the build sorts above stock CentOS Stream's current one for
+each Stream collection, with the macros CBS builds with and stock's
+build from `fedrq`, epochs included. A mismatch is listed and
+confirmed, defaulting to not building; a dry run or a scratch build
+only warns. A comparison whose data cannot be read is skipped with a
+warning. `build` now needs `rpmspec` (rpm-build), `fedrq` for a Stream
+collection, and `rpmautospec` for a spec using it (#152).
+
+The CBS login and the terminal are now checked before the Release
+check and before sources are uploaded to the lookaside, rather than
+after, so an expired login fails in seconds.
+
 ### cbspkg sig-repo fetches the remote it adds
 
 When `cbspkg sig-repo` added a SIG's repo as a remote to a package

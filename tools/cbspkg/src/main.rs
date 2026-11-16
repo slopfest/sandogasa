@@ -11,6 +11,7 @@ mod configure;
 mod local;
 mod notify;
 mod promote;
+mod release_check;
 mod sig_repo;
 #[cfg(test)]
 mod test_support;

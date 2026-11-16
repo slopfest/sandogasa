@@ -200,20 +200,105 @@ pub fn define_args(macros: &[(String, String)]) -> Vec<String> {
         .collect()
 }
 
-/// The command printing the version-release `spec` builds with `macros`.
-pub fn verrel_argv(spec: &str, macros: &[(String, String)]) -> Vec<String> {
-    let mut argv: Vec<String> = [
-        "rpmspec",
-        "-q",
-        "--srpm",
-        "--qf",
-        "%{version}-%{release}\\n",
-    ]
-    .map(String::from)
-    .to_vec();
+/// The command printing `qf` for the SRPM `spec` builds with `macros`.
+pub fn rpmspec_argv(spec: &str, macros: &[(String, String)], qf: &str) -> Vec<String> {
+    let mut argv: Vec<String> = ["rpmspec", "-q", "--srpm", "--qf", qf]
+        .map(String::from)
+        .to_vec();
     argv.extend(define_args(macros));
     argv.push(spec.to_string());
     argv
+}
+
+/// Whether a spec, its `text`, uses rpmautospec: `%autorelease` or
+/// `%autochangelog`, in any spelling (`%{autorelease}`,
+/// `%{autorelease -b 2}`, `%{?autorelease}`), outside comments.
+pub fn uses_rpmautospec(text: &str) -> bool {
+    text.lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .any(|line| {
+            ["autorelease", "autochangelog"].iter().any(|name| {
+                ["%", "%{", "%{?", "%{!?"].iter().any(|open| {
+                    let form = format!("{open}{name}");
+                    line.match_indices(&form).any(|(at, _)| {
+                        !line[at + form.len()..]
+                            .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+                    })
+                })
+            })
+        })
+}
+
+/// The command filling in `spec`'s rpmautospec macros from its git
+/// history, writing the result to `out`.
+pub fn process_distgit_argv(spec: &Path, out: &Path) -> Vec<String> {
+    vec![
+        "rpmautospec".to_string(),
+        "process-distgit".to_string(),
+        spec.display().to_string(),
+        out.display().to_string(),
+    ]
+}
+
+/// The spec `rpmspec` and `rpmbuild` should read: `spec` itself, or,
+/// when it uses rpmautospec, a copy in `out_dir`, under the same name,
+/// with `%autorelease` and `%autochangelog` filled in from the git
+/// history of the checkout it is in, as fedpkg, centpkg and CBS fill
+/// them in. Without that, redhat-rpm-config's fallback makes every
+/// `%autorelease` release 1.
+pub fn readable_spec(ui: &Ui, spec: &Path, out_dir: &Path) -> Result<PathBuf, String> {
+    let text = std::fs::read_to_string(spec)
+        .map_err(|e| format!("cannot read {}: {e}", spec.display()))?;
+    if !uses_rpmautospec(&text) {
+        return Ok(spec.to_path_buf());
+    }
+    sandogasa_cli::require_tools(&[(
+        "rpmautospec",
+        "sudo dnf install rpmautospec",
+        Some("--help"),
+    )])?;
+    std::fs::create_dir_all(out_dir)
+        .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
+    let out = out_dir.join(spec.file_name().unwrap_or_default());
+    let argv = process_distgit_argv(spec, &out);
+    ui.show_command(&argv);
+    let checkout = spec.parent().filter(|p| !p.as_os_str().is_empty());
+    let run = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(checkout.unwrap_or(Path::new(".")))
+        .output()
+        .map_err(|e| format!("cannot run rpmautospec: {e}"))?;
+    if !run.status.success() || !out.is_file() {
+        return Err(format!(
+            "rpmautospec could not fill in {}'s release: {}",
+            spec.display(),
+            String::from_utf8_lossy(&run.stderr).trim()
+        ));
+    }
+    Ok(out)
+}
+
+/// Run an `rpmspec` query (`argv`) in `dir`, its output on success.
+pub fn rpmspec_query(ui: &Ui, dir: &Path, argv: &[String]) -> Result<String, String> {
+    ui.show_command(argv);
+    let run = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("cannot run rpmspec: {e}"))?;
+    let text = String::from_utf8_lossy(&run.stdout).into_owned();
+    if !run.status.success() || text.trim().is_empty() {
+        return Err(format!(
+            "rpmspec could not read the spec: {}",
+            String::from_utf8_lossy(&run.stderr).trim()
+        ));
+    }
+    Ok(text)
+}
+
+/// The command printing the version-release `spec` builds with `macros`.
+pub fn verrel_argv(spec: &str, macros: &[(String, String)]) -> Vec<String> {
+    rpmspec_argv(spec, macros, "%{version}-%{release}\\n")
 }
 
 /// The command building `spec`'s SRPM in `dir` with `macros`, its
@@ -317,7 +402,9 @@ fn exit(result: Result<(), Box<dyn std::error::Error>>) -> ExitCode {
 
 /// Read each tag's settings from CBS, all at once: one `koji` each,
 /// which costs a second of startup apiece, so they run side by side.
-fn build_configs(tags: &[String]) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+pub(crate) fn build_configs(
+    tags: &[String],
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
     let children = tags
         .iter()
         .map(|tag| {

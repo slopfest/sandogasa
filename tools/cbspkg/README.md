@@ -75,7 +75,9 @@ cargo install cbspkg
 login (`~/.centos.cert`, from `centos-cert`). `srpm`, `mockbuild` and
 `verrel` need `koji` with the `cbs` profile, to read CBS, and
 `rpm-build`; `mockbuild` needs `mock` and mock-centos-sig-configs.
-`sig-repo` needs `git`. Creating a repo needs a GitLab token with the
+`build` also needs `rpm-build`, for a Stream collection `fedrq`, and
+for a spec using `%autorelease` or `%autochangelog` `rpmautospec`, to
+check the build's Release against its changelog and stock CentOS Stream. `sig-repo` needs `git`. Creating a repo needs a GitLab token with the
 `api` scope, from `GITLAB_TOKEN` or `cbspkg config`, belonging to an
 account with the Maintainer role in the SIG's group.
 
@@ -140,6 +142,17 @@ Several builds run at once: each is started with `cbs build --nowait`,
 and one `cbs watch-task <task>…` waits for them all. `--nowait` leaves
 them running and prints that `cbs watch-task` instead. `--background`
 builds at a lower priority (`cbs build --background`).
+
+Before building, `build` reads the spec in a worktree of the commit to
+build with `rpmspec`, after `rpmautospec process-distgit` fills in
+`%autorelease` and `%autochangelog` as CBS does, and checks that its Version and Release match its newest
+`%changelog` entry, and that each Stream collection's build, with the
+macros CBS builds with, sorts above stock CentOS Stream's current one,
+which `fedrq` reads. A Proposed Update with the same Release as stock
+sorts below it and is never installed. A mismatch is listed and the
+build asks whether to go ahead anyway, defaulting to no; a dry run or
+a scratch build only warns. A comparison whose data cannot be read is
+skipped with a warning.
 
 CBS fetches the sources from the SIG lookaside, so before building,
 `build` checks for them and uploads what is missing as `upload-sources`
