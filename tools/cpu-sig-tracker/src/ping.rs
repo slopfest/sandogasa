@@ -48,6 +48,7 @@
 use std::process::ExitCode;
 
 use chrono::{DateTime, Utc};
+use sandogasa_cbs::Stage;
 
 use crate::gitlab::{self, Note};
 use crate::status::{
@@ -424,15 +425,25 @@ pub fn assess(f: &Facts<'_>, me: &str, now: DateTime<Utc>, w: Windows) -> Assess
         // A -release build a -testing one replaces is behind stock:
         // not news.
         let release = f.release_nvr.filter(|_| fix_in_testing.is_none());
-        let stages = [(release, "release"), (f.testing_nvr, "testing")];
-        for (nvr, stage) in stages {
+        let stages = [(release, Stage::Release), (f.testing_nvr, Stage::Testing)];
+        for (nvr, cbs_stage) in stages {
             let Some(nvr) = nvr else { continue };
-            if stage == "testing" && f.release_nvr == Some(nvr) {
+            if cbs_stage == Stage::Testing && f.release_nvr == Some(nvr) {
                 continue;
             }
+            let stage = cbs_stage.as_str();
             let marker = build_marker(nvr, stage);
             let to_mr = f.mr_state == "opened" && ours(f.mr_notes, me, &marker).is_none();
-            let to_issue = ours(f.issue_notes, me, &marker).is_none();
+            // On the issue, cbspkg's comment on the build reaching the
+            // stage says more than the announcement would, whoever
+            // posted it. cbspkg does not look for ping's in turn, so
+            // its comment, label and provenance are never left out.
+            let cbspkg_marker = sandogasa_cbs::tracking::stage_marker(nvr, cbs_stage);
+            let cbspkg_said = f
+                .issue_notes
+                .iter()
+                .any(|n| !n.system && n.body.contains(&cbspkg_marker));
+            let to_issue = !cbspkg_said && ours(f.issue_notes, me, &marker).is_none();
             if to_mr || to_issue {
                 announce.push(Announce {
                     nvr: nvr.to_string(),
@@ -1264,6 +1275,39 @@ mod tests {
             assess(&f, ME, at(NOW), W).tell_issue_behind,
             "stock moving again is news again"
         );
+    }
+
+    /// cbspkg promote's comment on the tracking issue is the
+    /// announcement there, whoever posted it; the MR still gets one.
+    #[test]
+    fn a_cbspkg_comment_on_the_issue_is_the_announcement_there() {
+        let said = [note(
+            "a-colleague",
+            &format!("`{PU}` is released.\n\n<!-- sandogasa: {PU} reached release -->"),
+            "2026-09-01T00:00:00Z",
+            false,
+        )];
+        let mut f = facts(&[], "2025-12-14T20:38:23Z");
+        f.issue_notes = &said;
+        let a = assess(&f, ME, at(NOW), W);
+        assert_eq!(
+            a.announce,
+            vec![Announce {
+                nvr: PU.into(),
+                stage: "release",
+                to_mr: true,
+                to_issue: false,
+            }]
+        );
+        // cbspkg's comment on testing does not stand for the release.
+        let testing = [note(
+            "a-colleague",
+            &format!("`{PU}` is ready for testing.\n\n<!-- sandogasa: {PU} reached testing -->"),
+            "2026-09-01T00:00:00Z",
+            false,
+        )];
+        f.issue_notes = &testing;
+        assert!(assess(&f, ME, at(NOW), W).announce[0].to_issue);
     }
 
     /// blktrace c10s: stock took `-13` without the change, and the SIG's

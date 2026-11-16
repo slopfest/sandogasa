@@ -346,7 +346,9 @@ for the next person:
   gives the NVR and how to get it — the SIG repo for a release, the
   buildlogs testing repo for a testing build — on the MR and on the
   tracking issue, once per build and stage; the same NVR in both tags
-  is announced as released only. Independent of the action.
+  is announced as released only. On the tracking issue, `cbspkg`'s
+  comment on the build reaching that stage counts as the announcement,
+  whoever posted it. Independent of the action.
 - **ping** — the MR merges cleanly, the SIG build is current, and the
   MR has been quiet for `--days` (default 14). A note on the MR asks
   the maintainer what blocks review and names the tracking issue.

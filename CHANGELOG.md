@@ -193,17 +193,19 @@ project's issues past the twentieth. Resolves #143.
 
 A Proposed Update's tracking issue said nothing about its build once
 the merge request was carried: whoever followed it had to look in CBS
-to learn that the fix had reached `-testing` or been released.
-`cbspkg promote` now finds the update's open tracking issue, by the
-branch's release label and RHEL issue, shows the comment it will post
-with the promotion it confirms, and once the build is tagged, posts it,
-sets the scoped label `stage::testing` or `stage::release` where the
-SIG's group has it, and moves a `To do` issue to `In progress`. A
-hidden marker in each comment keeps a rerun from saying it twice, and a
-build that moved gets its comment even when a later `cbs` command
-fails, since a rerun would find nothing left to promote. Without a
-GitLab token, the confirmation says no comment will be posted. Builds,
-untags and Hyperscale's issues are to follow (#144).
+to learn that the fix had reached `-testing` or been released. `cbspkg
+promote` now finds the update's open tracking issue, by the branch's
+release label and RHEL issue, shows the comment it will post with the
+promotion it confirms, and once the build is tagged, posts it, sets
+the scoped label `stage::testing` or `stage::release` where the SIG's
+group has it, and moves a `To do` issue to `In progress`. A hidden
+marker in each comment keeps a rerun from saying it twice, and
+`cpu-sig-tracker ping` takes the comment as its own announcement of
+the build on the issue, so it does not post a second one. A build that
+moved gets its comment even when a later `cbs` command fails, since a
+rerun would find nothing left to promote. Without a GitLab token, the
+confirmation says no comment will be posted. Builds, untags and
+Hyperscale's issues are to follow (#144).
 
 sandogasa-cbs gains the `tracking` module (matching a branch to its
 issue, the comment and its marker, the stage labels), and
