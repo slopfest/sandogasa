@@ -495,11 +495,16 @@ fn merge_request_of(
 /// Fetch, once each, what the checkout at `repo` lacks to compare
 /// `commits` with the merge request: its head from CentOS Stream, the
 /// builds' commits from the checkout's remotes.
+/// The preview needs them, so this runs before anything is confirmed;
+/// it only updates remote-tracking refs, and says so, as it can take a
+/// while.
 fn fetch_missing(repo: &Path, mr: &MergeRequest, commits: &[Option<String>]) {
     if !has_commit(repo, &mr.head) {
+        eprintln!("Fetching the merge request's head, to say what the build carries…");
         let _ = git(repo, &["fetch", "--quiet", &mr.repo_url, &mr.mr_ref]);
     }
     if commits.iter().flatten().any(|c| !has_commit(repo, c)) {
+        eprintln!("Fetching the checkout's remotes, to say what the build carries…");
         let _ = git(repo, &["fetch", "--quiet", "--all"]);
     }
 }
@@ -521,7 +526,10 @@ pub fn provenance(repo: &Path, head: &str, commit: &str) -> Provenance {
         );
         return Provenance::Unknown;
     }
-    let id = git(repo, &["rev-parse", "--short", commit]).unwrap_or_else(|_| short(commit));
+    // A fixed length, not git's abbreviation, which grows with the repo
+    // and differs between clones: an earlier comment's list of carried
+    // commits is matched by its text.
+    let id = git(repo, &["rev-parse", "--short=12", commit]).unwrap_or_else(|_| short(commit));
     let full = |c: &str| git(repo, &["rev-parse", c]).ok();
     if full(head) == full(commit) {
         return Provenance::Head(id);
@@ -531,7 +539,12 @@ pub fn provenance(repo: &Path, head: &str, commit: &str) -> Provenance {
     }
     match git(
         repo,
-        &["log", "--format=%h %s", &format!("{head}..{commit}")],
+        &[
+            "log",
+            "--abbrev=12",
+            "--format=%h %s",
+            &format!("{head}..{commit}"),
+        ],
     ) {
         Ok(carried) if !carried.is_empty() => {
             Provenance::Carried(id, carried.lines().map(str::to_string).collect())
@@ -540,9 +553,9 @@ pub fn provenance(repo: &Path, head: &str, commit: &str) -> Provenance {
     }
 }
 
-/// The first seven characters of a commit id.
+/// The first twelve characters of a commit id.
 fn short(commit: &str) -> String {
-    commit.chars().take(7).collect()
+    commit.chars().take(12).collect()
 }
 
 /// Run `git` in `repo` to read something, its output trimmed.
@@ -951,8 +964,8 @@ mod tests {
             "Pin Ruby 3 for CBS's el9 buildroot",
         ]);
         let pinned = git(&["rev-parse", "HEAD"]);
-        let short_head = git(&["rev-parse", "--short", &head]);
-        let short_pinned = git(&["rev-parse", "--short", &pinned]);
+        let short_head = git(&["rev-parse", "--short=12", &head]);
+        let short_pinned = git(&["rev-parse", "--short=12", &pinned]);
         assert_eq!(
             provenance(repo, &head, &head),
             Provenance::Head(short_head.clone())

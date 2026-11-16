@@ -1164,8 +1164,11 @@ pub fn run_configured(
     // The SIG's open tracking issues: where a package's merge requests
     // are found, and what each one carried is reported against. Not
     // being able to read them is an error when they say what to carry,
-    // and only leaves the report out otherwise.
-    let issues = if from_issues || !changes.is_empty() {
+    // and only leaves the report out otherwise. A repo just created, or
+    // in a dry run still to be, has none, and may not exist to ask.
+    let issues = if created {
+        Some(Vec::new())
+    } else if from_issues || !changes.is_empty() {
         match Client::new(base, &path, token.as_deref().unwrap_or(""))?
             .list_issues("cpu-sig-tracker", Some("opened"))
         {
@@ -1320,6 +1323,27 @@ mod tests {
             sig,
             yes: true,
         }
+    }
+
+    /// A dry run for a package whose SIG repo does not exist yet shows
+    /// the repo's creation, without reading the tracking issues of a
+    /// project GitLab does not have.
+    #[test]
+    fn a_dry_run_for_a_missing_repo_reads_no_tracking_issues() {
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server.mock("GET", path).with_status(404).create();
+        let issues = server
+            .mock("GET", format!("{path}/issues").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(404)
+            .with_body(r#"{"message": "404 Project Not Found"}"#)
+            .expect(0)
+            .create();
+        let mut run = args("rsync", Some(SigName::ProposedUpdates));
+        run.dry_run = true;
+        run_with(&run, &server.url(), None).unwrap();
+        issues.assert();
     }
 
     /// rsync's first run: no SIG repo yet, so it is created in the
