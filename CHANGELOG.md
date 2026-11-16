@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.28.2
 
 ### cbspkg promote untags the older builds a promotion replaces
 
