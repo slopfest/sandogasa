@@ -11,6 +11,7 @@
 //! row.
 
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use sandogasa_fedrq::Fedrq;
@@ -168,6 +169,8 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
     };
 
     let group_client = gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
+    // Whether a refresh can ask about a CVE it is unsure of.
+    let interactive = !args.json && std::io::stdin().is_terminal();
 
     let package_filter: Option<std::collections::HashSet<&str>> = if args.packages.is_empty() {
         None
@@ -397,21 +400,33 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         .iter()
                         .filter_map(|(_, i)| i.as_ref().map(|i| i.summary.as_str()))
                         .collect();
-                    let cves = crate::triage::update_cves(
-                        [
-                            mr_title.as_deref().unwrap_or(""),
-                            parsed.mr_description.as_deref().unwrap_or(""),
-                            body,
-                        ]
-                        .into_iter()
-                        .chain(summaries.iter().copied()),
+                    let found = crate::triage::update_cves(
+                        [mr_title.as_deref().unwrap_or(""), body]
+                            .into_iter()
+                            .chain(summaries.iter().copied()),
+                        parsed.mr_description.as_deref().unwrap_or(""),
                         infos
                             .iter()
                             .filter_map(|(_, i)| i.as_ref()?.description.as_deref()),
                     );
-                    let new_cve_lines = (crate::triage::parse_cve_lines(body).is_empty()
-                        && !cves.is_empty())
-                    .then(|| crate::triage::rated_cve_lines(&cves, args.verbose));
+                    // A body with CVE lines already says which CVEs the
+                    // update fixes, so only one without them asks.
+                    let no_cve_lines = crate::triage::parse_cve_lines(body).is_empty();
+                    let cves = if no_cve_lines {
+                        crate::triage::settle_cves(found, interactive, |q, items| {
+                            sandogasa_cli::confirm_each(
+                                &format!("{package} on {release}, {}:\n{q}", issue.web_url),
+                                "Does it fix this one?",
+                                items,
+                                false,
+                            )
+                            .unwrap_or_default()
+                        })
+                    } else {
+                        found.certain
+                    };
+                    let new_cve_lines = (no_cve_lines && !cves.is_empty())
+                        .then(|| crate::triage::rated_cve_lines(&cves, args.verbose));
                     // The builds, for a body that names them unknown (#101):
                     // stock's build expected to carry the fix, named by the
                     // SIG's, and stock's current build while stock lacks

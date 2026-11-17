@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### cpu-sig-tracker asks about a CVE only an MR description names
+
+`file-issue` and `status --refresh` took every CVE a merge request's
+description mentioned as one the update fixes, so a description saying
+"a regression of the fix for CVE-X" would have given the tracking issue
+a CVE line for CVE-X, and the `security` label. CVEs the description
+alone names are now listed, each with the line that names it, and asked
+about at a terminal: all, none (the default) or each in turn. Under
+`--dry-run` or `--json`, or without a terminal, they are left out with
+a warning naming them. CVEs
+from the merge request's title, the tracking issue, or the RHEL issues'
+summaries and per-CVE sections count as before. `status --refresh` asks
+only for an issue that has no CVE lines yet.
+
 ## v0.28.2
 
 ### cbspkg promote untags the older builds a promotion replaces

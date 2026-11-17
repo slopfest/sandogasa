@@ -74,20 +74,101 @@ pub fn sort_cve_lines(lines: &mut [&str]) {
     }
 }
 
+/// The CVEs [`update_cves`] found, by how sure the evidence is.
+#[derive(Debug, Default, PartialEq)]
+pub struct FoundCves {
+    /// Named by the merge request's title, the tracking issue, or the
+    /// RHEL issues' summaries or descriptions, sorted ([`sort_cves`]).
+    pub certain: Vec<String>,
+    /// Named only in the merge request's description, sorted, each with
+    /// the description's line that names it. Prose there can mention a
+    /// CVE the update does not fix, such as one whose fix it regressed,
+    /// so these are asked about.
+    pub unsure: Vec<(String, String)>,
+}
+
+/// How much of a description's line a question about it shows.
+const CONTEXT_CHARS: usize = 100;
+
 /// The CVEs an update fixes: those named in `texts` (the merge request's
-/// title and description, the tracking issue's body, the RHEL issues'
-/// summaries), then those its RHEL issues' `descriptions` set out
-/// ([`described_cves`]), each once, sorted ([`sort_cves`]). An update
-/// fixing several CVEs names them in its RHEL issue's description, not
-/// in a title.
+/// title, the tracking issue's body, the RHEL issues' summaries), then
+/// those its RHEL issues' `descriptions` set out ([`described_cves`]),
+/// each once, sorted ([`sort_cves`]). An update fixing several CVEs
+/// names them in its RHEL issue's description, not in a title. A CVE
+/// only `mr_description` names is unsure.
 pub fn update_cves<'a>(
     texts: impl IntoIterator<Item = &'a str>,
+    mr_description: &str,
     descriptions: impl IntoIterator<Item = &'a str>,
-) -> Vec<String> {
-    let mut out = cves_in(texts);
+) -> FoundCves {
+    let mut certain = cves_in(texts);
     for id in descriptions.into_iter().flat_map(described_cves) {
-        if !out.contains(&id) {
-            out.push(id);
+        if !certain.contains(&id) {
+            certain.push(id);
+        }
+    }
+    sort_cves(&mut certain);
+    let mut ids: Vec<String> = cves_in([mr_description])
+        .into_iter()
+        .filter(|id| !certain.contains(id))
+        .collect();
+    sort_cves(&mut ids);
+    let unsure = ids
+        .into_iter()
+        .map(|id| {
+            let line = mr_description
+                .lines()
+                .map(str::trim)
+                .find(|l| crate::sync_updates::cve_ids(l).contains(&id))
+                .unwrap_or_default();
+            let line = match line.char_indices().nth(CONTEXT_CHARS) {
+                Some((at, _)) => format!("{}…", &line[..at]),
+                None => line.to_string(),
+            };
+            (id, line)
+        })
+        .collect();
+    FoundCves { certain, unsure }
+}
+
+/// The CVEs to record: the certain ones, and the unsure ones `ask`
+/// takes. `ask` gets the question, which lists them, and one entry per
+/// unsure CVE, and returns the positions of those it takes
+/// (`sandogasa_cli::confirm_each`, defaulting to none). Without
+/// `interactive`, the unsure ones are left out, with a warning naming
+/// them.
+pub fn settle_cves(
+    found: FoundCves,
+    interactive: bool,
+    ask: impl FnOnce(&str, &[String]) -> Vec<usize>,
+) -> Vec<String> {
+    let mut out = found.certain;
+    if found.unsure.is_empty() {
+        return out;
+    }
+    if !interactive {
+        let ids: Vec<&str> = found.unsure.iter().map(|(id, _)| id.as_str()).collect();
+        eprintln!(
+            "warning: left out {}: named only in the merge request's \
+             description; a run at a terminal, without --dry-run or --json, \
+             asks about each",
+            ids.join(", ")
+        );
+        return out;
+    }
+    let items: Vec<String> = found
+        .unsure
+        .iter()
+        .map(|(id, line)| format!("  {id}: {line}"))
+        .collect();
+    let question = format!(
+        "The merge request's description names CVEs found nowhere else:\n{}\n\
+         Does the update fix them?",
+        items.join("\n")
+    );
+    for i in ask(&question, &items) {
+        if let Some((id, _)) = found.unsure.get(i) {
+            out.push(id.clone());
         }
     }
     sort_cves(&mut out);
@@ -229,13 +310,78 @@ mod tests {
         // A heading that is not a CVE alone, or prose, is not one.
         assert!(described_cves("See CVE-2026-1234:\nCVE-2026-1234 is bad").is_empty());
         assert_eq!(
-            update_cves(["Fix CVE-2026-113408"], [several]),
+            update_cves(["Fix CVE-2026-113408"], "", [several]).certain,
             ["CVE-2026-111760", "CVE-2026-113408"]
         );
         assert_eq!(
-            update_cves(["Fix CVE-2026-111760"], [several]),
+            update_cves(["Fix CVE-2026-111760"], "", [several]).certain,
             ["CVE-2026-111760", "CVE-2026-113408"]
         );
+    }
+
+    #[test]
+    fn a_cve_only_the_mr_description_names_is_unsure() {
+        let long = "x".repeat(120);
+        let found = update_cves(
+            ["Fix CVE-2026-2002"],
+            &format!(
+                "Fixes CVE-2026-2002.\n\n  A regression of the fix for CVE-2026-1001.\n\
+                 Also CVE-2025-9009 {long}"
+            ),
+            [],
+        );
+        assert_eq!(found.certain, ["CVE-2026-2002"]);
+        assert_eq!(
+            found.unsure,
+            [
+                (
+                    "CVE-2025-9009".to_string(),
+                    format!("Also CVE-2025-9009 {}…", &long[..81])
+                ),
+                (
+                    "CVE-2026-1001".to_string(),
+                    "A regression of the fix for CVE-2026-1001.".to_string()
+                ),
+            ]
+        );
+        // Named elsewhere too, it is certain.
+        let found = update_cves(["Fix CVE-2026-2002", "CVE-2026-1001"], "CVE-2026-1001", []);
+        assert!(found.unsure.is_empty());
+    }
+
+    #[test]
+    fn an_unsure_cve_is_kept_only_when_taken() {
+        let found = || FoundCves {
+            certain: vec!["CVE-2026-5005".into()],
+            unsure: vec![
+                ("CVE-2026-1001".into(), "regressed by CVE-2026-1001".into()),
+                ("CVE-2026-9009".into(), "see CVE-2026-9009".into()),
+            ],
+        };
+        let mut asked = None;
+        let kept = settle_cves(found(), true, |q, items| {
+            asked = Some((q.to_string(), items.to_vec()));
+            vec![0]
+        });
+        assert_eq!(kept, ["CVE-2026-1001", "CVE-2026-5005"]);
+        let (q, items) = asked.unwrap();
+        assert!(q.contains("  CVE-2026-1001: regressed by CVE-2026-1001\n"));
+        assert!(q.ends_with("Does the update fix them?"));
+        assert_eq!(items[1], "  CVE-2026-9009: see CVE-2026-9009");
+        // Without a terminal nothing is asked and the unsure ones are
+        // left out.
+        let kept = settle_cves(found(), false, |_, _| panic!("asked"));
+        assert_eq!(kept, ["CVE-2026-5005"]);
+        // Nothing unsure: nothing asked, even at a terminal.
+        let kept = settle_cves(
+            FoundCves {
+                certain: vec!["CVE-2026-5005".into()],
+                unsure: vec![],
+            },
+            true,
+            |_, _| panic!("asked"),
+        );
+        assert_eq!(kept, ["CVE-2026-5005"]);
     }
 
     #[test]

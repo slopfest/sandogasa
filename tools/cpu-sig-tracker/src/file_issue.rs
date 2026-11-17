@@ -232,22 +232,28 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         .collect();
     // How urgent it is (#98): the CVEs the change fixes, rated, and the
     // priority Red Hat gave its RHEL issues.
-    let cves = crate::triage::update_cves(
-        [mr.title.as_str(), mr.description.as_deref().unwrap_or("")]
-            .into_iter()
-            .chain(
+    let interactive = !args.dry_run && std::io::stdin().is_terminal();
+    let cves = crate::triage::settle_cves(
+        crate::triage::update_cves(
+            std::iter::once(mr.title.as_str()).chain(
                 seen.iter()
                     .filter_map(|(_, s)| s.as_ref().map(|s| s.summary.as_str())),
             ),
-        seen.iter()
-            .filter_map(|(_, s)| s.as_ref()?.description.as_deref()),
+            mr.description.as_deref().unwrap_or(""),
+            seen.iter()
+                .filter_map(|(_, s)| s.as_ref()?.description.as_deref()),
+        ),
+        interactive,
+        |q, items| {
+            sandogasa_cli::confirm_each(q, "Does it fix this one?", items, false)
+                .unwrap_or_default()
+        },
     );
     let cve_lines = crate::triage::rated_cve_lines(&cves, args.verbose);
     let priority = crate::triage::priority_label(
         seen.iter()
             .filter_map(|(_, s)| s.as_ref()?.priority.as_deref()),
     );
-    let interactive = !args.dry_run && std::io::stdin().is_terminal();
     // The builds, from the evidence when not named (#101): stock's build
     // expected to carry the fix, named by the SIG's in -release or
     // -testing, and stock's current build, the affected one while the

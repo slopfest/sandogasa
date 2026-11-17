@@ -128,15 +128,18 @@ still under embargo: it is then hidden from the public, and from the
 SIG's site, until someone makes it public in GitLab.
 
 How urgent the update is goes on the issue too. Each CVE the merge
-request or its RHEL issues name (the merge request's title or
-description, the RHEL issues' summaries, and the per-CVE sections `jira`
-writes into an RHEL issue's description, which is where an update fixing
-several CVEs names them) gets a `- **CVE**:` line with its
+request or its RHEL issues name (the merge request's title, the RHEL
+issues' summaries, and the per-CVE sections `jira` writes into an RHEL
+issue's description, which is where an update fixing several CVEs names
+them) gets a `- **CVE**:` line with its
 severity (Red Hat's rating first, then NVD's and GitHub's), linking
 Red Hat's page for it, which lists the advisories that fix it, and
-NVD's. A change fixing a CVE is filed as `security` unless `--type`
-says otherwise; at a terminal, a `--type` that disagrees is confirmed,
-defaulting to `security`. Without a CVE, the type is asked at a
+NVD's. CVEs named only in the merge request's description are listed,
+each with the line naming it, and asked about at a terminal, defaulting
+to none; without a terminal they are left out with a warning. A change
+fixing a CVE is filed as `security` unless `--type` says otherwise; at
+a terminal, a `--type` that disagrees is confirmed, defaulting to
+`security`. Without a CVE, the type is asked at a
 terminal (`security`, `bugfix`, `enhancement`, `arch-enablement` or
 `undefined`, with no default), and `--type` is required without one.
 `undefined` is for an update that fits none, such as one naming an
@@ -522,11 +525,14 @@ fix from the same evidence `file-issue` uses (the affected build only
 while stock lacks the change, since it names the vulnerable build), and
 never changes one that has a value, except an expected fix naming a
 `~proposed` build: that is the SIG's own, never stock's, and is
-replaced. It also fills in what `file-issue`
-records about urgency when the issue was filed without it: `- **CVE**:` lines for the
-CVEs its merge request or RHEL issues name, found as `file-issue` finds them, the `security` label when
-it has no type label, and the `priority::` label for its RHEL issues'
-priority, replacing one that no longer matches.
+replaced. It also fills in what `file-issue` records about urgency when
+the issue was filed without it: `- **CVE**:` lines for the CVEs its
+merge request or RHEL issues name, found as `file-issue` finds them (a
+CVE only the merge request's description names is asked about at a
+terminal, and left out with a warning under `--json` or without one),
+the `security` label when it has no type label, and the `priority::`
+label for its RHEL issues' priority, replacing one that no longer
+matches.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
 
