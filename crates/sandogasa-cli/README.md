@@ -15,7 +15,7 @@ transport error, or a 429, 500, 502, 503 or 504. `send` and
 returning the last response when the attempts run out, so the caller
 judges its status. `retry` and `retry_blocking` take a predicate for
 anything else, such as a Koji XML-RPC call. A `Policy` sets the
-attempts and the backoff (doubling from a base delay, honouring a
+attempts and the backoff (doubling from a base delay, honoring a
 `Retry-After`, never over a cap); `Policy::immediate` waits for
 nothing, for tests.
 
@@ -42,7 +42,7 @@ whose steps are commands a person could run by hand: `Ui { explain,
 dry_run, quiet }` narrates each step (`step`), shows its command
 exactly as it would be typed (`show_command`), and runs it
 (`run_required`, `run_capture`, …), pausing for Enter first under
-`--explain` and running nothing under `--dry-run`. Colour goes through
+`--explain` and running nothing under `--dry-run`. Color goes through
 `anstream`, which drops it for a pipe or with `NO_COLOR`. It came from
 dbranch, whose `--explain` the workspace rule names as the model.
 

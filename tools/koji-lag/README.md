@@ -88,7 +88,7 @@ Two kinds are detected. A **mass rebuild** is found from who submitted each
 day, so it is dated from what happened rather than from what was announced —
 with `--schedule` both are reported, and they differ: F45's was announced
 across four weeks and submitted in four days. A **stall** is one architecture
-falling an order of magnitude behind the others, and each is labelled from
+falling an order of magnitude behind the others, and each is labeled from
 throughput: `congestion` when its builders were working harder than usual and
 still fell behind, `outage` when they did less than usual while the queue
 grew.
@@ -193,7 +193,7 @@ publishing a per-person report.
 child tasks by the build, so a build finishing minutes before midnight
 keeps its arch tasks instead of being split across two periods.
 
-Only whole days are analysed. A day the store has listed but not finished
+Only whole days are analyzed. A day the store has listed but not finished
 fetching holds builds whose arch tasks have not arrived, and statistics over
 those read as a quiet day rather than an unfinished one — so such days are
 left out, named so they can be synced, and a range with nothing complete in
@@ -516,7 +516,7 @@ rebuild windows detected from who submitted each day, queue wait per class of
 build, service time per architecture, builder capacity from the hub's
 configuration history, utilisation against the wait actually observed, the
 long-build tail, per-package slowdown grouped by build toolchain, and
-single-architecture stalls labelled congestion or outage. It covers s390x and
+single-architecture stalls labeled congestion or outage. It covers s390x and
 ppc64le together — both mean asking IBM for hardware, and they are each
 other's control: they reach the same utilisation from opposite directions and
 only one of them queues.
@@ -607,14 +607,14 @@ nothing at all over 9; see the comments in `scripts/publish-store.sh` for the
 measurements. Decompression is about half a second per gigabyte whatever the
 level, so the choice costs whoever packs it and never whoever downloads it.
 
-`publish-store.sh` snapshots with `VACUUM INTO` so the artefact is consistent
+`publish-store.sh` snapshots with `VACUUM INTO` so the artifact is consistent
 even if a sync is running, verifies the snapshot before compressing it, and
 writes a `.sha256` beside it. The file is named for the last day it covers
 rather than the day it was packed, so two runs over the same data agree.
 
 ### Attaching it to a release
 
-The artefact goes on a `koji-lag-store-*` release of this repository,
+The artifact goes on a `koji-lag-store-*` release of this repository,
 tagged for the last day the store covers rather than the day it was packed,
 so the tag and the asset name agree:
 

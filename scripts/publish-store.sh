@@ -15,7 +15,7 @@
 # length: a WAL-mode store keeps committed data across three files, and
 # copying them individually can capture a database that opens cleanly with
 # rows quietly missing. Compressing that snapshot rather than the live file
-# means the artefact is consistent even if a sync is running.
+# means the artifact is consistent even if a sync is running.
 #
 # Usage: scripts/publish-store.sh STORE [OUTDIR]
 #   e.g. scripts/publish-store.sh scratch/lag.sqlite dist/
@@ -34,7 +34,7 @@ OUTDIR=${2:-dist}
 command -v zstd >/dev/null || { echo "error: zstd is not installed" >&2; exit 1; }
 command -v sqlite3 >/dev/null || { echo "error: sqlite3 is not installed" >&2; exit 1; }
 
-# Name the artefact for the last day it covers, not for today: two runs on
+# Name the artifact for the last day it covers, not for today: two runs on
 # different days over the same data should produce the same name, and a
 # reader wants to know what is in it rather than when it was packed.
 # `to_ts` is an exclusive midnight bound, so the last day actually covered
@@ -62,8 +62,8 @@ before=$(stat -c %s "$STORE")
 echo "snapshotting $STORE ($((before / 1024 / 1024))MB), covering to $COVERS"
 sqlite3 "file:$STORE?mode=ro" "VACUUM INTO '$SNAP'"
 
-# Verify before publishing, not after. A corrupt artefact that nobody
-# checked is worse than no artefact, and this is the last moment the
+# Verify before publishing, not after. A corrupt artifact that nobody
+# checked is worse than no artifact, and this is the last moment the
 # original is still to hand for comparison.
 echo -n "verifying snapshot: "
 check=$(sqlite3 "$SNAP" "PRAGMA integrity_check")

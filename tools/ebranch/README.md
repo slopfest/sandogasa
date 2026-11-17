@@ -785,7 +785,7 @@ like breakage: a `-1` for `--give-karma`, a stop for `--submit` until
 the reviewer keeps, explains or removes them.
 
 For an update from a side tag, each reverse dependency that would
-break is also labelled with when it reached the target, measured
+break is also labeled with when it reached the target, measured
 against the side tag's creation in Koji: **new** (the package was
 first listed in any tag after then, as a package added to Fedora since
 was), **rebuilt** (its newest build in the target finished after
@@ -1479,7 +1479,7 @@ plan over a day old is confirmed at a terminal first, and refused
 without one. Only the latest run and the one sent are kept.
 
 With `--copr <owner>/<project>`, the change owner's COPR, where the
-dependents' rebuilds are often trialled before the side tag exists, is
+dependents' rebuilds are often trialed before the side tag exists, is
 read for each package left to rebuild that it has a succeeded build of
 (the branch's chroot preferred):
 
@@ -2017,7 +2017,7 @@ file with; create it at
 https://forge.fedoraproject.org/user/settings/applications with the
 issue scope at Read and Write, to search and file tickets, and the
 organization scope at Read, since some of the labels a ticket is
-filed with belong to the releng organisation. A new token is checked
+filed with belong to the releng organization. A new token is checked
 for all of it against the releng tracker, without writing anything
 there; a kept one only for still working. A token Forgejo refuses, or
 one missing a scope, is offered for replacement.

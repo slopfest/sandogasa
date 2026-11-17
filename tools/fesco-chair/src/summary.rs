@@ -211,14 +211,14 @@ fn pending_announcements(
     (voted, concluded)
 }
 
-/// The email body: the artefact links, any tickets decided in-ticket
+/// The email body: the artifact links, any tickets decided in-ticket
 /// but not yet announced, then the full plain-text minutes. The
 /// section header matches the schedule announcement's, since it lists
 /// the same kind of item; it is omitted when there is nothing to
 /// announce.
 ///
 /// Ticket entries and the minutes are wrapped to
-/// [`sources::WRAP`] columns. The artefact links aren't: each is one
+/// [`sources::WRAP`] columns. The artifact links aren't: each is one
 /// unbreakable URL already past the width, and wrapping would only
 /// orphan its label.
 pub fn render_body(

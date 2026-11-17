@@ -84,7 +84,7 @@ enum Command {
     Ping(PingArgs),
 
     /// Close a tracking issue for a reason — landed, superseded or
-    /// abandoned — labelling it, telling the MR, closing the MR of
+    /// abandoned — labeling it, telling the MR, closing the MR of
     /// an abandoned change.
     Retire(RetireArgs),
 

@@ -17,7 +17,7 @@ name: CodeQL
 
 on:
   # Markdown alone changes nothing either extractor reads. The
-  # workflows themselves are analysed, by the `actions` language, so
+  # workflows themselves are analyzed, by the `actions` language, so
   # only `**.md` is safe to skip here.
   pull_request:
     paths-ignore:

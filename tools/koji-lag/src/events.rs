@@ -474,7 +474,7 @@ mod tests {
     }
 
     /// A store holding one releng burst and one architecture left behind
-    /// by it, which is the shape `assemble` exists to recognise.
+    /// by it, which is the shape `assemble` exists to recognize.
     fn store_with_a_rebuild_and_a_stall() -> (tempfile::TempDir, crate::store::Store) {
         let dir = tempfile::tempdir().unwrap();
         let mut store = crate::store::Store::open(&dir.path().join("s.sqlite")).unwrap();

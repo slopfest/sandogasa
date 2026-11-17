@@ -202,7 +202,7 @@ pub fn weekend_days(country: &str) -> &'static [Weekday] {
 /// Local-time snapshot derived from an IANA timezone name.
 #[derive(Debug, Clone)]
 pub struct LocalTimeInfo {
-    /// Localised datetime, RFC 3339 (with offset).
+    /// Localized datetime, RFC 3339 (with offset).
     pub local_time_rfc3339: String,
     /// Human-friendly local datetime, e.g. `2026-06-03 14:25:33`.
     pub local_time_display: String,

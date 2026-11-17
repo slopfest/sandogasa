@@ -17,7 +17,7 @@
 //! - **Per cohort.** In July 2026 ten people submitted 67% of Fedora's
 //!   human s390x workload at a 1.83h p90 while *every* cohort's median sat
 //!   at about a minute. Heavy maintainers meet the p90 many times in one
-//!   session, and bulk work across a dependency set serialises, so one tail
+//!   session, and bulk work across a dependency set serializes, so one tail
 //!   event becomes a day. A median over submitters cannot show this.
 //! - **Wasted and tail share.** Four tasks that ran past fifty hours and
 //!   produced nothing took 11.8% of one rebuild's s390x capacity. They are
@@ -1087,7 +1087,7 @@ mod tests {
         assert_eq!(assess_all(&with).cohorts.len(), 5);
 
         // The same sixty, narrowed: no bands, and no warning derived from
-        // them. Not a judgement about the population -- the population is
+        // them. Not a judgment about the population -- the population is
         // identical -- but about the question having been narrowed away.
         let selected: Vec<&TaskRecord> = with.tasks.values().collect();
         let narrowed = assess(&with, &selected, None, false);

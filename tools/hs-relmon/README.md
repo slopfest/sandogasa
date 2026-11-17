@@ -641,7 +641,7 @@ be promoted even if you name it directly.
 
 When a package name is given, its latest build in each testing
 tag is reviewed. When an NVR is given, only that build is
-reviewed (an NVR is recognised by its `.el` dist marker).
+reviewed (an NVR is recognized by its `.el` dist marker).
 
 ## Data sources
 

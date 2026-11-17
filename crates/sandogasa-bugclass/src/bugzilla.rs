@@ -167,7 +167,7 @@ pub fn classify(bug: &Bug, trackers: &TrackerIds) -> BugKind {
     // this component and a new version. Going through
     // `extract_new_version` rather than a bare `starts_with` anchors
     // the component the same way the version comparison does, so a
-    // bug against `rust-ctor` is not labelled an update request on
+    // bug against `rust-ctor` is not labeled an update request on
     // the strength of a `rust-ctor-proc-macro-0.0.13` summary.
     if bug.keywords.iter().any(|k| k == "FutureFeature")
         && let Some(component) = bug.component.first()

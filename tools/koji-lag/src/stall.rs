@@ -128,7 +128,7 @@ impl Stall {
 
 /// An architecture's ordinary throughput, as the median of its daily means.
 ///
-/// The median rather than the mean because the point is to characterise a
+/// The median rather than the mean because the point is to characterize a
 /// normal day, and both rebuild bursts and outages are in the input: a
 /// month holding one four-day rebuild at eight times normal would drag a
 /// mean well above anything typical.

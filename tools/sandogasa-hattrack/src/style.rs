@@ -39,7 +39,7 @@ fn paint(s: &str, code: &str, on: bool) -> String {
     }
 }
 
-/// How the current local date is classified for colouring.
+/// How the current local date is classified for coloring.
 /// `Weekend` and `Holiday` are both "off" days and render
 /// yellow; `Weekday` is green; `Unknown` (no country, no
 /// signal) stays plain.

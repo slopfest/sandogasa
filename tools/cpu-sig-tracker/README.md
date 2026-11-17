@@ -53,7 +53,7 @@ scoped token, `read:jira-user` and `read:jira-work`, plus
 email of the Atlassian account it belongs to; both are checked against
 the site before being
 kept. Authenticated calls go through Atlassian's API gateway, the only
-place a scoped token is honoured; anonymous reads go to the site. The
+place a scoped token is honored; anonymous reads go to the site. The
 tokens are kept in the desktop keyring (through `secret-tool`), as
 entries shared with the other sandogasa tools that use the same
 service, e.g. `secret-tool lookup application sandogasa service
@@ -246,7 +246,7 @@ classified as well, adding `proposed` (only in the central
 `proposed_updates/package_tracker`) and `missing`; issues for packages
 outside the inventory are still listed.
 
-Hand-filed issues are offered the label at the prompt, or labelled
+Hand-filed issues are offered the label at the prompt, or labeled
 outright with `--adopt`, after which every command tracks them; an
 unattended run only reports them. Otherwise read-only; file new
 tracking issues explicitly via `file-issue`.
@@ -382,7 +382,7 @@ notes do not count. The last response is shown flattened onto one
 line, so a greeting on its first line does not stand for it. Every
 note carries a hidden `<!-- cpu-sig-tracker: … -->` marker naming the
 build, stage or revision it is about, which is how later runs
-recognise it. "Us" is the token's login, from `GET /api/v4/user`. A
+recognize it. "Us" is the token's login, from `GET /api/v4/user`. A
 comment on the RHEL Jira issue, for its watchers, is the
 announcement's third channel once the Jira crate can write.
 
@@ -426,7 +426,7 @@ does the SIG stop carrying it?
   inferred from and checked against.
 - **unanswered** — Red Hat never responded: every RHEL issue was
   closed with no sign of a fix, as for inactivity, and the change went
-  nowhere. Inferred from that; otherwise your judgement.
+  nowhere. Inferred from that; otherwise your judgment.
 - **abandoned** — the SIG gives up for its own reasons, Bugzilla's
   CANTFIX. Nothing to verify beyond the build being untagged.
 

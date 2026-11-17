@@ -396,7 +396,7 @@ pub fn dh_make_argv(name: &str, version: &str) -> Vec<String> {
 
 /// `lrc` — licenserecon, comparing debian/copyright against what
 /// `licensecheck` finds in the source. Exits 0 when they agree and
-/// non-zero (3, measured) when they disagree about a licence.
+/// non-zero (3, measured) when they disagree about a license.
 pub fn lrc_argv() -> Vec<String> {
     argv(&["lrc"])
 }
@@ -417,7 +417,7 @@ pub fn cme_check_copyright_argv() -> Vec<String> {
 ///
 /// It rewrites the whole file rather than the disputed field: header
 /// order, `Upstream-Contact` layout and the copyright holder lines all
-/// move, and the licence text is restructured into a standalone
+/// move, and the license text is restructured into a standalone
 /// paragraph. Correct DEP-5, but not a small diff -- which is why it
 /// is offered rather than applied, and lands in a commit of its own.
 pub fn cme_update_copyright_argv() -> Vec<String> {
@@ -429,7 +429,7 @@ pub fn cme_update_copyright_argv() -> Vec<String> {
 /// as it ships.
 ///
 /// A 3.0 (quilt) tree keeps its patches unapplied in the packaging
-/// repository, so anything reading the source -- a licence check, a
+/// repository, so anything reading the source -- a license check, a
 /// copyright scan -- reads the unpatched files and misses a fix that
 /// is already carried downstream. Both are no-ops for a package with
 /// no patches.

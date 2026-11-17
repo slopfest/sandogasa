@@ -688,7 +688,7 @@ pub struct Unclear {
 
 /// One line of an unclear comment, for showing at a prompt.
 ///
-/// The first non-empty line is enough to recognise what was said;
+/// The first non-empty line is enough to recognize what was said;
 /// the full text is a click away and the ticket is named above it.
 pub fn unclear_excerpt(body: &str, width: usize) -> String {
     let line = body
@@ -1301,7 +1301,7 @@ mod tests {
 
     #[test]
     fn the_week_runs_from_when_the_ticket_was_opened() {
-        // Change: Libical4 — filed 2026-10-01, labelled 2026-10-13,
+        // Change: Libical4 — filed 2026-10-01, labeled 2026-10-13,
         // +4 and no -1. Counting from the label gave it a week
         // ending 13:38 on the day of the meeting, so the agenda said
         // "approves 2026-10-20" for a vote that had in fact approved
@@ -1314,7 +1314,7 @@ mod tests {
             &BTreeMap::new(),
         );
         let opened = at("2026-10-01T11:40:12Z");
-        let labelled = at("2026-10-13T13:38:33Z");
+        let labeled = at("2026-10-13T13:38:33Z");
         let meeting_morning = at("2026-10-20T09:00:00Z");
         assert_eq!(
             classify(&t, false, opened, meeting_morning).outcome,
@@ -1326,7 +1326,7 @@ mod tests {
         );
         // What the label-based start produced, for the record.
         assert_eq!(
-            classify(&t, false, labelled, meeting_morning).outcome,
+            classify(&t, false, labeled, meeting_morning).outcome,
             Outcome::Waiting
         );
     }

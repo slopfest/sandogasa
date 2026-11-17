@@ -107,7 +107,7 @@ pub struct DatasetMeta {
 /// window `[from, to)` on `instance` — adjacent daily windows
 /// share a boundary instant without double-counting it.
 ///
-/// Serialisable, unlike the rest of this module: a report states the
+/// Serializable, unlike the rest of this module: a report states the
 /// coverage it was computed over, so these travel in report JSON.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct FetchWindow {
@@ -253,7 +253,7 @@ impl Dataset {
     /// stay silent for the wrong reasons.
     ///
     /// So the merged result has none, and a caller that needs it refills over
-    /// the range it actually covers — [`crate::store::Store::analysable`]
+    /// the range it actually covers — [`crate::store::Store::analyzable`]
     /// does exactly that. An absent denominator reports as absent; a wrong
     /// one reports as a fact.
     pub fn merge(&mut self, other: Dataset) -> MergeStats {

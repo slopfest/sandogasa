@@ -166,10 +166,10 @@ tool, an `info:` line on stderr notes that the bundled copy is
 being used instead. Force one or the other with `--tz-source
 system` / `--tz-source bundled`.
 
-The weekday tag is coloured (green for weekday, yellow for
+The weekday tag is colored (green for weekday, yellow for
 weekend) and the time itself is dimmed when the local hour
 falls outside working hours. Defaults to `9-18`; override with
-`--working-hours <START-END>`. Colours follow the grep/ls
+`--working-hours <START-END>`. Colors follow the grep/ls
 convention: `--color auto` (default) enables them on a TTY
 when `NO_COLOR` is unset; `--color always` / `--color never`
 force a choice.
@@ -179,7 +179,7 @@ top of `last-seen` output. Both FAS (via FASJSON) and
 Discourse are queried independently: matching timezones
 collapse to one entry, mismatched ones are shown side-by-side
 with a `[FAS]` / `[Discourse]` suffix so you can spot a
-traveller who's updated one source but not the other.
+traveler who's updated one source but not the other.
 
 ### Public-holiday flag
 

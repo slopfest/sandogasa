@@ -19,7 +19,7 @@ around, and the arithmetic behind it is lopsided:
   disk, and less than the JSON tree it replaces.
 
 So a task fetched for one window and never used again has still paid for
-itself the first time a neighbouring window would have re-fetched it. Do
+itself the first time a neighboring window would have re-fetched it. Do
 not add logic that discards rows outside the window of interest, or that
 "tidies up" tasks whose builds fall outside a reporting period. The
 expensive thing is the round trip, and it has already happened.
@@ -30,7 +30,7 @@ A sweep may skip work only against a record of what it **listed**, never
 against a record of what it **stored**.
 
 The distinction cost real data. An earlier design bounded each sweep by
-the oldest build id in the neighbouring window's dataset, reasoning that
+the oldest build id in the neighboring window's dataset, reasoning that
 nothing older could be wanted. But a dataset holds the builds it *kept*
 — those completing inside its window — and their oldest sits inside the
 previous window's grace margin, so the bound skipped creations the window
@@ -99,7 +99,7 @@ Four times the rows for 14% more time at depth. So `--page-size` defaults
 to 4000: it cut July 2025's listing from an estimated five hours to
 twenty-one minutes, and because pacing is a duty cycle rather than a fixed
 pause, a larger page does not increase our share of the hub — it just asks
-it to perform a quarter as many of the expensive seeks. The hub honours
+it to perform a quarter as many of the expensive seeks. The hub honors
 limits up to at least 16,000 without capping, which matters for more than
 speed: [`crate::sweep::step`] reads a short page as "nothing older exists",
 so a silently capped limit would make every page look short and claim a gap
@@ -138,7 +138,7 @@ count:
 | 200 | 758 | 0.76s | 3.8ms |
 | 400 | 1900 | 1.69s | 4.2ms |
 
-`PARENT_CHUNK` is 200: past a hundred or so the flat cost is amortised
+`PARENT_CHUNK` is 200: past a hundred or so the flat cost is amortized
 away, and a bigger batch only raises the chance of an answer that
 overflows the page and has to be split and refetched.
 
@@ -172,7 +172,7 @@ It pools, and on 2026-08-20 it produced 3.9s and 7.1s on some calls and
 split and nothing to do with depth or ordering. Two wrong conclusions were
 drawn from it before the mechanism was spotted — first that the hub was
 degraded twentyfold, then that the query's shape mattered a hundredfold.
-Both were artefacts of the client doing the measuring.
+Both were artifacts of the client doing the measuring.
 
 So the rule is narrow and worth keeping: **time `sync`'s own `Pages`
 implementation**, which is what `koji-lag probe` does. Anything else
@@ -231,7 +231,7 @@ noise next to a multi-megabyte task page and next to the pacing we do
 anyway.
 
 Everything ordinary about HTTP performance points the other way, which is
-what makes it a trap: keep-alive is the optimisation everywhere else, so
+what makes it a trap: keep-alive is the optimization everywhere else, so
 any client written without knowing this is *fast by accident and slow by
 default* — the first call on a new connection is quick and the ones that
 follow it stall.
@@ -289,7 +289,7 @@ re-list, and a new listing field must not cost days.
 Koji answers a `build` task's request with a git URL when the source came
 from dist-git, and with an SRPM path only when someone uploaded one. So a
 package name can be parsed from the request of about 2% of the builds on a
-mass-rebuild day — and those are the days worth analysing. The children are
+mass-rebuild day — and those are the days worth analyzing. The children are
 different: each was handed a specific SRPM, so 81% of them name their
 package.
 
@@ -338,7 +338,7 @@ precisely the builds worth studying, and it misses them *silently*: a build
 never listed leaves nothing behind to notice.
 
 The margin is nearly free where coverage is contiguous, since a
-neighbouring period has already listed it and `gaps` subtracts what is
+neighboring period has already listed it and `gaps` subtracts what is
 listed. It costs about 44 pages once, at the leading edge of an isolated
 stretch. Raising it does invalidate completeness at existing edges — a
 period whose margin is only partly listed stops counting as whole, which is
@@ -466,7 +466,7 @@ F45, so a fixed-mix comparison is stable to about ±15% and warns at 1.25x
 **`events` supplies those periods, not the trend itself.** `events` already
 locates the rebuild windows to write its tree; deriving them a second time
 inside `trend` would mean deriving them differently the first time one of
-them changed. So `trend::assess` takes a labelled series and a threshold and
+them changed. So `trend::assess` takes a labeled series and a threshold and
 knows nothing about where either came from, `pool` feeds it months at 1.5x,
 and `events` feeds it rebuilds at 1.25x.
 
@@ -484,7 +484,7 @@ Two failures found by running `report --owner NAME` against real data, both
 of which had the report describing the fleet under a heading that said
 otherwise.
 
-**Every count a filter can reach must honour it.** `Builds completed` was
+**Every count a filter can reach must honor it.** `Builds completed` was
 computed from `dataset.builds` filtered only by window and scratchness, so a
 report narrowed to one account printed 241,772 above that person's 1,490 rows
 — and it is the denominator the attributed share is read against. The
@@ -828,7 +828,7 @@ is therefore how long a backup takes, not how big the file is.
 
 The obvious approach is `ATTACH` plus `UNION ALL` views over the attached
 schemas. Measured on two real shards, one query took **33.8 seconds** where
-a single store answered the same question in 14.7ms: SQLite materialises
+a single store answered the same question in 14.7ms: SQLite materializes
 the union and then scans it, so the join loses `tasks_parent` entirely
 (`SCAN b`, `SCAN t` in the plan).
 

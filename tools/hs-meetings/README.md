@@ -57,10 +57,10 @@ through `!endmeeting`, with the checklist's topics pre-filled:
   of its action items as an `!info followup from <date>: …` line.
 - **Tickets** links the group's open-issue view on GitLab, then each
   open issue in the [CentOS/Hyperscale](https://gitlab.com/CentOS/Hyperscale)
-  group, `meeting`-labelled ones first and then newest first.
+  group, `meeting`-labeled ones first and then newest first.
   hs-relmon's automated `rfe::new-version` issues and the frozen
   Pagure imports under the `archive` subgroup are left out.
-- **Membership** appears only when a `membership`-labelled issue is
+- **Membership** appears only when a `membership`-labeled issue is
   open, and links those.
 
 The stderr side names the date, counts the followups, and lists every

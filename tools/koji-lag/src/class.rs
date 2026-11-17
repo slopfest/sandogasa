@@ -33,7 +33,7 @@ use crate::dataset::BuildRecord;
 /// The kind of work a build represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Class {
-    /// releng's mass rebuild: bulk, deprioritised, contends with itself.
+    /// releng's mass rebuild: bulk, deprioritized, contends with itself.
     MassRebuild,
     /// ELN's bulk sync, rebuilding what Rawhide builds that ELN tracks.
     ElnSync,

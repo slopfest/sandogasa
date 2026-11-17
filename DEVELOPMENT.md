@@ -97,7 +97,7 @@ turned up in one day:
   lets `ebranch check-wip` say "not yet in dist-git" for the first
   and "not checked" for the second. A signature that returned an
   empty `Vec` for both would have quietly claimed packages were
-  missing whenever the network hiccupped.
+  missing whenever the network hiccuped.
 
 The shared test for new code: if this lookup fails, does the caller
 report something indistinguishable from a genuine negative? If so, the
@@ -264,7 +264,7 @@ reqwest is configured for rustls throughout — so a static build costs
 nothing.
 
 **`precise-builds = true` is load-bearing; do not remove it as an
-optimisation.** cargo-dist defaults to `cargo build --workspace`, which
+optimization.** cargo-dist defaults to `cargo build --workspace`, which
 unifies features across every tool and switches `sandogasa-cli`'s `tls`
 feature back on, linking `ring` into dbranch after all. `ring` compiles
 C, and on a musl target `cc` insists on a compiler named

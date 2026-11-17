@@ -1656,7 +1656,7 @@ mod tests {
 
     #[test]
     fn tool_name_not_from_well_known_binary() {
-        // "well-known binary" (WKB) is a serialisation format, not a program.
+        // "well-known binary" (WKB) is a serialization format, not a program.
         let names = extract_tool_names_from_text(
             "denial-of-service when parsing deeply nested GEOMETRYCOLLECTION objects \
              supplied as well-known text (WKT), well-known binary (WKB), or hex-encoded WKB",

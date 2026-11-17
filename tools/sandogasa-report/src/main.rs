@@ -516,7 +516,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     };
 
     // Format output. A breakdown is appended rather than replacing
-    // the sections, since it summarises what they already say and a
+    // the sections, since it summarizes what they already say and a
     // reader usually wants both.
     let by_repo = cli.by.contains(&Axis::Repo);
     let output = if cli.json {

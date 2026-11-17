@@ -336,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_honours_refresh_and_ages() {
+    fn round_trips_honors_refresh_and_ages() {
         let dir = tempfile::tempdir().unwrap();
         let day = Some(Duration::from_secs(86_400));
         let disk = DiskCache::at(Some(dir.path().to_path_buf()), false, day);

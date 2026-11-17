@@ -15,7 +15,7 @@ README.md; why it changed is in the workspace CHANGELOG.md.
    Red Hat and medium (CVSS 4.0 5.7) to Python's CNA.
 2. **NVD's answer**, through `CveResponse::cvss`: NVD's own score, or
    the CNA's and other parties', which NVD carries before it has
-   analysed a CVE.
+   analyzed a CVE.
 3. **GitHub's advisory database**, by CVE: a severity for what GitHub
    has reviewed, thin for C libraries but not empty (freetype's
    CVE-2025-27363 is there).

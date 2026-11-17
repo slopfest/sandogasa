@@ -586,7 +586,7 @@ mod tests {
     /// untag and retire act on the same answer: for every kind of
     /// evidence, or none, untag's precondition passes exactly when
     /// retire's check for "landed" does. A change to either side's
-    /// judgement fails here until the other follows.
+    /// judgment fails here until the other follows.
     #[test]
     fn untag_and_retire_agree_on_what_landed() {
         let (c, m) = (carried(), missing());

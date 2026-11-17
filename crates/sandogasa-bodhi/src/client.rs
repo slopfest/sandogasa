@@ -328,7 +328,7 @@ impl BodhiClient {
     /// them to let Bodhi narrow the result set server-side rather
     /// than client-filtering a huge response. Both are optional:
     /// omitting them yields the unfiltered "all updates by user"
-    /// behaviour.
+    /// behavior.
     ///
     /// Note: filtering by submission date misses updates
     /// submitted before the window that transitioned

@@ -59,7 +59,7 @@ impl Counterparts {
     ) -> Result<Self, String> {
         let inventory = sandogasa_inventory::load(inventory_path)?;
         let workloads = &inventory.inventory.workloads;
-        // A workload labelled with the release answers for it. That
+        // A workload labeled with the release answers for it. That
         // is how rawhide is reached: RPM Fusion calls it "rawhide" in
         // their repo ids and in their Bugzilla's version list, while
         // the update being checked is for f46, and `sync-rpmfusion`
@@ -1106,7 +1106,7 @@ vlc = \"vlc-plugins-freeworld\"
     }
 
     #[test]
-    fn a_labelled_workload_answers_for_the_release_it_names() {
+    fn a_labeled_workload_answers_for_the_release_it_names() {
         // RPM Fusion calls rawhide "rawhide" in their repo ids and in
         // their Bugzilla's versions, while the update being checked
         // is for f46. The label carries the correspondence, so the
@@ -1141,7 +1141,7 @@ name = "libheif-freeworld"
         // never "f46".
         assert_eq!(c.release(), "rawhide");
         assert_eq!(bz_version(c.release()), "rawhide");
-        // An unlabelled release is still an error, so a stale
+        // An unlabeled release is still an error, so a stale
         // inventory cannot quietly disable the guard.
         assert!(Counterparts::load(&path.to_string_lossy(), None, "f47").is_err());
     }
@@ -1530,7 +1530,7 @@ name = "libheif-freeworld"
         // all three face the same free-el-10.
         assert_eq!(workload_for_branch("epel10.3").as_deref(), Some("el10"));
         assert_eq!(workload_for_branch("epel10.4").as_deref(), Some("el10"));
-        // Anything unrecognised declines rather than guessing.
+        // Anything unrecognized declines rather than guessing.
         assert_eq!(workload_for_branch("epel"), None);
         assert_eq!(workload_for_branch("f"), None);
     }

@@ -44,7 +44,7 @@ const VALID_ARCHES: &[&str] = &[
 ///
 /// Parses the DNF transaction table that both DNF4 and DNF5 produce,
 /// with columns: Package, Arch, Version, Repo, Size.  Lines are
-/// recognised by having a known RPM arch as the second
+/// recognized by having a known RPM arch as the second
 /// whitespace-delimited token.
 ///
 /// Also handles mock's `DEBUG util.py:NNN:` prefix.
@@ -80,7 +80,7 @@ pub fn parse_installed_packages(root_log: &str) -> Vec<InstalledPackage> {
 ///
 /// Example: `libgcc  x86_64  15.2.1-7.fc42  koji-build-xxxx  268 k`
 ///
-/// Recognised by having a valid RPM arch as the second token.
+/// Recognized by having a valid RPM arch as the second token.
 fn parse_transaction_table_row(line: &str) -> Option<InstalledPackage> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     if tokens.len() < 4 {

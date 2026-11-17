@@ -29,7 +29,7 @@ use crate::utils::{Check, parse_jira_keys_from_body, report_check};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Reason {
     /// The problem is fixed in stock — by the SIG's MR merging, or
-    /// another way (labelled `superseded`).
+    /// another way (labeled `superseded`).
     Landed,
     /// The SIG gives up on the change for its own reasons (Bugzilla's
     /// CANTFIX).
@@ -170,8 +170,8 @@ pub fn reason_check(reason: Reason, f: &RetireFacts) -> Check {
             "the RHEL issue was closed with no sign of a fix, as for inactivity".to_string(),
         ),
         // An issue left open with nobody answering is the SIG's
-        // judgement, as for abandoned.
-        Reason::Unanswered => Check::Pass("the SIG's judgement: no response".to_string()),
+        // judgment, as for abandoned.
+        Reason::Unanswered => Check::Pass("the SIG's judgment: no response".to_string()),
     }
 }
 
@@ -644,7 +644,7 @@ fn verified_by_operator(nvr: &str) -> String {
     )
 }
 
-/// The token's GitLab username, when it can be learnt.
+/// The token's GitLab username, when it can be learned.
 fn whoami() -> Option<String> {
     let token = gitlab::load_token().ok()?;
     sandogasa_gitlab::current_user(&crate::utils::gitlab_base(), &token)
@@ -684,7 +684,7 @@ fn tell_mr(
     verbose: bool,
 ) {
     let Ok((_, project, iid)) = gitlab::parse_mr_url(url) else {
-        eprintln!("warning: unrecognised MR URL {url}; nothing posted there");
+        eprintln!("warning: unrecognized MR URL {url}; nothing posted there");
         return;
     };
     let client = match gitlab::client(&crate::utils::gitlab_base(), &project) {
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn the_reason_is_read_off_the_facts_and_the_label_says_how_it_got_fixed() {
-        // Evidence from stock's history, MR not merged: landed, labelled
+        // Evidence from stock's history, MR not merged: landed, labeled
         // superseded — upstream got there another way.
         let mut f = facts(
             Some("opened"),

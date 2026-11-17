@@ -816,7 +816,7 @@ mod tests {
     /// the pre-push hook read c9s's `sources`. Here a hook records which
     /// `sources` it saw, and the checkout must end up where it started.
     #[test]
-    fn the_pre_push_hook_sees_the_pushed_branchs_working_tree() {
+    fn the_pre_push_hook_sees_the_working_tree_of_the_pushed_branch() {
         let dir = tempfile::tempdir().unwrap();
         let (repo, remote) = (dir.path().join("repo"), dir.path().join("fork.git"));
         let run = |cwd: &Path, args: &[&str]| {

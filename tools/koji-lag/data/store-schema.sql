@@ -36,7 +36,7 @@ CREATE TABLE host_config (
     host_id INTEGER NOT NULL,
     name TEXT,
     -- Space-separated, as the hub reports it. Kept verbatim rather than
-    -- normalised into rows: a handful of revisions carry a Kerberos
+    -- normalized into rows: a handful of revisions carry a Kerberos
     -- principal here instead of architectures, and inventing structure
     -- for that would be inventing meaning.
     arches TEXT,

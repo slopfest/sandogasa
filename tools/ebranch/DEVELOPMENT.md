@@ -45,7 +45,7 @@ of how the pieces behave, each checked on a live update
   `dirs` crate, per the workspace rule), with the sorted NVR list beside
   the repodata: same list, reuse; different list, remove and rebuild so
   no RPM from a superseded build lingers. Without an alias the
-  directory is named `<first-nvr>-<digest of all of them>`, sanitised
+  directory is named `<first-nvr>-<digest of all of them>`, sanitized
   to the characters a path component is validated for. Correctness does
   not rest on that name — the recorded NVR list is what decides reuse —
   but two build sets sharing a first build must not share a directory.
@@ -394,7 +394,7 @@ only reached after `Yours` and `NothingOwed` have been returned, so by
 construction the asker has no access and the bug is not theirs. Filing
 is strictly more consequential than pinging — it asks a human to hand
 over ACLs on someone else's package — so it also confirms per ticket,
-honours `--yes`, and does nothing but report when stdin is not a
+honors `--yes`, and does nothing but report when stdin is not a
 terminal.
 
 ## Drawing the request graph must not be able to lose a filed bug

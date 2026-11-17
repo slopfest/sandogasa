@@ -199,7 +199,7 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
             match rt.block_on(client.check_login(&email)) {
                 Ok(LoginCheck::Valid) => KeyVerdict::Accepted("valid.".to_string()),
                 Ok(LoginCheck::NotRecognised) => KeyVerdict::Refused(format!(
-                    "not recognised for {email} — the key, or the address, is not \
+                    "not recognized for {email} — the key, or the address, is not \
                      the one Bugzilla has."
                 )),
                 Ok(LoginCheck::Refused(why)) => KeyVerdict::Refused(format!("refused: {why}")),

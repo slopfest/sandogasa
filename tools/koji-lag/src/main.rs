@@ -559,7 +559,7 @@ fn cmd_export(args: &ExportArgs) -> Result<(), Box<dyn Error>> {
             "coverage: {} whole day(s); left out {} incomplete day(s): {}",
             exported.days_whole,
             exported.days_skipped.len(),
-            summarise(&exported.days_skipped),
+            summarize(&exported.days_skipped),
         );
         eprintln!("sync those days to include them.");
     }
@@ -568,7 +568,7 @@ fn cmd_export(args: &ExportArgs) -> Result<(), Box<dyn Error>> {
 
 /// A few names, then a count: a month of missing days should not print
 /// thirty dates.
-fn summarise(days: &[String]) -> String {
+fn summarize(days: &[String]) -> String {
     const SHOWN: usize = 5;
     match days.len() {
         0 => String::new(),
@@ -972,7 +972,7 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
     // Whole days only, as everywhere else: statistics over a day whose arch
     // tasks have not arrived read as a quiet day rather than an unfinished
     // one.
-    let selection = store.analysable(&instance_key, from, to, fetch::CREATE_GRACE_SECS)?;
+    let selection = store.analyzable(&instance_key, from, to, fetch::CREATE_GRACE_SECS)?;
     if selection.whole.is_empty() {
         return Err(koji_lag::export::refuse(&selection).into());
     }
@@ -980,7 +980,7 @@ fn cmd_report(args: &ReportArgs) -> Result<(), Box<dyn Error>> {
         eprintln!(
             "note: {} incomplete day(s) left out of this report: {}",
             selection.skipped.len(),
-            summarise(&selection.skipped_dates()),
+            summarize(&selection.skipped_dates()),
         );
     }
     // The store applied the window already, selecting a build's children by

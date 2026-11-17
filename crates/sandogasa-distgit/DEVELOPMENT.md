@@ -21,7 +21,7 @@ endpoints fail at Fedora scale:
 for the slowness. Earlier docs asserted it "scans every project's
 ACLs server-side" and that there is "no cheaper API that covers all
 ACL types" — both overstated what we actually verified. Treat the
-internal cause as unknown; only the observed behaviour is reliable.
+internal cause as unknown; only the observed behavior is reliable.
 (See the v0.12.1 erratum in the repo `CHANGELOG.md`.)
 
 **Workaround.** `poi-tracker sync-distgit --user` defaults to

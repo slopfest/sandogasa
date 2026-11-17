@@ -22,7 +22,7 @@ use wait_timeout::ChildExt;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Environment variable overriding [`DEFAULT_TIMEOUT`], in seconds. A
-/// value of `0` waits forever, which is the old behaviour and what a
+/// value of `0` waits forever, which is the old behavior and what a
 /// caller genuinely willing to block should ask for.
 pub const TIMEOUT_ENV: &str = "SANDOGASA_KOJI_TIMEOUT";
 

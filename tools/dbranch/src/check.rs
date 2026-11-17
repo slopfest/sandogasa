@@ -54,17 +54,17 @@ impl Severity {
         }
     }
 
-    /// How the label is coloured, so a blocker is findable in a long
+    /// How the label is colored, so a blocker is findable in a long
     /// report without reading it. Rendered through `anstream`, which
     /// drops the codes when output is not a terminal or `NO_COLOR`
     /// is set.
     pub fn style(self) -> anstyle::Style {
-        let colour = match self {
+        let color = match self {
             Severity::Blocker => anstyle::AnsiColor::Red,
             Severity::Warning => anstyle::AnsiColor::Yellow,
             Severity::Note => anstyle::AnsiColor::BrightBlack,
         };
-        let style = anstyle::Style::new().fg_color(Some(colour.into()));
+        let style = anstyle::Style::new().fg_color(Some(color.into()));
         match self {
             Severity::Blocker => style.bold(),
             _ => style,
@@ -437,7 +437,7 @@ fn header_field(line: &str) -> Option<&str> {
 /// Blank lines in the header are not a finding either. DEP-3 is
 /// RFC822-shaped, so in principle one ends the field block -- but
 /// lintian reads the fields below it anyway, and `gbp pq export`
-/// cannot emit anything else: it serialises the commit as mail, so
+/// cannot emit anything else: it serializes the commit as mail, so
 /// the blank after `Subject` is structural. Flagging it would
 /// disagree with lintian and with git's own trailer convention,
 /// which puts a blank line before `Signed-off-by`.
@@ -1136,7 +1136,7 @@ pub enum Attempt {
 /// Read one attempt, given what the run cost and what can be
 /// believed about it.
 ///
-/// The whole judgement of the smoke test lives here: 127 means the
+/// The whole judgment of the smoke test lives here: 127 means the
 /// host is missing something rather than the package being broken,
 /// and an ordinary failure is only the package's fault when the run
 /// could be believed in the first place.
@@ -2045,10 +2045,10 @@ pub fn wrap_command(command: &str, indent: usize, width: usize) -> String {
 /// The findings as a person reads them: worst first, each followed by
 /// the command that shows the same thing.
 ///
-/// `colour` styles the severity word and dims the command. Only
+/// `color` styles the severity word and dims the command. Only
 /// those: the message itself stays plain so it can be quoted into a
 /// bug report without carrying escape codes along.
-pub fn render_styled(findings: &[Finding], colour: bool) -> String {
+pub fn render_styled(findings: &[Finding], color: bool) -> String {
     if findings.is_empty() {
         return "nothing to report\n".to_string();
     }
@@ -2064,7 +2064,7 @@ pub fn render_styled(findings: &[Finding], colour: bool) -> String {
         let wrapped = sandogasa_cli::wrap_prefixed(&format!("{label}: {message}"), "", 78);
         let mut lines = wrapped.lines();
         let first = lines.next().unwrap_or_default();
-        match colour {
+        match color {
             true => {
                 let s = finding.severity.style();
                 let rest = first.strip_prefix(label).unwrap_or(first);
@@ -2081,7 +2081,7 @@ pub fn render_styled(findings: &[Finding], colour: bool) -> String {
         }
         if let Some(command) = &finding.command {
             let wrapped = wrap_command(command, 4, 78);
-            match colour {
+            match color {
                 true => out.push_str(&format!(
                     "{}{wrapped}{}\n",
                     dim.render(),
@@ -2091,7 +2091,7 @@ pub fn render_styled(findings: &[Finding], colour: bool) -> String {
             }
         }
         for line in source_lines(finding.sources) {
-            match colour {
+            match color {
                 true => out.push_str(&format!("{}{line}{}\n", dim.render(), dim.render_reset())),
                 false => out.push_str(&format!("{line}\n")),
             }
@@ -2125,7 +2125,7 @@ fn source_lines(sources: &[crate::cite::Citation]) -> Vec<String> {
     lines
 }
 
-/// [`render_styled`] without colour, which is what a test reads.
+/// [`render_styled`] without color, which is what a test reads.
 pub fn render(findings: &[Finding]) -> String {
     render_styled(findings, false)
 }
@@ -2496,7 +2496,7 @@ mod tests {
     }
 
     #[test]
-    fn a_long_list_is_summarised_rather_than_recited() {
+    fn a_long_list_is_summarized_rather_than_recited() {
         let changed: Vec<String> = (1..=6).map(|n| format!("file{n}.c")).collect();
         let found = upstream_change_findings("debian/latest", &changed);
         assert!(
@@ -2695,7 +2695,7 @@ mod tests {
     }
 
     #[test]
-    fn quilts_stack_is_read_rather_than_the_directorys_existence() {
+    fn quilts_stack_is_read_rather_than_whether_the_directory_exists() {
         let dir = fixture("1.2.3-1");
         std::fs::create_dir_all(dir.path().join(".pc")).unwrap();
         // A .pc directory with no stack: quilt has nothing applied,
@@ -3062,7 +3062,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dependencys_version_is_never_read_as_the_crates_own() {
+    fn the_version_of_a_dependency_is_never_read_as_the_crates_own() {
         // Stop at the next table, or the first dependency's version
         // becomes the package's.
         let toml = "[dependencies]\nserde = \"1.0\"\n\n[package]\nname = \"x\"\n";
@@ -3084,7 +3084,7 @@ mod tests {
     }
 
     #[test]
-    fn the_assets_worth_installing_are_recognised_by_name() {
+    fn the_assets_worth_installing_are_recognized_by_name() {
         assert_eq!(classify_asset("man/dbranch.1"), Some("man page"));
         assert_eq!(classify_asset("foo.desktop"), Some("desktop entry"));
         assert_eq!(
@@ -3269,7 +3269,7 @@ mod tests {
     }
 
     #[test]
-    fn colour_touches_only_the_label_the_command_and_the_sources() {
+    fn color_touches_only_the_label_the_command_and_the_sources() {
         let finding = Finding::new("stale-build", Severity::Warning, "old build".into())
             .with_command("head -1 debian/changelog".into());
         let text = render_styled(&[finding], true);
@@ -3290,7 +3290,7 @@ mod tests {
             }
             out
         };
-        assert_ne!(text, plain, "colour adds escape codes");
+        assert_ne!(text, plain, "color adds escape codes");
         assert_eq!(
             plain,
             render(&[

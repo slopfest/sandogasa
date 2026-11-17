@@ -4,7 +4,7 @@
 //! moves (#144).
 //!
 //! The Proposed Updates SIG tracks each update in an issue in the
-//! package's SIG repo, filed by cpu-sig-tracker: labelled with the
+//! package's SIG repo, filed by cpu-sig-tracker: labeled with the
 //! release (`c10s`), naming the RHEL issue the merge request resolves.
 //! Those two are what the SIG's branch is named after
 //! (`c10s-proposed-RHEL-306261`), so a build of the branch finds its

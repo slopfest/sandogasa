@@ -28,7 +28,7 @@ packaging activity across multiple systems:
 - **GitHub**: PRs opened / merged / reviewed / commented on,
   authored commit counts per repo, annotated tags cut, and
   GitHub Releases published. Optionally scoped by
-  organisation. See `TODO.md` for why GitHub ships only the
+  organization. See `TODO.md` for why GitHub ships only the
   authored count today (mirror-pusher detection deferred). The
   opened list carries the same `(merged)` / `(closed)` /
   `(applied)` markers, rebased commits included
@@ -43,7 +43,7 @@ packaging activity across multiple systems:
   or `(applied)` when a closed-unmerged PR's commit still landed
   on the target branch: as-is (a maintainer cherry-picked or
   fast-forwarded it instead of clicking merge), or rebased or
-  reworded under a new sha, recognised by the same title *and the
+  reworded under a new sha, recognized by the same title *and the
   same author*. The same change redone by the maintainer stays
   `(closed)`.
 - **Sourcehut** (sr.ht): patches sent / applied (lists.sr.ht — the

@@ -4,7 +4,7 @@
 //! `rebuild` uses `ubuntu-distro-info` to pick the PPA branches — a
 //! branch whose codename is a real Ubuntu release — and to flag
 //! end-of-life ones. `debian-distro-info` maps a Debian codename to its
-//! release number (e.g. `trixie` → 13), used to recognise a
+//! release number (e.g. `trixie` → 13), used to recognize a
 //! `debian/<codename>` proposed-update target and form its
 //! `~deb<N>u<M>` version.
 

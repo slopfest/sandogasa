@@ -75,7 +75,7 @@ pub fn release_tag_for(testing_tag: &str) -> String {
     format!("{}-release", testing_tag.trim_end_matches("-testing"))
 }
 
-/// Classify the positional argument. An NVR is recognised by the
+/// Classify the positional argument. An NVR is recognized by the
 /// `.el` dist marker every CBS build carries in its release
 /// (e.g. `1.hs.el10`, `1.hs+fb.el9_z`); package names don't
 /// contain `.el`, so it's a reliable discriminator.
@@ -88,7 +88,7 @@ pub fn classify_target(arg: Option<&str>) -> Target {
 }
 
 /// Parse a karma prompt response. Accepts `+1`/`1`, `-1`,
-/// `0`/`s`/empty (skip), `q` (quit). Unrecognised input returns
+/// `0`/`s`/empty (skip), `q` (quit). Unrecognized input returns
 /// `None` so the caller can re-prompt.
 pub fn parse_karma(input: &str) -> Option<Karma> {
     match input.trim() {
@@ -556,7 +556,7 @@ fn prompt_karma() -> Result<Option<Karma>, String> {
         }
         match parse_karma(&line) {
             Some(k) => return Ok(Some(k)),
-            None => eprintln!("unrecognised input: {:?}", line.trim()),
+            None => eprintln!("unrecognized input: {:?}", line.trim()),
         }
     }
 }

@@ -313,7 +313,7 @@ pub struct GitlabConfig {
 /// Per-domain GitHub settings. Parallels `GitlabConfig`:
 /// `instance` defaults to `https://api.github.com` so the field
 /// is optional in practice; `org` narrows the scope to repos
-/// owned by that organisation (or user namespace), matching
+/// owned by that organization (or user namespace), matching
 /// GitLab's `group` prefix.
 #[derive(Debug, Default, Deserialize)]
 pub struct GithubConfig {
@@ -323,7 +323,7 @@ pub struct GithubConfig {
     #[serde(default = "default_github_instance")]
     pub instance: String,
 
-    /// Organisation or user namespace to scope to. Used in PR
+    /// Organization or user namespace to scope to. Used in PR
     /// Search queries as `org:<value>` and as a prefix filter
     /// for the events-derived list of touched repos.
     #[serde(default)]

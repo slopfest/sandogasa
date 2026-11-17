@@ -84,7 +84,7 @@ instance = "https://salsa.debian.org"
 # --- Upstream forges (GitHub + Forgejo + Sourcehut) ---
 
 # All your github.com PR / commit / review activity, any owner.
-# Add `org = "..."` to scope to one organisation.
+# Add `org = "..."` to scope to one organization.
 [domains.upstream.github]
 
 # Forgejo / Gitea (here, codeberg.org): PRs you opened and merged.

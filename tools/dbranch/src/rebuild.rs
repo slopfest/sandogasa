@@ -789,7 +789,7 @@ pub fn update(
 /// their commits stay ancestors of ours and the range is exactly the
 /// delta.
 ///
-/// A suggestion, not a check. What belongs upstream is a judgement:
+/// A suggestion, not a check. What belongs upstream is a judgment:
 /// code fixes in debian/patches do (DEP-3's `Forwarded:` records it,
 /// and lintian's patch-not-forwarded-upstream already nags at lint
 /// time), while Maintainer, Vcs-*, the Debian changelog and the CI
@@ -1343,7 +1343,7 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
     let file = repo.join("debian/copyright");
     if !ui.dry_run && !file.is_file() {
         eprintln!(
-            "note: no debian/copyright to check — {} writes one from a scan of the source (review it: a generated copyright is a claim about other people's licences)",
+            "note: no debian/copyright to check — {} writes one from a scan of the source (review it: a generated copyright is a claim about other people's licenses)",
             plan::decopy_shell_line()
         );
         return Ok(());
@@ -1425,7 +1425,7 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
 /// Say where a fix to a file outside `debian/` has to go, after
 /// something has been found that may need one.
 ///
-/// The findings above are usually about upstream's files -- a licence
+/// The findings above are usually about upstream's files -- a license
 /// that disagrees, a holder nobody wrote down, a malformed notice in
 /// a man page -- and on a `3.0 (quilt)` package those cannot be fixed
 /// by committing to this branch. The orig comes from the upstream tag,
@@ -1466,12 +1466,12 @@ fn check_copyright_syntax(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error
 /// Say which copyright holders a scan of the source finds that
 /// `debian/copyright` never mentions.
 ///
-/// This is the hole `lrc` leaves. It compares licences, and a vendored
-/// file under the same licence as everything else gives it nothing to
+/// This is the hole `lrc` leaves. It compares licenses, and a vendored
+/// file under the same license as everything else gives it nothing to
 /// report -- which is how fnlfmt passed while crediting "fnlfmt
 /// contributors" for a file written by Calvin Rose.
 ///
-/// The scan is written beside the build artefacts rather than into
+/// The scan is written beside the build artifacts rather than into
 /// `debian/`, where it would land in the source package, and nothing
 /// is applied from it: decopy's grouping is its own guess (it files
 /// upstream's own code under the vendored author), and its holder
@@ -1498,7 +1498,7 @@ fn compare_holders(ui: &Ui, repo: &Path, file: &Path) -> Result<(), Box<dyn std:
         eprintln!();
         eprintln!("warning: debian/copyright claims {claimed} at the latest, and the source");
         eprintln!("  mentions {found}. A file crediting the right people under the right");
-        eprintln!("  licence still goes stale every January.");
+        eprintln!("  license still goes stale every January.");
     }
     match crate::copyright::unattributed(&existing, &scanned).as_slice() {
         [] => Ok(()),

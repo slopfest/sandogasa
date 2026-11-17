@@ -498,7 +498,7 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   debian`. The path limit is what makes the number mean anything:
   merging a release tag brings all of upstream's code commits into the
   range, so an unlimited count reports their work as your divergence.
-  What to send is a judgement — a fix under `debian/patches` belongs
+  What to send is a judgment — a fix under `debian/patches` belongs
   upstream, recorded in DEP-3's `Forwarded:` (lintian's
   `patch-not-forwarded-upstream` nags about it at lint time), while
   `Maintainer`, `Vcs-*`, the Debian changelog and the CI config are
@@ -540,7 +540,7 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   non-interactive run reports and carries on, and a missing `lrc` is a
   note rather than a failure. Placeholders are reported separately
   (`no-info-found` from `cme`, `TODO` from `decopy`): `lrc` passes
-  them, because a placeholder is not a licence disagreement, but
+  them, because a placeholder is not a license disagreement, but
   neither is it something to upload. `rebuild` does not check — it
   builds the same source for another suite, and an edit on a PPA or
   backport branch is a delta that conflicts with the Debian branch on
@@ -548,16 +548,16 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
 
   It also reports when the source mentions a later year than
   `debian/copyright` claims — the half neither other check sees, since
-  a file can credit the right people under the right licence and still
+  a file can credit the right people under the right license and still
   be two years out of date. The `Files: debian/*` stanza is ignored in
   that comparison, being the packaging's own and current by
   construction, and an open-ended `2020-present` is never stale.
 
-  `lrc` compares licences, not copyright holders, so a vendored file
-  under the same licence as everything else gives it nothing to
+  `lrc` compares licenses, not copyright holders, so a vendored file
+  under the same license as everything else gives it nothing to
   report. When it passes, `decopy` scans the source and names any
   holder that `debian/copyright` never mentions, writing the scan
-  beside the build artefacts for you to compare. Nothing is applied
+  beside the build artifacts for you to compare. Nothing is applied
   from it: decopy's grouping is its own guess, and its holder list
   carries junk. `debian/patches` is excluded from that scan, because a
   patch file carries copies of upstream text — the lines it removes

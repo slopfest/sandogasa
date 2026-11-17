@@ -289,7 +289,7 @@ pub fn forgejo() -> ForgejoConfig {
 /// Everything `escalate` needs of a new Forgejo token, asked of the
 /// releng tracker without writing anything there: reading and writing
 /// its issues, and resolving the labels a ticket is filed with, some
-/// of which belong to the organisation and need its scope. The first
+/// of which belong to the organization and need its scope. The first
 /// refusal is the answer.
 fn new_token_access(url: &str, token: &str) -> Result<sandogasa_forgejo::IssueAccess, String> {
     use sandogasa_forgejo::IssueAccess;
@@ -323,7 +323,7 @@ pub async fn ask_forgejo_token(forge: &mut ForgejoConfig, review: bool) -> Resul
         "\nescalate files a releng ticket for a branch request whose maintainers \
          have not answered. Create a token at {}/user/settings/applications with \
          the issue scope at Read and Write (to search and file tickets) and the \
-         organization scope at Read (for the tracker's organisation-wide labels), \
+         organization scope at Read (for the tracker's organization-wide labels), \
          or leave empty to skip.",
         forge.url.trim_end_matches('/')
     );
@@ -1043,7 +1043,7 @@ mod tests {
         assert_eq!(other.rpmfusion_bugzilla.url, "https://bz.example");
         assert_eq!(other.rpmfusion_bugzilla.rest_path, "rest");
         // The table is spelled with a dash, not an underscore: a
-        // mis-spelled table is silently ignored rather than applied,
+        // misspelled table is silently ignored rather than applied,
         // which would leave filing unconfigured with no sign why.
         let dashed = toml::to_string(&other).unwrap();
         assert!(dashed.contains("[rpmfusion-bugzilla]"), "{dashed}");

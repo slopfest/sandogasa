@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 
 /// Compare two version strings using the RPM vercmp algorithm.
 ///
-/// Key behaviours:
+/// Key behaviors:
 /// - `~` sorts *before* the version without it:
 ///   `1.0~rc1 < 1.0 < 1.0.1`
 /// - `^` sorts *after* the base version but before a new segment:

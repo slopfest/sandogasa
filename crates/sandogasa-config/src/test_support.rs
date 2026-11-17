@@ -5,7 +5,7 @@
 //! `features = ["test-support"]`.
 
 /// Sets (or unsets) environment variables for its lifetime, restoring
-/// what was there when dropped. Callers serialise the tests that use
+/// what was there when dropped. Callers serialize the tests that use
 /// it with `#[serial_test::serial]`, as the environment is the
 /// process's.
 ///
@@ -29,7 +29,7 @@ impl EnvGuard {
         };
         for (k, v) in vars {
             guard.remember(k);
-            // SAFETY: callers serialise with #[serial_test::serial], so
+            // SAFETY: callers serialize with #[serial_test::serial], so
             // no other thread reads these variables meanwhile.
             unsafe { std::env::set_var(k, v) };
         }

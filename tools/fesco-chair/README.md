@@ -294,7 +294,7 @@ fesco-chair summary --json             # machine-readable
 Finds the meeting on meetbot (available right after `!endmeeting`),
 and prints the summary email: subject
 `Summary/Minutes from today's FESCo Meeting (date)`, the four
-artefact links (minutes/log, HTML and text), and the full plain-text
+artifact links (minutes/log, HTML and text), and the full plain-text
 minutes. Send it as a reply to the schedule announcement, then
 comment/close the discussed tickets.
 

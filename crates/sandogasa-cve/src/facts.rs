@@ -16,7 +16,7 @@ use sandogasa_cli::cache::DiskCache;
 use crate::cache::NvdCache;
 
 /// A distribution name as [PEP 503](https://peps.python.org/pep-0503/)
-/// normalises it and as Fedora's `python3dist()` provides carry it:
+/// normalizes it and as Fedora's `python3dist()` provides carry it:
 /// lowercase, with any run of `-`, `_` and `.` as a single `-`
 /// (`jaraco.context` → `jaraco-context`).
 pub fn pep503(name: &str) -> String {
@@ -573,7 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn cve_ids_and_security_trackers_are_recognised() {
+    fn cve_ids_and_security_trackers_are_recognized() {
         assert_eq!(
             cve_id_in("CVE-2026-62292 libheif: libheif: Denial of service [epel-all]"),
             Some("CVE-2026-62292")

@@ -112,7 +112,7 @@ impl FetchOpts {
 /// would all have been missed at the leading edge of a sweep, and those
 /// are exactly the builds an arch-bottleneck analysis is about.
 ///
-/// Nearly free where coverage is contiguous: a neighbouring period has
+/// Nearly free where coverage is contiguous: a neighboring period has
 /// already listed the margin, so [`crate::store::Store::gaps`] subtracts
 /// it and nothing extra is fetched. It costs about 44 pages once, at the
 /// leading edge of an isolated stretch.

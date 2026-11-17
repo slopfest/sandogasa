@@ -13,7 +13,7 @@ use crate::models::{CreatedIssue, FieldMeta, Issue, Myself, NewIssue, Version};
 /// beside the account's email, as basic auth
 /// ([`with_api_token`](Self::with_api_token)) — through Atlassian's
 /// API gateway rather than the site itself, since a scoped token is
-/// honoured only there: [`cloud_id`] reads the site's tenant id and
+/// honored only there: [`cloud_id`] reads the site's tenant id and
 /// [`gateway_url`] turns it into the base URL. A self-hosted Jira
 /// takes a personal access token as a bearer
 /// ([`with_api_key`](Self::with_api_key)). Give a Cloud site its own

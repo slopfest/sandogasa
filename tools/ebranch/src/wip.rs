@@ -1411,7 +1411,7 @@ fn release_recency(branch: &str) -> (u8, Vec<u32>) {
             // behind it as a plain numeric comparison would have it.
             Some(v) if !v.contains('.') => (1, vec![parts(v)[0], u32::MAX]),
             Some(v) => (1, parts(v)),
-            // fNN, and anything unrecognised sorts last rather than
+            // fNN, and anything unrecognized sorts last rather than
             // being guessed at.
             None => match b.strip_prefix('f') {
                 Some(v) if v.bytes().all(|c| c.is_ascii_digit() || c == b'.') => (2, parts(v)),
@@ -1965,7 +1965,7 @@ fn state(package: &Package, targets: &[String], branch_of: &BTreeMap<String, Str
     // Whether coming back needs a fresh review depends on how long it
     // has been retired, which is Fedora policy with tooling that has
     // changed recently — so no threshold is encoded. Report what is
-    // known and leave the judgement to the reader.
+    // known and leave the judgment to the reader.
     if d.retired {
         // What is knowable is whether a review is *open*, not whether
         // the closed one found is the first: a package can be retired
@@ -3456,7 +3456,7 @@ mod tests {
     fn render_shows_when_a_review_was_filed() {
         // The date is context for judging whether a retired
         // package's review is old enough to need redoing — a
-        // judgement the tool deliberately leaves to the reader.
+        // judgment the tool deliberately leaves to the reader.
         let mut ledger = Ledger::default();
         ledger.reconcile("@rust/uutils", &[staged("rust-a", "0.9.0-1")], "2026-08-10");
         ledger.packages.get_mut("rust-a").unwrap().review = Some(review(2258203, "CLOSED", true));

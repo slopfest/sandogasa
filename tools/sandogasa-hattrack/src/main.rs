@@ -87,7 +87,7 @@ enum Service {
 
 /// Decide whether `svc` should run given the (mutually
 /// exclusive) `--skip` and `--only` lists. Empty lists =
-/// default behaviour = include everything.
+/// default behavior = include everything.
 fn service_enabled(svc: Service, skip: &[Service], only: &[Service]) -> bool {
     if !only.is_empty() {
         return only.contains(&svc);
@@ -1191,7 +1191,7 @@ struct LastSeenSummary {
     username: String,
     /// One entry per distinct timezone the user advertises.
     /// FAS and Discourse are tracked independently because a
-    /// traveller may update Discourse but leave FAS pointing at
+    /// traveler may update Discourse but leave FAS pointing at
     /// home (or vice versa) — surface both rather than guessing
     /// which is current.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1411,7 +1411,7 @@ async fn gather_last_seen(
     services.sort_by(|a, b| b.last_active.cmp(&a.last_active));
 
     // Collect every timezone the user has set. FAS and
-    // Discourse are tracked independently — a traveller may
+    // Discourse are tracked independently — a traveler may
     // update Discourse but leave FAS pointing home, or vice
     // versa, so show both rather than picking one.
     let mut pairs: Vec<(&str, &str)> = Vec::new();
@@ -2176,7 +2176,7 @@ mod tests {
 
     #[test]
     fn service_enabled_only_wins_when_both_specified() {
-        // Defence-in-depth: clap rejects this combination via
+        // Defense-in-depth: clap rejects this combination via
         // `conflicts_with`, but if it ever slipped through,
         // `only` takes priority over `skip`.
         let only = [Service::Discourse];

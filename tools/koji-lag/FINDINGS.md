@@ -121,7 +121,7 @@ architectures that is a guest — `buildvm-`, never `buildhw-`. How many
 machines are behind those 29 and 19 is not something Koji records, and it
 matters enough to be Q1 and Q4 for infrastructure.)
 
-The weights are nearly the same, so this is not an accounting artefact:
+The weights are nearly the same, so this is not an accounting artifact:
 **ppc64le clears a task in half the time, so the same utilisation drains
 twice as fast and never becomes a queue.** That is the strongest available
 argument that s390x's problem is service time rather than capacity — its own
@@ -207,7 +207,7 @@ waits **26 fell on a single submitter**.
 
 Two mechanisms compound for heavy maintainers, neither visible in a
 population median. They meet the p90 many times in one session rather than
-once. And bulk work across a dependency set serialises — each build waits on
+once. And bulk work across a dependency set serializes — each build waits on
 the one before it — so a single tail event becomes a day.
 
 **This is also the harm that is new.** In January 2025 every cohort sat at a
@@ -911,7 +911,7 @@ utilisation 0.78, above the 0.7 line" without anybody running a query.
 | metric | threshold | why this one |
 |:--|:--|:--|
 | weighted utilisation per arch | warn 0.6, act 0.7 | leads everything; nonlinear in wait |
-| service time median / p90 / mean per arch | drift >20% year-on-year | localises a regression to an architecture |
+| service time median / p90 / mean per arch | drift >20% year-on-year | localizes a regression to an architecture |
 | the same, against a rust control population | divergence between the two | separates platform from compiler cost |
 | straggler share: which arch finished each multi-arch build last | one arch above 50% | the fleet property no per-arch row shows |
 | wasted builder-hours (failed + cancelled) | above 10% | pure loss, cheapest to recover |
@@ -1020,7 +1020,7 @@ here was first computed wrongly:
 Measure every release cycle, decide on several.
 
 One cycle is not evidence: a rebuild lands in some months and not others, an
-outage can own a fortnight, and this document has twice mistaken an artefact
+outage can own a fortnight, and this document has twice mistaken an artifact
 for a trend on a single-period comparison. **Three consecutive cycles moving
 the same way** is the weakest claim worth acting on, which at Fedora's
 cadence is about eighteen months.

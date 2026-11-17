@@ -696,11 +696,11 @@ impl Client {
     ///
     /// Labels live in two scopes and an issue may carry either, so both
     /// are searched: the repository's own labels first, then those of
-    /// the owning organisation, a repository label of the same name
+    /// the owning organization, a repository label of the same name
     /// winning. Fedora's `releng/tickets` needs exactly this -- its
     /// stalled-EPEL template asks for `ops`, which is a repository
     /// label, alongside `points/01` and `Priority/Low`, which belong to
-    /// the `releng` organisation.
+    /// the `releng` organization.
     ///
     /// An unknown name is an error naming it rather than a label
     /// quietly dropped: the API accepts a short list without
@@ -733,7 +733,7 @@ impl Client {
                         known.entry(l.name).or_insert(l.id);
                     }
                 }
-                // A user-owned repository has no organisation to fall
+                // A user-owned repository has no organization to fall
                 // back to, which is not a failure in itself; it is
                 // named only if a label then goes unfound.
                 Err(e) => org_unread = Some(e.to_string()),
@@ -746,7 +746,7 @@ impl Client {
             .collect();
         if !missing.is_empty() {
             let why = org_unread
-                .map(|e| format!(" (the {owner} organisation's labels could not be read: {e})"))
+                .map(|e| format!(" (the {owner} organization's labels could not be read: {e})"))
                 .unwrap_or_default();
             return Err(format!(
                 "{owner}/{repo}: no such label(s): {}{why}",
@@ -1043,8 +1043,8 @@ pub fn check_issue_read(
     Ok(access_refusal(read, "read")?.unwrap_or(IssueAccess::Granted))
 }
 
-/// Check that `token` can read organisation `org`, by listing one of
-/// its labels: what resolving an organisation-wide label for a new
+/// Check that `token` can read organization `org`, by listing one of
+/// its labels: what resolving an organization-wide label for a new
 /// issue needs. A token without the organization scope is refused
 /// (403) even where the labels are public.
 pub fn check_org_read(
@@ -1059,7 +1059,7 @@ pub fn check_org_read(
         base_url.trim_end_matches('/')
     );
     let read = http.get(url).query(&[("limit", "1")]).send()?;
-    Ok(access_refusal(read, "organisation")?.unwrap_or(IssueAccess::Granted))
+    Ok(access_refusal(read, "organization")?.unwrap_or(IssueAccess::Granted))
 }
 
 /// Check that `token` can read and write `owner/repo`'s issues: what a
@@ -1478,7 +1478,7 @@ mod tests {
     }
 
     #[test]
-    fn label_ids_searches_the_repo_then_the_organisation() {
+    fn label_ids_searches_the_repo_then_the_organization() {
         // Fedora's releng/tickets is exactly this shape: `ops` is a
         // repository label, the other two belong to the org, and the
         // stalled-EPEL template asks for all three at once.
@@ -1495,9 +1495,9 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_organisation_is_named_when_its_labels_go_unfound() {
+    fn a_refused_organization_is_named_when_its_labels_go_unfound() {
         // Fedora's Forgejo refuses an issue-only token the releng
-        // organisation's labels (403, read:organization). Dropped, that
+        // organization's labels (403, read:organization). Dropped, that
         // refusal read as "no such label(s): points/01, Priority/Low".
         let mut server = mockito::Server::new();
         server
@@ -1516,14 +1516,14 @@ mod tests {
         let client = Client::new(&server.url(), "tok").unwrap();
         let err = client
             .label_ids("releng", "tickets", &["ops", "points/01", "Priority/Low"])
-            .expect_err("unreadable organisation labels are unfound");
+            .expect_err("unreadable organization labels are unfound");
         let msg = err.to_string();
         assert!(msg.contains("Priority/Low"), "{msg}");
         assert!(msg.contains("read:organization"), "{msg}");
     }
 
     #[test]
-    fn a_repo_label_wins_over_the_organisations() {
+    fn a_repo_label_wins_over_the_organizations() {
         let server = label_server(
             r#"[{"id": 982, "name": "ops"}]"#,
             Some(r#"[{"id": 1, "name": "ops"}, {"id": 1417, "name": "points/01"}]"#),
@@ -1555,7 +1555,7 @@ mod tests {
     }
 
     #[test]
-    fn a_user_owned_repo_has_no_organisation_to_fall_back_to() {
+    fn a_user_owned_repo_has_no_organization_to_fall_back_to() {
         // The org lookup 404s and that is not a failure in itself --
         // only an unresolved name is.
         let server = label_server(r#"[{"id": 7, "name": "bug"}]"#, None);
@@ -1567,7 +1567,7 @@ mod tests {
         let err = client
             .label_ids("releng", "tickets", &["ops"])
             .expect_err("a name that is nowhere must still be an error");
-        // And why the organisation was no help is said, not dropped.
+        // And why the organization was no help is said, not dropped.
         assert!(err.to_string().contains("could not be read"), "{err}");
     }
 

@@ -126,7 +126,7 @@ fn adopt(rows: &[Row], args: &ListIssuesArgs) -> Result<(), Box<dyn std::error::
             continue;
         };
         let Some(project) = crate::status::tracking_project_of(url) else {
-            eprintln!("warning: {url}: unrecognised issue URL; not labelled");
+            eprintln!("warning: {url}: unrecognized issue URL; not labeled");
             continue;
         };
         gitlab::client(&gitlab_base(), &project)?.edit_issue(
@@ -136,7 +136,7 @@ fn adopt(rows: &[Row], args: &ListIssuesArgs) -> Result<(), Box<dyn std::error::
                 ..Default::default()
             },
         )?;
-        println!("labelled {url} `{TRACKING_LABEL}`");
+        println!("labeled {url} `{TRACKING_LABEL}`");
     }
     Ok(())
 }
@@ -277,7 +277,7 @@ pub(crate) fn build_rows(args: &ListIssuesArgs) -> Result<Vec<Row>, Box<dyn std:
     Ok(rows)
 }
 
-/// The releases the open issues are labelled with: `c9s`, `c10s`.
+/// The releases the open issues are labeled with: `c9s`, `c10s`.
 fn releases_from_labels(issues: &[gitlab::Issue]) -> Vec<String> {
     issues
         .iter()
@@ -305,7 +305,7 @@ fn mr_of(issue: &gitlab::Issue) -> Option<String> {
 /// Decide which bucket a (release, package) falls into given
 /// pre-fetched issue lists: `active` is every open issue in the
 /// per-package projects with the release label, the tool's own
-/// (labelled) first.
+/// (labeled) first.
 fn classify(
     release: &str,
     package: &str,
@@ -426,10 +426,10 @@ mod tests {
     use super::*;
 
     fn issue(url: &str, title: &str) -> gitlab::Issue {
-        labelled_issue(url, title, &["c10s", TRACKING_LABEL])
+        labeled_issue(url, title, &["c10s", TRACKING_LABEL])
     }
 
-    fn labelled_issue(url: &str, title: &str, labels: &[&str]) -> gitlab::Issue {
+    fn labeled_issue(url: &str, title: &str, labels: &[&str]) -> gitlab::Issue {
         serde_json::from_value(serde_json::json!({
             "labels": labels, "iid": 7, "title": title, "state": "opened",
             "web_url": url, "assignees": []
@@ -438,11 +438,11 @@ mod tests {
     }
 
     #[test]
-    fn classify_calls_an_unlabelled_per_package_issue_hand_filed() {
+    fn classify_calls_an_unlabeled_per_package_issue_hand_filed() {
         // blktrace#2 as a person filed it: the release label, not the
         // tool's. It is the tracking issue all the same, and wins over
         // a package_tracker entry — but is told apart from active.
-        let active = vec![labelled_issue(
+        let active = vec![labeled_issue(
             "https://gitlab.com/CentOS/proposed_updates/rpms/blktrace/-/issues/2",
             "blktrace: Move librsvg2-tools runtime requirement",
             &["bugfix", "c10s"],
@@ -459,7 +459,7 @@ mod tests {
                 .unwrap()
                 .ends_with("/rpms/blktrace/-/issues/2")
         );
-        // With both kinds present, the labelled one is the active issue.
+        // With both kinds present, the labeled one is the active issue.
         let mut both = active;
         both.push(issue(
             "https://gitlab.com/CentOS/proposed_updates/rpms/blktrace/-/issues/3",
@@ -673,7 +673,7 @@ name = "missingpkg"
 
     #[test]
     fn a_row_names_the_mr_its_issue_names_and_releases_come_from_labels() {
-        let mut issue = labelled_issue(
+        let mut issue = labeled_issue(
             "https://gitlab.com/CentOS/proposed_updates/rpms/PackageKit/-/issues/3",
             "PackageKit: 1.2.8-8.el10 → 1.2.8-9.el10",
             &["c10s", TRACKING_LABEL, "security"],
@@ -682,7 +682,7 @@ name = "missingpkg"
             "- **MR**: [!13](https://gitlab.com/redhat/centos-stream/rpms/PackageKit/-/merge_requests/13)\n"
                 .to_string(),
         );
-        let other = labelled_issue(
+        let other = labeled_issue(
             "https://gitlab.com/CentOS/proposed_updates/rpms/blktrace/-/issues/1",
             "blktrace",
             &["bugfix", "c9s"],

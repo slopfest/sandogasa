@@ -274,7 +274,7 @@ impl CheckResult {
     /// Format a closing comment for a released package.
     ///
     /// Lists CBS build page links for each up-to-date
-    /// release build, labelled by distro.
+    /// release build, labeled by distro.
     pub fn close_comment(&self) -> String {
         let links: Vec<String> = self
             .release_builds()

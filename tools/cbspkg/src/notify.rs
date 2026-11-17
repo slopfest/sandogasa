@@ -879,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn a_notice_is_posted_labelled_and_moves_the_issue_into_progress() {
+    fn a_notice_is_posted_labeled_and_moves_the_issue_into_progress() {
         let mut server = mockito::Server::new();
         serve(&mut server, false, r#"[{"name": "stage::testing"}]"#);
         let steps = [step(Stage::Testing)];

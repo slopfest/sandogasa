@@ -94,10 +94,10 @@ pub fn release_heading(release: &str) -> String {
 }
 
 /// The releases to give sections, newest first: the two current ones
-/// and any other an open issue is labelled with.
-pub fn release_order(labelled: &BTreeSet<String>) -> Vec<String> {
+/// and any other an open issue is labeled with.
+pub fn release_order(labeled: &BTreeSet<String>) -> Vec<String> {
     let mut all: BTreeSet<String> = RELEASES.iter().map(|r| r.to_string()).collect();
-    all.extend(labelled.iter().cloned());
+    all.extend(labeled.iter().cloned());
     let mut out: Vec<String> = all.into_iter().collect();
     let number = |r: &str| -> u32 {
         r.strip_prefix('c')
@@ -302,14 +302,14 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
         eprintln!("[cpu-sig-tracker] listing open tracking issues in {GROUP}");
     }
     let open = group.list_issues_where(&[("state", "opened")])?;
-    let labelled: BTreeSet<String> = open
+    let labeled: BTreeSet<String> = open
         .iter()
         .flat_map(|i| i.labels.iter())
         .filter(|l| l.starts_with('c') && l.ends_with('s') && l.len() > 2)
         .filter(|l| l[1..l.len() - 1].chars().all(|c| c.is_ascii_digit()))
         .cloned()
         .collect();
-    let releases = release_order(&labelled);
+    let releases = release_order(&labeled);
 
     let runtime = crate::jira::runtime()?;
     let jira = sandogasa_jira::JiraClient::new(&jira_base());
@@ -593,8 +593,8 @@ mod tests {
     #[test]
     fn releases_are_newest_first_with_the_current_two_always_present() {
         assert_eq!(release_order(&BTreeSet::new()), ["c10s", "c9s"]);
-        let labelled: BTreeSet<String> = ["c8s".to_string()].into();
-        assert_eq!(release_order(&labelled), ["c10s", "c9s", "c8s"]);
+        let labeled: BTreeSet<String> = ["c8s".to_string()].into();
+        assert_eq!(release_order(&labeled), ["c10s", "c9s", "c8s"]);
         assert_eq!(release_heading("c10s"), "CentOS Stream 10");
     }
 

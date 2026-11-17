@@ -203,7 +203,7 @@ impl BzClient {
     /// Whether the server accepts the configured key, and if not, why,
     /// in Bugzilla's words. Makes the same harmless request as
     /// [`Self::api_key_accepted`]. Refused: 306 (invalid key), 410 (no
-    /// key, or none it recognises) and 32000, which Red Hat's instance
+    /// key, or none it recognizes) and 32000, which Red Hat's instance
     /// answers for an expired key. Accepted: 106, the complaint about
     /// the missing product, which only a request past authentication
     /// gets. Anything else is unclear rather than a pass.

@@ -217,7 +217,7 @@ pub fn next_tuesday(today: NaiveDate) -> NaiveDate {
     sandogasa_cli::date::next_weekday(today, chrono::Weekday::Tue)
 }
 
-/// The plain-text artefact for a meetbot HTML URL: `….html` → `….txt`
+/// The plain-text artifact for a meetbot HTML URL: `….html` → `….txt`
 /// (also turns `….log.html` into `….log.txt`).
 pub use sandogasa_meetbot::txt_url;
 
@@ -759,7 +759,7 @@ pub fn forge_client() -> Result<sandogasa_forgejo::Client, Box<dyn std::error::E
     sandogasa_forgejo::Client::new(FORGE_URL, &forge_token()?)
 }
 
-/// A plain HTTP client for fetching meetbot artefacts.
+/// A plain HTTP client for fetching meetbot artifacts.
 pub fn http_client() -> reqwest::blocking::Client {
     sandogasa_cli::install_crypto_provider();
     reqwest::blocking::Client::builder()
@@ -769,7 +769,7 @@ pub fn http_client() -> reqwest::blocking::Client {
         .expect("build reqwest client")
 }
 
-/// Fetch a text artefact, surfacing HTTP errors with the URL.
+/// Fetch a text artifact, surfacing HTTP errors with the URL.
 pub fn fetch_text(http: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
     let resp = http
         .get(url)

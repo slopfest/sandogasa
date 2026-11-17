@@ -46,7 +46,7 @@ use std::path::Path;
 use clap::{Command, CommandFactory};
 use clap_mangen::Man;
 
-/// The `.TH` manual field: the header's centre text.
+/// The `.TH` manual field: the header's center text.
 const MANUAL: &str = "Sandogasa Manual";
 
 /// The `.TH` source field: the footer's left text, naming the
@@ -56,7 +56,7 @@ fn source(crate_version: &str) -> String {
 }
 
 /// Render `cmd` and its visible subcommands as one roff man page,
-/// dated `date` (`YYYY-MM-DD`, shown in the footer's centre).
+/// dated `date` (`YYYY-MM-DD`, shown in the footer's center).
 pub fn render_dated(cmd: Command, date: &str, crate_version: &str) -> Vec<u8> {
     // The command's version is the git describe of a developer's
     // checkout (`sandogasa_cli::version!`); a committed page must carry

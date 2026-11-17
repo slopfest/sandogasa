@@ -44,7 +44,7 @@ tools/*/Cargo.lock
 crates/*/Cargo.lock
 
 # Published stores. `publish-store.sh` writes here by default, and the
-# compressed artefact is not matched by the *.sqlite rules above — it is
+# compressed artifact is not matched by the *.sqlite rules above — it is
 # hundreds of megabytes and rebuildable from the store.
 /dist/
 *.sqlite.zst
@@ -55,7 +55,7 @@ crates/*/Cargo.lock
 
 # A rendered FINDINGS, for people who would rather read a document than
 # a markdown file in a git forge — `make findings`. Generated from the
-# committed source, so these are artefacts rather than content: they are
+# committed source, so these are artifacts rather than content: they are
 # attached to a release and regenerated from the tag, never committed. A
 # binary that changes wholesale on every edit is also the worst thing to
 # keep in git.

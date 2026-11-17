@@ -4,11 +4,11 @@
 //! the tools that write it leave behind.
 //!
 //! `licenserecon` compares the file against `licensecheck` and exits
-//! non-zero when they disagree about a licence. `cme update
+//! non-zero when they disagree about a license. `cme update
 //! dpkg-copyright` reconciles an existing file; `decopy` writes one
 //! from scratch. Neither produces something uploadable unreviewed:
 //! both leave placeholders where they could not tell, and
-//! `licenserecon` passes them, because a placeholder is not a licence
+//! `licenserecon` passes them, because a placeholder is not a license
 //! disagreement.
 
 /// Placeholders the generators leave for a human, as the exact strings
@@ -123,7 +123,7 @@ pub fn latest_year(text: &str) -> Option<u32> {
 /// copyright file does not reach.
 ///
 /// The year is the half `licenserecon` and the holder comparison both
-/// miss: a file crediting the right people under the right licence
+/// miss: a file crediting the right people under the right license
 /// still goes stale every January, and the release that ships it says
 /// so. fnlfmt claimed 2019-2024 while its own README said 2026.
 pub fn stale_years(existing: &str, generated: &str) -> Option<(u32, u32)> {

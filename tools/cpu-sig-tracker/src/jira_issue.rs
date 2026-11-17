@@ -1375,7 +1375,7 @@ mod tests {
         assert!(shown.contains("note: something\n"), "{shown}");
         assert_eq!(found_keys(&lookups), ["RHEL-9"]);
 
-        // Without a CVE, the package's issues are unlabelled.
+        // Without a CVE, the package's issues are unlabeled.
         let plain = render_search(&target(&[]), &[lookup(None, vec![], vec![])], true, &[]);
         assert_eq!(
             plain,

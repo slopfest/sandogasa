@@ -4,7 +4,7 @@
 # Render a markdown document for people who would rather read a
 # document than a file in a git forge — FINDINGS by default.
 #
-# The output is an artefact, not content: it is gitignored, attached
+# The output is an artifact, not content: it is gitignored, attached
 # to a release, and regenerated from the tag rather than committed.
 #
 # HTML needs nothing but pandoc and is always produced. PDF needs

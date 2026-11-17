@@ -20,7 +20,7 @@ use crate::sources;
 
 /// What the chair chose to do with a decided vote.
 pub enum Announced {
-    /// Posted and relabelled; the string is what was commented.
+    /// Posted and relabeled; the string is what was commented.
     Done(String),
     /// Left alone, to be handled as an ordinary agenda ticket.
     Skipped,
@@ -121,7 +121,7 @@ pub fn offer(
             eprintln!("  would {relabel}");
         } else {
             relabel_only(client, number, has_vote_label)?;
-            eprintln!("  relabelled #{number}");
+            eprintln!("  relabeled #{number}");
         }
         return Ok(Announced::Done(existing.to_string()));
     }
@@ -135,7 +135,7 @@ pub fn offer(
         return Ok(Announced::Done(text));
     }
     write(client, number, &text, has_vote_label)?;
-    eprintln!("  commented on #{number} and relabelled");
+    eprintln!("  commented on #{number} and relabeled");
     Ok(Announced::Done(text))
 }
 
@@ -143,7 +143,7 @@ pub fn offer(
 ///
 /// The comment goes first on purpose: it is the part that records
 /// the decision, and a label edit that fails after it leaves a
-/// ticket that is merely mislabelled rather than one that is
+/// ticket that is merely mislabeled rather than one that is
 /// announced with nothing saying what was decided.
 fn write(
     client: &sandogasa_forgejo::Client,
@@ -305,7 +305,7 @@ fn fetch_announcement(url: &str) -> Result<String, String> {
 
 /// The meetbot minutes an announcement links to.
 ///
-/// A summary mail carries the minutes it summarises, so the meeting
+/// A summary mail carries the minutes it summarizes, so the meeting
 /// does not have to be named on the command line or guessed from the
 /// date — and a mail that links no minutes is not a summary, which
 /// is the right reason to do nothing.
@@ -316,7 +316,7 @@ pub fn minutes_url(body: &str) -> Option<String> {
         .chars()
         .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '<')
         .collect();
-    // The plain-text artefact: the HTML one is a page of markup the
+    // The plain-text artifact: the HTML one is a page of markup the
     // AGREED lines would have to be dug out of.
     Some(sources::txt_url(&url))
 }
@@ -382,7 +382,7 @@ fn assemble(args: &AnnouncedArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     sources::fill_decisions(&client, &mut tickets, args.verbose);
     // Fetched once: it says both which tickets it names and which
-    // meeting it summarises.
+    // meeting it summarizes.
     let announcement = match fetch_announcement(&args.url) {
         Ok(body) => Some(body),
         Err(e) => {
@@ -1084,7 +1084,7 @@ mod tests {
             status_for("REJECTED (+0, 0, -7)"),
             Some(sources::REJECTED_LABEL)
         );
-        // extract_decision normalises to the verdict, but a hand
+        // extract_decision normalizes to the verdict, but a hand
         // written line may still be indented.
         assert_eq!(
             status_for("  approved (+3, 0, 0)"),

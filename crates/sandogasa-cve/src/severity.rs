@@ -6,7 +6,7 @@
 //! is weighed by, but Red Hat may not have assessed a CVE yet, which is
 //! often exactly when a CentOS Proposed Update is filed. NVD's answer
 //! carries the CNA's score, and other parties', even before NVD has
-//! analysed a CVE, but a CNA may give none. GitHub's advisory database
+//! analyzed a CVE, but a CNA may give none. GitHub's advisory database
 //! has a severity for what it has reviewed. So [`ratings`] asks them in
 //! that order and keeps every answer: the first is the one to use, and
 //! the rest show whether the sources agree.

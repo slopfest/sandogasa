@@ -218,7 +218,7 @@ pub(crate) fn build_rows(args: &TimelineArgs) -> Result<Vec<Row>, Box<dyn std::e
     Ok(rows)
 }
 
-/// The releases the issues are labelled with: `c9s`, `c10s`.
+/// The releases the issues are labeled with: `c9s`, `c10s`.
 fn releases_from_labels(issues: &[gitlab::Issue]) -> Vec<String> {
     issues
         .iter()

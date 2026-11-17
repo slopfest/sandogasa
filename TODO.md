@@ -64,7 +64,7 @@ Three pieces, in increasing order of churn:
 - **A `make check` script over tracked text.** `git grep -nIE ' +$'`
   over `*.md`, `*.rs`, `*.toml`, `*.sh` and `*.1`, in the shape of
   `scripts/check-non-exhaustive.sh`. This catches committed
-  artefacts, which the test helper cannot: generated reports, man
+  artifacts, which the test helper cannot: generated reports, man
   pages, and the docs themselves.
 
 - **Fix the man pages, which are the one real offender found.** All
@@ -189,7 +189,7 @@ run left open, for before the next release:
   cNs-proposed-x <nvr>` does just the untag for each (blktrace waits on
   its open question, see its tracking issues).
 - **Secrets in the keyring (#79).** Tokens sit in plain-text config
-  files; a session that read one printed a GitLab token. Prioritise
+  files; a session that read one printed a GitLab token. Prioritize
   #79 for the release.
 - **Jira transitions.** `sandogasa-jira` files and reads issues but
   cannot transition them, to follow an issue's progress.
@@ -255,7 +255,7 @@ release: add `epoch: Option<i64>` to `LatestBuild`, mark it
   publishes (`scripts/publish-store.sh`, `scripts/fetch-store.sh`, the
   `koji-lag-store-*` release), the narrative notebook is written by hand
   in koji-lag-metrics, and this side supplies the scripts it calls.
-  Keeping the notebook out of this tree also keeps a generated artefact
+  Keeping the notebook out of this tree also keeps a generated artifact
   out of one that would otherwise diff to noise on every re-run.
 
 - (2026-08-20) **The SRPM stage ran on s390x for about ten months, and it
@@ -542,7 +542,7 @@ count beside it.
   an error — a Fedora user copying a config from elsewhere must get
   their report, not a failure.
 
-Tests must honour the flag, since the point is that Fedora's
+Tests must honor the flag, since the point is that Fedora's
 `%check` passes with it off: `#[cfg(feature = "cocomo")]` on anything
 that estimates, and **always-on** tests for the absence path — the
 config key parses, the note prints once, the report is otherwise
@@ -644,7 +644,7 @@ us most.
 
   The claim was that s390x stopped building about 90% of the
   distribution between 2025-07 and 2025-09, 23,733 distinct packages
-  a month down to 2,459. Both ends are artefacts. 2025-07 contains
+  a month down to 2,459. Both ends are artifacts. 2025-07 contains
   F43's mass rebuild (2025-07-23..26), which is the trap the last
   bullet in this very list describes; and koschei was switched off on
   s390x between 2025-08 and 2025-09 — 7,127 tasks that August, 14
@@ -660,7 +660,7 @@ us most.
   20% over eighteen months, which is worth reporting as what it is.
 
   So the metric must **exclude koschei and name rebuild months**, or
-  the first thing it reports is this artefact with a warning attached
+  the first thing it reports is this artifact with a warning attached
   to it. A bare `COUNT(DISTINCT package)` per period would have
   announced a 90% collapse that never happened, which is worse than
   the silence it was meant to fix.
@@ -716,7 +716,7 @@ us most.
 - **Whether the period contains a mass rebuild.** The `events`
   directory already records them, and a month containing one is not
   comparable to a month that does not: July 2026's s390x package count
-  was 5x its neighbours' purely because of the 2026-07-15 rebuild.
+  was 5x its neighbors' purely because of the 2026-07-15 rebuild.
   Say so in the period's own report rather than leaving a reader to
   discover it by noticing the shape.
 
@@ -1042,7 +1042,7 @@ pkgreport.cgi), and `bts` covers single-bug operations well. The gap
 is synthesis over everything one maintainer owns, and ergonomics on
 the write side, where the interface is email with pseudo-headers.
 
-Queries worth having, all of them answerable without judgement:
+Queries worth having, all of them answerable without judgment:
 
 - Open ITPs whose package is already in the archive -- the netconsd
   case.
@@ -1098,7 +1098,7 @@ human:
   bump -- upstream's call, not the packager's -- or a symbol that was
   never meant to be public. Added symbols can be taken automatically;
   this one has to stop and ask.
-- A symbol whose *behaviour* changed keeps its name, so no diff shows
+- A symbol whose *behavior* changed keeps its name, so no diff shows
   it. Policy 8.6.2: "there is no automated method of determining
   such changes", and getting it wrong yields dependencies too weak,
   failing at runtime. libkdumpfile 0.5.5 is a specimen -- its NEWS
@@ -1115,15 +1115,15 @@ interesting branch -- architecture divergence, C++ mangling, optional
 symbols, a real disappearance -- would be written blind. Pick it up
 when a package turns up that has one of them.
 
-## dbranch: lrc checks licences, not copyright holders (2026-10-13)
+## dbranch: lrc checks licenses, not copyright holders (2026-10-13)
 
 `update` runs `lrc` before the source stage and offers `cme update
 dpkg-copyright` when it disagrees. fnlfmt shows the gap: `lrc`
 **passes** it, and its `debian/copyright` is still wrong. The package
-vendors `fennel` and `fennel.lua`, both Expat — the same licence as
+vendors `fennel` and `fennel.lua`, both Expat — the same license as
 everything else, so `lrc` has nothing to report — while
 `Files: *` attributes them to "fnlfmt contributors" when `fennel.lua`
-is Calvin Rose's. A licence check that reads like a copyright check is
+is Calvin Rose's. A license check that reads like a copyright check is
 exactly how that got past a maintainer and two tools.
 
 Two things to do, in order of certainty:
@@ -1225,7 +1225,7 @@ independent debcargo rules intersect:
   `test-name=librust-<crate>-dev:<feature>`. A binary-only package has
   no feature set to enumerate.
 
-Neither is a judgement that binaries need less testing; the code path
+Neither is a judgment that binaries need less testing; the code path
 simply does not exist. Which means a hand-written
 `src/dbranch/debian/tests/control` is filling a structural gap rather
 than overriding a policy: it would call the same

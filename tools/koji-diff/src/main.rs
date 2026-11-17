@@ -274,7 +274,7 @@ fn debug_log_info(label: &str, log_content: &str, tmpdir: &std::path::Path) {
         }
     }
 
-    // Show root.log stats and lines containing "Installed" or "nstall".
+    // Show root.log stats and lines mentioning installs.
     let lines: Vec<_> = log_content.lines().collect();
     eprintln!(
         "  root.log: {} bytes, {} lines",

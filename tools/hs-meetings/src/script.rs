@@ -145,7 +145,7 @@ fn open_issues() -> Result<Vec<Issue>, Box<dyn std::error::Error>> {
 }
 
 /// The Tickets and Membership lists: archived Pagure imports dropped,
-/// `meeting`-labelled issues first, then newest first; membership
+/// `meeting`-labeled issues first, then newest first; membership
 /// requests split out; `new` marks issues opened since `since`.
 pub fn agenda(issues: Vec<Issue>, since: Option<NaiveDate>) -> (Vec<Ticket>, Vec<Ticket>) {
     let mut tickets: Vec<Ticket> = issues

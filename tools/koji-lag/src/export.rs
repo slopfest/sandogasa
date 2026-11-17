@@ -52,9 +52,9 @@ pub fn run(
     // Whole days only. A partial day is not a quiet day — its builds are
     // there and their arch tasks are not — so exporting one hands someone
     // a file whose figures are wrong in a way nothing in the file reveals.
-    // Anyone analysing this cannot be expected to know which days to drop,
+    // Anyone analyzing this cannot be expected to know which days to drop,
     // so they are dropped here.
-    let selection = store.analysable(instance, from, to, grace)?;
+    let selection = store.analyzable(instance, from, to, grace)?;
     if selection.whole.is_empty() {
         return Err(refuse(&selection));
     }
@@ -207,7 +207,7 @@ pub fn run(
 /// "no builds that week", which is a different claim entirely.
 pub fn refuse(selection: &crate::store::Selection) -> String {
     format!(
-        "nothing complete to analyse in that range: {} day(s) have rows but \
+        "nothing complete to analyze in that range: {} day(s) have rows but \
          are incomplete{}. Sync them first, or narrow the range.",
         selection.skipped.len(),
         match selection.skipped_dates().split_first() {
@@ -376,7 +376,7 @@ mod tests {
             dir.path(),
         )
         .unwrap_err();
-        assert!(err.contains("nothing complete to analyse"), "{err}");
+        assert!(err.contains("nothing complete to analyze"), "{err}");
         assert!(
             err.contains("2026-08-13"),
             "must name the day to sync: {err}"

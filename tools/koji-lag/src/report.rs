@@ -116,7 +116,7 @@ pub struct ArchStats {
 /// What wrote this report, for the `generator` field.
 ///
 /// The plain crate version, not the `git describe` that `--version`
-/// shows: a report is published and compared against its neighbours,
+/// shows: a report is published and compared against its neighbors,
 /// so the stamp must be the same for everyone building the same
 /// release rather than naming the checkout it came from.
 pub fn generator() -> String {
@@ -1440,7 +1440,7 @@ mod tests {
         // Exactly the crate version, not the `git describe` that
         // `--version` shows: two people building the same release
         // must stamp the same string, and a published report is
-        // compared against its neighbours.
+        // compared against its neighbors.
         assert_eq!(version, env!("CARGO_PKG_VERSION"), "{g}");
     }
 

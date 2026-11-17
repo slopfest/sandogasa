@@ -76,7 +76,7 @@ pub fn dist_tag(nvr: &str) -> Option<&str> {
 /// A side tag is `<branch>-build-side-<digits>` and carries no dist
 /// tag, so the two cannot be confused — but the test is deliberately
 /// positive rather than "not a side tag", because the fallback for
-/// anything unrecognised is still a side tag and sending a build
+/// anything unrecognized is still a side tag and sending a build
 /// there is the cheaper mistake to make.
 fn looks_like_build(s: &str) -> bool {
     s.matches('-').count() >= 2 && dist_tag(s).is_some()
@@ -1018,7 +1018,7 @@ pub(crate) trait KojiQuery: Sync {
     }
 
     /// When `tag` was created, as a unix time. Defaults to unknown,
-    /// which leaves reverse dependencies unlabelled.
+    /// which leaves reverse dependencies unlabeled.
     fn tag_created(&self, _tag: &str) -> Option<f64> {
         None
     }
@@ -3224,7 +3224,7 @@ fn infer_branch_for_side_tag(tag: &str) -> Result<String, String> {
         _ => Err(format!(
             "could not infer a branch from {tag}: it is neither a side tag \
              (<branch>-build-side-<id>) nor a build whose dist tag ebranch \
-             recognises; pass --branch"
+             recognizes; pass --branch"
         )),
     }
 }
@@ -5021,7 +5021,7 @@ mod tests {
             ),
             "{out}"
         );
-        // kdepimlibs was there already: listed, labelled, not in the note.
+        // kdepimlibs was there already: listed, labeled, not in the note.
         assert!(!out.contains("> - **kdepimlibs**"), "{out}");
         assert!(
             out.contains("- **kdepimlibs** (already there when the side tag opened)"),

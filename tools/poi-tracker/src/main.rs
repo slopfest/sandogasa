@@ -35,7 +35,7 @@ use sandogasa_distgit::DistGitClient;
 struct Cli {
     /// Exactly these inventory TOML file(s) (repeatable) — the most
     /// specific of the three ways to name inventories, and always
-    /// honoured: it overrides whatever a workspace file would supply.
+    /// honored: it overrides whatever a workspace file would supply.
     #[arg(short, long, global = true)]
     inventory: Vec<String>,
 
@@ -2733,7 +2733,7 @@ fn cmd_validate(paths: &[String]) -> CmdResult {
     }
 }
 
-/// Write an export file, labelling the path in the error the way
+/// Write an export file, labeling the path in the error the way
 /// every export site does.
 fn write_export(path: &str, content: &str) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("failed to write {path}: {e}"))

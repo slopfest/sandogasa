@@ -11,7 +11,7 @@ site takes an API token from
 <https://id.atlassian.com/manage-profile/security/api-tokens> with the
 account's email, as basic auth (`JiraClient::with_api_token`) — sent
 through Atlassian's API gateway, the only place a scoped token is
-honoured: `cloud_id(site)` reads the tenant id and
+honored: `cloud_id(site)` reads the tenant id and
 `gateway_url(&id)` is the base URL to build the client on. A scoped
 token needs `read:jira-user` for `myself()`, `read:jira-work` for
 issues and searches, and `write:jira-work` to file one. A self-hosted

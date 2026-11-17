@@ -294,7 +294,7 @@ fn warn(t: &ArchTrend, drift_warn: f64) -> Vec<String> {
         // Said instead of the drift, not beside it: a ratio over a
         // population that changed size is not a smaller finding, it is a
         // different measurement, and reporting both invites the reader to
-        // believe the one they recognise.
+        // believe the one they recognize.
         if let Some(shift) = d.population_shift()
             && shift >= POPULATION_SHIFT
         {
@@ -584,7 +584,7 @@ mod tests {
         };
         assert_eq!(label_of(&e), "F42");
         // No schedule supplied, so fall back to the day it opened rather
-        // than leaving the row unlabelled.
+        // than leaving the row unlabeled.
         e.release = None;
         assert_eq!(label_of(&e), "2025-01-16");
     }

@@ -14,7 +14,7 @@
 //! Release engineering's mass rebuilds (`releng`) are counted apart.
 //!
 //! Only counts and dates are reported, never names: this is a hint on
-//! how long to wait for a reply, not a judgement of anyone.
+//! how long to wait for a reply, not a judgment of anyone.
 //!
 //! datagrepper answers a search on one package, newest first and
 //! bounded in time, in seconds; an unbounded or oldest-first one runs

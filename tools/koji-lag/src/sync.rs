@@ -375,7 +375,7 @@ fn say_the_plan(want: &Span, gaps: &[Span], already: f64) {
 mod tests {
     use super::*;
 
-    /// A hub that serves tasks out of a fixed list, honouring the cursor
+    /// A hub that serves tasks out of a fixed list, honoring the cursor
     /// the same way `listTasks` does: newest first, created strictly
     /// before the bound, skipping `offset`.
     struct Canned {

@@ -1071,7 +1071,7 @@ Latest Info: **Deferred to F46**\n";
     }
 
     #[test]
-    fn a_change_ticket_is_recognised_by_slug_name_or_every_word() {
+    fn a_change_ticket_is_recognized_by_slug_name_or_every_word() {
         assert!(ticket_matches("Change: LLVM 23", "LLVM 23", Some("llvm23")));
         assert!(ticket_matches(
             "Change: RelocateRpmRepoConfigsToUsr",

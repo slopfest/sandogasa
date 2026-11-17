@@ -296,7 +296,7 @@ pub(crate) fn bug_verdict(bug: &BugFacts, update: &UpdateFacts<'_>) -> Verdict {
     // A branch request is answered by the branch existing and the
     // package being built there, which is what this update is. The
     // request names a release family (`epel10`) while the update
-    // targets a branch within it (`epel10.4`), so both are normalised
+    // targets a branch within it (`epel10.4`), so both are normalized
     // before they are compared.
     if let Some((pkg, branch)) = sandogasa_bugclass::bugzilla::branch_request_parts(title) {
         let family =
@@ -1723,7 +1723,7 @@ mod tests {
     }
 
     #[test]
-    fn an_epel_all_tracker_is_every_epel_branchs_tracker() {
+    fn an_epel_all_tracker_is_the_tracker_of_every_epel_branch() {
         // Filed on epel10 by the security team, marked [epel-all]: an
         // epel9 update answers it too. Without the marker, epel10's
         // tracker is not epel9's business.

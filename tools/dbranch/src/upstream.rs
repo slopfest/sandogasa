@@ -319,7 +319,7 @@ pub fn clone(ui: &Ui, opts: &CloneOptions) -> Result<(), Box<dyn std::error::Err
             // Scaffolding, like gbp.conf, so it is written now rather
             // than by the first push: nothing about it depends on the
             // release, and created later it lands after the changelog
-            // entry meant to summarise the packaging -- and, before
+            // entry meant to summarize the packaging -- and, before
             // that was fixed, after the source package was built.
             // Only with --salsa, since it is salsa's CI that reads it.
             if !dir.join(plan::SALSA_CI_PATH).exists() {
@@ -684,7 +684,7 @@ fn upstream_packaging(
 /// The files `dpkg-source` needs to build a source package at all.
 /// `copyright` is not among them: policy wants it for an upload, but
 /// its absence does not stop the tree building, and guessing a
-/// licence is not dbranch's to do.
+/// license is not dbranch's to do.
 const ESSENTIALS: [&str; 3] = ["control", "rules", "changelog"];
 
 /// Which of [`ESSENTIALS`] this packaging has not got, in the order

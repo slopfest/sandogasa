@@ -795,7 +795,7 @@ pub const USERS: &[(&str, &[&str])] = &[
     ("sandogasa: SourceHut token", &["sandogasa-report"]),
 ];
 
-/// The tools other than `tool` that keep a secret labelled `label` and
+/// The tools other than `tool` that keep a secret labeled `label` and
 /// are set up on this machine: those with a config file under
 /// `config_home` (`$XDG_CONFIG_HOME`).
 fn other_users_in(config_home: &std::path::Path, tool: &str, label: &str) -> Vec<&'static str> {
@@ -807,7 +807,7 @@ fn other_users_in(config_home: &std::path::Path, tool: &str, label: &str) -> Vec
         .collect()
 }
 
-/// The tools other than `tool` that keep a secret labelled `label` and
+/// The tools other than `tool` that keep a secret labeled `label` and
 /// are set up on this machine. None when no config directory can be
 /// found: this only ever feeds a note.
 pub fn other_users_here(tool: &str, label: &str) -> Vec<&'static str> {

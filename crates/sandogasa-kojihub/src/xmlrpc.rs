@@ -218,7 +218,7 @@ impl Client {
         };
         Self {
             http: builder.build().expect("build reqwest client"),
-            // Normalised, so a hub given as ".../kojihub/" is the same
+            // Normalized, so a hub given as ".../kojihub/" is the same
             // client as one given as ".../kojihu" — the difference is a
             // typo, not a different hub.
             hub_url: hub_url.trim_end_matches('/').to_string(),

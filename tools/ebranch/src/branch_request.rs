@@ -1079,7 +1079,7 @@ impl BranchStanding {
 /// Pagure splits the scope on commas and matches each pattern against
 /// the ref name with `fnmatch` (`is_repo_collaborator` in
 /// `pagure/utils.py`), so `epel*` covers `epel10` and `epel9` covers
-/// nothing else. Only `*` is honoured here; a pattern using fnmatch's
+/// nothing else. Only `*` is honored here; a pattern using fnmatch's
 /// `?` or `[seq]` reads as not covering, which asks a person rather
 /// than assuming the right to act.
 fn scope_covers(patterns: &str, branch: &str) -> bool {
@@ -1560,7 +1560,7 @@ pub enum CloseDecision {
 /// like [`ping_decision`]: the probe belongs to the caller.
 ///
 /// Only a build counts. A branch with nothing built from it does not
-/// fulfil a request -- the bug asked for the package to be *in* the
+/// fulfill a request -- the bug asked for the package to be *in* the
 /// branch, and an empty branch is the halfway state `RequestKind::Build`
 /// exists to describe.
 pub fn close_decision(status: &str, present: Option<&str>) -> CloseDecision {
@@ -3054,7 +3054,7 @@ mod tests {
 
     #[test]
     fn a_request_is_closed_only_once_the_build_is_there() {
-        // A branch with nothing built in it does not fulfil the
+        // A branch with nothing built in it does not fulfill the
         // request: the bug asked for the package to be *in* epel10.
         assert_eq!(close_decision("NEW", None), CloseDecision::Pending);
         assert_eq!(
@@ -4139,7 +4139,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        // No backoff: the retries are the behaviour under test, not
+        // No backoff: the retries are the behavior under test, not
         // the waiting between them.
         let bz = BzClient::new(&server.uri()).with_retry_backoff(std::time::Duration::ZERO);
         let edges = BTreeMap::from([
@@ -4654,7 +4654,7 @@ mod tests {
     #[tokio::test]
     async fn a_dry_run_does_not_file_a_releng_ticket() {
         // The dry run stops before the forge is contacted at all, so
-        // the unroutable URL below is never dialled.
+        // the unroutable URL below is never dialed.
         let standing = BranchStanding::default();
         let mut opts = mock_opts("http://127.0.0.1:1", true);
         opts.identity = Some("alice".into());

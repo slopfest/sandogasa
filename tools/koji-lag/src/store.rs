@@ -125,7 +125,7 @@ CREATE TABLE IF NOT EXISTS host_config (
     host_id INTEGER NOT NULL,
     name TEXT,
     -- Space-separated, as the hub reports it. Kept verbatim rather than
-    -- normalised into rows: a handful of revisions carry a Kerberos
+    -- normalized into rows: a handful of revisions carry a Kerberos
     -- principal here instead of architectures, and inventing structure
     -- for that would be inventing meaning.
     arches TEXT,
@@ -175,7 +175,7 @@ pub const LISTING_GEN: i64 = 1;
 /// asked for".
 pub const CHILDREN_GEN: i64 = 1;
 
-/// Rows worth analysing, and what was left out of them.
+/// Rows worth analyzing, and what was left out of them.
 #[derive(Debug)]
 pub struct Selection {
     pub dataset: Dataset,
@@ -806,7 +806,7 @@ impl Store {
     /// November, so a monthly figure taken at the midpoint would be either
     /// the before or the after and never the truth.
     ///
-    /// Called again by [`Store::analysable`] over the whole requested range,
+    /// Called again by [`Store::analyzable`] over the whole requested range,
     /// because that merges one dataset per whole day and `Dataset::merge`
     /// carries no window lengths to weight per-day means by. Recomputing
     /// once over the range the report actually covers is both simpler and
@@ -909,7 +909,7 @@ impl Store {
     /// range's children leaves the store *believing* it is complete: the
     /// `listed` window covers the day, so nothing asks for it again, and
     /// every report counts the day as real and quiet. 2026-08-10 held 58
-    /// tasks between neighbours of 31,817 and 26,008 and no part of the
+    /// tasks between neighbors of 31,817 and 26,008 and no part of the
     /// tool noticed.
     ///
     /// Detected without asking the hub anything, and without checking
@@ -977,7 +977,7 @@ impl Store {
     ///
     /// Historical revisions carry the same sets in other orders and with
     /// architectures now gone (`aarch64 armhfp`, `i386 x86_64`), so the
-    /// component walk normalises rather than matching strings.
+    /// component walk normalizes rather than matching strings.
     pub fn pools_at(&self, instance: &str, at: f64) -> Result<Vec<(Vec<String>, f64)>, String> {
         let mut stmt = self
             .conn
@@ -1212,14 +1212,14 @@ impl Store {
         Ok(())
     }
 
-    /// The rows of `[from, to)` worth analysing, and the days left out.
+    /// The rows of `[from, to)` worth analyzing, and the days left out.
     ///
     /// Only whole days go in. A day listed but not yet finished holds
     /// builds whose arch tasks have not arrived, and statistics over those
     /// do not read as incomplete — they read as a quiet day. Every consumer
-    /// of this store analyses the same way as a result: `report`, `reports`
+    /// of this store analyzes the same way as a result: `report`, `reports`
     /// and `export` all take their rows from here.
-    pub fn analysable(
+    pub fn analyzable(
         &self,
         instance: &str,
         from: f64,
@@ -1444,7 +1444,7 @@ impl Store {
 /// `ALTER TABLE ADD COLUMN` into that text with its own spacing. So the
 /// stored schema reflects how a migration happened to be typed, which
 /// would make the committed snapshot churn on whitespace and would leave
-/// an added column formatted unlike its neighbours. Reformatting on the
+/// an added column formatted unlike its neighbors. Reformatting on the
 /// way out makes the file depend on what the schema *is* and nothing else:
 /// the same statement typed on one line and across twenty produces
 /// identical output.

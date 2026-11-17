@@ -169,7 +169,7 @@ here; each has a README and a man page under `tools/<name>/` at
   #link("https://gitlab.com/redhat/centos-stream/rpms/rsync/-/merge_requests/91")[!91]
   (c9s)
 - Each has its RHEL issue and a tracking issue in
-  `CentOS/proposed_updates/rpms/rsync`, labelled `c10s` or `c9s` and
+  `CentOS/proposed_updates/rpms/rsync`, labeled `c10s` or `c9s` and
   `security`
 - Each becomes a SIG branch named after release and RHEL issue:
   `c10s-proposed-RHEL-303721`

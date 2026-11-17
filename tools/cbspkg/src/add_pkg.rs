@@ -761,7 +761,7 @@ mod tests {
     /// perf, from c9s-hs: main on Stream and facebook on RHEL, in place
     /// of the branch's main alone; `--rhel` alone adds to the branch's.
     #[test]
-    fn variants_replace_the_branchs_collection() {
+    fn variants_replace_the_collection_of_the_branch() {
         let (sig, own) = collections_of("perf", "c9s-hs", &[Sig::Hyperscale]).unwrap();
         let prefixes = |c: Vec<Collection>| c.iter().map(Collection::prefix).collect::<Vec<_>>();
         let both = [

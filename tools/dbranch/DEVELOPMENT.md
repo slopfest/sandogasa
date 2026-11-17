@@ -530,7 +530,7 @@ placeholder while git drops a commented line.
 
 Some upstreams (antifennel) ask not to be packaged from tarballs — they
 publish none of their own, and the forge-generated archives are not
-release artefacts — but from something tied to their git tags. That is
+release artifacts — but from something tied to their git tags. That is
 gbp's "when upstream uses git, no tarballs" flow: the Debian branch
 descends from upstream's release tag, a new release is `git merge
 <tag>`, and the orig tarball is *generated* from the tag with
@@ -678,7 +678,7 @@ the fork's project.
   PPA runs don't need it) is a Debian **proposed-update**; a
   `debian/<codename>-backports` branch (numbered release + suffix) is a
   Debian **backport**; everything else is an Ubuntu **PPA**. The type
-  drives three things, all still funnelled through the same merge →
+  drives three things, all still funneled through the same merge →
   normalize → build machinery:
   - *version* — `changelog::rebuild_version` (`~<codename>+<N>`) vs
     `changelog::proposed_version` (`~deb<N>u<M>`) vs
@@ -829,7 +829,7 @@ anything below it stops being a field — which is what a reviewer
 objected to in a real patch. But lintian reads those fields anyway:
 a patch whose `Forwarded:` sits below two blank lines does *not*
 raise `patch-not-forwarded-upstream`. And `gbp pq export` cannot
-produce anything else, because it serialises the commit as a mail
+produce anything else, because it serializes the commit as a mail
 message, so the blank line after `Subject` is structural. Flagging it
 would have meant disagreeing with lintian, contradicting the only
 tool that generates these patches, and telling people to break git's

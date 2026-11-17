@@ -500,7 +500,7 @@ mod tests {
                     .iter()
                     .find(|s| s.labels.iter().any(|l| l == label))
                 {
-                    None => wrong.push(format!("{slug}: no section is labelled {label}")),
+                    None => wrong.push(format!("{slug}: no section is labeled {label}")),
                     Some(s)
                         if (s.number.as_str(), s.title.as_str(), s.doc.as_str())
                             != (number, title, doc) =>
@@ -568,7 +568,7 @@ mod tests {
         // Developer's Reference citations are checked against their
         // own manual, where this label is missing.
         let wrong = mismatches(table, &moved, devref_claim);
-        assert_eq!(wrong, ["c: no section is labelled bpp-debian-patches"]);
+        assert_eq!(wrong, ["c: no section is labeled bpp-debian-patches"]);
     }
 
     #[test]

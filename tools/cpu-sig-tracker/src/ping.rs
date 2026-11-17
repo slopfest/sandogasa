@@ -43,7 +43,7 @@
 //! last response is shown instead. Nothing is posted unasked: at a
 //! terminal each note is offered one by one, `--apply` posts them all
 //! for an unattended run, and otherwise the run only reports. Every
-//! note carries a hidden marker so later runs recognise it.
+//! note carries a hidden marker so later runs recognize it.
 
 use std::process::ExitCode;
 
@@ -60,7 +60,7 @@ use crate::utils::gitlab_base;
 
 const PROPOSED_UPDATES_GROUP: &str = "CentOS/proposed_updates/rpms";
 const TRACKING_LABEL: &str = "cpu-sig-tracker";
-/// Hidden in the rendered notes; how a later run recognises them.
+/// Hidden in the rendered notes; how a later run recognizes them.
 pub const PING_MARKER: &str = "<!-- cpu-sig-tracker: ping -->";
 const REBASE_MARKER: &str = "<!-- cpu-sig-tracker: rebase ";
 const BUILD_MARKER: &str = "<!-- cpu-sig-tracker: build ";
@@ -671,7 +671,7 @@ fn scan(args: &PingArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
         for (package, issue) in issues {
             let body = issue.description.clone().unwrap_or_default();
             let Some(tracking_project) = tracking_project_of(&issue.web_url) else {
-                eprintln!("warning: {package} {release}: unrecognised issue URL; skipped");
+                eprintln!("warning: {package} {release}: unrecognized issue URL; skipped");
                 continue;
             };
             let issue_client = gitlab::client(&base, &tracking_project)?;

@@ -335,7 +335,7 @@ defaults to --branch."
         conflicts_with_all = ["branch", "refresh", "repo", "testing_branch"],
         long_help = "\
 Use the check kept from an earlier run instead
-of analysing again, so --give-karma or --submit
+of analyzing again, so --give-karma or --submit
 can be rerun from it, e.g. after one failed.
 Every check is kept under what it checked and
 the updates it voted on or submitted, in
@@ -1350,7 +1350,7 @@ type RpmfusionFound = (rpmfusion::Counterparts, Vec<(String, String)>);
 ///
 /// A batch is deduplicated on this rather than on the text given, so
 /// a bare alias and its Bodhi URL count as the one update they are.
-/// Analysing an update twice would also comment on it twice, and file
+/// Analyzing an update twice would also comment on it twice, and file
 /// against RPM Fusion listing it twice.
 fn input_identity(kind: &check_update::InputKind) -> String {
     match kind {
@@ -2094,7 +2094,7 @@ fn main() -> ExitCode {
         let mut needs_koji = false;
         // What has already been planned, by what the input *is*
         // rather than how it was written: a bare alias and its Bodhi
-        // URL are one update, and analysing it twice would also
+        // URL are one update, and analyzing it twice would also
         // comment on it twice.
         let mut already: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         // Builds named on the command line are regrouped by release
@@ -3593,7 +3593,7 @@ mod tests {
     fn one_update_written_two_ways_is_one_input() {
         // A batch is deduplicated on what an input refers to, not on
         // its text, so pasting a URL beside the alias it contains
-        // does not analyse the update twice — which would comment on
+        // does not analyze the update twice — which would comment on
         // it twice and list it twice in the RPM Fusion bug.
         let bare = input_identity(&detect_input_type("FEDORA-2026-e9bb998784"));
         let url = input_identity(&detect_input_type(

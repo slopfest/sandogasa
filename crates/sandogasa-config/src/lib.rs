@@ -942,7 +942,7 @@ mod tests {
         assert!(text.contains("token = \"new\""), "{text}");
         assert!(
             text.contains("extra = 1"),
-            "unmodelled key inside a modelled table kept: {text}"
+            "unmodeled key inside a modeled table kept: {text}"
         );
         assert!(text.contains("non-voting = [\"jspaleta\"]"), "{text}");
         assert!(text.contains("[defaults.agenda]\nhistory = 20"), "{text}");

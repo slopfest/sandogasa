@@ -26,7 +26,7 @@ Reasons it's deferred:
   on top would be noisier than useful.
 - The phenomenon GitLab's dual count catches — `git push
   --mirror` of someone else's repo crediting every commit to
-  you — is much rarer on GitHub because GitHub's UI emphasises
+  you — is much rarer on GitHub because GitHub's UI emphasizes
   PRs over direct pushes, and mirroring tools more often go
   through dedicated bot accounts.
 

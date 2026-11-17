@@ -65,7 +65,7 @@ list. The 3-page cap is hardcoded with a comment so readers
 don't try to "fix" it by paginating further — there's nothing
 behind page 3. If GitHub ever raises the limit the cap should
 move; until then the current ceiling matches the documented
-behaviour.
+behavior.
 
 ## Why blocking, not async
 
