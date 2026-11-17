@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### cbspkg prints a tracking-issue comment it could not post
+
+When `cbspkg build` or `promote` could not post its comment on a
+tracking issue, it warned and dropped the comment. For a Hyperscale
+issue it had just closed because every release has the version, that
+left the issue closed with nothing saying why. The warning now
+carries the whole comment, to post by hand; commenting on a closed
+issue works.
+
 ### cpu-sig-tracker asks about a CVE only an MR description names
 
 `file-issue`, `status --refresh` and `jira` took every CVE a merge

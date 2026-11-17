@@ -375,7 +375,10 @@ pub fn post(
         match client.add_note(notice.iid, &note) {
             Ok(()) => println!("Commented on {}.", notice.issue_url),
             Err(e) => {
-                eprintln!("warning: could not comment on {} ({e})", notice.issue_url);
+                eprintln!(
+                    "{}",
+                    unposted(&notice.issue_url, done_note.is_some(), &e, &note)
+                );
                 continue;
             }
         }
@@ -627,6 +630,18 @@ fn with_paragraph(note: &str, paragraph: &str) -> String {
         Some(at) => format!("{}\n\n{paragraph}{}", &note[..at], &note[at..]),
         None => format!("{note}\n\n{paragraph}"),
     }
+}
+
+/// The warning for a comment that could not be posted, with the
+/// comment, so it can be posted by hand: commenting on a closed issue
+/// works. An issue `closed` just now has nothing else saying why.
+fn unposted(issue_url: &str, closed: bool, error: &impl std::fmt::Display, note: &str) -> String {
+    let why = if closed {
+        "; it was closed, and this comment says why, so post it by hand"
+    } else {
+        "; to post it by hand"
+    };
+    format!("warning: could not comment on {issue_url} ({error}){why}:\n\n{note}\n")
 }
 
 /// Close the issue of `notice` and set it to Done, warning about each
@@ -1450,6 +1465,24 @@ mod tests {
         close.assert();
         graphql.assert();
         assert_eq!(with_paragraph("no marker", "p"), "no marker\n\np");
+    }
+
+    #[test]
+    fn an_unposted_comment_is_printed_to_post_by_hand() {
+        let note = "Released.\n\n<!-- sandogasa:cbspkg -->";
+        let closed = unposted("h2", true, &"HTTP 502", note);
+        assert!(
+            closed.starts_with(
+                "warning: could not comment on h2 (HTTP 502); it was closed, \
+                 and this comment says why, so post it by hand:\n\n"
+            ),
+            "{closed}"
+        );
+        // The whole comment, marker included, so a hand-posted one is
+        // still recognized.
+        assert!(closed.ends_with(&format!("\n\n{note}\n")), "{closed}");
+        let open = unposted("h2", false, &"HTTP 502", note);
+        assert!(open.contains("(HTTP 502); to post it by hand:"), "{open}");
     }
 
     #[test]
