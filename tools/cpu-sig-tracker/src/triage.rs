@@ -11,6 +11,12 @@ use sandogasa_cve::severity::Rating;
 /// What a CVE line starts with.
 pub const CVE_LINE: &str = "- **CVE**:";
 
+/// What the line recording CVEs the update does not fix starts with:
+/// those named only in the merge request's description that the person
+/// filing or refreshing the issue declined, so they are not asked about
+/// again.
+pub const NOT_FIXED_LINE: &str = "- **Not fixed here**:";
+
 /// The scope of the priority labels: `priority::major`.
 pub const PRIORITY_SCOPE: &str = "priority::";
 
@@ -131,33 +137,61 @@ pub fn update_cves<'a>(
     FoundCves { certain, unsure }
 }
 
+/// What [`settle_cves`] decided.
+#[derive(Debug, Default, PartialEq)]
+pub struct Settled {
+    /// The CVEs the update fixes, sorted.
+    pub cves: Vec<String>,
+    /// The unsure CVEs asked about and not taken, sorted, for a
+    /// [`not_fixed_line`].
+    pub declined: Vec<String>,
+    /// The unsure CVEs left out without an answer, because there was no
+    /// terminal to ask at or the question could not be read: neither
+    /// fixed nor declined.
+    pub left_out: Vec<String>,
+}
+
+impl Settled {
+    /// Warn that [`Settled::left_out`] were left out, if any were.
+    pub fn warn_left_out(&self) {
+        if !self.left_out.is_empty() {
+            eprintln!(
+                "warning: left out {}: named only in the merge request's \
+                 description, and not asked about in this run",
+                self.left_out.join(", ")
+            );
+        }
+    }
+}
+
 /// The CVEs to record: the certain ones, and the unsure ones `ask`
-/// takes. `ask` gets the question, which lists them, and one entry per
-/// unsure CVE, and returns the positions of those it takes
-/// (`sandogasa_cli::confirm_each`, defaulting to none). Without
-/// `interactive`, the unsure ones are left out, with a warning naming
-/// them.
+/// takes. Unsure ones in `declined_before` (an earlier answer, from the
+/// issue's [`NOT_FIXED_LINE`]) are left out without asking. `ask` gets
+/// the question, which lists the rest, and one entry per CVE, and
+/// returns the positions of those it takes, or `None` when it could
+/// not ask ([`ask_at_terminal`]). Without `interactive`, or when `ask`
+/// could not ask, they are [`Settled::left_out`].
 pub fn settle_cves(
     found: FoundCves,
+    declined_before: &[String],
     interactive: bool,
-    ask: impl FnOnce(&str, &[String]) -> Vec<usize>,
-) -> Vec<String> {
-    let mut out = found.certain;
-    if found.unsure.is_empty() {
-        return out;
-    }
-    if !interactive {
-        let ids: Vec<&str> = found.unsure.iter().map(|(id, _)| id.as_str()).collect();
-        eprintln!(
-            "warning: left out {}: named only in the merge request's \
-             description; a run at a terminal, without --dry-run or --json, \
-             asks about each",
-            ids.join(", ")
-        );
-        return out;
-    }
-    let items: Vec<String> = found
+    ask: impl FnOnce(&str, &[String]) -> Option<Vec<usize>>,
+) -> Settled {
+    let cves = found.certain;
+    let unsure: Vec<(String, String)> = found
         .unsure
+        .into_iter()
+        .filter(|(id, _)| !declined_before.contains(id))
+        .collect();
+    let left_out = |cves, unsure: Vec<(String, String)>| Settled {
+        cves,
+        declined: Vec::new(),
+        left_out: unsure.into_iter().map(|(id, _)| id).collect(),
+    };
+    if unsure.is_empty() || !interactive {
+        return left_out(cves, unsure);
+    }
+    let items: Vec<String> = unsure
         .iter()
         .map(|(id, line)| format!("  {id}: {line}"))
         .collect();
@@ -166,13 +200,59 @@ pub fn settle_cves(
          Does the update fix them?",
         items.join("\n")
     );
-    for i in ask(&question, &items) {
-        if let Some((id, _)) = found.unsure.get(i) {
-            out.push(id.clone());
+    let Some(taken) = ask(&question, &items) else {
+        return left_out(cves, unsure);
+    };
+    let mut settled = Settled {
+        cves,
+        ..Default::default()
+    };
+    for (i, (id, _)) in unsure.into_iter().enumerate() {
+        if taken.contains(&i) {
+            settled.cves.push(id);
+        } else {
+            settled.declined.push(id);
         }
     }
-    sort_cves(&mut out);
-    out
+    sort_cves(&mut settled.cves);
+    settled
+}
+
+/// The `ask` for [`settle_cves`] at a terminal: all, none (the default)
+/// or each in turn, after `heading` when there is one. `None` when the
+/// answer could not be read.
+pub fn ask_at_terminal(
+    heading: Option<String>,
+) -> impl FnOnce(&str, &[String]) -> Option<Vec<usize>> {
+    move |question, items| {
+        let question = match heading {
+            Some(h) => format!("{h}:\n{question}"),
+            None => question.to_string(),
+        };
+        sandogasa_cli::confirm_each(&question, "Does it fix this one?", items, false).ok()
+    }
+}
+
+/// The line recording that the update does not fix `cves`.
+pub fn not_fixed_line(cves: &[String]) -> String {
+    format!("{NOT_FIXED_LINE} {}", cves.join(", "))
+}
+
+/// The CVEs a body's [`NOT_FIXED_LINE`] names.
+pub fn parse_not_fixed(body: &str) -> Vec<String> {
+    cves_in(
+        body.lines()
+            .filter(|l| l.trim_start().starts_with(NOT_FIXED_LINE)),
+    )
+}
+
+/// `body` without its [`NOT_FIXED_LINE`], for reading the CVEs the
+/// update fixes from the rest.
+pub fn without_not_fixed(body: &str) -> String {
+    body.lines()
+        .filter(|l| !l.trim_start().starts_with(NOT_FIXED_LINE))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The label for the most urgent of `priorities` (Jira's names):
@@ -359,29 +439,58 @@ mod tests {
             ],
         };
         let mut asked = None;
-        let kept = settle_cves(found(), true, |q, items| {
+        let settled = settle_cves(found(), &[], true, |q, items| {
             asked = Some((q.to_string(), items.to_vec()));
-            vec![0]
+            Some(vec![0])
         });
-        assert_eq!(kept, ["CVE-2026-1001", "CVE-2026-5005"]);
+        assert_eq!(settled.cves, ["CVE-2026-1001", "CVE-2026-5005"]);
+        assert_eq!(settled.declined, ["CVE-2026-9009"]);
+        assert!(settled.left_out.is_empty());
         let (q, items) = asked.unwrap();
         assert!(q.contains("  CVE-2026-1001: regressed by CVE-2026-1001\n"));
         assert!(q.ends_with("Does the update fix them?"));
         assert_eq!(items[1], "  CVE-2026-9009: see CVE-2026-9009");
-        // Without a terminal nothing is asked and the unsure ones are
-        // left out.
-        let kept = settle_cves(found(), false, |_, _| panic!("asked"));
-        assert_eq!(kept, ["CVE-2026-5005"]);
-        // Nothing unsure: nothing asked, even at a terminal.
-        let kept = settle_cves(
-            FoundCves {
-                certain: vec!["CVE-2026-5005".into()],
-                unsure: vec![],
-            },
-            true,
-            |_, _| panic!("asked"),
+        // One declined before is not asked about again.
+        let settled = settle_cves(found(), &["CVE-2026-9009".into()], true, |_, items| {
+            assert_eq!(items, ["  CVE-2026-1001: regressed by CVE-2026-1001"]);
+            Some(vec![])
+        });
+        assert_eq!(settled.cves, ["CVE-2026-5005"]);
+        assert_eq!(settled.declined, ["CVE-2026-1001"]);
+        // Every one declined before: nothing asked.
+        let before = ["CVE-2026-1001".to_string(), "CVE-2026-9009".to_string()];
+        let settled = settle_cves(found(), &before, true, |_, _| panic!("asked"));
+        assert_eq!(
+            settled,
+            Settled {
+                cves: vec!["CVE-2026-5005".into()],
+                ..Default::default()
+            }
         );
-        assert_eq!(kept, ["CVE-2026-5005"]);
+        // Without a terminal nothing is asked, and the unsure ones are
+        // left out, not declined.
+        let settled = settle_cves(found(), &[], false, |_, _| panic!("asked"));
+        assert_eq!(settled.cves, ["CVE-2026-5005"]);
+        assert!(settled.declined.is_empty());
+        assert_eq!(settled.left_out, ["CVE-2026-1001", "CVE-2026-9009"]);
+        // Nor is a question that could not be answered a "no".
+        let settled = settle_cves(found(), &[], true, |_, _| None);
+        assert!(settled.declined.is_empty());
+        assert_eq!(settled.left_out, ["CVE-2026-1001", "CVE-2026-9009"]);
+    }
+
+    #[test]
+    fn the_not_fixed_line_round_trips_and_hides_its_cves() {
+        let line = not_fixed_line(&["CVE-2025-9009".into(), "CVE-2026-1001".into()]);
+        assert_eq!(line, "- **Not fixed here**: CVE-2025-9009, CVE-2026-1001");
+        let body = format!("- **CVE**: CVE-2026-5005\n{line}\n- **Release**: c10s\n");
+        assert_eq!(parse_not_fixed(&body), ["CVE-2025-9009", "CVE-2026-1001"]);
+        assert_eq!(
+            cves_in([without_not_fixed(&body).as_str()]),
+            ["CVE-2026-5005"]
+        );
+        // Its CVEs are not CVE lines.
+        assert_eq!(parse_cve_lines(&body), ["CVE-2026-5005"]);
     }
 
     #[test]

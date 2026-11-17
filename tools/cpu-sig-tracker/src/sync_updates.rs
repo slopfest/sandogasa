@@ -132,6 +132,17 @@ pub fn cve_ids(text: &str) -> Vec<String> {
     out
 }
 
+/// The CVEs a tracking issue's title and body name, sorted, except
+/// those its not-fixed line names (`triage::NOT_FIXED_LINE`).
+fn issue_cves(title: &str, body: &str) -> Vec<String> {
+    let mut cves = cve_ids(&format!(
+        "{title}\n{}",
+        crate::triage::without_not_fixed(body)
+    ));
+    crate::triage::sort_cves(&mut cves);
+    cves
+}
+
 /// The `!N` a merge request URL ends in.
 pub fn mr_iid(url: &str) -> Option<u64> {
     url.trim_end_matches('/')
@@ -339,8 +350,7 @@ fn gather(verbose: bool) -> Result<Vec<Section>, Box<dyn std::error::Error>> {
             let mr_url = crate::status::parse_mr_line(body)
                 .map(|(u, _)| u)
                 .or_else(|| crate::status::scan_mr_url_in_body(body));
-            let mut cves = cve_ids(&format!("{}\n{body}", issue.title));
-            crate::triage::sort_cves(&mut cves);
+            let cves = issue_cves(&issue.title, body);
             // Public yet (#80): every CVE disclosed, and the upstream
             // merge request readable anonymously, as an embargoed fix is
             // never sent as a public merge request. A source that cannot
@@ -503,6 +513,15 @@ fn builds(release: &str, verbose: bool) -> BTreeMap<String, (String, Stage)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_issues_cves_leave_out_those_it_does_not_fix() {
+        let body = "- **CVE**: CVE-2026-5005\n- **Not fixed here**: CVE-2026-1001\n";
+        assert_eq!(
+            issue_cves("git: Fix CVE-2026-9009", body),
+            ["CVE-2026-5005", "CVE-2026-9009"]
+        );
+    }
 
     fn update(package: &str, stage: Stage) -> Update {
         Update {

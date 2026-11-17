@@ -136,7 +136,8 @@ severity (Red Hat's rating first, then NVD's and GitHub's), linking
 Red Hat's page for it, which lists the advisories that fix it, and
 NVD's. CVEs named only in the merge request's description are listed,
 each with the line naming it, and asked about at a terminal, defaulting
-to none; without a terminal they are left out with a warning. A change
+to none; those declined go on a `- **Not fixed here**:` line, and
+without a terminal they are left out with a warning. A change
 fixing a CVE is filed as `security` unless `--type` says otherwise; at
 a terminal, a `--type` that disagrees is confirmed, defaulting to
 `security`. Without a CVE, the type is asked at a
@@ -175,8 +176,11 @@ per branch, before the MR is opened: given a package name, `--branch`
 says which branch and `--cve` which CVEs (repeated or
 comma-separated: a rebase often fixes several). For an MR already open
 without one, its URL can be given instead, and the package, branch,
-title and the CVEs it fixes (from its title and description) are
-read from it.
+title and the CVEs it fixes are read from it: those its title names,
+and those only its description names that you take when asked at a
+terminal. Under `--yes` or `--json`, or without a terminal, a CVE only
+the description names is an error, and `--cve` says which CVEs the
+update fixes.
 
 It first searches RHEL for open issues on that package on any
 release, once per CVE, as Product Security files one tracker per CVE
@@ -529,7 +533,8 @@ replaced. It also fills in what `file-issue` records about urgency when
 the issue was filed without it: `- **CVE**:` lines for the CVEs its
 merge request or RHEL issues name, found as `file-issue` finds them (a
 CVE only the merge request's description names is asked about at a
-terminal, and left out with a warning under `--json` or without one),
+terminal, unless the `- **Not fixed here**:` line names it, and left
+out with a warning under `--json` or without one),
 the `security` label when it has no type label, and the `priority::`
 label for its RHEL issues' priority, replacing one that no longer
 matches.

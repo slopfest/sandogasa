@@ -233,7 +233,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     // How urgent it is (#98): the CVEs the change fixes, rated, and the
     // priority Red Hat gave its RHEL issues.
     let interactive = !args.dry_run && std::io::stdin().is_terminal();
-    let cves = crate::triage::settle_cves(
+    let settled = crate::triage::settle_cves(
         crate::triage::update_cves(
             std::iter::once(mr.title.as_str()).chain(
                 seen.iter()
@@ -243,12 +243,12 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
             seen.iter()
                 .filter_map(|(_, s)| s.as_ref()?.description.as_deref()),
         ),
+        &[],
         interactive,
-        |q, items| {
-            sandogasa_cli::confirm_each(q, "Does it fix this one?", items, false)
-                .unwrap_or_default()
-        },
+        crate::triage::ask_at_terminal(None),
     );
+    settled.warn_left_out();
+    let cves = settled.cves;
     let cve_lines = crate::triage::rated_cve_lines(&cves, args.verbose);
     let priority = crate::triage::priority_label(
         seen.iter()
@@ -302,6 +302,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         mr_state: Some(&mr.state),
         jira: &jira,
         cve_lines: &cve_lines,
+        not_fixed: &settled.declined,
         affected: affected.as_deref(),
         expected_fix: expected_fix.as_deref(),
         note: args.note.as_deref(),
@@ -450,6 +451,9 @@ struct BodyFields<'a> {
     jira: &'a [(String, Option<String>, Option<String>)],
     /// One line per CVE the change fixes (`triage::cve_line`).
     cve_lines: &'a [String],
+    /// CVEs named only in the merge request's description that the
+    /// filer said the change does not fix (`triage::not_fixed_line`).
+    not_fixed: &'a [String],
     affected: Option<&'a str>,
     expected_fix: Option<&'a str>,
     note: Option<&'a str>,
@@ -716,7 +720,11 @@ fn format_body(f: &BodyFields<'_>) -> String {
         .collect();
     let jira_line = format_jira_lines(&issues);
 
-    let cves: String = f.cve_lines.iter().map(|l| format!("{l}\n")).collect();
+    let mut cves: String = f.cve_lines.iter().map(|l| format!("{l}\n")).collect();
+    if !f.not_fixed.is_empty() {
+        cves.push_str(&crate::triage::not_fixed_line(f.not_fixed));
+        cves.push('\n');
+    }
     let metadata = format!(
         "{mr_line}\n\
          {jira_line}\n\
@@ -845,6 +853,7 @@ mod tests {
                 None,
             )],
             cve_lines: &[],
+            not_fixed: &[],
             affected: Some("xz-5.4-1.el10"),
             expected_fix: Some("xz-5.6-1.el10"),
             note: None,
@@ -881,6 +890,7 @@ mod tests {
             mr_state: None,
             jira: &[],
             cve_lines: &[],
+            not_fixed: &[],
             affected: None,
             expected_fix: None,
             note: None,
@@ -906,6 +916,7 @@ mod tests {
                 Some("Done".to_string()),
             )],
             cve_lines: &[],
+            not_fixed: &[],
             affected: None,
             expected_fix: None,
             note: None,
@@ -986,6 +997,7 @@ mod tests {
             mr_title: "t",
             jira: &[("RHEL-1".to_string(), None, None)],
             cve_lines: &[],
+            not_fixed: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -1006,6 +1018,7 @@ mod tests {
             mr_title: "t",
             jira: &[],
             cve_lines: &[],
+            not_fixed: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -1022,6 +1035,7 @@ mod tests {
             mr_title: "t",
             jira: &[],
             cve_lines: &[],
+            not_fixed: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -1038,6 +1052,7 @@ mod tests {
             mr_title: "t",
             jira: &[],
             cve_lines: &[],
+            not_fixed: &[],
             mr_state: None,
             affected: None,
             expected_fix: None,
@@ -1386,12 +1401,32 @@ mod tests {
             mr_state: Some("opened"),
             jira: &[("RHEL-1".to_string(), Some("New".to_string()), None)],
             cve_lines: std::slice::from_ref(&line),
+            not_fixed: &[],
             affected: None,
             expected_fix: None,
             note: None,
         });
         assert!(
             body.contains(&format!("— New\n{line}\n- **Release**: c10s\n")),
+            "{body}"
+        );
+        // CVEs the filer declined follow the CVE lines.
+        let body = format_body(&BodyFields {
+            release: "c10s",
+            mr_url: "https://example/mr",
+            mr_title: "t",
+            mr_state: Some("opened"),
+            jira: &[("RHEL-1".to_string(), Some("New".to_string()), None)],
+            cve_lines: std::slice::from_ref(&line),
+            not_fixed: &["CVE-2026-1001".to_string()],
+            affected: None,
+            expected_fix: None,
+            note: None,
+        });
+        assert!(
+            body.contains(&format!(
+                "{line}\n- **Not fixed here**: CVE-2026-1001\n- **Release**: c10s\n"
+            )),
             "{body}"
         );
     }

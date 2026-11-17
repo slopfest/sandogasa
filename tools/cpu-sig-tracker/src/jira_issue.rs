@@ -298,17 +298,6 @@ fn cve_id(value: &str) -> Result<String, String> {
     }
 }
 
-/// Every CVE id in `texts`, upper-cased, each once, in order.
-pub fn extract_cves(texts: &[&str]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for id in texts.iter().flat_map(|t| crate::sync_updates::cve_ids(t)) {
-        if !out.contains(&id) {
-            out.push(id);
-        }
-    }
-    out
-}
-
 /// One CVE's part of an issue's description.
 pub struct CveBlock<'a> {
     pub cve: &'a str,
@@ -455,7 +444,38 @@ struct Lookup {
     elsewhere: Vec<Issue>,
 }
 
-fn resolve_target(args: &JiraArgs) -> Result<Target, Box<dyn std::error::Error>> {
+/// The CVEs a merge request fixes: those its title names, and those
+/// only its description names that `ask` takes, as file-issue asks
+/// (`ask_at_terminal`). Without `interactive`, or when the question
+/// could not be answered, such a CVE is an error rather than left out:
+/// leaving it out would search, and file, as if the update fixed no CVE,
+/// and a filed issue cannot be edited.
+fn mr_cves(
+    title: &str,
+    description: &str,
+    interactive: bool,
+    ask: impl FnOnce(&str, &[String]) -> Option<Vec<usize>>,
+) -> Result<Vec<String>, String> {
+    let settled = crate::triage::settle_cves(
+        crate::triage::update_cves([title], description, []),
+        &[],
+        interactive,
+        ask,
+    );
+    if settled.left_out.is_empty() {
+        return Ok(settled.cves);
+    }
+    Err(format!(
+        "the merge request's description names {}, and its title does not; \
+         say which CVEs the update fixes with --cve, or run at a terminal \
+         without --yes or --json to be asked",
+        settled.left_out.join(", ")
+    ))
+}
+
+/// What to work on: from a package name and the flags, or from a merge
+/// request. `ask` says whether there is a terminal to ask at.
+fn resolve_target(args: &JiraArgs, ask: bool) -> Result<Target, Box<dyn std::error::Error>> {
     let given: Vec<&str> = args.cve.iter().map(String::as_str).collect();
     if !args.target.contains("://") {
         let branch = args
@@ -465,7 +485,7 @@ fn resolve_target(args: &JiraArgs) -> Result<Target, Box<dyn std::error::Error>>
         return Ok(Target {
             package: args.target.clone(),
             branch,
-            cves: extract_cves(&given),
+            cves: crate::triage::cves_in(given.iter().copied()),
             mr_url: None,
             mr_title: None,
         });
@@ -479,9 +499,14 @@ fn resolve_target(args: &JiraArgs) -> Result<Target, Box<dyn std::error::Error>>
     }
     let mr = crate::gitlab::reader(&crate::utils::gitlab_base(), &project)?.merge_request(iid)?;
     let cves = if given.is_empty() {
-        extract_cves(&[&mr.title, mr.description.as_deref().unwrap_or("")])
+        mr_cves(
+            &mr.title,
+            mr.description.as_deref().unwrap_or(""),
+            ask,
+            crate::triage::ask_at_terminal(None),
+        )?
     } else {
-        extract_cves(&given)
+        crate::triage::cves_in(given.iter().copied())
     };
     Ok(Target {
         package,
@@ -535,8 +560,8 @@ fn settle_priority(
 }
 
 fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let target = resolve_target(args)?;
     let ask = !args.yes && !args.json && std::io::stdin().is_terminal();
+    let target = resolve_target(args, ask)?;
     let runtime = crate::jira::runtime()?;
     let client = runtime.block_on(crate::jira::client())?;
 
@@ -1425,19 +1450,37 @@ mod tests {
     }
 
     #[test]
-    fn cves_are_read_out_of_an_mr_each_once() {
+    fn an_mrs_cves_are_its_titles_and_those_of_its_description_taken() {
+        let title = "Rebase for cve-2026-114583";
+        let description = "Fixes CVE-2026-114583.\nA regression of the fix for CVE-2025-27363.";
+        // Nothing to ask about: the title's.
         assert_eq!(
-            extract_cves(&["OOB write fixes for CVE-2025-27363"]),
-            ["CVE-2025-27363"]
+            mr_cves(title, "Fixes CVE-2026-114583.", false, |_, _| panic!(
+                "asked"
+            )),
+            Ok(vec!["CVE-2026-114583".to_string()])
+        );
+        // Taken, or declined.
+        assert_eq!(
+            mr_cves(title, description, true, |_, _| Some(vec![0])),
+            Ok(vec![
+                "CVE-2025-27363".to_string(),
+                "CVE-2026-114583".to_string()
+            ])
         );
         assert_eq!(
-            extract_cves(&[
-                "Rebase for cve-2026-114583 and CVE-2026-119741",
-                "Fixes CVE-2026-119741.",
-            ]),
-            ["CVE-2026-114583", "CVE-2026-119741"]
+            mr_cves(title, description, true, |_, _| Some(vec![])),
+            Ok(vec!["CVE-2026-114583".to_string()])
         );
-        assert!(extract_cves(&["CVE-26-1 and none", "no id here"]).is_empty());
+        // Without an answer it refuses, naming the CVE and --cve.
+        for err in [
+            mr_cves(title, description, false, |_, _| panic!("asked")),
+            mr_cves(title, description, true, |_, _| None),
+        ] {
+            let err = err.unwrap_err();
+            assert!(err.contains("names CVE-2025-27363"), "{err}");
+            assert!(err.contains("--cve"), "{err}");
+        }
     }
 
     #[test]

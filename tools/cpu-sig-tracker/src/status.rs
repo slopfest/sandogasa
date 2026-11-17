@@ -400,8 +400,11 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         .iter()
                         .filter_map(|(_, i)| i.as_ref().map(|i| i.summary.as_str()))
                         .collect();
+                    // The body's CVEs count, except those its
+                    // not-fixed line names.
+                    let fixed_part = crate::triage::without_not_fixed(body);
                     let found = crate::triage::update_cves(
-                        [mr_title.as_deref().unwrap_or(""), body]
+                        [mr_title.as_deref().unwrap_or(""), fixed_part.as_str()]
                             .into_iter()
                             .chain(summaries.iter().copied()),
                         parsed.mr_description.as_deref().unwrap_or(""),
@@ -410,21 +413,27 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                             .filter_map(|(_, i)| i.as_ref()?.description.as_deref()),
                     );
                     // A body with CVE lines already says which CVEs the
-                    // update fixes, so only one without them asks.
+                    // update fixes, so only one without them asks, and
+                    // never again about a CVE declined before.
                     let no_cve_lines = crate::triage::parse_cve_lines(body).is_empty();
-                    let cves = if no_cve_lines {
-                        crate::triage::settle_cves(found, interactive, |q, items| {
-                            sandogasa_cli::confirm_each(
-                                &format!("{package} on {release}, {}:\n{q}", issue.web_url),
-                                "Does it fix this one?",
-                                items,
-                                false,
-                            )
-                            .unwrap_or_default()
-                        })
+                    let settled = if no_cve_lines {
+                        crate::triage::settle_cves(
+                            found,
+                            &crate::triage::parse_not_fixed(body),
+                            interactive,
+                            crate::triage::ask_at_terminal(Some(format!(
+                                "{package} on {release}, {}",
+                                issue.web_url
+                            ))),
+                        )
                     } else {
-                        found.certain
+                        crate::triage::Settled {
+                            cves: found.certain,
+                            ..Default::default()
+                        }
                     };
+                    settled.warn_left_out();
+                    let cves = settled.cves;
                     let new_cve_lines = (no_cve_lines && !cves.is_empty())
                         .then(|| crate::triage::rated_cve_lines(&cves, args.verbose));
                     // The builds, for a body that names them unknown (#101):
@@ -462,6 +471,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         mr_state: mr_state.as_deref(),
                         jira: &jira,
                         new_cve_lines: new_cve_lines.as_deref(),
+                        new_not_fixed: &settled.declined,
                         builds: (affected_build.as_deref(), expected_build.as_deref()),
                     });
                     if changed {
@@ -992,6 +1002,8 @@ struct RefreshCtx<'a> {
     jira: &'a [JiraState],
     /// CVE lines to add, for a body that has none.
     new_cve_lines: Option<&'a [String]>,
+    /// CVEs just declined, for the not-fixed line.
+    new_not_fixed: &'a [String],
     /// The affected and expected builds, for lines that say unknown.
     builds: (Option<&'a str>, Option<&'a str>),
 }
@@ -1068,6 +1080,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
         mr_state: ctx.mr_state,
         jira: ctx.jira,
         new_cve_lines: ctx.new_cve_lines,
+        new_not_fixed: ctx.new_not_fixed,
         builds: ctx.builds,
     });
     // GitLab strips trailing whitespace/newlines from stored
@@ -1110,6 +1123,8 @@ struct RefreshedBodyArgs<'a> {
     mr_state: Option<&'a str>,
     jira: &'a [JiraState],
     new_cve_lines: Option<&'a [String]>,
+    /// CVEs just declined, added to the body's not-fixed line.
+    new_not_fixed: &'a [String],
     /// What fills unknown build lines (#101).
     builds: (Option<&'a str>, Option<&'a str>),
 }
@@ -1157,6 +1172,22 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
             lines.iter().map(|l| format!("{l}\n")).collect()
         }
     };
+    // CVEs declined before and now, so they are not asked about again.
+    let mut not_fixed = crate::triage::parse_not_fixed(a.original_body);
+    for id in a.new_not_fixed {
+        if !not_fixed.contains(id) {
+            not_fixed.push(id.clone());
+        }
+    }
+    // A CVE that has since gained a CVE line is fixed after all.
+    let fixed = crate::triage::parse_cve_lines(&cves);
+    not_fixed.retain(|id| !fixed.contains(id));
+    crate::triage::sort_cves(&mut not_fixed);
+    let cves = if not_fixed.is_empty() {
+        cves
+    } else {
+        format!("{cves}{}\n", crate::triage::not_fixed_line(&not_fixed))
+    };
     let metadata = format!(
         "{mr_line}\n\
          {jira_line}\n\
@@ -1199,6 +1230,7 @@ fn is_metadata_line(line: &str) -> bool {
         "- **Expected fix**:",
         "- **Stock fix**:",
         "- **CVE**:",
+        "- **Not fixed here**:",
         "- **Status**:",
         "* Stream MR:",
         "* Affected",
@@ -2035,6 +2067,7 @@ mod tests {
                 verdict: None,
             }],
             new_cve_lines: None,
+            new_not_fixed: &[],
             builds: (None, None),
         });
         assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
@@ -2091,6 +2124,7 @@ mod tests {
             mr_state: Some("opened"),
             jira: &jira,
             new_cve_lines: None,
+            new_not_fixed: &[],
             builds: (None, None),
         });
         assert!(out.contains("[RHEL-303720]("), "{out}");
@@ -2217,6 +2251,7 @@ mod tests {
             mr_state: None,
             jira: &[],
             new_cve_lines: None,
+            new_not_fixed: &[],
             builds: (None, None),
         });
         assert!(out.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
@@ -2715,6 +2750,7 @@ name = "PackageKit"
             mr_state: Some("opened"),
             jira: &jira,
             new_cve_lines: new,
+            new_not_fixed: &[],
             builds: (None, None),
         };
         let lines: &'static [String] = Box::leak(vec![line.clone()].into_boxed_slice());
@@ -2727,6 +2763,57 @@ name = "PackageKit"
         // Refreshed again, the line is the body's own and stays put.
         let again = refreshed_body(args(Box::leak(out.clone().into_boxed_str()), None));
         assert_eq!(again, out);
+    }
+
+    #[test]
+    fn a_declined_cve_is_recorded_and_kept() {
+        let jira = vec![JiraState {
+            key: "RHEL-303721".into(),
+            status: Some("New".into()),
+            resolution: None,
+            resolved: false,
+            verdict: None,
+        }];
+        let args = |body: &'static str, declined: &'static [String]| RefreshedBodyArgs {
+            original_body: body,
+            release: "c10s",
+            mr_url: "https://example/-/merge_requests/90",
+            mr_title: "t",
+            mr_state: Some("opened"),
+            jira: &jira,
+            new_cve_lines: None,
+            new_not_fixed: declined,
+            builds: (None, None),
+        };
+        let original = "- **MR**: [t](https://example/-/merge_requests/90) — opened\n\
+                        - **JIRA**: [RHEL-303721](https://x/browse/RHEL-303721) — New\n\
+                        - **Release**: c10s\n";
+        let declined: &'static [String] =
+            Box::leak(vec!["CVE-2026-9009".to_string()].into_boxed_slice());
+        let out = refreshed_body(args(original, declined));
+        assert!(
+            out.contains("— New\n- **Not fixed here**: CVE-2026-9009\n- **Release**: c10s\n"),
+            "{out}"
+        );
+        // Kept on the next rewrite, and merged with a later answer.
+        let out: &'static str = Box::leak(out.into_boxed_str());
+        assert_eq!(refreshed_body(args(out, &[])), out);
+        let more: &'static [String] =
+            Box::leak(vec!["CVE-2026-1001".to_string()].into_boxed_slice());
+        assert!(
+            refreshed_body(args(out, more))
+                .contains("- **Not fixed here**: CVE-2026-1001, CVE-2026-9009\n"),
+        );
+        // Not lead prose either.
+        assert_eq!(extract_lead_paragraph(out), None);
+        // A declined CVE that gains a CVE line leaves the line.
+        let line = crate::triage::cve_line("CVE-2026-9009", &[]);
+        let lines: &'static [String] = Box::leak(vec![line.clone()].into_boxed_slice());
+        let mut a = args(out, &[]);
+        a.new_cve_lines = Some(lines);
+        let fixed = refreshed_body(a);
+        assert!(fixed.contains(&line), "{fixed}");
+        assert!(!fixed.contains("Not fixed here"), "{fixed}");
     }
 
     #[test]
@@ -2788,6 +2875,7 @@ name = "PackageKit"
             mr_state: Some("opened"),
             jira: &jira,
             new_cve_lines: None,
+            new_not_fixed: &[],
             builds: (Some("rsync-3.5.0-1.el10"), Some("rsync-3.5.0-2.el10")),
         });
         assert!(
