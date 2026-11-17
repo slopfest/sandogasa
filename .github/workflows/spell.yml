@@ -1,0 +1,23 @@
+# Spelling gets its own gate, like Markdown: it covers code and
+# documentation alike, so it runs on every change, and it needs no
+# workspace build. `make spell` runs the same check locally.
+name: Spelling
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  spell:
+    name: typos (en-US)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: typos-cli@1.52.2
+      - run: make spell

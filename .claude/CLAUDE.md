@@ -48,6 +48,7 @@
 
 ## Code Style
 - Always run `cargo fmt` before committing
+- **Project text uses en-US spelling**: documentation, comments, messages, test names, commit messages, CHANGELOG entries and issue text (behavior, color, license, organization, summarize). `make spell` (part of `make check`, and its own CI workflow) runs typos-cli with the en-US locale, which reports en-GB spellings as well as typos. Words that must keep another spelling, such as file names matched literally, a public identifier that waits for a breaking release, or a JSON field name, are listed in `_typos.toml` with the reason. Released CHANGELOG entries are left as they are; the script checks the `Unreleased` section
 - Commits must not introduce `cargo clippy --workspace` warnings or errors. Fix any clippy issues in code you touch. `make clippy` passes `-D warnings`, so a warning fails the gate rather than scrolling past: before that (2026-10-01) a complex-type warning rode along in a commit and was only noticed days later
 - Every source file must start with `// SPDX-License-Identifier: Apache-2.0 OR MIT`
 - CLI help text (`-h` and `--help`) must not exceed 80 characters per line

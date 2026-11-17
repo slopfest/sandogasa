@@ -84,6 +84,10 @@ msrv-check: ## Build with the declared MSRV toolchain (rustup toolchain install 
 check-non-exhaustive: ## Fail on a library response model that is not #[non_exhaustive]
 	./scripts/check-non-exhaustive.sh
 
+.PHONY: spell
+spell: ## Check spelling, en-US (needs typos-cli; see _typos.toml)
+	./scripts/check-spelling.sh
+
 .PHONY: check-deprecated
 check-deprecated: ## Fail on deprecated API use, with all features on
 	./scripts/check-deprecated.sh
@@ -122,6 +126,7 @@ check: ## Everything a pull request should pass
 	$(MAKE) clippy
 	$(MAKE) test
 	$(MAKE) check-non-exhaustive
+	$(MAKE) spell
 	$(MAKE) packaging-test
 
 .PHONY: release-checks
