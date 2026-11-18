@@ -625,6 +625,40 @@ pub fn attach(markdown: &str, notes: &[Stored]) -> (String, Vec<usize>) {
     (out, unplaced)
 }
 
+/// Whether `note` is under an embargo not lifted yet: an `embargo:`
+/// header (any case) whose value does not start with the word
+/// `lifted`.
+pub fn embargoed(note: &Note) -> bool {
+    note.headers.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("embargo")
+            && !v
+                .split_whitespace()
+                .next()
+                .is_some_and(|w| w.eq_ignore_ascii_case("lifted"))
+    })
+}
+
+/// The notes a report to share may carry, and how many it leaves out:
+/// only those that go under an item `listed` (the report as it will
+/// be read) shows, so a note is never more private than the line it
+/// sits under, and never an embargoed one.
+pub fn shareable(notes: Vec<Stored>, listed: &str) -> (Vec<Stored>, usize) {
+    let (_, unlisted) = attach(listed, &notes);
+    let mut keep = vec![true; notes.len()];
+    for i in unlisted {
+        keep[i] = false;
+    }
+    let total = notes.len();
+    let kept: Vec<Stored> = notes
+        .into_iter()
+        .zip(keep)
+        .filter(|(s, keep)| *keep && !embargoed(&s.note))
+        .map(|(s, _)| s)
+        .collect();
+    let left_out = total - kept.len();
+    (kept, left_out)
+}
+
 /// The report's closing section for `notes` no item showed: those
 /// about something else, by URL, then those with none.
 pub fn format_section(notes: &[&Stored]) -> String {
@@ -1031,6 +1065,52 @@ mod tests {
             "- [p](https://e.org/p)\n  - [c](https://e.org/c)\n    > child\n  > parent\n\
              - [q](https://e.org/q)\n  > last\n"
         );
+    }
+
+    #[test]
+    fn a_shared_report_carries_only_notes_on_listed_items() {
+        let listed = "### GitHub\n\n#### Opened\n\n\
+            - [packit/packit#2794](https://github.com/packit/packit/pull/2794) x\n\n\
+            #### Commits by repo\n\n- `slopfest/sandogasa`: 33\n";
+        let mut notes = real_notes();
+        let mut embargoed_pr = notes[0].clone();
+        embargoed_pr.note.headers = vec![("embargo".into(), "until disclosed".into())];
+        let mut lifted = notes[0].clone();
+        lifted.note.headers = vec![("embargo".into(), "lifted 2026-11-20".into())];
+        lifted.note.text = "lifted".into();
+        notes.push(embargoed_pr);
+        notes.push(lifted);
+        let texts = |v: &[Stored]| v.iter().map(|s| s.note.text.clone()).collect::<Vec<_>>();
+
+        // The forge ticket, a commit to an unlisted repository, the
+        // URL-less note and the embargoed one stay out.
+        let (shared, left_out) = shareable(notes, listed);
+        assert_eq!(
+            texts(&shared),
+            [
+                "Found while checking links\nfor the primer.",
+                "Added so a CBS build is checked.",
+                "lifted"
+            ]
+        );
+        assert_eq!(left_out, 4);
+    }
+
+    #[test]
+    fn an_embargo_is_read_in_any_case() {
+        let with = |k: &str, v: &str| {
+            let mut n = note(None, "2026-11-18", "x");
+            n.headers = vec![(k.into(), v.into())];
+            n
+        };
+        assert!(embargoed(&with("Embargo", "until disclosed")));
+        assert!(embargoed(&with("EMBARGO", "until 2026-12-01")));
+        assert!(embargoed(&with("embargo", "liftedness unknown")));
+        assert!(embargoed(&with("embargo", "")));
+        assert!(!embargoed(&with("embargo", "Lifted 2026-12-01")));
+        assert!(!embargoed(&with("embargo", "lifted")));
+        assert!(!embargoed(&with("other", "until disclosed")));
+        assert!(!embargoed(&note(None, "2026-11-18", "x")));
     }
 
     #[test]

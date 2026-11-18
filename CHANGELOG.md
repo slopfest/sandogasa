@@ -17,7 +17,10 @@ under the item it is about (for a commit, its repository's line in
 that forge's commit counts), and the rest in a closing "Notes" section;
 URLs for the same item match across schemes, trailing slashes,
 fragments, tracking parameters, Bugzilla short links, GitHub API URLs
-and the case of GitHub and GitLab paths (Refs #167).
+and the case of GitHub and GitLab paths. A report is made to be shared
+unless `--private` is given: it then carries a note only under an item
+it shows, never one about something it leaves out, a note without a
+URL, or an embargoed one, and says how many it left out (Refs #167).
 
 ### cbspkg promote checks what a build drops before it reaches -testing
 

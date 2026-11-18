@@ -186,6 +186,13 @@ struct ReportArgs {
     #[arg(short, long, value_name = "PATH", help_heading = "Output")]
     output: Option<String>,
 
+    /// Make a report for your own use: with --notes, also the notes on
+    /// items the report does not show, those without a URL, and
+    /// embargoed ones. Without it, a note shows only under an item
+    /// the report shows (with --json, any item it carries).
+    #[arg(long, help_heading = "Output")]
+    private: bool,
+
     /// Print progress to stderr.
     #[arg(short, long, help_heading = "Output")]
     verbose: bool,
@@ -304,6 +311,27 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
         print!("{}", notes::format_list(&selected));
     }
     Ok(())
+}
+
+/// The notes a report carries: all of them with --private, otherwise
+/// only those under an item the report as read (`listed`) shows, with
+/// a count of the rest on standard error.
+fn shared_notes(
+    cli: &ReportArgs,
+    found: Vec<notes::Stored>,
+    listed: impl FnOnce() -> String,
+) -> Vec<notes::Stored> {
+    if cli.private || found.is_empty() {
+        return found;
+    }
+    let (kept, left_out) = notes::shareable(found, &listed());
+    if left_out > 0 {
+        eprintln!(
+            "Left out {left_out} note(s) on items this report does not show, \
+             without a URL, or embargoed; --private includes them."
+        );
+    }
+    kept
 }
 
 fn run_report(cli: &ReportArgs) -> ExitCode {
@@ -694,6 +722,11 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         });
         // Only when asked for, so the shape stays as it was otherwise.
         if cli.notes {
+            // The JSON carries every item, as the report does at full
+            // detail.
+            let period_notes = shared_notes(cli, period_notes, || {
+                report::format_markdown(&unified, 2, &cfg.groups)
+            });
             let notes: Vec<notes::ReportNote> = period_notes
                 .iter()
                 .map(|stored| notes::ReportNote {
@@ -712,6 +745,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         // Last, so each note sits under its item and the rest close
         // the report.
         if cli.notes {
+            let period_notes = shared_notes(cli, period_notes, || md.clone());
             let (attached, rest) = notes::attach(&md, &period_notes);
             let rest: Vec<&notes::Stored> = rest.iter().map(|&i| &period_notes[i]).collect();
             md = attached;
@@ -769,6 +803,7 @@ mod tests {
             json: false,
             notes: false,
             output: None,
+            private: false,
             verbose: false,
         };
         assert!(resolve_date_range(&cli).is_err());
@@ -795,6 +830,7 @@ mod tests {
             json: false,
             notes: false,
             output: None,
+            private: false,
             verbose: false,
         };
         let (s, e) = resolve_date_range(&cli).unwrap();
