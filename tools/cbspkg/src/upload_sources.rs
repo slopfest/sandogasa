@@ -81,7 +81,7 @@ pub fn run(args: &UploadSourcesArgs) -> ExitCode {
 }
 
 /// Run `git` in `repo` to read something, its output trimmed.
-fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .args(args)
         .current_dir(repo)
@@ -170,24 +170,14 @@ pub fn switch_for_sources(
     }))
 }
 
-/// Upload whichever of the files the `sources` file at `commit` names
-/// the SIG lookaside lacks, fetching any the checkout lacks with
-/// `centpkg sources` first (on the branch, switching to it and back when
-/// it is not checked out), after confirming at a terminal. `Ok(false)`
-/// when the person declined.
-pub fn upload_missing(
+/// Which of `sources` the SIG lookaside lacks, asking it for each
+/// file. Every file has to be listed with a sha512 sum: the SIG
+/// lookaside takes no other.
+pub fn lookaside_lacks(
     ui: &Ui,
-    repo: &Path,
-    checkout: &Checkout,
-    remote: &str,
-    commit: &str,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let package = &checkout.package;
-    let Ok(text) = git(repo, &["show", &format!("{commit}:sources")]) else {
-        // No sources file: nothing to fetch.
-        return Ok(true);
-    };
-    let sources = parse_sources(&text);
+    package: &str,
+    sources: &[Source],
+) -> Result<Vec<Source>, Box<dyn std::error::Error>> {
     if let Some(other) = sources.iter().find(|s| s.hash != "sha512") {
         return Err(format!(
             "{} is listed with {}; the SIG lookaside takes sha512 sums",
@@ -205,14 +195,83 @@ pub fn upload_missing(
     ui.step(&format!(
         "Check which of {package}'s sources the SIG lookaside has"
     ));
-    let mut missing: Vec<&Source> = Vec::new();
-    for source in &sources {
+    let mut missing = Vec::new();
+    for source in sources {
         let at = url(&base, package, source);
         ui.show_command(&["curl", "--head", "--fail", &at].map(String::from));
         if !in_lookaside(&http, &at)? {
-            missing.push(source);
+            missing.push(source.clone());
         }
     }
+    Ok(missing)
+}
+
+/// Upload `missing`, files in `repo` with the sums they are listed
+/// with, to the SIG lookaside, after confirming at a terminal.
+/// `Ok(false)` when the person declined.
+pub fn upload(
+    ui: &Ui,
+    repo: &Path,
+    package: &str,
+    missing: &[Source],
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if !ui.dry_run {
+        sandogasa_cbs::login::ensure_login("cbspkg", true, ui.explain)?;
+        if !std::io::stdin().is_terminal() {
+            return Err(
+                "uploading to the SIG lookaside is confirmed at a terminal; run it in one".into(),
+            );
+        }
+        println!("The SIG lookaside lacks:");
+        for source in missing {
+            println!(
+                "  {}",
+                sandogasa_cli::explain::command_line(&upload_argv(&source.name, package))
+            );
+        }
+        if !sandogasa_cli::confirm("Upload them?", true)? {
+            println!("Nothing uploaded.");
+            return Ok(false);
+        }
+    }
+    // Its -h exits 1, so only that it is on PATH is checked.
+    sandogasa_cli::require_tools(&[(
+        "centos-lookaside-upload-sig",
+        "sudo dnf install centos-packager",
+        None,
+    )])?;
+    for source in missing {
+        ui.step(&format!("Upload {} to the SIG lookaside", source.name));
+        let code = ui.run_status(&upload_argv(&source.name, package), repo)?;
+        if !upload_succeeded(code) {
+            return Err(format!(
+                "centos-lookaside-upload-sig failed for {} (exit {code})",
+                source.name
+            )
+            .into());
+        }
+    }
+    Ok(true)
+}
+
+/// Upload whichever of the files the `sources` file at `commit` names
+/// the SIG lookaside lacks, fetching any the checkout lacks with
+/// `centpkg sources` first (on the branch, switching to it and back when
+/// it is not checked out), after confirming at a terminal. `Ok(false)`
+/// when the person declined.
+pub fn upload_missing(
+    ui: &Ui,
+    repo: &Path,
+    checkout: &Checkout,
+    remote: &str,
+    commit: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let package = &checkout.package;
+    let Ok(text) = git(repo, &["show", &format!("{commit}:sources")]) else {
+        // No sources file: nothing to fetch.
+        return Ok(true);
+    };
+    let missing = lookaside_lacks(ui, package, &parse_sources(&text))?;
     if missing.is_empty() {
         println!("{package}'s sources are in the SIG lookaside already.");
         return Ok(true);
@@ -268,44 +327,7 @@ pub fn upload_missing(
             .into());
         }
     }
-
-    if !ui.dry_run {
-        sandogasa_cbs::login::ensure_login("cbspkg", true, ui.explain)?;
-        if !std::io::stdin().is_terminal() {
-            return Err(
-                "uploading to the SIG lookaside is confirmed at a terminal; run it in one".into(),
-            );
-        }
-        println!("The SIG lookaside lacks:");
-        for source in &missing {
-            println!(
-                "  {}",
-                sandogasa_cli::explain::command_line(&upload_argv(&source.name, package))
-            );
-        }
-        if !sandogasa_cli::confirm("Upload them?", true)? {
-            println!("Nothing uploaded.");
-            return Ok(false);
-        }
-    }
-    // Its -h exits 1, so only that it is on PATH is checked.
-    sandogasa_cli::require_tools(&[(
-        "centos-lookaside-upload-sig",
-        "sudo dnf install centos-packager",
-        None,
-    )])?;
-    for source in missing {
-        ui.step(&format!("Upload {} to the SIG lookaside", source.name));
-        let code = ui.run_status(&upload_argv(&source.name, package), repo)?;
-        if !upload_succeeded(code) {
-            return Err(format!(
-                "centos-lookaside-upload-sig failed for {} (exit {code})",
-                source.name
-            )
-            .into());
-        }
-    }
-    Ok(true)
+    upload(ui, repo, package, &missing)
 }
 
 fn run_inner(args: &UploadSourcesArgs) -> Result<(), Box<dyn std::error::Error>> {

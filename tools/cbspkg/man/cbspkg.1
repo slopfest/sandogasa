@@ -134,6 +134,28 @@ Show each step and its command without running anything
 .TP
 \fB\-\-explain\fR
 Narrate each step and show its command, pausing before each
+.SS cbspkg new-sources
+\fBcbspkg new\-sources\fR [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-offline\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFILE\fR>
+.PP
+Write sources and .gitignore for new source files, then upload them to the SIG lookaside
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without changing anything
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
+.TP
+\fB\-\-offline\fR
+Write `sources` and `.gitignore` only, uploading nothing
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIFILE\fR>
+The source files, replacing the ones `sources` lists; a file outside the checkout is copied into it
 .SS cbspkg promote
 \fBcbspkg promote\fR [\fB\-\-branch\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-\-to\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fINVR\fR]
 .PP

@@ -10,6 +10,7 @@ mod checkout;
 mod config;
 mod configure;
 mod local;
+mod new_sources;
 mod promote;
 mod release_check;
 mod sig_repo;
@@ -21,6 +22,7 @@ mod upload_sources;
 use add_pkg::AddPkgArgs;
 use build::BuildArgs;
 use local::{MockbuildArgs, SrpmArgs, VerrelArgs};
+use new_sources::NewSourcesArgs;
 use promote::PromoteArgs;
 use sig_repo::SigRepoArgs;
 use untag::UntagArgs;
@@ -63,6 +65,10 @@ enum Command {
     /// matching its collection, with CBS's macros
     Mockbuild(MockbuildArgs),
 
+    /// Write sources and .gitignore for new source files, then upload
+    /// them to the SIG lookaside
+    NewSources(NewSourcesArgs),
+
     /// Move a build to its collection's next stage (-testing, then
     /// -release, untagging it from -testing)
     Promote(PromoteArgs),
@@ -96,6 +102,7 @@ fn main() -> ExitCode {
         Command::Build(args) => build::run(&args),
         Command::Config(args) => configure::run(&args),
         Command::Mockbuild(args) => local::run_mockbuild(&args),
+        Command::NewSources(args) => new_sources::run(&args),
         Command::Promote(args) => promote::run(&args),
         Command::SigRepo(args) => sig_repo::run(&args),
         Command::Srpm(args) => local::run_srpm(&args),

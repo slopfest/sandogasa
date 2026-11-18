@@ -201,6 +201,31 @@ none left to build, such as Hyperscale's asahi and kernel repositories,
 is refused. Build those in CBS with `cbspkg build --scratch`. `--arch`
 builds for another architecture than this machine's.
 
+### `new-sources`
+
+```sh
+cbspkg new-sources [-C DIR] [--offline] [--explain] [--dry-run] FILE...
+```
+
+Sets the package's source files, as `fedpkg new-sources` does in
+Fedora: writes their sha512 sums to `sources`, replacing the files it
+listed, adds `/<file>` to `.gitignore` for each file no pattern there
+ignores yet (`git check-ignore` decides, so a glob such as `/*.tar.gz`
+counts), and stages both with `git add`, leaving the commit to you. A
+file given from outside the checkout is copied into it, and the copy
+is reported; a different file of the same name already in the
+checkout stops it.
+
+It then uploads the files the SIG lookaside lacks, as `upload-sources`
+does, confirmed at a terminal. `--offline` stops after staging, for
+someone who cannot upload: whoever merges the change uploads the
+files. `--explain` and `--dry-run` show each step's command; a dry run
+prints what it would write and changes nothing.
+
+For a package that reuses CentOS Stream's `sources` file unchanged (a
+Hyperscale rebuild with other settings, a Proposed Update adding
+patches), use `upload-sources` instead.
+
 ### `promote`
 
 ```sh

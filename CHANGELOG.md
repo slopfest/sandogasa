@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### cbspkg new-sources writes sources and .gitignore, then uploads
+
+A version bump of a SIG package meant editing its `sources` file and
+`.gitignore` by hand, working out each tarball's sha512 sum, before
+`cbspkg upload-sources` could upload it. `cbspkg new-sources FILE...`
+does what `fedpkg new-sources` does in Fedora: it writes the files'
+sums to `sources`, replacing the files listed there, adds each file to
+`.gitignore` unless a pattern already ignores it, stages both, and
+uploads what the SIG lookaside lacks. A file from outside the checkout
+is copied in, with a note saying so. `--offline`, as in fedpkg, skips
+the upload, for someone who cannot upload. `upload-sources` stays, for
+packages that reuse CentOS Stream's `sources` file unchanged (Resolves
+#171).
+
 ### cbspkg untag takes a build out of a stage and tells its tracking issue why
 
 Untagging a SIG build was `cbs untag-build` by hand, once per tag, and
