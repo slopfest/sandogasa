@@ -195,6 +195,56 @@ fn warn_bare_form(input: &str, opts: &DigestOpts) {
     }
 }
 
+/// Bugzilla's verdict on `key` for the account `email`: `valid_login`
+/// sends the key and asks whether it belongs to that account, so it
+/// proves both, which is also why a refusal names the address as well
+/// as the key. Shared by `config` and a key typed in at `--post`'s
+/// prompt.
+fn key_verdict(
+    rt: &tokio::runtime::Runtime,
+    key: &str,
+    email: &str,
+) -> sandogasa_cli::credential::KeyVerdict {
+    use sandogasa_bugzilla::LoginCheck;
+    use sandogasa_cli::credential::KeyVerdict;
+    let client = match BzClient::new(BUGZILLA_URL).with_api_key(key.to_string()) {
+        Ok(c) => c,
+        Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
+    };
+    match rt.block_on(client.check_login(email)) {
+        Ok(LoginCheck::Valid) => KeyVerdict::Accepted("valid.".to_string()),
+        Ok(LoginCheck::NotRecognised) => KeyVerdict::Refused(format!(
+            "not recognized for {email} — the key, or the address, is not \
+             the one Bugzilla has."
+        )),
+        Ok(LoginCheck::Refused(why)) => KeyVerdict::Refused(format!("refused: {why}")),
+        Ok(_) => KeyVerdict::Unknown("could not tell.".to_string()),
+        Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
+    }
+}
+
+/// Why a request Bugzilla failed may have been refused, asked on demand
+/// once it was (#164): Bugzilla's own reason when the key is the
+/// problem ("The API key you specified has expired…"), with where to get
+/// a new one; `None` when the key is fine, or that cannot be told.
+fn key_refusal(rt: &tokio::runtime::Runtime, key: &str, email: &str) -> Option<String> {
+    use sandogasa_cli::credential::KeyVerdict;
+    match key_verdict(rt, key, email) {
+        KeyVerdict::Refused(why) => Some(refusal_text(&why)),
+        KeyVerdict::Accepted(_) | KeyVerdict::Unknown(_) => None,
+    }
+}
+
+/// What to say about a key Bugzilla refused (`why`, from
+/// [`key_verdict`]), and how to replace it.
+fn refusal_text(why: &str) -> String {
+    format!(
+        "Bugzilla API key {why}\nCreate a new key at \
+         https://bugzilla.redhat.com/userprefs.cgi?tab=apikey and save it with \
+         `fedora-review-digest config`."
+    )
+}
+
 /// Set up / verify the Bugzilla API key (and email, for validation):
 /// the key in the desktop keyring when there is one, the rest at
 /// `~/.config/fedora-review-digest/config.toml`.
@@ -227,31 +277,12 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let email = cfg.bugzilla.email.clone();
-    // `valid_login` sends the key and asks whether it belongs to this
-    // account, so it proves both — which is also why a refusal names
-    // the address as well as the key.
+    // Checked against the address too (`key_verdict`).
     cfg.bugzilla.api_key = sandogasa_cli::credential::validated_key_blocking(
         "Bugzilla",
         "API key",
         cfg.bugzilla.api_key.clone(),
-        |key| {
-            use sandogasa_cli::credential::KeyVerdict;
-            let client = match BzClient::new(BUGZILLA_URL).with_api_key(key.to_string()) {
-                Ok(c) => c,
-                Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
-            };
-            use sandogasa_bugzilla::LoginCheck;
-            match rt.block_on(client.check_login(&email)) {
-                Ok(LoginCheck::Valid) => KeyVerdict::Accepted("valid.".to_string()),
-                Ok(LoginCheck::NotRecognised) => KeyVerdict::Refused(format!(
-                    "not recognized for {email} — the key, or the address, is not \
-                     the one Bugzilla has."
-                )),
-                Ok(LoginCheck::Refused(why)) => KeyVerdict::Refused(format!("refused: {why}")),
-                Ok(_) => KeyVerdict::Unknown("could not tell.".to_string()),
-                Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
-            }
-        },
+        |key| key_verdict(&rt, key, &email),
     )
     .key;
     if config::save(&cf, keyring(), &mut cfg, &before).map_err(|e| e.to_string())? {
@@ -658,15 +689,25 @@ fn post_to_bugzilla(
 ) -> Result<bool, String> {
     let bug_id = bug_id(input, dir)
         .ok_or("couldn't determine the bug id from the input or dir name; pass the bug id")?;
-    let creds = config::credentials(keyring()).map_err(|e| e.to_string())?;
-    let client = BzClient::new(BUGZILLA_URL)
-        .with_api_key(creds.api_key)
-        .map_err(|e| e.to_string())?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let creds = config::credentials(keyring(), &|key, email| key_verdict(&rt, key, email))
+        .map_err(|e| e.to_string())?;
+    let client = BzClient::new(BUGZILLA_URL)
+        .with_api_key(creds.api_key.clone())
+        .map_err(|e| e.to_string())?;
+    // Bugzilla's refusal of the key, asked only once a request failed.
+    let why = |what: String| match key_refusal(&rt, &creds.api_key, &creds.email) {
+        Some(refusal) => format!("{what}\n{refusal}"),
+        None => what,
+    };
 
-    let bug = rt
-        .block_on(client.bug(bug_id))
-        .map_err(|e| format!("fetching bug {bug_id}: {e}"))?;
+    let bug = match rt.block_on(client.bug(bug_id)) {
+        Ok(bug) => bug,
+        Err(e) if e.status().is_some_and(|s| s.is_client_error()) => {
+            return Err(why(format!("fetching bug {bug_id}: {e}")));
+        }
+        Err(e) => return Err(format!("fetching bug {bug_id}: {e}")),
+    };
     let current_flag = bugzilla::current_review_flag(&bug);
     // Claim the bug by assigning it to the reviewer — unless it's already
     // theirs, in which case there's nothing to change.
@@ -693,10 +734,10 @@ fn post_to_bugzilla(
         eprintln!("note: bug {bug_id}: {note}");
     }
     if !out.complete() {
-        return Err(format!(
+        return Err(why(format!(
             "posting to bug {bug_id}: {}",
             out.last_error.unwrap_or_default()
-        ));
+        )));
     }
     eprintln!("Posted to bug {bug_id}.");
     Ok(true)
@@ -1243,5 +1284,20 @@ mod tests {
             ),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_refused_key_says_why_and_how_to_replace_it() {
+        let text = refusal_text(
+            "refused: The API key you specified has expired. The API key was \
+             expired in bug https://bugzilla.redhat.com/show_bug.cgi?id=2379663",
+        );
+        assert!(
+            text.starts_with("Bugzilla API key refused: The API key you specified has expired.")
+        );
+        assert!(text.ends_with(
+            "Create a new key at https://bugzilla.redhat.com/userprefs.cgi?tab=apikey \
+             and save it with `fedora-review-digest config`."
+        ));
     }
 }

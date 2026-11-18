@@ -68,8 +68,12 @@ pub struct Credentials {
 /// the email from `$BUGZILLA_EMAIL`, the key falling back to the keyring,
 /// each then to the config file and then an interactive prompt that saves
 /// it. Loads (and saves) the config file once for both. `store` is the
-/// keyring.
-pub fn credentials(store: &dyn SecretStore) -> Result<Credentials, Box<dyn std::error::Error>> {
+/// keyring; `validate` checks a key typed in at the prompt, with the
+/// email, before it is saved.
+pub fn credentials(
+    store: &dyn SecretStore,
+    validate: &dyn Fn(&str, &str) -> sandogasa_cli::credential::KeyVerdict,
+) -> Result<Credentials, Box<dyn std::error::Error>> {
     let file = ConfigFile::for_tool("fedora-review-digest");
     let mut cfg: Config = file.load_user().unwrap_or_default();
     let mut dirty = false;
@@ -121,8 +125,22 @@ pub fn credentials(store: &dyn SecretStore) -> Result<Credentials, Box<dyn std::
     };
 
     if prompted_key {
+        // A key typed in now is checked before it is kept, as `config`
+        // checks one (#164): an expired one is named as such, with the
+        // chance to enter another, instead of failing the post later.
+        let checked = sandogasa_cli::credential::validated_key_blocking(
+            "Bugzilla",
+            "API key",
+            cfg.bugzilla.api_key.clone(),
+            |key| validate(key, &email),
+        );
+        cfg.bugzilla.api_key = checked.key;
         // None was found, so there is nothing to turn off: a new key.
         save(&file, store, &mut cfg, &[Before::Absent])?;
+        return Ok(Credentials {
+            api_key: cfg.bugzilla.api_key.clone(),
+            email,
+        });
     } else if dirty {
         file.save(&cfg)?;
     }

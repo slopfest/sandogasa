@@ -45,7 +45,9 @@ mod tests {
         )
         .unwrap();
         let store = MemoryStore::default();
-        let creds = crate::config::credentials(&store).unwrap();
+        let creds =
+            crate::config::credentials(&store, &|_, _| unreachable!("no key is prompted for"))
+                .unwrap();
         assert_eq!(creds.api_key, "from-file");
         assert_eq!(creds.email, "me@example.com");
 
@@ -59,14 +61,18 @@ mod tests {
         assert!(!text.contains("api_key"), "{text}");
         assert!(text.contains("me@example.com"), "{text}");
         assert_eq!(
-            crate::config::credentials(&store).unwrap().api_key,
+            crate::config::credentials(&store, &|_, _| unreachable!("no key is prompted for"))
+                .unwrap()
+                .api_key,
             "from-keyring"
         );
 
         // The environment still wins.
         let _env2 = EnvGuard::new(&[("BUGZILLA_API_KEY", "from-env")]);
         assert_eq!(
-            crate::config::credentials(&store).unwrap().api_key,
+            crate::config::credentials(&store, &|_, _| unreachable!("no key is prompted for"))
+                .unwrap()
+                .api_key,
             "from-env"
         );
         assert_eq!(

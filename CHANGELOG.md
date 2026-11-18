@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### fedora-review-digest says why Bugzilla refused its key
+
+`fedora-review-digest --post` with an expired Bugzilla API key failed
+with only "fetching bug 2575659: HTTP status client error (400 Bad
+Request)". Red Hat's Bugzilla expires keys on a schedule, announcing
+each in a confidential bug, so a key that worked months ago stops
+working with no change on our side, and the reason was in the response
+all along. When a request is refused, the key is now checked then, and
+an expired or invalid one is reported with Bugzilla's reason and where
+to create a new one; a key that is fine leaves the original error. A
+key typed in at `--post`'s prompt, when none is set up, is checked
+before it is saved, as `config` checks one, with the chance to enter
+another. Keys are checked only then, never before every run. Fixes
+#164.
+
 ### fedora-review-digest gains a digest subcommand, and says what to run
 
 `fedora-review-digest <BUG>` only reads an existing fedora-review result,

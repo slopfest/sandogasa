@@ -229,6 +229,12 @@ email) — unless it's already assigned to you.
 
 `--post` still prints the digest to stdout as well.
 
+When Bugzilla refuses a request, the key is checked then, and an
+expired or invalid one is reported with Bugzilla's reason (Red Hat's
+instance expires keys on a schedule, announcing each in a bug) and
+where to create a new one. A key typed in at `--post`'s prompt, when
+none is set up, is checked the same way before it is saved.
+
 Set up (and verify) the API key and email ahead of time with:
 
 ```
