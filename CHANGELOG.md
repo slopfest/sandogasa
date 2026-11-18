@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### New specport tool: autotools to Meson spec conversion
+
+When upstream moves from autotools to Meson, every `%configure` option
+in the spec has to be mapped to a Meson option by hand, and a feature
+the spec does not mention becomes required, since `%meson` passes
+`--auto-features=enabled` (Fedora, EL9 and EL10 alike). Hyperscale's
+rasdaemon 1.0.0 made the move with about 15 options across two
+architecture-specific invocations, and Fedora's package, still at
+0.8.0, had no conversion to follow. `specport autotools-to-meson SPEC
+--source DIR|TARBALL` rewrites `%configure` as `%meson`, keeping its
+`%if` and `%ifarch` structure and mapping `%{?with_foo:…}` arguments
+inside their macros, maps each option by the type the new source's
+Meson options file gives it, turns an option off in the branches that
+do not set it, sets every feature nothing set to `disabled`, and turns the make steps into `%meson_build`,
+`%meson_install` and `%meson_test`. It drops `autoreconf` and the
+autotools BuildRequires and adds `meson`. The old invocation stays in a
+comment above the new one, with a `FIXME` line naming candidates for
+each option without a clean counterpart. It shows a diff, colored on a
+terminal with its `FIXME` lines in yellow, or writes the spec with
+`--write`, keeping the original as `<spec>.orig` (Resolves #172).
+
 ### cbspkg new-sources writes sources and .gitignore, then uploads
 
 A version bump of a SIG package meant editing its `sources` file and

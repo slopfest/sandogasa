@@ -318,12 +318,13 @@ meaning gets a row in this table in the same change.
 |---|---|---|
 | bold green | something for the user to do: a command to run, a comment to post | `--explain` commands (`sandogasa_cli::explain`), fedora-review-digest's comment heading and the command replacing a deprecated form |
 | green | good: up to date, ahead, unchanged | hs-relmon `retire` (ahead), koji-diff (same) |
-| yellow | look at it: a warning, a compatible change, a rebase to do | dbranch `check` warnings, hs-relmon (rebase), koji-diff (compatible), fedora-review-digest's deprecation warning |
+| yellow | look at it: a warning, a compatible change, a rebase to do | dbranch `check` warnings, hs-relmon (rebase), koji-diff (compatible), fedora-review-digest's deprecation warning, specport's FIXMEs |
 | orange (256-color 208) | worse than yellow, short of red | koji-diff (minor breaking) |
 | red, bold for a blocker | broken or blocking | dbranch `check` blockers, hs-relmon (retire), koji-diff (major breaking) |
 | magenta | missing declaration | hs-relmon (declare) |
 | bold | a heading, or the item a list is about | `--explain` step headings, hs-relmon (release) |
-| gray (bright black, SGR 90) | secondary: notes, the `$` prompt, nothing to show | dbranch `check` notes, commands and `see:` citations, `--explain` prompts, hs-relmon (none) |
+| gray (bright black, SGR 90) | secondary: notes, the `$` prompt, nothing to show | dbranch `check` notes, commands and `see:` citations, `--explain` prompts, hs-relmon (none), specport's notes and the comment block it adds |
+| red and green in a diff | lines taken out and put in, as `git diff` shows them; not good or broken | specport's diff (a FIXME it adds is yellow) |
 
 Plain green and bold green are deliberately apart: a status table's
 green says "nothing to do", the bold green of an instruction says

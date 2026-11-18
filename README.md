@@ -43,6 +43,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[sandogasa-pkg-acl](tools/sandogasa-pkg-acl/)** — view and manage Fedora package ACLs via the Pagure dist-git API
 - **[sandogasa-pkg-health](tools/sandogasa-pkg-health/)** — audit package health across a sandogasa inventory (pluggable checks, selective update)
 - **[sandogasa-report](tools/sandogasa-report/)** — activity reporting for Fedora, EPEL, and CentOS SIG packaging
+- **[specport](tools/specport/)** — port an RPM spec to a new build system when upstream switches, starting with autotools to Meson: maps the configure options, keeps the old ones in a comment and flags what needs a person
 
 ## Library crates
 

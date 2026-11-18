@@ -1,0 +1,22 @@
+[package]
+name = "specport"
+description = "Port RPM specs between build systems, starting with autotools to Meson"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+sandogasa-cli = { workspace = true, features = ["explain"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[build-dependencies]
+sandogasa-build = { workspace = true }
+
+[dev-dependencies]
+sandogasa-cli = { workspace = true, features = ["man"] }

@@ -23,6 +23,7 @@ NotRecognised = "NotRecognised"
 
 [default.extend-words]
 # Names, not misspellings
+aer = "aer"                  # PCIe AER, a rasdaemon option (specport tests)
 astroid = "astroid"          # a Python package
 Automattic = "Automattic"    # the company
 buildd = "buildd"            # Debian's build daemon

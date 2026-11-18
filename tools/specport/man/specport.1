@@ -1,0 +1,51 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH specport 1 2026-11-18 "sandogasa 0.28.2" "Sandogasa Manual"
+.SH NAME
+specport \- Port RPM specs between build systems, starting with autotools to Meson
+.SH SYNOPSIS
+\fBspecport\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Port RPM specs between build systems, starting with autotools to Meson
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS specport autotools-to-meson
+\fBspecport autotools\-to\-meson\fR [\fB\-\-color\fR] [\fB\-\-json\fR] [\fB\-\-write\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-source\fR> <\fISPEC\fR>
+.PP
+Convert a spec\*(Aqs %configure and make steps to Meson\*(Aqs, mapping its configure options to the new source\*(Aqs Meson options
+.TP
+\fB\-\-color\fR \fI<WHEN>\fR [default: auto]
+Color the diff: auto (on a terminal), always or never
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-json\fR
+Print the converted spec and the notes as JSON
+.TP
+\fB\-\-source\fR \fI<PATH>\fR
+The new source: its unpacked tree, or its tarball
+.TP
+\fB\-\-write\fR
+Write the converted spec in place, keeping the original as <spec>.orig, rather than showing a diff
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fISPEC\fR>
+The spec to convert
