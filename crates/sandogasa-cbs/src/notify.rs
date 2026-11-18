@@ -24,7 +24,7 @@ use crate::{Sig, Stage};
 use sandogasa_gitlab::{Client, IssueUpdate};
 
 /// One comment to post, and the label to set with it.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Notice {
     /// The build and stage it tells of, to post it only once the build
     /// got there.
@@ -54,7 +54,7 @@ pub struct Notice {
 /// carries the package for has that version or a newer one released.
 /// The release being promoted counts once it is tagged; a release still
 /// behind leaves the issue open for hs-relmon's next scan to close.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Closing {
     pub package: String,
     pub version: String,
@@ -66,6 +66,11 @@ pub struct Closing {
 /// The newest build of a package in each of some tags, one entry per
 /// tag: [`crate::packages::latest_in_tags`], or a stand-in.
 pub type LatestIn<'a> = &'a dyn Fn(&[String], &str) -> Result<Vec<Option<String>>, String>;
+
+/// One answer per item of a list, read in one go: the commits builds
+/// were made from ([`crate::packages::build_commits`]), the builds tasks
+/// made ([`crate::packages::task_builds`]), or a stand-in.
+pub type ReadEach<'a> = &'a dyn Fn(&[String]) -> Result<Vec<Option<String>>, String>;
 
 /// What the tracking-issue comments need from the package's checkout,
 /// which the tool doing the CBS write has (`cbspkg`'s git checkout), or
@@ -103,8 +108,9 @@ pub struct Branch<'a> {
 /// without an open issue for the branch, and a warning when GitLab
 /// cannot be read.
 ///
-/// Each comment says what the build was made from: `commit_of` gives
-/// the commit CBS built (`crate::packages::build_commit`), and
+/// Each comment says what the build was made from: `commits_of` gives
+/// the commits CBS built, for all the builds at once
+/// (`crate::packages::build_commits`), and
 /// the checkout ([`Checkout`]) compares it with the merge request's head, so
 /// SIG-only commits on top are listed.
 pub fn plan(
@@ -112,7 +118,7 @@ pub fn plan(
     token: Option<&str>,
     on: &Branch,
     steps: &[(String, Stage, Vec<TagChange>)],
-    commit_of: &dyn Fn(&str) -> Result<Option<String>, String>,
+    commits_of: ReadEach,
 ) -> Vec<Notice> {
     let Branch {
         sig,
@@ -216,16 +222,26 @@ pub fn plan(
                 }
             })
     };
-    let commits: Vec<Option<String>> = pending
-        .iter()
-        .map(|(nvr, _, _)| match commit_of(nvr) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("warning: cannot tell what {nvr} was built from ({e})");
-                None
+    // Asked for all the builds at once (#144), and only when there is
+    // something to tell.
+    let pending_nvrs: Vec<String> = pending.iter().map(|(nvr, _, _)| nvr.clone()).collect();
+    let commits: Vec<Option<String>> = if pending_nvrs.is_empty() {
+        Vec::new()
+    } else {
+        match commits_of(&pending_nvrs) {
+            Ok(c) if c.len() == pending_nvrs.len() => c,
+            Ok(_) => {
+                eprintln!(
+                    "warning: cannot tell what the builds were made from (an answer is missing)"
+                );
+                vec![None; pending_nvrs.len()]
             }
-        })
-        .collect();
+            Err(e) => {
+                eprintln!("warning: cannot tell what the builds were made from ({e})");
+                vec![None; pending_nvrs.len()]
+            }
+        }
+    };
     if let Some(mr) = &mr
         && !dry_run
     {
@@ -640,9 +656,9 @@ mod tests {
         }
     }
 
-    /// A build whose source names no commit.
-    fn none(_: &str) -> Result<Option<String>, String> {
-        Ok(None)
+    /// Builds whose sources name no commit.
+    fn none(nvrs: &[String]) -> Result<Vec<Option<String>>, String> {
+        Ok(vec![None; nvrs.len()])
     }
 
     fn no_latest(_: &[String], _: &str) -> Result<Vec<Option<String>>, String> {

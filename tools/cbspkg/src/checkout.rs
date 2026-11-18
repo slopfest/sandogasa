@@ -362,7 +362,7 @@ mod tests {
             dry_run: false,
             tool: "cbspkg",
         };
-        let built = |_: &str| Ok(Some(pinned.clone()));
+        let built = |nvrs: &[String]| Ok(vec![Some(pinned.clone()); nvrs.len()]);
         let notices = plan(&url, Some("t"), &on, &steps, &built);
         let note = &notices[0].note;
         assert!(

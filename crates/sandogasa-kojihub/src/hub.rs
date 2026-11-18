@@ -208,6 +208,69 @@ impl HubClient {
             .collect())
     }
 
+    /// Each build's source, the SCM URL it was built from
+    /// (`git+https://…#<commit>`), asked in one `multiCall` of
+    /// `getBuild`, as `koji buildinfo` shows it under `Source:`. One
+    /// result per NVR, in order: `None` for a build the hub does not
+    /// know, or one without a source.
+    pub fn builds_sources(
+        &self,
+        nvrs: &[String],
+    ) -> Result<Vec<Result<Option<String>, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = nvrs
+            .iter()
+            .map(|nvr| ("getBuild", vec![Value::String(nvr.clone())]))
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| {
+                r.map(|v| {
+                    v.get("source")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
+            })
+            .collect())
+    }
+
+    /// The NVRs of the complete builds each task in `task_ids` made,
+    /// asked in one `multiCall` of `listBuilds(taskID=…,
+    /// state=BUILD_COMPLETE)`, as `koji taskinfo` shows them under
+    /// `Build:`. One result per task, in order: empty for a task that
+    /// made no build, or none that completed.
+    pub fn tasks_builds(&self, task_ids: &[i64]) -> Result<Vec<Result<Vec<String>, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = task_ids
+            .iter()
+            .map(|id| {
+                (
+                    "listBuilds",
+                    vec![kwargs(&[
+                        ("taskID", Value::Int(*id)),
+                        ("state", Value::Int(BUILD_COMPLETE)),
+                    ])],
+                )
+            })
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| {
+                r.map(|v| {
+                    v.as_array()
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|b| b.get("nvr").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect()
+                })
+            })
+            .collect())
+    }
+
     /// The dependencies of type `dep_type` (0 requires, 1 provides,
     /// 2 obsoletes, 3 conflicts, as `koji call getRPMDeps` numbers them)
     /// of each binary RPM in `nvras` (`name-version-release.arch`), as
@@ -892,6 +955,77 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(got, [Some(BUILD_COMPLETE), Some(BUILD_FAILED), None]);
+    }
+
+    #[test]
+    fn build_sources_and_task_builds_come_back_from_one_multicall_each() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = block_on(MockServer::start());
+        let member = |name: &str, value: &str| {
+            format!("<member><name>{name}</name><value><string>{value}</string></value></member>")
+        };
+        let one = |v: String| format!("<value><array><data>{v}</data></array></value>");
+        let sources = response(&format!(
+            "{}{}{}",
+            one(format!(
+                "<value><struct>{}</struct></value>",
+                member("source", "git+https://gitlab.com/x/git#0123abcd")
+            )),
+            one("<value><struct></struct></value>".into()),
+            one("<value><nil/></value>".into()),
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("getBuild"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(sources))
+                .expect(1)
+                .mount(&server),
+        );
+        let builds = response(&format!(
+            "{}{}",
+            one(format!(
+                "<value><array><data><value><struct>{}</struct></value></data></array></value>",
+                member("nvr", "git-2.52.1-1.el10")
+            )),
+            one("<value><array><data></data></array></value>".into()),
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("listBuilds"))
+                .and(body_string_contains("taskID"))
+                .and(body_string_contains("<name>state</name>"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(builds))
+                .expect(1)
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        let nvrs = ["git-1-1", "bare-1-1", "nope-1-1"].map(String::from);
+        let got: Vec<Option<String>> = hub
+            .builds_sources(&nvrs)
+            .unwrap()
+            .into_iter()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            got,
+            [
+                Some("git+https://gitlab.com/x/git#0123abcd".to_string()),
+                None,
+                None
+            ]
+        );
+        let got: Vec<Vec<String>> = hub
+            .tasks_builds(&[5531001, 5531002])
+            .unwrap()
+            .into_iter()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(got, [vec!["git-2.52.1-1.el10".to_string()], vec![]]);
+        assert!(hub.tasks_builds(&[]).unwrap().is_empty());
     }
 
     #[test]

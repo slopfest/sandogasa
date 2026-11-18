@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### cbspkg asks Koji once per run, not once per build
+
+The 0.28.2 release review found `cbspkg` asking Koji once per item:
+`promote` ran one `koji buildinfo` per build to learn what it was made
+from, and `build` one `koji taskinfo` per task to learn what it made.
+Both are now read in one hub call each (`sandogasa-kojihub`'s new
+`builds_sources` and `tasks_builds`, and `sandogasa-cbs`'s
+`build_commits` and `task_builds`), and a fault on one build or task
+loses only its own answer. Only builds that completed count as a
+task's build.
+
+The review also found `build` planning its tracking-issue comment twice,
+reading the issue again after the build. That stays: reusing the
+comment previewed before the build would pick the issue without knowing
+the build's version, so for a Hyperscale package with two open version
+issues the comment could go nowhere, and it would miss what the issue
+was told while the build ran. Refs #144.
+
 ### sandogasa-cbs: tag changes as values, made through one hub
 
 Each tool that moves SIG builds between CBS tags built its own `cbs

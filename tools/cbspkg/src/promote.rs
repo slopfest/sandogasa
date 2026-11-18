@@ -215,7 +215,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             tool: "cbspkg",
         },
         &steps,
-        &sandogasa_cbs::packages::build_commit,
+        &sandogasa_cbs::packages::build_commits,
     );
 
     if !args.dry_run {

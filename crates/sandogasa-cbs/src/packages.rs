@@ -119,6 +119,14 @@ pub fn tags_of(nvr: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// The commit a build's source names, after its `#`:
+/// `git+https://…/git#0123abcd` gives `0123abcd`.
+pub fn commit_of_source(source: &str) -> Option<String> {
+    let (_, commit) = source.rsplit_once('#')?;
+    (!commit.is_empty() && commit.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| commit.to_string())
+}
+
 /// The commit a build was made from: the `#<sha>` ending the `Source:`
 /// line `koji buildinfo` prints, as for
 /// `git+https://gitlab.com/CentOS/proposed_updates/rpms/git.git#a879194…`.
@@ -127,12 +135,11 @@ pub fn source_commit(buildinfo: &str) -> Option<String> {
         .lines()
         .find_map(|l| l.strip_prefix("Source:"))?
         .trim();
-    let (_, commit) = source.rsplit_once('#')?;
-    (!commit.is_empty() && commit.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then(|| commit.to_string())
+    commit_of_source(source)
 }
 
 /// The commit `nvr` was built from in CBS, if its source names one.
+/// For several builds, [`build_commits`] asks once.
 pub fn build_commit(nvr: &str) -> Result<Option<String>, String> {
     let out = Command::new("koji")
         .args(["--profile", PROFILE, "buildinfo", nvr])
@@ -159,7 +166,8 @@ pub fn task_build_of(taskinfo: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The build CBS task `task` made, if it made one.
+/// The build CBS task `task` made, if it made one. For several tasks,
+/// [`task_builds`] asks once.
 pub fn task_build(task: &str) -> Result<Option<String>, String> {
     let out = Command::new("koji")
         .args(["--profile", PROFILE, "taskinfo", task])
@@ -173,6 +181,81 @@ pub fn task_build(task: &str) -> Result<Option<String>, String> {
         ));
     }
     Ok(task_build_of(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// The commit each build in `nvrs` was made from ([`build_commit`]),
+/// read from the hub in one call; `None` for a build without one, or
+/// one the hub faulted on, which is warned about. An error only when the
+/// hub cannot be asked at all.
+pub fn build_commits(nvrs: &[String]) -> Result<Vec<Option<String>>, String> {
+    build_commits_at(&hub_url(), nvrs)
+}
+
+/// [`build_commits`], from the hub at `hub_url`.
+pub fn build_commits_at(hub_url: &str, nvrs: &[String]) -> Result<Vec<Option<String>>, String> {
+    let found = sandogasa_kojihub::HubClient::new(hub_url)
+        .builds_sources(nvrs)
+        .map_err(|e| e.to_string())?;
+    // A fault for one build loses only that build's answer.
+    Ok(found
+        .into_iter()
+        .zip(nvrs)
+        .map(|(r, nvr)| match r {
+            Ok(source) => source.as_deref().and_then(commit_of_source),
+            Err(e) => {
+                eprintln!("warning: cannot read what {nvr} was built from ({e})");
+                None
+            }
+        })
+        .collect())
+}
+
+/// The build each task in `tasks` made ([`task_build`]), read from the
+/// hub in one call; `None` for a task that made none, or one the hub
+/// faulted on, which is warned about.
+pub fn task_builds(tasks: &[String]) -> Result<Vec<Option<String>>, String> {
+    task_builds_at(&hub_url(), tasks)
+}
+
+/// [`task_builds`], from the hub at `hub_url`.
+pub fn task_builds_at(hub_url: &str, tasks: &[String]) -> Result<Vec<Option<String>>, String> {
+    // A task that is not an id is warned about and answered `None`;
+    // the rest are asked in one call.
+    let ids: Vec<Option<i64>> = tasks
+        .iter()
+        .map(|t| {
+            let id = t.parse().ok();
+            if id.is_none() {
+                eprintln!("warning: {t} is not a task id");
+            }
+            id
+        })
+        .collect();
+    let asked: Vec<i64> = ids.iter().flatten().copied().collect();
+    let mut found = sandogasa_kojihub::HubClient::new(hub_url)
+        .tasks_builds(&asked)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .zip(&asked);
+    // A fault for one task loses only that task's answer.
+    Ok(ids
+        .iter()
+        .map(|id| {
+            id.as_ref()?;
+            match found.next()? {
+                (Ok(nvrs), _) => nvrs.into_iter().next(),
+                (Err(e), task) => {
+                    eprintln!("warning: cannot read task {task}'s build ({e})");
+                    None
+                }
+            }
+        })
+        .collect())
+}
+
+/// CBS's hub, from the `cbs` koji profile, else its known URL.
+fn hub_url() -> String {
+    sandogasa_kojihub::config::hub_url(PROFILE).unwrap_or_else(|| crate::HUB_URL.to_string())
 }
 
 /// The newest build of `package` in `tag`, if it has one.
@@ -200,9 +283,7 @@ pub fn latest(tag: &str, package: &str) -> Option<String> {
 /// the CBS hub (`koji --profile cbs`'s, else CBS's own): one entry per
 /// tag, `None` where the tag has no build of it.
 pub fn latest_in_tags(tags: &[String], package: &str) -> Result<Vec<Option<String>>, String> {
-    let hub_url =
-        sandogasa_kojihub::config::hub_url(PROFILE).unwrap_or_else(|| crate::HUB_URL.to_string());
-    latest_in_tags_at(&hub_url, tags, package)
+    latest_in_tags_at(&hub_url(), tags, package)
 }
 
 /// [`latest_in_tags`], asking the hub at `hub_url`.
@@ -281,6 +362,80 @@ mod tests {
     use super::*;
 
     use crate::test_support::FakeTools;
+
+    #[test]
+    fn builds_commits_and_tasks_builds_are_read_at_once() {
+        let answer = |inner: &str| {
+            format!(
+                "<?xml version='1.0'?><methodResponse><params><param>\
+                 <value><array><data>{inner}</data></array></value>\
+                 </param></params></methodResponse>"
+            )
+        };
+        let one = |v: &str| format!("<value><array><data>{v}</data></array></value>");
+        let source = |s: &str| {
+            one(&format!(
+                "<value><struct><member><name>source</name><value><string>{s}</string>\
+                 </value></member></struct></value>"
+            ))
+        };
+        let mut server = mockito::Server::new();
+        // A fault on one build loses only its answer.
+        let fault = "<value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>No such build</string></value></member>\
+             </struct></value>";
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("getBuild".into()))
+            .with_status(200)
+            .with_body(answer(&format!(
+                "{}{}{fault}",
+                source("git+https://gitlab.com/x/git.git#a879194835"),
+                source("cli-build/xz.src.rpm")
+            )))
+            .expect(1)
+            .create();
+        let url = server.url();
+        let nvrs = [
+            "git-1-1".to_string(),
+            "xz-1-1".to_string(),
+            "gone-1-1".to_string(),
+        ];
+        assert_eq!(
+            build_commits_at(&url, &nvrs).unwrap(),
+            [Some("a879194835".to_string()), None, None]
+        );
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("listBuilds".into()))
+            .with_status(200)
+            .with_body(answer(&format!(
+                "{}{}{fault}",
+                one(
+                    "<value><array><data><value><struct><member><name>nvr</name>\
+                     <value><string>git-1-1</string></value></member></struct></value>\
+                     </data></array></value>"
+                ),
+                one("<value><array><data></data></array></value>")
+            )))
+            .expect(1)
+            .create();
+        let tasks = ["5531001", "5531002", "5531003"].map(String::from);
+        assert_eq!(
+            task_builds_at(&url, &tasks).unwrap(),
+            [Some("git-1-1".to_string()), None, None]
+        );
+        // One that is not an id answers None, asking nothing for it.
+        assert_eq!(
+            task_builds_at(&url, &["not-a-task".to_string()]).unwrap(),
+            [None]
+        );
+        // A hub that cannot be reached is an error, not "no commit".
+        assert!(build_commits_at("http://127.0.0.1:1", &nvrs).is_err());
+        assert!(task_builds_at("http://127.0.0.1:1", &["1".to_string()]).is_err());
+        assert_eq!(commit_of_source("git+https://x#"), None);
+    }
 
     #[test]
     fn a_packages_newest_build_is_read_from_each_tag_at_once() {

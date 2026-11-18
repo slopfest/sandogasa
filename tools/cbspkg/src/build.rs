@@ -161,28 +161,37 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// The builds made into each of `collections`, by the task started for
-/// it (`tasks`, in the same order), which names it exactly; without
-/// tasks, the newest in each `-candidate`.
+/// it (`tasks`, in the same order), which names it exactly, read for all
+/// the tasks at once with `task_builds`
+/// (`sandogasa_cbs::packages::task_builds`); without tasks, the newest in
+/// each `-candidate`.
 fn builds_of<'a>(
     collections: &'a [Collection],
     tasks: &[String],
     package: &str,
+    task_builds: sandogasa_cbs::notify::ReadEach,
 ) -> Vec<(&'a Collection, String)> {
+    if tasks.is_empty() {
+        return collections
+            .iter()
+            .filter_map(|c| Some((c, latest(&c.tag(Stage::Candidate), package)?)))
+            .collect();
+    }
+    let nvrs = task_builds(tasks).unwrap_or_else(|e| {
+        eprintln!("warning: cannot read the tasks' builds ({e})");
+        Vec::new()
+    });
     collections
         .iter()
-        .enumerate()
-        .filter_map(|(n, collection)| {
-            let nvr = match tasks.get(n) {
-                Some(task) => sandogasa_cbs::packages::task_build(task)
-                    .map_err(|e| eprintln!("warning: cannot read task {task}'s build ({e})"))
-                    .ok()
-                    .flatten(),
-                None if tasks.is_empty() => latest(&collection.tag(Stage::Candidate), package),
-                None => None,
-            }?;
-            Some((collection, nvr))
-        })
+        .zip(nvrs)
+        .filter_map(|(c, nvr)| Some((c, nvr?)))
         .collect()
+}
+
+/// What stands in for the build in `collection` until its task names
+/// it.
+fn stand_in(collection: &Collection) -> String {
+    format!("<the build in {}>", collection.prefix())
 }
 
 /// Tell the tracking issue of `built`, the builds just made from
@@ -209,8 +218,9 @@ fn tell_built(
             )
         })
         .collect();
-    let notices =
-        sandogasa_cbs::notify::plan(base, token, on, &steps, &|_| Ok(Some(commit.to_string())));
+    let notices = sandogasa_cbs::notify::plan(base, token, on, &steps, &|nvrs: &[String]| {
+        Ok(vec![Some(commit.to_string()); nvrs.len()])
+    });
     let done: Vec<(String, Stage)> = built
         .iter()
         .map(|(_, nvr)| (nvr.clone(), Stage::Candidate))
@@ -392,11 +402,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     // names it.
     let base = crate::config::gitlab_base();
     let token = crate::config::gitlab_token();
-    let stand_ins: Vec<String> = checkout
-        .collections
-        .iter()
-        .map(|c| format!("<the build in {}>", c.prefix()))
-        .collect();
+    let stand_ins: Vec<String> = checkout.collections.iter().map(stand_in).collect();
     let preview = if tells {
         ui.step("Find the tracking issue to update, through GitLab's API");
         let steps: Vec<(String, Stage, Vec<TagChange>)> = checkout
@@ -424,7 +430,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
                 tool: "cbspkg",
             },
             &steps,
-            &|_| Ok(Some(commit.clone())),
+            &|nvrs: &[String]| Ok(vec![Some(commit.clone()); nvrs.len()]),
         )
     } else {
         Vec::new()
@@ -539,7 +545,12 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     if !args.scratch && !args.dry_run {
         // Set apart from the build's own output, which ends just above.
         println!();
-        let built = builds_of(&checkout.collections, &tasks, package);
+        let built = builds_of(
+            &checkout.collections,
+            &tasks,
+            package,
+            &sandogasa_cbs::packages::task_builds,
+        );
         for (collection, nvr) in &built {
             println!(
                 "Next, to offer {nvr} for testing: cbspkg promote (cbs tag-build {} {nvr})",
@@ -825,22 +836,27 @@ mod tests {
         let f = Fixture::hyperscale("ethtool", "c9s-hs");
         f.fake(
             "koji",
-            &[
-                ("taskinfo 101", "Task: 101\nBuild: ethtool-7.1-1.hs.el9 (5)"),
-                ("taskinfo", "!GenericError: No such task"),
-                ("list-tagged", "ethtool-7.0-1.hs.el9  t  someone"),
-            ],
+            &[("list-tagged", "ethtool-7.0-1.hs.el9  t  someone")],
         );
         let checkout = resolve(&f.repo, None, None, None).unwrap();
         let tasks = vec!["101".to_string()];
-        let built = builds_of(&checkout.collections, &tasks, "ethtool");
+        let by_task = |asked: &[String]| -> Result<Vec<Option<String>>, String> {
+            assert_eq!(asked, ["101"]);
+            Ok(vec![Some("ethtool-7.1-1.hs.el9".to_string())])
+        };
+        let built = builds_of(&checkout.collections, &tasks, "ethtool", &by_task);
         assert_eq!(built.len(), 1);
         assert_eq!(built[0].1, "ethtool-7.1-1.hs.el9");
         // No task: the newest in -candidate.
-        let newest = builds_of(&checkout.collections, &[], "ethtool");
+        let unasked = |_: &[String]| -> Result<Vec<Option<String>>, String> { panic!("asked") };
+        let newest = builds_of(&checkout.collections, &[], "ethtool", &unasked);
         assert_eq!(newest[0].1, "ethtool-7.0-1.hs.el9");
-        // A task that names no build: nothing.
-        assert!(builds_of(&checkout.collections, &["102".to_string()], "ethtool").is_empty());
+        // A task that names no build, or a hub that cannot be read:
+        // nothing.
+        let nothing = |_: &[String]| -> Result<Vec<Option<String>>, String> { Ok(vec![None]) };
+        assert!(builds_of(&checkout.collections, &tasks, "ethtool", &nothing).is_empty());
+        let down = |_: &[String]| -> Result<Vec<Option<String>>, String> { Err("down".into()) };
+        assert!(builds_of(&checkout.collections, &tasks, "ethtool", &down).is_empty());
 
         let mut server = mockito::Server::new();
         let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fethtool";
