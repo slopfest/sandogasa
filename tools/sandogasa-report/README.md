@@ -260,6 +260,15 @@ listed, so a shared report needs `--detailed --detailed` to carry
 notes. `--private` carries them all, for your own use such as a
 self-review.
 
+On GitHub the same switch covers the items themselves. A shared report
+searches for PRs with `is:public` and keeps only events (reviews,
+comments, releases, and the pushes its tags and commit counts come
+from) that were public when they happened and are in a repository
+that is public now; how many it left out is printed on standard
+error. `--private` includes them. The GitLab, Forgejo, Sourcehut,
+Bugzilla, Bodhi and Koji sections include whatever your tokens can see,
+with or without `--private`.
+
 `notes` lists them oldest first, filtered with `--since`, `--until`
 and `--url`, or as JSON with `--json`. A file that cannot be read as
 a note is skipped with a warning.

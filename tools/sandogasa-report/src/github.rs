@@ -147,6 +147,7 @@ pub fn github_report(
     since: NaiveDate,
     until: NaiveDate,
     tokens: &BTreeMap<String, String>,
+    include_private: bool,
     verbose: bool,
 ) -> Result<GithubReport, String> {
     let token = find_token(&cfg.instance, tokens)?;
@@ -174,10 +175,11 @@ pub fn github_report(
         .as_deref()
         .map(|o| format!(" org:{o}"))
         .unwrap_or_default();
+    let vis_clause = visibility_clause(include_private);
     let login = &user_obj.login;
 
     // PRs opened in window.
-    let q = format!("type:pr author:{login} created:{since}..{until}{org_clause}",);
+    let q = format!("type:pr author:{login} created:{since}..{until}{org_clause}{vis_clause}",);
     report.opened_prs = run_pr_search(&client, &q, verbose)?
         .into_iter()
         .map(into_pr_ref)
@@ -192,7 +194,9 @@ pub fn github_report(
     }
 
     // PRs by the user that were merged in window.
-    let q = format!("type:pr author:{login} is:merged merged:{since}..{until}{org_clause}",);
+    let q = format!(
+        "type:pr author:{login} is:merged merged:{since}..{until}{org_clause}{vis_clause}",
+    );
     report.merged_prs = run_pr_search(&client, &q, verbose)?
         .into_iter()
         .map(into_pr_ref)
@@ -212,6 +216,34 @@ pub fn github_report(
     let events = client
         .user_events(login)
         .map_err(|e| format!("GitHub events on {base}: {e}"))?;
+    let events = if include_private {
+        events
+    } else {
+        // Public then and public now, as the PR search's is:public
+        // sees it: a repository made private since stays out.
+        let repos: BTreeSet<String> = events
+            .iter()
+            .filter(|e| e.public)
+            .filter_map(|e| e.repo_slug().map(String::from))
+            .collect();
+        if verbose {
+            eprintln!(
+                "[github] {base}: checking which of {} repo(s) are public",
+                repos.len()
+            );
+        }
+        let public = public_now(&client, &repos);
+        let total = events.len();
+        let kept = shareable_events(events, &public);
+        if kept.len() < total {
+            eprintln!(
+                "GitHub ({base}): left out {} event(s) in private repositories; \
+                 --private includes them.",
+                total - kept.len()
+            );
+        }
+        kept
+    };
     let (reviewed, commented) = prs_from_events(&events, since, until, cfg.org.as_deref());
     report.reviewed_prs = reviewed;
     report.commented_prs = commented;
@@ -615,6 +647,46 @@ fn pr_ref_from_issue_event(payload: &serde_json::Value, repo: &str) -> Option<Pr
     })
 }
 
+/// The search qualifier that keeps a report to share to public
+/// repositories; nothing for one that may include private work.
+fn visibility_clause(include_private: bool) -> &'static str {
+    if include_private { "" } else { " is:public" }
+}
+
+/// The repositories among `repos` that are public now, asked eight
+/// at a time; one that is gone, hidden or cannot be read counts as
+/// private.
+fn public_now(client: &Client, repos: &BTreeSet<String>) -> BTreeSet<String> {
+    let repos: Vec<&String> = repos.iter().collect();
+    let mut public = BTreeSet::new();
+    for chunk in repos.chunks(8) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|slug| {
+                    scope.spawn(move || {
+                        let (owner, repo) = slug.split_once('/')?;
+                        matches!(client.repository_public(owner, repo), Ok(Some(true)))
+                            .then(|| (*slug).clone())
+                    })
+                })
+                .collect();
+            public.extend(handles.into_iter().filter_map(|h| h.join().ok().flatten()));
+        });
+    }
+    public
+}
+
+/// The events a shared report keeps: public when they happened, in a
+/// repository `public` (now) lists. Reviews, comments, releases, tags
+/// and commit counts are all derived from these.
+fn shareable_events(events: Vec<Event>, public: &BTreeSet<String>) -> Vec<Event> {
+    events
+        .into_iter()
+        .filter(|e| e.public && e.repo_slug().is_some_and(|s| public.contains(s)))
+        .collect()
+}
+
 fn run_pr_search(client: &Client, query: &str, verbose: bool) -> Result<Vec<PullRequest>, String> {
     if verbose {
         eprintln!("[github] search: {query}");
@@ -910,9 +982,160 @@ mod tests {
             "type": event_type,
             "repo": {"id": 1, "name": repo},
             "created_at": created_at,
+            "public": true,
             "payload": payload,
         }))
         .unwrap()
+    }
+
+    /// A GitHub with one user, `me`, who in February 2026 opened a
+    /// PR and pushed to `o/pub` (public), `o/priv` (private) and
+    /// `o/since` (public then, private now). The PR searches answer
+    /// only the query the visibility asks for.
+    fn mock_github(include_private: bool) -> GithubReport {
+        use serde_json::json;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let vis = visibility_clause(include_private);
+        let pr = json!({"total_count": 1, "items": [{
+            "number": 3, "title": "Fix it", "state": "open",
+            "html_url": "https://github.com/o/pub/pull/3"}]});
+        let push = |repo: &str, public: bool| {
+            json!({"id": "1", "type": "PushEvent", "repo": {"id": 1, "name": repo},
+                   "created_at": "2026-02-15T10:00:00Z", "public": public, "payload": {}})
+        };
+        let commits = |n: usize| json!(vec![json!({"sha": "x"}); n]);
+        rt.block_on(async {
+            let get = |p: &str, body: serde_json::Value| {
+                Mock::given(method("GET"))
+                    .and(path(p.to_string()))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            };
+            get("/users/me", json!({"id": 1, "login": "me"}))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/search/issues"))
+                .and(query_param(
+                    "q",
+                    format!("type:pr author:me created:2026-02-01..2026-02-28{vis}"),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(pr))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/search/issues"))
+                .and(query_param(
+                    "q",
+                    format!("type:pr author:me is:merged merged:2026-02-01..2026-02-28{vis}"),
+                ))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"total_count": 0, "items": []})),
+                )
+                .mount(&server)
+                .await;
+            get(
+                "/users/me/events",
+                json!([
+                    push("o/pub", true),
+                    push("o/priv", false),
+                    push("o/since", true)
+                ]),
+            )
+            .mount(&server)
+            .await;
+            // o/since was public when pushed to, and is private now.
+            get("/repos/o/pub", json!({"id": 1, "private": false}))
+                .mount(&server)
+                .await;
+            get("/repos/o/since", json!({"id": 3, "private": true}))
+                .mount(&server)
+                .await;
+            get("/repos/o/pub/commits", commits(2)).mount(&server).await;
+            get("/repos/o/priv/commits", commits(5))
+                .mount(&server)
+                .await;
+            get("/repos/o/since/commits", commits(7))
+                .mount(&server)
+                .await;
+            for repo in ["o/pub", "o/priv", "o/since"] {
+                Mock::given(method("GET"))
+                    .and(path(format!("/repos/{repo}/git/refs/tags")))
+                    .respond_with(ResponseTemplate::new(404))
+                    .mount(&server)
+                    .await;
+            }
+        });
+        let cfg: GithubConfig =
+            serde_json::from_value(serde_json::json!({"instance": server.uri()})).unwrap();
+        let mut tokens = BTreeMap::new();
+        tokens.insert(forge::instance_host(&server.uri()), "tok".to_string());
+        let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        github_report(
+            &cfg,
+            "me",
+            day("2026-02-01"),
+            day("2026-02-28"),
+            &tokens,
+            include_private,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_shared_report_asks_only_for_public_work() {
+        let shared = mock_github(false);
+        assert_eq!(shared.opened_prs.len(), 1);
+        assert_eq!(
+            shared.commits_authored,
+            BTreeMap::from([("o/pub".to_string(), 2)])
+        );
+        let full = mock_github(true);
+        assert_eq!(full.opened_prs.len(), 1);
+        assert_eq!(
+            full.commits_authored,
+            BTreeMap::from([
+                ("o/priv".to_string(), 5),
+                ("o/pub".to_string(), 2),
+                ("o/since".to_string(), 7)
+            ])
+        );
+    }
+
+    #[test]
+    fn shared_events_were_public_then_and_are_public_now() {
+        let at = "2026-11-18T10:00:00Z";
+        let push = |repo: &str, public: bool| {
+            let mut e = make_event("PushEvent", repo, at, serde_json::json!({}));
+            e.public = public;
+            e
+        };
+        let events = vec![
+            push("o/private", false),
+            push("o/made-private", true),
+            push("o/public", true),
+        ];
+        // `public_now` lists the repositories public today.
+        let now: BTreeSet<String> = ["o/private", "o/public"].map(String::from).into();
+        let kept: Vec<String> = shareable_events(events, &now)
+            .iter()
+            .filter_map(|e| e.repo_slug().map(String::from))
+            .collect();
+        assert_eq!(kept, ["o/public"]);
+        // An event without the field is taken as private.
+        let bare: Event = serde_json::from_value(serde_json::json!({
+            "id": "2", "type": "PushEvent", "repo": {"id": 1, "name": "o/r"},
+            "created_at": at
+        }))
+        .unwrap();
+        assert!(!bare.public);
     }
 
     #[test]

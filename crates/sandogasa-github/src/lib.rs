@@ -236,6 +236,10 @@ pub struct Event {
     pub event_type: String,
     pub repo: Repository,
     pub created_at: String,
+    /// Whether the event happened in a public repository. GitHub sets
+    /// it on every event; a missing value reads as private.
+    #[serde(default)]
+    pub public: bool,
     /// Free-form payload — varies per event type.
     #[serde(default)]
     pub payload: serde_json::Value,
@@ -511,6 +515,26 @@ impl Client {
         Ok(http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?)
     }
 
+    /// Whether `owner/repo` is public now: `Some(false)` for a private
+    /// repository, `None` when it is gone or the token cannot see it.
+    pub fn repository_public(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+        #[derive(Deserialize)]
+        struct Visibility {
+            private: bool,
+        }
+        let url = format!("{}/repos/{owner}/{repo}", self.base_url);
+        let resp = self.http.get(&url).send()?;
+        if resp.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        let v: Visibility = http::blocking_json_ok(resp, &format!("GitHub GET {url}"))?;
+        Ok(Some(!v.private))
+    }
+
     /// The commits a pull request carries, oldest first (one page; a
     /// PR of more than a hundred commits is not what this is for).
     pub fn pull_request_commits(
@@ -721,6 +745,32 @@ mod tests {
         assert_eq!(user.id, 1);
         assert_eq!(user.login, "octocat");
         mock.assert();
+    }
+
+    #[test]
+    fn repository_public_reads_the_private_flag() {
+        let mut server = mockito::Server::new();
+        let public = server
+            .mock("GET", "/repos/o/pub")
+            .with_body(r#"{"id": 1, "private": false}"#)
+            .create();
+        let private = server
+            .mock("GET", "/repos/o/priv")
+            .with_body(r#"{"id": 2, "private": true}"#)
+            .create();
+        let gone = server
+            .mock("GET", "/repos/o/gone")
+            .with_status(404)
+            .create();
+        let broken = server.mock("GET", "/repos/o/err").with_status(500).create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        assert_eq!(client.repository_public("o", "pub").unwrap(), Some(true));
+        assert_eq!(client.repository_public("o", "priv").unwrap(), Some(false));
+        assert_eq!(client.repository_public("o", "gone").unwrap(), None);
+        assert!(client.repository_public("o", "err").is_err());
+        for m in [public, private, gone, broken] {
+            m.assert();
+        }
     }
 
     #[test]

@@ -186,10 +186,13 @@ struct ReportArgs {
     #[arg(short, long, value_name = "PATH", help_heading = "Output")]
     output: Option<String>,
 
-    /// Make a report for your own use: with --notes, also the notes on
-    /// items the report does not show, those without a URL, and
-    /// embargoed ones. Without it, a note shows only under an item
-    /// the report shows (with --json, any item it carries).
+    /// Make a report for your own use: include GitHub work in private
+    /// repositories and, with --notes, the notes on items the report
+    /// does not show, those without a URL, and embargoed ones. Without
+    /// it, the GitHub section keeps to public repositories and a note
+    /// shows only under an item the report shows (with --json, any
+    /// item it carries). The other forges' sections include private
+    /// projects your tokens can see either way.
     #[arg(long, help_heading = "Output")]
     private: bool,
 
@@ -565,6 +568,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                         since,
                         until,
                         &cfg.github_tokens,
+                        cli.private,
                         cli.verbose,
                     ) {
                         Ok(gh_report) => dr.github = Some(gh_report),

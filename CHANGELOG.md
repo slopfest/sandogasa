@@ -35,6 +35,20 @@ unless `--private` is given: it then carries a note only under an item
 it shows, never one about something it leaves out, a note without a
 URL, or an embargoed one, and says how many it left out (Refs #167).
 
+### sandogasa-report keeps private GitHub work out of reports unless `--private`
+
+A report listed GitHub work in private repositories whenever the token
+could see them: over 2026-11-01 to 2026-11-18 it counted 76 commits to
+a private repository among the commits by repo. Without `--private`,
+the GitHub section now searches PRs with `is:public` and keeps only
+events that were public when they happened and are in a repository
+that is public now, so reviews, comments, releases, tags and commit
+counts from private repositories are left out, with a count on
+standard error. A report run for your own use, such as a self-review,
+needs `--private` to keep them. The other forges' sections are not
+filtered yet. sandogasa-github's `Event` gains `public`, and `Client`
+gains `repository_public` (Refs #167).
+
 ### cbspkg promote checks what a build drops before it reaches -testing
 
 `cbspkg promote` tagged a build into `-testing` without looking at what
