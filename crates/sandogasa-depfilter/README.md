@@ -5,7 +5,9 @@ RPM dependency filtering for cross-branch analysis.
 Provides functions to classify RPM dependency strings as auto-generated
 or otherwise ignorable when comparing packages across Fedora/EPEL
 branches, plus a default list of source packages to exclude from
-installability checks.
+installability checks. `compare_provides` lists the Provides one set of
+packages has and another lacks as they were, each dropped or at another
+version (`provide_name` gives a Provide's capability).
 
 ## Installation
 

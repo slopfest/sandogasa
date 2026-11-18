@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### cbspkg promote checks what a build drops before it reaches -testing
+
+`cbspkg promote` tagged a build into `-testing` without looking at what
+it changed for other packages. A SIG build that drops a shared library,
+or another capability that packages in stock CentOS Stream or EPEL
+require, would break them for everyone testing the SIG's repo. A build
+going to `-testing` is now checked first. Its Provides, read from the
+CBS hub before it can be installed, are compared with those of the
+build it replaces: the collection's newest in `-testing`, or else
+`-release`. Each capability it drops is looked up in stock CentOS
+Stream and EPEL with fedrq. One that another source package still
+provides is not lost. For the rest, the packages whose binaries
+require them at run time are listed. The plan before `Promote?` shows:
+- what is dropped, red for a soname;
+- what is still provided elsewhere, in gray;
+- the packages that would break, in bold red;
+- the version changes, in gray.
+
+When something would break, or a repo could not be looked in for
+something dropped, Enter answers no; when the check could not run at
+all, the plan says so. This is step 1 of #157. The SIG's own repos,
+sets of builds promoted together and `hs-relmon review` come next.
+sandogasa-cbs gains `check`; sandogasa-depfilter gains
+`compare_provides` and `provide_name`, moved from ebranch (Refs #157).
+
 ### cbspkg colors the plan it asks you to confirm
 
 Before `Start build?`, `Promote?` and `Untag?`, cbspkg listed the

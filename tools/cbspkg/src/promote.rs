@@ -208,6 +208,27 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             return Err("promoting in CBS is confirmed at a terminal; run it in one".into());
         }
     }
+    // Then what the builds going to -testing drop, which takes the hub
+    // and fedrq some seconds.
+    let (found, unchecked) = check_moves(
+        &ui,
+        package,
+        &moves,
+        sandogasa_kojihub::config::hub_url("cbs").as_deref(),
+        &FedrqLookup::new(),
+    );
+    if args.dry_run {
+        // What the check found, before the steps it would lead to, as a
+        // real run's plan shows it first.
+        print!(
+            "{}",
+            crate::plan::checks(
+                &found,
+                unchecked.as_deref(),
+                sandogasa_cli::style::use_color(sandogasa_cli::style::ColorChoice::Auto)
+            )
+        );
+    }
     // The tracking issue is read next, so what it will be told is shown
     // with the promotion and confirmed with it.
     let base = crate::config::gitlab_base();
@@ -237,9 +258,21 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         let color = sandogasa_cli::style::stderr_color();
         eprint!(
             "\n{}",
-            crate::plan::promote(&steps, &notices, &replaced, token.is_some(), color)
+            crate::plan::promote(
+                &steps,
+                &found,
+                unchecked.as_deref(),
+                &notices,
+                &replaced,
+                token.is_some(),
+                color
+            )
         );
-        if !sandogasa_cli::confirm("Promote?", true)? {
+        // Something elsewhere requiring what a build drops, or a dropped
+        // capability whose users could not be looked up, makes "no" the
+        // answer an Enter gives.
+        let breaks = found.iter().any(|c| c.breaks() || c.uncertain());
+        if !sandogasa_cli::confirm("Promote?", !breaks)? {
             eprintln!("Nothing changed.");
             return Ok(());
         }
@@ -342,6 +375,176 @@ fn release_next(
         if nvrs.len() == 1 { "it" } else { "them" }
     );
     Some((what, command, by_hand))
+}
+
+/// The repos a check looks in, through fedrq: absent, every question is
+/// an error saying so, and the check reports them as not looked in.
+struct FedrqLookup {
+    installed: bool,
+}
+
+impl FedrqLookup {
+    fn new() -> Self {
+        let installed =
+            sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])
+                .is_ok();
+        Self { installed }
+    }
+
+    fn fedrq(&self, branch: &str) -> Result<sandogasa_fedrq::Fedrq, String> {
+        if !self.installed {
+            return Err("fedrq is not installed (sudo dnf install fedrq)".into());
+        }
+        Ok(sandogasa_fedrq::Fedrq {
+            branch: Some(branch.to_string()),
+            repo: None,
+        })
+    }
+}
+
+impl sandogasa_cbs::check::Lookup for FedrqLookup {
+    fn providers(
+        &self,
+        branch: &str,
+        capabilities: &[String],
+    ) -> Result<Vec<(String, Vec<String>)>, String> {
+        Ok(self
+            .fedrq(branch)?
+            .providers_info(capabilities)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|p| (p.source_name.unwrap_or(p.name), p.provides))
+            .collect())
+    }
+
+    fn users(&self, branch: &str, capabilities: &[String]) -> Result<Vec<String>, String> {
+        Ok(self
+            .fedrq(branch)?
+            .whatrequires_notsrc(capabilities)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|(_, source)| source)
+            .collect())
+    }
+}
+
+/// The checks of the builds that `moves` take to `-testing` (#157):
+/// each against the newest build of `package` in its collection's
+/// `-testing`, else `-release`, read from the CBS hub at `hub_url`
+/// (both tags of every collection, and then every build's Provides, in
+/// one `multiCall` each), with the users of what a build drops looked
+/// up through `lookup` in stock CentOS Stream and EPEL. Also, when
+/// nothing could be checked, why: no hub configured, or one that cannot
+/// be read. A collection whose `-testing` cannot be read is not checked,
+/// rather than compared with an older build.
+fn check_moves(
+    ui: &Ui,
+    package: &str,
+    moves: &[(&Collection, String, Stage)],
+    hub_url: Option<&str>,
+    lookup: &dyn sandogasa_cbs::check::Lookup,
+) -> (Vec<sandogasa_cbs::check::Check>, Option<String>) {
+    use sandogasa_cbs::check::{compare, look_up, provides_of, user_repos};
+    let to_testing: Vec<&(&Collection, String, Stage)> = moves
+        .iter()
+        .filter(|(_, _, to)| *to == Stage::Testing)
+        .collect();
+    if to_testing.is_empty() {
+        return (Vec::new(), None);
+    }
+    let Some(hub_url) = hub_url else {
+        return (
+            Vec::new(),
+            Some("no CBS hub in koji's configuration (profile cbs)".into()),
+        );
+    };
+    // One line says what is going on: the step heading when steps are
+    // narrated, a plain status line otherwise.
+    if !(ui.explain || ui.dry_run) {
+        eprintln!("Checking what the builds of {package} drop that other packages require…");
+    }
+    ui.step(&format!(
+        "Check what the builds of {package} drop that other packages require"
+    ));
+    let hub = sandogasa_kojihub::HubClient::new(hub_url);
+    let tags: Vec<String> = to_testing
+        .iter()
+        .flat_map(|(c, _, _)| [c.tag(Stage::Testing), c.tag(Stage::Release)])
+        .collect();
+    let latest = match hub.latest_in_tags(&tags, package) {
+        Ok(l) => l,
+        Err(e) => {
+            return (
+                Vec::new(),
+                Some(format!("cannot read {package}'s builds from CBS ({e})")),
+            );
+        }
+    };
+    // Per collection, the build it replaces: newest in -testing, else
+    // -release; Err when -testing could not be read.
+    let against: Vec<Result<Option<String>, String>> = latest
+        .chunks(2)
+        .map(|pair| match &pair[0] {
+            Err(e) => Err(e.to_string()),
+            Ok(Some(b)) => Ok(Some(b.nvr.clone())),
+            Ok(None) => match &pair[1] {
+                Err(e) => Err(e.to_string()),
+                Ok(b) => Ok(b.as_ref().map(|b| b.nvr.clone())),
+            },
+        })
+        .collect();
+    let mut nvrs: Vec<String> = to_testing.iter().map(|(_, nvr, _)| nvr.clone()).collect();
+    nvrs.extend(against.iter().filter_map(|a| a.clone().ok().flatten()));
+    let provides = match provides_of(&hub, &nvrs) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                Vec::new(),
+                Some(format!("cannot read the builds' Provides from CBS ({e})")),
+            );
+        }
+    };
+    let by_nvr: std::collections::BTreeMap<
+        &str,
+        &Result<std::collections::BTreeSet<String>, String>,
+    > = nvrs
+        .iter()
+        .map(String::as_str)
+        .zip(provides.iter())
+        .collect();
+    let mut found = Vec::new();
+    let mut repos = Vec::new();
+    for ((collection, nvr, _), against) in to_testing.iter().zip(&against) {
+        let new = match by_nvr.get(nvr.as_str()) {
+            Some(Ok(p)) => p,
+            Some(Err(e)) => {
+                eprintln!("warning: cannot read {nvr}'s Provides ({e}); not checked");
+                continue;
+            }
+            None => continue,
+        };
+        let old = match against {
+            Err(e) => {
+                eprintln!(
+                    "warning: cannot read {} ({e}); {nvr} not checked",
+                    collection.tag(Stage::Testing)
+                );
+                continue;
+            }
+            Ok(None) => None,
+            Ok(Some(a)) => match by_nvr.get(a.as_str()) {
+                Some(Ok(p)) => Some((a.as_str(), p)),
+                _ => {
+                    eprintln!("warning: cannot read {a}'s Provides; {nvr} not checked");
+                    continue;
+                }
+            },
+        };
+        found.push(compare(nvr, old, new));
+        repos.push(user_repos(collection.major));
+    }
+    look_up(&mut found, &repos, &[package], lookup);
+    (found, None)
 }
 
 /// The commands untagging the builds of `package` that each move in
@@ -563,6 +766,204 @@ mod tests {
             vec![TagChange::tag("t-release", "r-1-1.hs.el10")],
         )];
         assert!(release_next(&args, &released).is_none());
+    }
+
+    #[test]
+    fn builds_going_to_testing_are_checked_against_what_they_replace() {
+        let collections = sandogasa_cbs::hyperscale_collections(
+            10,
+            &["main".to_string(), "facebook".to_string()],
+            &[],
+        )
+        .unwrap();
+        let (main, fb) = (&collections[0], &collections[1]);
+        let value = |v: &str| format!("<value><array><data>{v}</data></array></value>");
+        let answer = |results: &[String]| {
+            format!(
+                "<?xml version='1.0'?><methodResponse><params><param>\
+                 <value><array><data>{}</data></array></value>\
+                 </param></params></methodResponse>",
+                results.concat()
+            )
+        };
+        let build = |nvr: &str| {
+            value(&format!(
+                "<value><array><data><value><struct><member><name>nvr</name>\
+                 <value><string>{nvr}</string></value></member></struct></value>\
+                 </data></array></value>"
+            ))
+        };
+        let none = value("<value><array><data></data></array></value>");
+        let rpm = |name: &str, vr: &str| {
+            let (v, r) = vr.split_once('-').unwrap();
+            format!(
+                "<value><struct><member><name>name</name><value><string>{name}</string></value></member>\
+                 <member><name>version</name><value><string>{v}</string></value></member>\
+                 <member><name>release</name><value><string>{r}</string></value></member>\
+                 <member><name>arch</name><value><string>x86_64</string></value></member></struct></value>"
+            )
+        };
+        let provide = |name: &str| {
+            value(&format!(
+                "<value><array><data><value><struct><member><name>name</name>\
+                 <value><string>{name}</string></value></member>\
+                 <member><name>type</name><value><int>1</int></value></member></struct></value>\
+                 </data></array></value>"
+            ))
+        };
+        let mut server = mockito::Server::new();
+        // main has 1-1 in -testing; facebook has nothing anywhere.
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("getLatestBuilds".into()))
+            .with_body(answer(&[
+                build("r-1-1.hs.el10"),
+                build("r-0-1.hs.el10"),
+                none.clone(),
+                none.clone(),
+            ]))
+            .expect(1)
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("listBuildRPMs".into()))
+            .with_body(answer(&[
+                value(&format!(
+                    "<value><array><data>{}</data></array></value>",
+                    rpm("r", "2-1.hs.el10")
+                )),
+                value(&format!(
+                    "<value><array><data>{}</data></array></value>",
+                    rpm("r", "2-1.hs+fb.el10")
+                )),
+                value(&format!(
+                    "<value><array><data>{}</data></array></value>",
+                    rpm("r", "1-1.hs.el10")
+                )),
+            ]))
+            .expect(1)
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("getRPMDeps".into()))
+            .with_body(answer(&[
+                provide("r"),
+                provide("r"),
+                provide("libr.so.1()(64bit)"),
+            ]))
+            .expect(1)
+            .create();
+        struct Repos;
+        impl sandogasa_cbs::check::Lookup for Repos {
+            fn providers(
+                &self,
+                _: &str,
+                caps: &[String],
+            ) -> Result<Vec<(String, Vec<String>)>, String> {
+                assert_eq!(caps, ["libr.so.1()(64bit)"]);
+                Ok(vec![])
+            }
+            fn users(&self, branch: &str, caps: &[String]) -> Result<Vec<String>, String> {
+                assert_eq!(caps, ["libr.so.1()(64bit)"]);
+                Ok(if branch == "c10s" {
+                    vec!["user".into()]
+                } else {
+                    vec![]
+                })
+            }
+        }
+        let ui = Ui {
+            explain: false,
+            dry_run: true,
+            quiet: true,
+        };
+        let moves = [
+            (main, "r-2-1.hs.el10".to_string(), Stage::Testing),
+            (fb, "r-2-1.hs+fb.el10".to_string(), Stage::Testing),
+            (main, "r-0-1.hs.el10".to_string(), Stage::Release),
+        ];
+        let (found, unchecked) = check_moves(&ui, "r", &moves, Some(&server.url()), &Repos);
+        assert_eq!(unchecked, None);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].against.as_deref(), Some("r-1-1.hs.el10"));
+        assert_eq!(found[0].dropped(), ["libr.so.1()(64bit)"]);
+        assert!(found[0].breaks());
+        assert_eq!(found[1].against, None);
+        let shown = crate::plan::checks(&found, None, false);
+        assert!(
+            shown.contains("required in CentOS Stream 10 by user"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("nothing in -testing or -release to compare it with"),
+            "{shown}"
+        );
+        // No hub configured, or one that cannot be read: nothing
+        // checked, and the plan says why.
+        let (found, why) = check_moves(&ui, "r", &moves, None, &Repos);
+        assert!(found.is_empty());
+        assert!(why.as_deref().unwrap().contains("no CBS hub"));
+        let (found, why) = check_moves(&ui, "r", &moves, Some("http://127.0.0.1:1"), &Repos);
+        assert!(found.is_empty() && why.is_some());
+        assert!(crate::plan::checks(&found, why.as_deref(), false).starts_with("Not checked"));
+        // Nothing going to -testing: nothing asked.
+        let (found, why) = check_moves(&ui, "r", &moves[2..], Some("http://127.0.0.1:1"), &Repos);
+        assert!(found.is_empty() && why.is_none());
+    }
+
+    #[test]
+    fn a_testing_tag_that_cannot_be_read_leaves_its_build_unchecked() {
+        let collections =
+            sandogasa_cbs::hyperscale_collections(10, &["main".to_string()], &[]).unwrap();
+        let fault = "<value><struct>\
+             <member><name>faultCode</name><value><int>1000</int></value></member>\
+             <member><name>faultString</name><value><string>No such tag</string></value></member>\
+             </struct></value>";
+        let release = "<value><array><data><value><array><data><value><struct>\
+             <member><name>nvr</name><value><string>r-0-1.hs.el10</string></value></member>\
+             </struct></value></data></array></value></data></array></value>";
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("getLatestBuilds".into()))
+            .with_body(format!(
+                "<?xml version='1.0'?><methodResponse><params><param>\
+                 <value><array><data>{fault}{release}</data></array></value>\
+                 </param></params></methodResponse>"
+            ))
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("listBuildRPMs".into()))
+            .with_body(
+                "<?xml version='1.0'?><methodResponse><params><param>\
+                 <value><array><data><value><array><data><value><array><data></data></array></value>\
+                 </data></array></value></data></array></value></param></params></methodResponse>",
+            )
+            .create();
+        struct Nothing;
+        impl sandogasa_cbs::check::Lookup for Nothing {
+            fn providers(
+                &self,
+                _: &str,
+                _: &[String],
+            ) -> Result<Vec<(String, Vec<String>)>, String> {
+                Ok(vec![])
+            }
+            fn users(&self, _: &str, _: &[String]) -> Result<Vec<String>, String> {
+                Ok(vec![])
+            }
+        }
+        let ui = Ui {
+            explain: false,
+            dry_run: true,
+            quiet: true,
+        };
+        let moves = [(&collections[0], "r-2-1.hs.el10".to_string(), Stage::Testing)];
+        // Not compared with the -release build it does not replace.
+        let (found, why) = check_moves(&ui, "r", &moves, Some(&server.url()), &Nothing);
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(why, None);
     }
 
     fn dry_run(nvr: Option<&str>, to: Option<To>, f: &Fixture) -> PromoteArgs {

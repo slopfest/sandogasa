@@ -326,6 +326,12 @@ meaning gets a row in this table in the same change.
 | gray (bright black, SGR 90) | secondary: notes, the `$` prompt, nothing to show | dbranch `check` notes, commands and `see:` citations, `--explain` prompts, hs-relmon (none), specport's notes and the comment block it adds |
 | red and green in a diff | lines taken out and put in, as `git diff` shows them; not good or broken | specport's diff (a FIXME it adds is yellow) |
 
+A check's results keep the normal text color, even when nothing is
+wrong ("drops no Provides", a version change): they are the answer
+the reader came for, and gray makes them hard to read. Only findings
+take a color. Gray is for what surrounds a result, like the `$`
+prompt or a citation.
+
 Plain green and bold green are deliberately apart: a status table's
 green says "nothing to do", the bold green of an instruction says
 "your turn". Use gray rather than SGR 2 ("faint"), which some

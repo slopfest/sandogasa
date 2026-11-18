@@ -239,6 +239,26 @@ or the package's newest in `-candidate` for each collection the branch
 (checked out, or `--branch`) builds into; `--to` names the stage when it
 is not the next one, such as `--to release` straight from `-candidate`.
 
+A build going to `-testing` is checked first. Its Provides, read from
+CBS, are compared with those of the build it replaces: the package's
+newest in the collection's `-testing`, or else `-release`. For each
+capability it drops, fedrq looks in stock CentOS Stream and EPEL (`-b
+c10s`, `-b epel10`). A capability another source package there still
+provides is not lost. For the rest, it lists the packages whose binary
+packages require them at run time. The plan before `Promote?` shows
+the result:
+- what the build drops, red for a shared library's soname and yellow
+  for anything else;
+- what another package still provides, in gray;
+- the packages that require something it drops, in bold red;
+- the version changes, in gray.
+
+When something requires what the build drops, or a repo could not be
+looked in for something it drops, Enter answers no to `Promote?`.
+`--dry-run` shows the check as well. Without koji's `cbs` profile, or
+with a hub that cannot be read, the plan says the builds were not
+checked; without fedrq, it says where it could not look.
+
 Promoting to `-release` also untags the build from `-testing`, so a
 released build is not left in testing as well. A build released before
 that, and still in `-testing`, is promoted again to finish the untag.

@@ -134,7 +134,9 @@ dependencies = [
  "sandogasa-cbs",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-fedrq",
  "sandogasa-gitlab",
+ "sandogasa-kojihub",
  "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
@@ -2021,6 +2023,7 @@ version = "0.28.2"
 dependencies = [
  "mockito",
  "sandogasa-cli",
+ "sandogasa-depfilter",
  "sandogasa-gitlab",
  "sandogasa-kojihub",
  "sandogasa-rpmvercmp",

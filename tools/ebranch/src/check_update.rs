@@ -6,6 +6,7 @@
 //! compares old vs new subpackage Provides to detect removed capabilities,
 //! then finds reverse dependencies in the stable repo that would break.
 
+use sandogasa_depfilter::provide_name;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -2941,39 +2942,16 @@ fn satisfied_outside_update(
     })
 }
 
-/// Extract the name part of a Provide string.
-///
-/// E.g. "tor = 0.4.9.5-1.el9" → "tor",
-///      "config(tor) = 0.4.9.5-1.el9" → "config(tor)",
-///      "libthing.so.1()(64bit)" → "libthing.so.1()(64bit)"
-fn provide_name(provide: &str) -> &str {
-    // Split on version operators: " = ", " < ", " > ", " <= ", " >= "
-    provide
-        .split_once(" = ")
-        .or_else(|| provide.split_once(" < "))
-        .or_else(|| provide.split_once(" > "))
-        .or_else(|| provide.split_once(" <= "))
-        .or_else(|| provide.split_once(" >= "))
-        .map(|(name, _)| name)
-        .unwrap_or(provide)
-}
-
-/// Compare old and new provides, classifying each as updated or removed.
+/// Compare old and new provides, classifying each as updated or removed
+/// ([`sandogasa_depfilter::compare_provides`]).
 fn compare_provides(old: &BTreeSet<String>, new: &BTreeSet<String>) -> Vec<ChangedProvide> {
-    // Build a map from provide name → full provide string for new provides.
-    let new_by_name: BTreeMap<&str, &str> =
-        new.iter().map(|p| (provide_name(p), p.as_str())).collect();
-
-    let mut changed = Vec::new();
-    for old_provide in old.difference(new) {
-        let name = provide_name(old_provide);
-        let new_match = new_by_name.get(name).map(|s| s.to_string());
-        changed.push(ChangedProvide {
-            old: old_provide.clone(),
-            new: new_match,
-        });
-    }
-    changed
+    sandogasa_depfilter::compare_provides(old, new)
+        .into_iter()
+        .map(|c| ChangedProvide {
+            old: c.old,
+            new: c.new,
+        })
+        .collect()
 }
 
 /// Check whether `@testing` actually carries the expected new

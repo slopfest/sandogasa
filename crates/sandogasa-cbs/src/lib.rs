@@ -23,6 +23,7 @@
 //! repo but into Extras' common collection, `extras<major>s-extras-common`
 //! (see [`release_package_collection`]).
 
+pub mod check;
 pub mod login;
 pub mod lookaside;
 pub mod notify;

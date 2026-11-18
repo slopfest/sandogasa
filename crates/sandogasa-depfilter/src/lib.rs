@@ -69,6 +69,59 @@ pub fn is_rpm_internal_dep(dep: &str) -> bool {
     dep.starts_with("rpmlib(") || dep.starts_with("auto(") || dep.starts_with("config(")
 }
 
+/// The capability a Provide string names, without its version:
+/// `tor = 0.4.9.5-1.el9` is `tor`, `config(tor) = 1` is `config(tor)`,
+/// and `libthing.so.1()(64bit)` is itself.
+pub fn provide_name(provide: &str) -> &str {
+    provide
+        .split_once(" = ")
+        .or_else(|| provide.split_once(" < "))
+        .or_else(|| provide.split_once(" > "))
+        .or_else(|| provide.split_once(" <= "))
+        .or_else(|| provide.split_once(" >= "))
+        .map(|(name, _)| name)
+        .unwrap_or(provide)
+}
+
+/// A Provide one side has and the other lacks as it was.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvideChange {
+    /// The old Provide string, `tor = 0.4.9.5-1.el9`.
+    pub old: String,
+    /// The new Provides of the same capability, if there still are
+    /// any: a version change. Several versions (a compat package
+    /// alongside) are listed in order, joined by `, `. `None` is a
+    /// Provide dropped.
+    pub new: Option<String>,
+}
+
+/// The Provides in `old` that `new` does not have as they were, each
+/// with the new Provide of the same capability when there is one.
+/// Compare the union of all the packages on each side: a capability
+/// that moved to another package, such as a compat package shipping the
+/// old version, is then not taken for one dropped.
+pub fn compare_provides(
+    old: &std::collections::BTreeSet<String>,
+    new: &std::collections::BTreeSet<String>,
+) -> Vec<ProvideChange> {
+    let mut new_by_name: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for p in new {
+        new_by_name
+            .entry(provide_name(p))
+            .or_default()
+            .push(p.as_str());
+    }
+    old.difference(new)
+        .map(|old_provide| ProvideChange {
+            old: old_provide.clone(),
+            new: new_by_name
+                .get(provide_name(old_provide))
+                .map(|all| all.join(", ")),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +193,52 @@ mod tests {
         assert!(!is_library_dep("protobuf-lite-devel"));
         assert!(!is_library_dep("crate(serde) = 1.0.229"));
         assert!(!is_library_dep("/usr/bin/pkg-config"));
+    }
+
+    #[test]
+    fn a_provide_is_named_without_its_version() {
+        assert_eq!(provide_name("tor = 0.4.9.5-1.el9"), "tor");
+        assert_eq!(provide_name("config(tor) = 1"), "config(tor)");
+        assert_eq!(provide_name("x >= 2"), "x");
+        assert_eq!(
+            provide_name("libthing.so.1()(64bit)"),
+            "libthing.so.1()(64bit)"
+        );
+    }
+
+    #[test]
+    fn provides_compare_as_dropped_or_changed() {
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
+        let changed = compare_provides(
+            &set(&["bash", "libfoo.so.1()(64bit)", "tor = 0.4.9.5-1.el9"]),
+            &set(&["bash", "tor = 0.4.9.6-1.el9"]),
+        );
+        assert_eq!(
+            changed,
+            [
+                ProvideChange {
+                    old: "libfoo.so.1()(64bit)".into(),
+                    new: None
+                },
+                ProvideChange {
+                    old: "tor = 0.4.9.5-1.el9".into(),
+                    new: Some("tor = 0.4.9.6-1.el9".into())
+                },
+            ]
+        );
+        // Several new versions are all named, in order.
+        assert_eq!(
+            compare_provides(&set(&["foo = 1.5"]), &set(&["foo = 1.0", "foo = 2.0"]))[0].new,
+            Some("foo = 1.0, foo = 2.0".to_string())
+        );
+        // A capability another package on the new side still ships as
+        // it was is not a change.
+        assert!(
+            compare_provides(
+                &set(&["crate(const-oid/std) = 0.9.6"]),
+                &set(&["crate(const-oid) = 0.10.2", "crate(const-oid/std) = 0.9.6"]),
+            )
+            .is_empty()
+        );
     }
 }

@@ -132,6 +132,19 @@ Hyperscale's are the `rfe::new-version` issues hs-relmon files per
 package. What the comments need from the package's git checkout comes
 through `notify::Checkout`, which the calling tool implements.
 
+## Checks
+
+`check` compares a candidate build's Provides with those of the build
+it replaces, before the candidate can be installed. `provides_of`
+reads each build's binary RPMs and their Provides from the hub, two
+`multiCall`s for all builds together. `compare` lists what the build
+drops or moves to another version. `look_up` then asks stock CentOS
+Stream and EPEL (`user_repos`) which source packages still provide a
+dropped capability, and whose binary packages require the rest. It
+asks each place once per distinct set of dropped capabilities, the
+places concurrently, through a `Lookup` the caller implements (fedrq
+in cbspkg, #157). A version change is listed but not looked up.
+
 ## Reviews
 
 `review::review` is the karma-style review loop SIG trackers share,
