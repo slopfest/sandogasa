@@ -11,8 +11,11 @@
 //! macros are read from CBS (`koji -p cbs call getBuildConfig`) rather
 //! than guessed, and passed as `--define`s to `rpmspec`, `rpmbuild` and
 //! `mock`. On the host `dist` is spelled out, as the host's own
-//! redhat-rpm-config is Fedora's; inside mock, the chroot's
-//! redhat-rpm-config does it, as in CBS. centpkg-sig has `srpm`,
+//! redhat-rpm-config is Fedora's, and so are the macros an EL
+//! buildroot's `macros.dist` defines (`rhel`, `centos`, `centos_ver`,
+//! `el<N>`), with the host's `fedora` undefined: a spec's `%if
+//! 0%{?rhel} < 10` or `%if 0%{?fedora}` then reads as it does in CBS.
+//! Inside mock, the chroot's own macros do it, as in CBS. centpkg-sig has `srpm`,
 //! `mockbuild` and `verrel` too, but takes the dist tag from the
 //! branch name alone, so a release package built in Extras
 //! (`.el9s` in CBS) comes out as `.el9`.
@@ -177,10 +180,23 @@ pub fn tag_macros(config: &serde_json::Value) -> Vec<(String, String)> {
 
 /// The macros for building on the host: the tag's, with `dist` spelled
 /// out where the tag gives only a prefix or suffix, as
-/// redhat-rpm-config would on EL `major`. The host's own `%dist` is
+/// redhat-rpm-config would on EL `major`, and the ones CentOS Stream's
+/// `macros.dist` defines there (`rhel`, `centos`, `centos_ver`,
+/// `el<N>`), unless the tag sets them. The host's own `%dist` is
 /// Fedora's, so it cannot be left to expand.
 pub fn host_macros(tag: &[(String, String)], major: u32) -> Vec<(String, String)> {
     let mut macros = tag.to_vec();
+    for (name, value) in [
+        ("centos".to_string(), major.to_string()),
+        ("centos_ver".to_string(), major.to_string()),
+        (format!("el{major}"), "1".to_string()),
+        ("rhel".to_string(), major.to_string()),
+    ] {
+        if !macros.iter().any(|(k, _)| *k == name) {
+            macros.push((name, value));
+        }
+    }
+    macros.sort();
     if !macros.iter().any(|(k, _)| k == "dist") {
         let get = |name: &str| {
             tag.iter()
@@ -203,11 +219,16 @@ pub fn define_args(macros: &[(String, String)]) -> Vec<String> {
         .collect()
 }
 
+/// What reads a spec on the host as an EL buildroot would: without the
+/// host's `%fedora`, which no EL buildroot defines.
+const HOST_UNDEFINES: [&str; 2] = ["--undefine", "fedora"];
+
 /// The command printing `qf` for the SRPM `spec` builds with `macros`.
 pub fn rpmspec_argv(spec: &str, macros: &[(String, String)], qf: &str) -> Vec<String> {
     let mut argv: Vec<String> = ["rpmspec", "-q", "--srpm", "--qf", qf]
         .map(String::from)
         .to_vec();
+    argv.extend(HOST_UNDEFINES.map(String::from));
     argv.extend(define_args(macros));
     argv.push(spec.to_string());
     argv
@@ -313,6 +334,7 @@ pub fn srpm_argv(dir: &Path, spec: &str, macros: &[(String, String)]) -> Vec<Str
     for name in ["_sourcedir", "_specdir", "_srcrpmdir"] {
         argv.extend(["--define".to_string(), format!("{name} {dir}")]);
     }
+    argv.extend(HOST_UNDEFINES.map(String::from));
     argv.extend(define_args(macros));
     argv.push(spec.to_string());
     argv
@@ -800,28 +822,55 @@ mod tests {
         assert!(tag_macros(&serde_json::json!({})).is_empty());
     }
 
+    /// `name`'s value among `macros`.
+    fn value<'a>(macros: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        macros
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
     #[test]
     fn dist_is_spelled_out_for_the_host_from_the_tags_parts() {
         // Hyperscale's Stream collection: dist itself.
-        let hs = macros(&[("dist", ".hs.el10")]);
-        assert_eq!(host_macros(&hs, 10), hs);
+        let hs = host_macros(&macros(&[("dist", ".hs.el10")]), 10);
+        assert_eq!(value(&hs, "dist"), Some(".hs.el10"));
         // Proposed Updates: a prefix.
-        assert_eq!(
-            host_macros(&macros(&[("distprefix", "~proposed")]), 10),
-            macros(&[("dist", "~proposed.el10"), ("distprefix", "~proposed")])
-        );
+        let pu = host_macros(&macros(&[("distprefix", "~proposed")]), 10);
+        assert_eq!(value(&pu, "dist"), Some("~proposed.el10"));
+        assert_eq!(value(&pu, "distprefix"), Some("~proposed"));
         // Hyperscale's RHEL facebook build: both.
-        assert_eq!(
-            host_macros(
-                &macros(&[("distprefix", ".hs+fb"), ("distsuffix", "_z")]),
-                10
-            )[0],
-            ("dist".to_string(), ".hs+fb.el10_z".to_string())
+        let fb = host_macros(
+            &macros(&[("distprefix", ".hs+fb"), ("distsuffix", "_z")]),
+            10,
         );
+        assert_eq!(value(&fb, "dist"), Some(".hs+fb.el10_z"));
         // Extras' common collection: a suffix, which centpkg-sig misses.
-        assert_eq!(
-            host_macros(&macros(&[("distsuffix", "s")]), 9)[0],
-            ("dist".to_string(), ".el9s".to_string())
+        let extras = host_macros(&macros(&[("distsuffix", "s")]), 9);
+        assert_eq!(value(&extras, "dist"), Some(".el9s"));
+    }
+
+    #[test]
+    fn the_host_reads_a_spec_as_an_el_buildroot_would() {
+        // rasdaemon's EL9-only Python 3.9 patch hangs on
+        // `%if 0%{?rhel} && 0%{?rhel} < 10`: without rhel, as on a
+        // Fedora host, the SRPM left it out.
+        let el9 = host_macros(&macros(&[("dist", ".hs.el9")]), 9);
+        assert_eq!(value(&el9, "rhel"), Some("9"));
+        assert_eq!(value(&el9, "centos"), Some("9"));
+        assert_eq!(value(&el9, "centos_ver"), Some("9"));
+        assert_eq!(value(&el9, "el9"), Some("1"));
+        assert_eq!(value(&el9, "el10"), None);
+        // What the tag sets is kept.
+        let own = host_macros(&macros(&[("rhel", "9.6")]), 9);
+        assert_eq!(value(&own, "rhel"), Some("9.6"));
+        // And the host's own fedora is gone from both host commands.
+        let srpm = srpm_argv(Path::new("/w"), "x.spec", &el9).join(" ");
+        assert!(srpm.contains("--undefine fedora"), "{srpm}");
+        assert!(
+            verrel_argv("x.spec", &el9)
+                .join(" ")
+                .contains("--undefine fedora")
         );
     }
 
@@ -830,12 +879,13 @@ mod tests {
         let m = macros(&[("dist", ".hs.el10")]);
         assert_eq!(
             sandogasa_cli::explain::command_line(&verrel_argv("perf.spec", &m)),
-            "rpmspec -q --srpm --qf '%{version}-%{release}\\n' --define 'dist .hs.el10' perf.spec"
+            "rpmspec -q --srpm --qf '%{version}-%{release}\\n' --undefine fedora \
+             --define 'dist .hs.el10' perf.spec"
         );
         assert_eq!(
             sandogasa_cli::explain::command_line(&srpm_argv(Path::new("/w"), "perf.spec", &m)),
             "rpmbuild -bs --define '_sourcedir /w' --define '_specdir /w' \
-             --define '_srcrpmdir /w' --define 'dist .hs.el10' perf.spec"
+             --define '_srcrpmdir /w' --undefine fedora --define 'dist .hs.el10' perf.spec"
         );
         assert_eq!(
             sandogasa_cli::explain::command_line(&mock_argv(

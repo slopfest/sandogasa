@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### cbspkg srpm and verrel read a spec as an EL buildroot does
+
+`cbspkg srpm` left out a patch declared under `%if 0%{?rhel} &&
+0%{?rhel} < 10` when building Hyperscale's rasdaemon for EL9: on a
+Fedora host `%{rhel}` was undefined and `%{fedora}` was Fedora's, so
+any spec condition on the distribution read the host's answer, not
+CBS's. `srpm`, `verrel` and the release check `build` runs now define
+what CentOS Stream's `macros.dist` defines for the collection's major
+(`rhel`, `centos`, `centos_ver`, `el<N>`) unless CBS's tag sets them,
+and undefine the host's `fedora`. `mockbuild` already read the spec
+inside the chroot (Fixes #175).
+
 ### New specport tool: autotools to Meson spec conversion
 
 When upstream moves from autotools to Meson, every `%configure` option
