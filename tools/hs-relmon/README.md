@@ -632,7 +632,7 @@ gets a comment
 saying so and the `stage::rejected` label, which flags the update for
 attention until the next build reaches a stage. The comment is shown
 before it is posted. A build older than the version the issue asks for
-tells it nothing. Posting needs the GitLab token from `hs-relmon config`;
+gets its comment too, saying so, but no label. Posting needs the GitLab token from `hs-relmon config`;
 without one the comments are shown and not posted.
 
 The changelog is scoped to what changed: for a package already

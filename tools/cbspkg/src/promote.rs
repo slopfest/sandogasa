@@ -210,7 +210,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     // Then what the builds going to -testing drop, which takes the hub
     // and fedrq some seconds.
-    let (found, unchecked) = check_moves(
+    let (found, unchecked, skipped) = check_moves(
         &ui,
         package,
         &moves,
@@ -236,7 +236,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     if sandogasa_cbs::notify::covers(checkout.sig) {
         ui.step("Find the tracking issue to update, through GitLab's API");
     }
-    let notices = sandogasa_cbs::notify::plan(
+    let mut notices = sandogasa_cbs::notify::plan(
         &base,
         token.as_deref(),
         &sandogasa_cbs::notify::Branch {
@@ -249,6 +249,14 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         },
         &steps,
         &sandogasa_cbs::packages::build_commits,
+    );
+    // What the check found goes on the issue too, with the build.
+    add_checks(
+        &mut notices,
+        &found,
+        &skipped,
+        unchecked.as_deref(),
+        &checked_by(&std::env::args().collect::<Vec<_>>()),
     );
 
     if !args.dry_run {
@@ -428,6 +436,98 @@ impl sandogasa_cbs::check::Lookup for FedrqLookup {
     }
 }
 
+/// Each build's checks, in full, as part of its tracking-issue comment,
+/// with `by` (the tool, its version and the command) at the end, as
+/// ebranch signs the check it posts to Bodhi; a build moving into
+/// several collections (Stream and RHEL) has one check per collection.
+/// A build `skipped` says why it was not checked, and when nothing
+/// could be checked, `unchecked` says why, so a comment without a check
+/// does not read as one that found nothing.
+fn add_checks(
+    notices: &mut [sandogasa_cbs::notify::Notice],
+    found: &[sandogasa_cbs::check::Check],
+    skipped: &[(String, String)],
+    unchecked: Option<&str>,
+    by: &str,
+) {
+    use sandogasa_cbs::check::one_line;
+    for notice in notices {
+        let mut parts: Vec<String> = found
+            .iter()
+            .filter(|c| c.nvr == notice.nvr)
+            .map(|c| c.markdown())
+            .collect();
+        parts.extend(
+            skipped
+                .iter()
+                .filter(|(nvr, _)| *nvr == notice.nvr)
+                .map(|(_, why)| format!("Not checked for what it drops: `{}`.", one_line(why))),
+        );
+        if parts.is_empty() {
+            if let Some(why) = unchecked {
+                notice.add_paragraph(&format!(
+                    "Not checked for what it drops: `{}`.",
+                    one_line(why)
+                ));
+            }
+            continue;
+        }
+        parts.push(by.to_string());
+        notice.add_paragraph(&parts.join("\n\n"));
+    }
+}
+
+/// Who checked: the tool, its version and the command, for the end of
+/// a posted check. The comment is public, so the checkout's path
+/// (`-C`, `--repo`) is left out and any other path cut to its last
+/// part; each argument is quoted as a shell would need it.
+fn checked_by(args: &[String]) -> String {
+    let mut command = vec!["cbspkg".to_string()];
+    let mut rest = args.iter().skip(1);
+    while let Some(a) = rest.next() {
+        if a == "-C" || a == "--repo" {
+            rest.next();
+            continue;
+        }
+        if a.starts_with("--repo=") || (a.starts_with("-C") && a.len() > 2) {
+            continue;
+        }
+        let a = if a.contains('/') {
+            a.rsplit('/').find(|p| !p.is_empty()).unwrap_or(a)
+        } else {
+            a
+        };
+        command.push(shell_quote(a));
+    }
+    format!(
+        "<sub>Checked by cbspkg {}: `{}`</sub>",
+        env!("CARGO_PKG_VERSION"),
+        sandogasa_cbs::check::one_line(&command.join(" "))
+    )
+}
+
+/// `arg` as a POSIX shell would need it: as is when it has only safe
+/// characters, otherwise in single quotes.
+fn shell_quote(arg: &str) -> String {
+    let safe = !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.,:=+@%^~".contains(c));
+    if safe {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
+}
+
+/// What [`check_moves`] found: the checks; why nothing could be
+/// checked, when so; and each build left unchecked, with why.
+type Checked = (
+    Vec<sandogasa_cbs::check::Check>,
+    Option<String>,
+    Vec<(String, String)>,
+);
+
 /// The checks of the builds that `moves` take to `-testing` or
 /// `-release` (#157), each against the newest build of `package` in its
 /// collection's `-release`, which is what everyone using the SIG's
@@ -444,19 +544,20 @@ fn check_moves(
     moves: &[(&Collection, String, Stage)],
     hub_url: Option<&str>,
     lookup: &dyn sandogasa_cbs::check::Lookup,
-) -> (Vec<sandogasa_cbs::check::Check>, Option<String>) {
+) -> Checked {
     use sandogasa_cbs::check::{compare, look_up, provides_of, user_repos};
     let to_testing: Vec<&(&Collection, String, Stage)> = moves
         .iter()
         .filter(|(_, _, to)| matches!(to, Stage::Testing | Stage::Release))
         .collect();
     if to_testing.is_empty() {
-        return (Vec::new(), None);
+        return (Vec::new(), None, Vec::new());
     }
     let Some(hub_url) = hub_url else {
         return (
             Vec::new(),
             Some("no CBS hub in koji's configuration (profile cbs)".into()),
+            Vec::new(),
         );
     };
     // One line says what is going on: the step heading when steps are
@@ -478,6 +579,7 @@ fn check_moves(
             return (
                 Vec::new(),
                 Some(format!("cannot read {package}'s builds from CBS ({e})")),
+                Vec::new(),
             );
         }
     };
@@ -501,6 +603,7 @@ fn check_moves(
             return (
                 Vec::new(),
                 Some(format!("cannot read the builds' Provides from CBS ({e})")),
+                Vec::new(),
             );
         }
     };
@@ -514,25 +617,33 @@ fn check_moves(
         .collect();
     let mut found = Vec::new();
     let mut repos = Vec::new();
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    let mut skip = |nvr: &str, why: String| {
+        eprintln!("warning: {why}; {nvr} not checked");
+        skipped.push((nvr.to_string(), why));
+    };
     for ((collection, nvr, _), against) in to_testing.iter().zip(&against) {
         let new = match by_nvr.get(nvr.as_str()) {
             Some(Ok(p)) => p,
             Some(Err(e)) => {
-                eprintln!("warning: cannot read {nvr}'s Provides ({e}); not checked");
+                skip(nvr, format!("cannot read {nvr}'s Provides ({e})"));
                 continue;
             }
             None => continue,
         };
         let old = match against {
             Err(e) => {
-                eprintln!("warning: cannot read {e}; {nvr} not checked");
+                skip(nvr, format!("cannot read {e}"));
                 continue;
             }
             Ok(None) => None,
+            // Already released (a re-promotion finishing its untag from
+            // -testing): nothing to compare it with but itself.
+            Ok(Some(a)) if a == nvr => continue,
             Ok(Some(a)) => match by_nvr.get(a.as_str()) {
                 Some(Ok(p)) => Some((a.as_str(), p)),
                 _ => {
-                    eprintln!("warning: cannot read {a}'s Provides; {nvr} not checked");
+                    skip(nvr, format!("cannot read {a}'s Provides"));
                     continue;
                 }
             },
@@ -541,7 +652,7 @@ fn check_moves(
         repos.push(user_repos(collection.major));
     }
     look_up(&mut found, &repos, &[package], lookup);
-    (found, None)
+    (found, None, skipped)
 }
 
 /// The commands untagging the builds of `package` that each move in
@@ -766,6 +877,114 @@ mod tests {
     }
 
     #[test]
+    fn each_builds_check_goes_into_its_own_comment() {
+        use sandogasa_cbs::notify::{Event, Notice};
+        let notice = |nvr: &str| Notice {
+            nvr: nvr.into(),
+            event: Event::Reached(Stage::Release),
+            path: "p".into(),
+            iid: 1,
+            issue_url: "u".into(),
+            note: format!("`{nvr}` is released.\n\n<!-- sandogasa: {nvr} reached release -->"),
+            label: None,
+            missing_label: None,
+            unlabel: None,
+            at_least: None,
+            closing: None,
+            older: false,
+            tool: "cbspkg",
+        };
+        let mut notices = vec![notice("w-2-1.el9"), notice("w-2-1.el10")];
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
+        let checked = sandogasa_cbs::check::compare(
+            "w-2-1.el9",
+            Some(("w-1-1.el9", &set(&["w = 1-1"]))),
+            &set(&["w = 2-1"]),
+        );
+        add_checks(
+            &mut notices,
+            std::slice::from_ref(&checked),
+            &[],
+            None,
+            "BY",
+        );
+        assert_eq!(
+            notices[0].note,
+            format!(
+                "`w-2-1.el9` is released.\n\n{}\n\nBY\n\n\
+                 <!-- sandogasa: w-2-1.el9 reached release -->",
+                checked.markdown()
+            )
+        );
+        // A build without a check keeps its comment as it was.
+        assert_eq!(
+            notices[1].note,
+            "`w-2-1.el10` is released.\n\n<!-- sandogasa: w-2-1.el10 reached release -->"
+        );
+        // Nothing could be checked: each comment says why.
+        let mut notices = vec![notice("w-2-1.el9")];
+        add_checks(&mut notices, &[], &[], Some("no CBS hub\nconfigured"), "BY");
+        assert!(
+            notices[0]
+                .note
+                .contains("\n\nNot checked for what it drops: `no CBS hub configured`.\n\n"),
+            "{}",
+            notices[0].note
+        );
+        // One build skipped, the other checked in two collections.
+        let mut notices = vec![notice("w-2-1.el9"), notice("w-2-1.el10")];
+        let mut rhel = checked.clone();
+        rhel.against = Some("w-1-2.el9".into());
+        add_checks(
+            &mut notices,
+            &[checked.clone(), rhel.clone()],
+            &[(
+                "w-2-1.el10".into(),
+                "cannot read w-2-1.el10's Provides".into(),
+            )],
+            None,
+            "BY",
+        );
+        assert!(notices[0].note.contains(&format!(
+            "{}\n\n{}\n\nBY",
+            checked.markdown(),
+            rhel.markdown()
+        )));
+        assert!(
+            notices[1].note.contains(
+                "Not checked for what it drops: `cannot read w-2-1.el10's Provides`.\n\nBY"
+            )
+        );
+        // The checkout's path stays private; arguments are quoted.
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            checked_by(&args(&[
+                "/usr/bin/cbspkg",
+                "promote",
+                "-C",
+                "/home/u/src/perf",
+                "--repo=/home/u/x",
+                "-C/home/u/y",
+                "--branch",
+                "c9s sig",
+                "--to",
+                "release"
+            ])),
+            format!(
+                "<sub>Checked by cbspkg {version}: \
+                 `cbspkg promote --branch 'c9s sig' --to release`</sub>"
+            )
+        );
+        assert_eq!(
+            checked_by(&args(&["cbspkg", "promote", "./it's/r-1.src.rpm"])),
+            format!("<sub>Checked by cbspkg {version}: `cbspkg promote r-1.src.rpm`</sub>")
+        );
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    #[test]
     fn builds_are_checked_against_what_they_replace() {
         let collections = sandogasa_cbs::hyperscale_collections(
             10,
@@ -890,7 +1109,7 @@ mod tests {
             (fb, "r-2-1.hs+fb.el10".to_string(), Stage::Testing),
             (main, "r-1-1.hs.el10".to_string(), Stage::Release),
         ];
-        let (found, unchecked) = check_moves(&ui, "r", &moves, Some(&server.url()), &Repos);
+        let (found, unchecked, _) = check_moves(&ui, "r", &moves, Some(&server.url()), &Repos);
         assert_eq!(unchecked, None);
         assert_eq!(found.len(), 3);
         // Going to -testing, against -release too.
@@ -912,14 +1131,15 @@ mod tests {
         );
         // No hub configured, or one that cannot be read: nothing
         // checked, and the plan says why.
-        let (found, why) = check_moves(&ui, "r", &moves, None, &Repos);
+        let (found, why, _) = check_moves(&ui, "r", &moves, None, &Repos);
         assert!(found.is_empty());
         assert!(why.as_deref().unwrap().contains("no CBS hub"));
-        let (found, why) = check_moves(&ui, "r", &moves, Some("http://127.0.0.1:1"), &Repos);
+        let (found, why, _) = check_moves(&ui, "r", &moves, Some("http://127.0.0.1:1"), &Repos);
         assert!(found.is_empty() && why.is_some());
         assert!(crate::plan::checks(&found, why.as_deref(), false).starts_with("Not checked"));
         // Nothing to move: nothing asked.
-        let (found, why) = check_moves(&ui, "r", &moves[..0], Some("http://127.0.0.1:1"), &Repos);
+        let (found, why, _) =
+            check_moves(&ui, "r", &moves[..0], Some("http://127.0.0.1:1"), &Repos);
         assert!(found.is_empty() && why.is_none());
     }
 
@@ -970,7 +1190,7 @@ mod tests {
         };
         let moves = [(&collections[0], "r-2-1.hs.el10".to_string(), Stage::Testing)];
         // Not checked, rather than taken as the first build released.
-        let (found, why) = check_moves(&ui, "r", &moves, Some(&server.url()), &Nothing);
+        let (found, why, _) = check_moves(&ui, "r", &moves, Some(&server.url()), &Nothing);
         assert!(found.is_empty(), "{found:?}");
         assert_eq!(why, None);
     }

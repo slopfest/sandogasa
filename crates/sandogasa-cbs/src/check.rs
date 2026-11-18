@@ -25,7 +25,7 @@ use sandogasa_kojihub::HubClient;
 pub struct Check {
     pub nvr: String,
     /// The build compared with, `None` when the collection has none
-    /// in `-testing` or `-release` yet.
+    /// in `-release` yet.
     pub against: Option<String>,
     /// The Provides the replaced build had that this one lacks as they
     /// were: dropped, or at another version.
@@ -69,6 +69,73 @@ impl Check {
             .collect()
     }
 
+    /// The whole check, as it shows at the terminal, in Markdown for a
+    /// tracking-issue comment: what was compared, what the build drops,
+    /// which of that another package still provides or packages
+    /// elsewhere require, where could not be looked, and every version
+    /// change, the last in a collapsed `<details>`. Each part is its own
+    /// paragraph, as GitLab joins single lines.
+    pub fn markdown(&self) -> String {
+        let Some(against) = &self.against else {
+            return "Checked what it drops: nothing in `-release` to compare it with yet."
+                .to_string();
+        };
+        let dropped: BTreeSet<&str> = self.dropped().into_iter().collect();
+        let mut out =
+            format!("Checked what it drops against `{against}`, the newest in `-release`:");
+        if dropped.is_empty() {
+            out.push_str("\n\n- drops no Provides");
+        } else {
+            out.push('\n');
+            for d in &dropped {
+                out.push_str(&format!("\n- drops `{d}`"));
+            }
+        }
+        for (place, cap, by) in &self.still_provided {
+            out.push_str(&format!(
+                "\n\n`{cap}` is still provided in {place} by {}.",
+                by.join(", ")
+            ));
+        }
+        for (place, users) in &self.users {
+            if !users.is_empty() {
+                out.push_str(&format!(
+                    "\n\n**Required in {place} by {}.**",
+                    users.join(", ")
+                ));
+            }
+        }
+        // Only once a lookup ran: no place looked in proves nothing.
+        if !dropped.is_empty()
+            && !self.users.is_empty()
+            && !self.breaks()
+            && self.unchecked.is_empty()
+        {
+            out.push_str("\n\nNothing in CentOS Stream or EPEL requires what it drops.");
+        }
+        if !self.unchecked.is_empty() {
+            let places: Vec<String> = self
+                .unchecked
+                .iter()
+                .map(|u| format!("`{}`", one_line(u)))
+                .collect();
+            out.push_str(&format!("\n\nNot looked in: {}.", places.join(", ")));
+        }
+        let changed = self.changed();
+        if !changed.is_empty() {
+            let n = changed.len();
+            out.push_str(&format!(
+                "\n\n<details><summary>Changes {n} Provide{} to another version</summary>\n",
+                if n == 1 { "" } else { "s" }
+            ));
+            for (old, new) in changed {
+                out.push_str(&format!("\n- `{old}` to `{new}`"));
+            }
+            out.push_str("\n\n</details>");
+        }
+        out
+    }
+
     /// The dropped capabilities, by name, sorted and without repeats.
     fn dropped_names(&self) -> Vec<String> {
         self.dropped()
@@ -78,6 +145,17 @@ impl Check {
             .into_iter()
             .collect()
     }
+}
+
+/// `text` (an error from fedrq or the hub, a command line) on one
+/// line, for a code span in a comment: newlines and runs of space
+/// become one space, and a backtick a quote, so it cannot end the span
+/// or start a paragraph.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('`', "'")
 }
 
 /// Where to look for the packages using a build of EL `major`: stock
@@ -321,6 +399,70 @@ mod tests {
                 .push(("users".into(), branch.into(), caps.to_vec()));
             Ok(vec!["bar".into(), "foo".into(), "(none)".into()])
         }
+    }
+
+    #[test]
+    fn a_check_reads_as_a_comment_in_full() {
+        let old = set(&["libr.so.1()(64bit)", "r-tools = 1-1", "r = 1-1"]);
+        let mut c = compare("r-2-1", Some(("r-1-1", &old)), &set(&["r = 2-1"]));
+        c.still_provided = vec![(
+            "CentOS Stream 10".into(),
+            "r-tools".into(),
+            vec!["other".into()],
+        )];
+        c.users = vec![
+            ("CentOS Stream 10".into(), vec!["a".into(), "b".into()]),
+            ("EPEL 10".into(), vec![]),
+        ];
+        assert_eq!(
+            c.markdown(),
+            "Checked what it drops against `r-1-1`, the newest in `-release`:\n\n\
+             - drops `libr.so.1()(64bit)`\n\
+             - drops `r-tools = 1-1`\n\n\
+             `r-tools` is still provided in CentOS Stream 10 by other.\n\n\
+             **Required in CentOS Stream 10 by a, b.**\n\n\
+             <details><summary>Changes 1 Provide to another version</summary>\n\n\
+             - `r = 1-1` to `r = 2-1`\n\n\
+             </details>"
+        );
+        // Looked up everywhere, needed nowhere.
+        c.users = vec![("CentOS Stream 10".into(), vec![])];
+        c.still_provided.clear();
+        assert!(
+            c.markdown()
+                .contains("\n\nNothing in CentOS Stream or EPEL requires what it drops.\n\n")
+        );
+        // Not looked up at all: no such claim.
+        c.users.clear();
+        assert!(!c.markdown().contains("Nothing in"), "{}", c.markdown());
+        // A place that could not be looked in, its error on one line.
+        c.unchecked = vec!["EPEL 10: no such\n`release`".into()];
+        assert!(
+            c.markdown()
+                .contains("\n\nNot looked in: `EPEL 10: no such 'release'`.\n\n"),
+            "{}",
+            c.markdown()
+        );
+        // Nothing dropped, two versions changed.
+        let same = compare(
+            "r-2-1",
+            Some(("r-1-1", &set(&["r = 1-1", "r-data = 1-1"]))),
+            &set(&["r = 2-1", "r-data = 2-1"]),
+        );
+        assert_eq!(
+            same.markdown(),
+            "Checked what it drops against `r-1-1`, the newest in `-release`:\n\n\
+             - drops no Provides\n\n\
+             <details><summary>Changes 2 Provides to another version</summary>\n\n\
+             - `r = 1-1` to `r = 2-1`\n\
+             - `r-data = 1-1` to `r-data = 2-1`\n\n\
+             </details>"
+        );
+        let first = compare("r-1-1", None, &set(&["r = 1-1"]));
+        assert_eq!(
+            first.markdown(),
+            "Checked what it drops: nothing in `-release` to compare it with yet."
+        );
     }
 
     #[test]

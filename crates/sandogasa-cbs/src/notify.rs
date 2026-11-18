@@ -58,8 +58,38 @@ pub struct Notice {
     pub at_least: Option<String>,
     /// For a Hyperscale release: when to close the issue.
     pub closing: Option<Closing>,
+    /// A Hyperscale build older than the version its issue asks for:
+    /// told about, but it sets no label or status and closes nothing.
+    pub older: bool,
     /// The tool doing the write, whose `config` sets a GitLab token.
     pub tool: &'static str,
+}
+
+impl Notice {
+    /// Add `paragraph` to the comment, before its hidden marker: what a
+    /// check found about the build, for one.
+    pub fn add_paragraph(&mut self, paragraph: &str) {
+        self.note = with_paragraph(&self.note, paragraph);
+    }
+
+    /// Make this the notice of a build older than the `asked` version
+    /// its issue is about: the comment says so, and it sets no label or
+    /// status and closes nothing, which follow the version asked for.
+    fn mark_older(&mut self, asked: &str) {
+        self.note = with_paragraph(
+            &self.note,
+            &format!(
+                "This is older than the {asked} this issue asks for, so its `stage::` label \
+                 stays as it is."
+            ),
+        );
+        self.label = None;
+        self.missing_label = None;
+        self.unlabel = None;
+        self.closing = None;
+        self.at_least = None;
+        self.older = true;
+    }
 }
 
 /// When a Hyperscale issue is done: hs-relmon files one per package,
@@ -161,17 +191,6 @@ pub fn plan(
     let pending: Vec<&(String, Stage, Vec<TagChange>)> = steps
         .iter()
         .filter(|(nvr, stage, _)| {
-            // A build's NVR is a stand-in until it is built.
-            if let Some(v) = &at_least
-                && !nvr.starts_with('<')
-                && !reaches(nvr, v)
-            {
-                eprintln!(
-                    "{nvr} is older than the {v} {} asks for: no comment to post.",
-                    issue.web_url
-                );
-                return false;
-            }
             let told = stage_noted(notes.iter().map(|n| n.body.as_str()), nvr, *stage);
             if told {
                 eprintln!(
@@ -238,6 +257,14 @@ pub fn plan(
     };
     let mut notices = Vec::new();
     for ((nvr, stage, changes), commit) in pending.into_iter().zip(&commits) {
+        // A Hyperscale build older than the version its issue asks for
+        // (an rc, or a fix to the version in -release) is still told
+        // about, but moves neither the issue's stage label nor closes
+        // it: those follow the version asked for. A build's NVR is a
+        // stand-in until it is built.
+        let older = at_least
+            .as_deref()
+            .filter(|v| !nvr.starts_with('<') && !reaches(nvr, v));
         let (tag, untagged) = tag_and_untag(changes);
         // Re-promoting a released build only finishes its untag from
         // -testing; the release tag is the testing one's sibling.
@@ -249,23 +276,24 @@ pub fn plan(
             },
             _ => continue,
         };
-        notices.push(Notice {
+        let note = stage_note(
+            nvr,
+            *stage,
+            &tag,
+            untagged,
+            &match (&mr, commit) {
+                (Some(mr), Some(commit)) => checkout.provenance(&mr.head, commit),
+                _ => Provenance::Unknown,
+            },
+            &earlier,
+        );
+        let mut notice = Notice {
             nvr: nvr.clone(),
             event: Event::Reached(*stage),
             path: path.clone(),
             iid: issue.iid,
             issue_url: issue.web_url.clone(),
-            note: stage_note(
-                nvr,
-                *stage,
-                &tag,
-                untagged,
-                &match (&mr, commit) {
-                    (Some(mr), Some(commit)) => checkout.provenance(&mr.head, commit),
-                    _ => Provenance::Unknown,
-                },
-                &earlier,
-            ),
+            note,
             label: stage_label(*stage),
             missing_label: None,
             unlabel: rejected.then_some(REJECTED),
@@ -278,8 +306,13 @@ pub fn plan(
                 _ => None,
             },
             at_least: at_least.clone(),
+            older: false,
             tool,
-        });
+        };
+        if let Some(v) = older {
+            notice.mark_older(v);
+        }
+        notices.push(notice);
     }
     // Which stage labels exist, read only when one is wanted.
     check_labels(&client, &path, &mut notices);
@@ -411,20 +444,10 @@ pub fn plan_untags(
         return Vec::new();
     };
     // As for a stage reached: a Hyperscale build older than the version
-    // its issue asks for is not what the issue is about.
+    // its issue asks for is told about, but leaves the label alone.
     let at_least = requested_at_least(on.sig, &issue, on.package);
     let mut notices: Vec<Notice> = untags
         .iter()
-        .filter(|(nvr, _)| match &at_least {
-            Some(v) if !reaches(nvr, v) => {
-                eprintln!(
-                    "{nvr} is older than the {v} {} asks for: no comment to post.",
-                    issue.web_url
-                );
-                false
-            }
-            _ => true,
-        })
         .filter(|(nvr, tag)| {
             let told = untag_noted(notes.iter().map(|n| n.body.as_str()), nvr, tag);
             if told {
@@ -432,19 +455,26 @@ pub fn plan_untags(
             }
             !told
         })
-        .map(|(nvr, tag)| Notice {
-            nvr: nvr.clone(),
-            event: Event::Untagged(tag.clone()),
-            path: path.clone(),
-            iid: issue.iid,
-            issue_url: issue.web_url.clone(),
-            note: untag_note(nvr, tag, reason),
-            label: untag_label(reason),
-            missing_label: None,
-            unlabel: None,
-            at_least: None,
-            closing: None,
-            tool: on.tool,
+        .map(|(nvr, tag)| {
+            let mut notice = Notice {
+                nvr: nvr.clone(),
+                event: Event::Untagged(tag.clone()),
+                path: path.clone(),
+                iid: issue.iid,
+                issue_url: issue.web_url.clone(),
+                note: untag_note(nvr, tag, reason),
+                label: untag_label(reason),
+                missing_label: None,
+                unlabel: None,
+                at_least: None,
+                closing: None,
+                older: false,
+                tool: on.tool,
+            };
+            if let Some(v) = at_least.as_deref().filter(|v| !reaches(nvr, v)) {
+                notice.mark_older(v);
+            }
+            notice
         })
         .collect();
     check_labels(&client, &path, &mut notices);
@@ -549,21 +579,20 @@ pub fn post(
     done: &[(String, Event)],
     latest: LatestIn,
 ) {
-    let notices: Vec<&Notice> = notices
+    let notices: Vec<Notice> = notices
         .iter()
         .filter(|n| {
             done.iter()
                 .any(|(nvr, event)| *nvr == n.nvr && *event == n.event)
         })
-        .filter(|n| match &n.at_least {
-            Some(v) if !reaches(&n.nvr, v) => {
-                eprintln!(
-                    "{} is older than the {v} {} asks for: no comment is posted.",
-                    n.nvr, n.issue_url
-                );
-                false
+        .map(|n| {
+            let mut n = n.clone();
+            // Planned before it was built, and built older than asked
+            // for: told about as any older build is.
+            if let Some(v) = n.at_least.clone().filter(|v| !reaches(&n.nvr, v)) {
+                n.mark_older(&v);
             }
-            _ => true,
+            n
         })
         .collect();
     if notices.is_empty() {
@@ -577,7 +606,7 @@ pub fn post(
         );
         return;
     };
-    for notice in notices {
+    for notice in &notices {
         let client = match Client::new(base, &notice.path, token) {
             Ok(c) => c,
             Err(e) => {
@@ -615,8 +644,9 @@ pub fn post(
                 eprintln!("warning: could not relabel {} ({e})", notice.issue_url);
             }
         }
-        // An untag leaves the work item's status to the tracker.
-        if done_note.is_some() || !matches!(notice.event, Event::Reached(_)) {
+        // An untag leaves the work item's status to the tracker, and an
+        // older build is not the version the issue is about.
+        if done_note.is_some() || notice.older || !matches!(notice.event, Event::Reached(_)) {
             continue;
         }
         // A tracked update being promoted is in progress, whatever the
@@ -674,7 +704,22 @@ fn pick_issue(
         .filter_map(|(n, i)| Some((reached(i)?, n)))
         .max_by(|a, b| sandogasa_rpmvercmp::rpmvercmp(&a.0, &b.0))
         .map(|(_, n)| n)
-        .unwrap_or(0);
+        // None reached by a build that is made (an older one): the issue
+        // asking for the lowest version, which it is closest to. A build
+        // not made yet has no version: the first GitLab lists, its
+        // newest.
+        .unwrap_or_else(|| {
+            if nvrs.iter().all(|nvr| nvr.starts_with('<')) {
+                return 0;
+            }
+            issues
+                .iter()
+                .enumerate()
+                .filter_map(|(n, i)| Some((requested_version(&i.title, package)?, n)))
+                .min_by(|a, b| sandogasa_rpmvercmp::rpmvercmp(a.0, b.0))
+                .map(|(_, n)| n)
+                .unwrap_or(0)
+        });
     issues.into_iter().nth(best)
 }
 
@@ -1288,9 +1333,10 @@ mod tests {
         assert!(!reaches("<the build in hyperscale9s-packages-main>", "7.1"));
     }
 
-    /// ethtool's Hyperscale issue asks for 7.1: a 7.1 build is told of,
-    /// a 7.0 rebuild is not, and a build not yet made is planned with
-    /// its stand-in, to be checked once it has its NVR.
+    /// ethtool's Hyperscale issue asks for 7.1: a 7.1 build is told of
+    /// and labels it; a 7.0 rebuild is told of too, saying it is older,
+    /// with no label; a build not yet made is planned with its stand-in,
+    /// and held to the same once it has its NVR.
     #[test]
     fn a_hyperscale_build_is_told_to_its_new_version_issue() {
         let mut server = mockito::Server::new();
@@ -1350,38 +1396,54 @@ mod tests {
             nvrs,
             [
                 "ethtool-7.1-1.hs.el9",
+                "ethtool-7.0-3.hs.el9",
                 "<the build in hyperscale9s-packages-main>"
             ]
         );
         assert_eq!(notices[0].issue_url, "h2");
         assert_eq!(notices[0].at_least.as_deref(), Some("7.1"));
+        assert!(!notices[0].older);
         assert!(!notices[0].note.contains("Built from"));
         // No stage label in the Hyperscale group yet: said, not set.
         assert_eq!(notices[0].missing_label, Some("stage::testing"));
+        // The 7.0 rebuild: told of, as older, with no label to set.
+        let older_note = "This is older than the 7.1 this issue asks for";
+        assert!(notices[1].older);
+        assert!(notices[1].note.contains(older_note), "{}", notices[1].note);
+        assert_eq!((notices[1].label, notices[1].missing_label), (None, None));
+        assert_eq!(notices[1].at_least, None);
 
-        // The build turned out older than asked for: not posted.
+        // The stand-in turned out older than asked for: posted as an
+        // older build, with no relabel and no status change.
         let posts = server
-            .mock("POST", mockito::Matcher::Any)
+            .mock("POST", format!("{path}/issues/2/notes").as_str())
+            .match_body(mockito::Matcher::Regex(older_note.into()))
             .with_status(201)
-            .expect(0)
+            .with_body(r#"{"id": 1, "body": "b"}"#)
+            .expect(1)
             .create();
+        let elsewhere = server.mock("POST", "/api/graphql").expect(0).create();
         let older = Notice {
             nvr: "ethtool-7.0-4.hs.el9".to_string(),
-            ..notices.into_iter().nth(1).unwrap()
+            ..notices.into_iter().nth(2).unwrap()
         };
         let done = [(older.nvr.clone(), Event::Reached(Stage::Testing))];
         post(&server.url(), Some("t"), &[older], &done, &no_latest);
         posts.assert();
+        elsewhere.assert();
 
-        // An untag is held to the same version: the 7.0 build's says
-        // nothing to the issue asking for 7.1.
+        // An untag is held to the same version: the 7.0 build's is told
+        // of as older, with no label.
         let untags = [
             ("ethtool-7.0-3.hs.el9".to_string(), "t".to_string()),
             ("ethtool-7.1-1.hs.el9".to_string(), "t".to_string()),
         ];
         let notices = plan_untags(&server.url(), None, &on, &untags, &UntagReason::Retired);
         let nvrs: Vec<&str> = notices.iter().map(|n| n.nvr.as_str()).collect();
-        assert_eq!(nvrs, ["ethtool-7.1-1.hs.el9"]);
+        assert_eq!(nvrs, ["ethtool-7.0-3.hs.el9", "ethtool-7.1-1.hs.el9"]);
+        assert!(notices[0].older && notices[0].label.is_none());
+        assert!(notices[0].note.contains(older_note));
+        assert!(!notices[1].older);
     }
 
     /// wprof, with experimental and main branches but built only in
@@ -1661,8 +1723,9 @@ mod tests {
         };
         assert_eq!(pick(&["ethtool-7.1-1.hs.el9"]), 2);
         assert_eq!(pick(&["ethtool-7.2-1.hs.el9"]), 3);
-        // Reaching none, or a build not made yet: the first.
-        assert_eq!(pick(&["ethtool-6.9-1.hs.el9"]), 3);
+        // Reaching none: the lowest version asked for; a build not made
+        // yet: the first, the newest.
+        assert_eq!(pick(&["ethtool-6.9-1.hs.el9"]), 1);
         assert_eq!(pick(&["<the build in hyperscale9s-packages-main>"]), 3);
         assert!(pick_issue(Vec::new(), Sig::Hyperscale, "ethtool", &[]).is_none());
         assert!(covers(Sig::Hyperscale) && covers(Sig::ProposedUpdates));

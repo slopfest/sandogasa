@@ -250,15 +250,19 @@ packages require them at run time. The plan before `Promote?` shows
 the result:
 - what the build drops, red for a shared library's soname and yellow
   for anything else;
-- what another package still provides, in gray;
+- what another package still provides;
 - the packages that require something it drops, in bold red;
-- the version changes, in gray.
+- the version changes.
 
 When something requires what the build drops, or a repo could not be
 looked in for something it drops, Enter answers no to `Promote?`.
 `--dry-run` shows the check as well. Without koji's `cbs` profile, or
 with a hub that cannot be read, the plan says the builds were not
-checked; without fedrq, it says where it could not look.
+checked; without fedrq, it says where it could not look. The whole
+check also goes into the build's comment on its tracking issue, the
+version changes in a collapsed list, ending with the cbspkg version and
+the command, so whoever tests or releases the build can see what was
+checked. When nothing could be checked, the comment says why.
 
 Promoting to `-release` also untags the build from `-testing`, so a
 released build is not left in testing as well. A build released before
@@ -277,9 +281,11 @@ The build's tracking issue, in the package's SIG repo, is updated:
   issue (`RHEL-306261`), as the branch `c10s-proposed-RHEL-306261`
   does;
 - for Hyperscale, the open `rfe::new-version` issue hs-relmon filed,
-  `ethtool-7.1 is available`, when the build is at or past the version
-  it asks for, as a rebuild of an older version is not what it is
-  about; of several open, the newest version the build reaches.
+  `ethtool-7.1 is available`; of several open, the one asking for the
+  newest version the build reaches. A build older than that version
+  (a release candidate, a rebuild) still gets its comment, saying so,
+  but sets no `stage::` label or status and does not close the issue,
+  which follow the version asked for.
 
 It gets a comment saying where the build went, inviting testers, for a
 `-testing` build, to react with 👍 or 👎 and to comment on what broke,
@@ -461,7 +467,7 @@ collection the branch (checked out, or `--branch`) builds into.
 `-candidate` keeps the build history and is not touched.
 
 The build's tracking issue, found as `promote` finds it (a Hyperscale
-build older than the version its issue asks for tells it nothing), gets
+build older than the version its issue asks for sets no label), gets
 a comment
 saying where the build left and why, from `--reason`:
 

@@ -144,6 +144,10 @@ dropped capability, and whose binary packages require the rest. It
 asks each place once per distinct set of dropped capabilities, the
 places concurrently, through a `Lookup` the caller implements (fedrq
 in cbspkg, #157). A version change is listed but not looked up.
+`Check::markdown` gives the whole check in Markdown for a
+tracking-issue comment, the version changes in a collapsed
+`<details>`, which `Notice::add_paragraph` puts before the comment's
+marker.
 
 ## Reviews
 

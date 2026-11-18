@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### cbspkg tells a tracking issue about builds older than it asks for (breaking)
+
+Promoting a perf build on 2026-11-18 posted nothing on its tracking
+issue, which asks for 7.3.5: a Hyperscale build older than the version
+its issue asks for (here a 7.3 release candidate) was skipped, so its
+check and where it went were never recorded. Such a build's promotion or untag now gets its comment
+too, saying it is older than the version asked for; it sets no
+`stage::` label or work-item status and closes nothing, since those
+follow the version the issue asks for. Like any other build, it now
+gets its commit looked up for the comment, in the same batched call.
+With several issues open and none reached, the comment goes to the one
+asking for the lowest version rather than the first GitLab lists.
+
+Breaking, in sandogasa-cbs: `notify::Notice` gains the public field
+`older`. Code building a `Notice` with a struct literal has to set it,
+usually `older: false` (Refs #157).
+
 ### cbspkg promote closes the tracking issue of a package outside main
 
 Releasing wprof 0.7.1 into the experimental collection would never
@@ -84,7 +101,11 @@ them at run time are listed. The plan before `Promote?` shows:
 
 When something would break, or a repo could not be looked in for
 something dropped, Enter answers no; when the check could not run at
-all, the plan says so. This is step 1 of #157. The SIG's own repos,
+all, the plan says so. The whole check also goes into the build's
+comment on its tracking issue, one per collection the build moves
+into, ending with the cbspkg version and the command (without the
+checkout's path, as the issue is public), or why the build could not
+be checked. This is step 1 of #157. The SIG's own repos,
 sets of builds promoted together and `hs-relmon review` come next.
 sandogasa-cbs gains `check`; sandogasa-depfilter gains
 `compare_provides` and `provide_name`, moved from ebranch (Refs #157).
