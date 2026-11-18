@@ -46,6 +46,34 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS fedora-review-digest digest
+\fBfedora\-review\-digest digest\fR [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-\-diff\-tool\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-\-reviews\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIDIR\-OR\-BUGID\fR]
+.PP
+Digest an existing fedora\-review result
+.TP
+\fB\-c\fR, \fB\-\-comment\fR \fI<TEXT>\fR
+Reviewer note placed above the review ("LGTM!")
+.TP
+\fB\-\-diff\-tool\fR \fI<CMD>\fR
+Show a Python spec\*(Aqs changes from pyp2spec with CMD (e.g. difft)
+.TP
+\fB\-\-no\-net\fR
+Skip the registry version check and the pyp2spec comparison
+.TP
+\fB\-\-post\fR
+Post to Bugzilla: comment, review flag, claim
+.TP
+\fB\-\-reviews\-dir\fR \fI<DIR>\fR [default: .]
+Base directory for bug\-id lookup
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Accept inferred checklist marks without prompting
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIDIR\-OR\-BUGID\fR]
+fedora\-review result dir, or a bug id under \-\-reviews\-dir
 .SS fedora-review-digest run
 \fBfedora\-review\-digest run\fR [\fB\-\-copr\fR] [\fB\-m\fR|\fB\-\-mock\-config\fR] [\fB\-\-mock\-option\fR] [\fB\-\-no\-digest\fR] [\fB\-\-repo\fR] [\fB\-\-uniqueext\fR] [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-\-diff\-tool\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-\-reviews\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUGID\fR>
 .PP

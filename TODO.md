@@ -219,6 +219,15 @@ release: add `epoch: Option<i64>` to `LatestBuild`, mark it
 `#[non_exhaustive]`, and compare `epoch:version-release` in
 `next_build_wins`.
 
+## At the next breaking release: fedora-review-digest's bare form (2026-11-18, #162)
+
+`fedora-review-digest <DIR-OR-BUGID>` without a subcommand is deprecated
+in favor of `fedora-review-digest digest <DIR-OR-BUGID>`: it warns, and
+waits for Enter at a terminal. At the next breaking release, drop the
+flattened `digest: DigestArgs` from `Cli` and `warn_bare_form` from
+`tools/fedora-review-digest/src/main.rs`, so a bare call gets clap's
+usage error, and list it under that release's `(breaking)` heading.
+
 ## koji-lag
 
 - (2026-08-22) **`fetch-store.sh` reaches only people with a checkout.**

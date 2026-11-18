@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### fedora-review-digest gains a digest subcommand, and says what to run
+
+`fedora-review-digest <BUG>` only reads an existing fedora-review result,
+which is easy to mistake for the command that runs fedora-review: run
+on a bug with no result yet, it said only "no review dir for bug
+2575659 under …". And `run` on a bug that already had one started
+fedora-review, which refused ("… is in the way, please remove").
+
+Digesting an existing result now has its own subcommand, `digest`. The
+bare `fedora-review-digest <DIR-OR-BUGID>` still works but warns that
+it is deprecated, naming the `digest` command to use, and waits for
+Enter at a terminal; it goes at the next breaking release. A bug id with
+no result directory gets the `run` command that would make one, with
+the options given. `run` asks what to do with a result directory
+already there: reuse it (the default), delete it and run fedora-review
+again (confirmed once more), or stop; without a terminal, or under
+`-y`, it stops and says how to do either. At a terminal without
+`--post`, the finished comment is now offered for posting, with
+`--post`'s preview and Enter declining. Resolves #162.
+
 ### fedora-review-digest reviews Python packages
 
 `fedora-review-digest` refused Python specs ("pyp2spec digests aren't

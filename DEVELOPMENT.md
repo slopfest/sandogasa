@@ -316,9 +316,9 @@ meaning gets a row in this table in the same change.
 
 | Style | Meaning | Where |
 |---|---|---|
-| bold green | something for the user to do: a command to run, a comment to post | `--explain` commands (`sandogasa_cli::explain`), fedora-review-digest's "Post this comment" heading |
+| bold green | something for the user to do: a command to run, a comment to post | `--explain` commands (`sandogasa_cli::explain`), fedora-review-digest's comment heading and the command replacing a deprecated form |
 | green | good: up to date, ahead, unchanged | hs-relmon `retire` (ahead), koji-diff (same) |
-| yellow | look at it: a warning, a compatible change, a rebase to do | dbranch `check` warnings, hs-relmon (rebase), koji-diff (compatible) |
+| yellow | look at it: a warning, a compatible change, a rebase to do | dbranch `check` warnings, hs-relmon (rebase), koji-diff (compatible), fedora-review-digest's deprecation warning |
 | orange (256-color 208) | worse than yellow, short of red | koji-diff (minor breaking) |
 | red, bold for a blocker | broken or blocking | dbranch `check` blockers, hs-relmon (retire), koji-diff (major breaking) |
 | magenta | missing declaration | hs-relmon (declare) |

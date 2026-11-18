@@ -50,19 +50,26 @@ the keyring the next time `config` runs.
 ## Usage
 
 ```
-fedora-review-digest <DIR-OR-BUGID> [--comment <TEXT>] [-y]
-    [--reviews-dir <DIR>] [--no-net] [--post]
+fedora-review-digest digest <DIR-OR-BUGID> [--comment <TEXT>] [-y]
+    [--reviews-dir <DIR>] [--no-net] [--post] [--diff-tool <CMD>]
 ```
 
-Point it at a finished review — either the directory `fedora-review`
+`digest` reads a finished review — either the directory `fedora-review`
 created, or the bug id (resolved to `<id>-*` under `--reviews-dir`,
-default the current directory):
+default the current directory). To run `fedora-review` as well, use
+`run` (below), which digests the result when the build is done.
 
 ```
 $ fedora-review -b 2489102                       # produces 2489102-rust-trustfall_core/
-$ fedora-review-digest 2489102-rust-trustfall_core
-$ fedora-review-digest 2489102                    # same, by bug id
+$ fedora-review-digest digest 2489102-rust-trustfall_core
+$ fedora-review-digest digest 2489102            # same, by bug id
 ```
+
+A bug id with no result directory yet gets the `run` command that would
+make one, with the options given. `fedora-review-digest <DIR-OR-BUGID>`
+without `digest` still works until the next breaking release, after a
+warning naming the `digest` command to use, which waits for Enter at a
+terminal.
 
 By default it walks the checklist interactively: it prints the full
 inferred review first, then asks you to confirm each item — `+1` pass /
@@ -95,8 +102,9 @@ an optional free-form comment for the top.
 - `--reviews-dir <DIR>` is where a bare bug id is resolved.
 - `--post` writes the result back to the bug (see below).
 
-The finished comment is written to **stdout**, ready to paste into
-Bugzilla.
+The finished comment is written to **stdout**. At a terminal, without
+`--post`, it is shown under a heading and then offered for posting to
+the bug, with the same preview as `--post` and Enter declining.
 
 ## Python packages
 
@@ -197,7 +205,11 @@ appending, `run` restates those defaults (`--no-cleanup-after
 `fedora-review` runs in `--reviews-dir` (default: the current
 directory) with its output streaming to the terminal, and the digest
 options (`--comment`, `-y`, `--no-net`, `--post`, …) apply to the
-digest that follows.
+digest that follows. fedora-review will not run over the bug's result
+directory, so when one is already there, `run` asks whether to reuse
+it (digest it as it is, the default), delete it and run fedora-review
+again (confirmed once more), or stop; without a terminal, or under
+`-y`, it stops and says how to do either.
 
 ## Posting to Bugzilla
 

@@ -34,7 +34,7 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Digest a review (the default action when no subcommand is given).
+    /// Deprecated: `digest` without the subcommand's name.
     #[command(flatten)]
     digest: DigestArgs,
 }
@@ -43,6 +43,8 @@ struct Cli {
 enum Command {
     /// Set up or verify the Bugzilla API key used by `--post`.
     Config(sandogasa_cli::ConfigArgs),
+    /// Digest an existing fedora-review result.
+    Digest(DigestArgs),
     /// Run fedora-review on a bug, then digest the result.
     Run(Box<RunArgs>),
 }
@@ -143,8 +145,15 @@ fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let result = match cli.command {
         Some(Command::Config(args)) => cmd_config(&args),
+        Some(Command::Digest(args)) => run(&args).map(|text| print!("{text}")),
         Some(Command::Run(args)) => cmd_run(&args),
-        None => run(&cli.digest).map(|text| print!("{text}")),
+        None => {
+            // The bare form, kept until the next breaking release (#162).
+            if let Some(input) = &cli.digest.input {
+                warn_bare_form(input, &cli.digest.opts);
+            }
+            run(&cli.digest).map(|text| print!("{text}"))
+        }
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -152,6 +161,37 @@ fn main() -> ExitCode {
             eprintln!("fedora-review-digest: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Warn that the bare `fedora-review-digest <DIR-OR-BUGID>` is
+/// deprecated, naming the `digest` command to use instead: the warning
+/// in yellow, the command in bold green (DEVELOPMENT.md, "Colors"), set
+/// apart by blank lines. At a terminal it waits for Enter, so the
+/// warning is read before the review scrolls it away; without one it
+/// carries on.
+fn warn_bare_form(input: &str, opts: &DigestOpts) {
+    use sandogasa_cli::style;
+    let color = style::stderr_color();
+    eprintln!(
+        "\n{}\n  {}\n(or `run <BUGID>` to run fedora-review first)\n",
+        style::paint(
+            "warning: fedora-review-digest without a subcommand is deprecated, \
+             and goes at the next breaking release; use:",
+            style::YELLOW,
+            color,
+        ),
+        style::paint(
+            &command_hint("digest", input, opts),
+            &format!("{}{}", style::BOLD, style::GREEN),
+            color,
+        ),
+    );
+    if !opts.yes && std::io::stdin().is_terminal() {
+        eprint!("Press Enter to go on, Ctrl-C to stop: ");
+        let _ = std::io::stderr().flush();
+        let _ = read_answer();
+        eprintln!();
     }
 }
 
@@ -238,11 +278,46 @@ fn cmd_run(args: &RunArgs) -> Result<(), String> {
         uniqueext: args.uniqueext.clone(),
         mock_options: args.mock_option.clone(),
     })?;
+    // fedora-review refuses to start when the bug's result directory is
+    // already there ("… is in the way, please remove"), so settle that
+    // first, and let a dry run say so.
+    let existing = existing_result(&args.opts.reviews_dir, &args.bug);
     if args.dry_run {
         println!("{}", runner::display_command(&review_args));
+        match &existing {
+            Ok(None) => {}
+            Ok(Some(dir)) => eprintln!(
+                "note: {} is already there; the real run asks whether to reuse it",
+                dir.display()
+            ),
+            Err(e) => eprintln!("note: the real run stops here: {e}"),
+        }
         return Ok(());
     }
-    runner::run_fedora_review(&review_args, &args.opts.reviews_dir)?;
+    let existing = existing?;
+    let built_differently = !args.copr.is_empty()
+        || !args.repo.is_empty()
+        || args.mock_config.is_some()
+        || !args.mock_option.is_empty()
+        || args.uniqueext.is_some();
+    let reuse = match &existing {
+        None => false,
+        Some(dir) => {
+            let interactive = !args.opts.yes && std::io::stdin().is_terminal();
+            settle_existing(
+                dir,
+                &args.bug,
+                &args.opts,
+                interactive,
+                built_differently,
+                &mut || read_answer(),
+                &mut |q| sandogasa_cli::confirm(q, false).unwrap_or(false),
+            )?
+        }
+    };
+    if !reuse {
+        runner::run_fedora_review(&review_args, &args.opts.reviews_dir)?;
+    }
     if args.no_digest {
         let dir = find_review_dir(&args.opts.reviews_dir, &args.bug)?;
         eprintln!("review results in {}", dir.display());
@@ -267,7 +342,20 @@ fn run(cli: &DigestArgs) -> Result<String, String> {
         .input
         .as_deref()
         .ok_or("provide a fedora-review result directory or a bug id")?;
-    let dir = resolve_input(input, &cli.opts.reviews_dir)?;
+    let dir = match resolve_input(input, &cli.opts.reviews_dir) {
+        Ok(dir) => dir,
+        // A bug with no result yet: fedora-review has not run for it.
+        Err(e)
+            if looks_like_bug_id(input)
+                && review_dirs(&cli.opts.reviews_dir, input).is_ok_and(|d| d.is_empty()) =>
+        {
+            return Err(format!(
+                "{e}\nTo run fedora-review for it first, then digest the result:\n  {}",
+                command_hint("run", input, &cli.opts)
+            ));
+        }
+        Err(e) => return Err(e),
+    };
     let review = Review::from_dir(&dir)?;
     match review.spec.generator {
         Generator::Rust2Rpm | Generator::CabalRpm => {}
@@ -380,7 +468,45 @@ fn finish(
     };
     let text = checklist::assemble(comment.as_deref(), review_block, post_block);
     if cli.opts.post {
-        post_to_bugzilla(input, dir, &text, verdict, cli.opts.yes)?;
+        let confirm = if cli.opts.yes {
+            Confirm::Yes
+        } else {
+            Confirm::Ask { default: true }
+        };
+        if !post_to_bugzilla(input, dir, &text, verdict, confirm)? {
+            return Err("aborted".into());
+        }
+    } else if interactive && bug_id(input, dir).is_some() {
+        // Show the comment, then offer to post it (#162): printed here,
+        // so it comes before the question, and not again by the caller.
+        use sandogasa_cli::style;
+        eprintln!(
+            "{}{}\n",
+            if prompted { "" } else { "\n" },
+            style::paint(
+                "── The comment ──",
+                &format!("{}{}", style::BOLD, style::GREEN),
+                style::stderr_color(),
+            )
+        );
+        print!("{text}");
+        std::io::stdout().flush().map_err(|e| e.to_string())?;
+        // Asked before anything reads a key or the network, so declining,
+        // or being offline, still leaves the comment to paste.
+        let offered = sandogasa_cli::confirm("Post it to the bug?", false).unwrap_or(false);
+        if !offered
+            || !post_to_bugzilla(input, dir, &text, verdict, Confirm::Ask { default: true })?
+        {
+            eprintln!(
+                "{}",
+                style::paint(
+                    "Not posted: paste it into the bug, or rerun with --post.",
+                    &format!("{}{}", style::BOLD, style::GREEN),
+                    style::stderr_color(),
+                )
+            );
+        }
+        return Ok(String::new());
     } else if interactive {
         // The comment goes to stdout next; set it apart from the prompts,
         // and say it was not posted.
@@ -507,18 +633,29 @@ fn run_python(
     )
 }
 
+/// Whether [`post_to_bugzilla`] asks before it writes.
+#[derive(Debug, Clone, Copy)]
+enum Confirm {
+    /// `-y`: post without asking.
+    Yes,
+    /// Ask at the terminal, with this answer on Enter: yes under
+    /// `--post`, no when the post is only offered.
+    Ask { default: bool },
+}
+
 /// Post the assembled review to its Bugzilla review bug: a comment, the
 /// `fedora-review` flag (and, on approval, status POST), and claiming the
 /// bug for the reviewer. Fetches the bug first (to validate it, read the
 /// current flag, and see who it's assigned to), shows what will change,
-/// and confirms before the write.
+/// and confirms before the write (`confirm`). Whether it posted: false
+/// when the reviewer declined.
 fn post_to_bugzilla(
     input: &str,
     dir: &Path,
     digest: &str,
     verdict: Verdict,
-    yes: bool,
-) -> Result<(), String> {
+    confirm: Confirm,
+) -> Result<bool, String> {
     let bug_id = bug_id(input, dir)
         .ok_or("couldn't determine the bug id from the input or dir name; pass the bug id")?;
     let creds = config::credentials(keyring()).map_err(|e| e.to_string())?;
@@ -541,12 +678,12 @@ fn post_to_bugzilla(
         "Will {}.",
         bugzilla::action_summary(verdict, current_flag, claim.is_some())
     );
-    if !yes {
+    if let Confirm::Ask { default } = confirm {
         if !std::io::stdin().is_terminal() {
             return Err("not a terminal; pass -y to post to Bugzilla".into());
         }
-        if !confirm_yes("Post to Bugzilla?")? {
-            return Err("aborted".into());
+        if !sandogasa_cli::confirm("Post to Bugzilla?", default).map_err(|e| e.to_string())? {
+            return Ok(false);
         }
     }
 
@@ -562,7 +699,7 @@ fn post_to_bugzilla(
         ));
     }
     eprintln!("Posted to bug {bug_id}.");
-    Ok(())
+    Ok(true)
 }
 
 /// The review-request bug id: a numeric input, else the leading digits
@@ -582,9 +719,55 @@ fn bug_id_from_dirname(name: &str) -> Option<u64> {
         .ok()
 }
 
-/// Yes/no confirmation defaulting to yes (the `--post` intent).
-fn confirm_yes(question: &str) -> Result<bool, String> {
-    sandogasa_cli::confirm(question, true).map_err(|e| e.to_string())
+/// The fedora-review result directories for `bug_id` under `base`
+/// (`<bug_id>-*`), sorted. A `base` that does not exist is an error
+/// rather than "no result", so a mistyped `--reviews-dir` is caught.
+fn review_dirs(base: &Path, bug_id: &str) -> Result<Vec<PathBuf>, String> {
+    let prefix = format!("{bug_id}-");
+    let entries = std::fs::read_dir(base).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("--reviews-dir {} does not exist", base.display())
+        } else {
+            format!("reading {}: {e}", base.display())
+        }
+    })?;
+    let mut dirs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix))
+        })
+        .collect();
+    dirs.sort();
+    Ok(dirs)
+}
+
+/// The one result directory for `bug_id` under `base`, if there is one;
+/// several are an error, as nothing says which to use.
+fn existing_result(base: &Path, bug_id: &str) -> Result<Option<PathBuf>, String> {
+    let mut dirs = review_dirs(base, bug_id)?;
+    match dirs.len() {
+        0 => Ok(None),
+        1 => Ok(dirs.pop()),
+        _ => Err(format!(
+            "multiple {bug_id}-* dirs under {}; pass the path directly, or \
+             remove all but one",
+            base.display()
+        )),
+    }
+}
+
+/// Find the review directory for a bug id under `base` (`<id>-*`).
+fn find_review_dir(base: &Path, bug_id: &str) -> Result<PathBuf, String> {
+    existing_result(base, bug_id)?.ok_or_else(|| {
+        format!(
+            "no review dir for bug {bug_id} under {} (looked for {bug_id}-*)",
+            base.display()
+        )
+    })
 }
 
 /// Resolve the positional input to a review directory: an existing
@@ -608,31 +791,127 @@ fn looks_like_bug_id(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// Find the single `<bug_id>-*` directory under `base` (fedora-review's
-/// naming). Errors if there are none or more than one.
-fn find_review_dir(base: &Path, bug_id: &str) -> Result<PathBuf, String> {
-    let prefix = format!("{bug_id}-");
-    let mut matches: Vec<PathBuf> = std::fs::read_dir(base)
-        .map_err(|e| format!("reading {}: {e}", base.display()))?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_dir()
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with(&prefix))
-        })
-        .collect();
-    match matches.len() {
-        0 => Err(format!(
-            "no review dir for bug {bug_id} under {} (looked for {prefix}*)",
-            base.display()
-        )),
-        1 => Ok(matches.pop().unwrap()),
-        _ => Err(format!(
-            "multiple {prefix}* dirs under {}; pass the path directly",
-            base.display()
-        )),
+/// `arg` as one word for a POSIX or fish shell: bare when it is plain,
+/// else single-quoted.
+fn shell_word(arg: &str) -> String {
+    let plain = !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:@+,".contains(c));
+    if plain {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
+}
+
+/// The `subcommand` command line for `bug` with the digest options
+/// given, to suggest: `run` when there is no result yet, `digest` when
+/// `run` will not run over one.
+fn command_hint(subcommand: &str, bug: &str, opts: &DigestOpts) -> String {
+    let mut argv = vec!["fedora-review-digest".to_string(), subcommand.to_string()];
+    if opts.reviews_dir != Path::new(".") {
+        argv.push("--reviews-dir".into());
+        argv.push(opts.reviews_dir.display().to_string());
+    }
+    if let Some(c) = &opts.comment {
+        argv.push("--comment".into());
+        argv.push(c.clone());
+    }
+    if let Some(t) = &opts.diff_tool {
+        argv.push("--diff-tool".into());
+        argv.push(t.clone());
+    }
+    for (on, flag) in [
+        (opts.no_net, "--no-net"),
+        (opts.post, "--post"),
+        (opts.yes, "-y"),
+    ] {
+        if on {
+            argv.push(flag.into());
+        }
+    }
+    argv.push(bug.to_string());
+    argv.iter()
+        .map(|a| shell_word(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What to do with a result directory `run` finds already there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Existing {
+    Reuse,
+    Delete,
+    Abort,
+}
+
+/// An answer to [`settle_existing`]'s question: Enter reuses.
+fn parse_existing(answer: &str) -> Option<Existing> {
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "" | "r" | "reuse" => Some(Existing::Reuse),
+        "d" | "delete" => Some(Existing::Delete),
+        "a" | "abort" => Some(Existing::Abort),
+        _ => None,
+    }
+}
+
+/// Settle a result directory `dir` that `run` found for `bug`: reuse it
+/// (true: digest it without running fedora-review), or delete it after
+/// `confirm` (false: run fedora-review again). `read` gives each answer,
+/// `None` at the end of input, which aborts. Without `interactive`,
+/// stops with the `digest` command to use instead. `built_differently`
+/// says the run was given build options, which a reused result was not
+/// built with.
+fn settle_existing(
+    dir: &Path,
+    bug: &str,
+    opts: &DigestOpts,
+    interactive: bool,
+    built_differently: bool,
+    read: &mut dyn FnMut() -> Option<String>,
+    confirm: &mut dyn FnMut(&str) -> bool,
+) -> Result<bool, String> {
+    if !interactive {
+        return Err(format!(
+            "{} is already there, and fedora-review will not run over it; \
+             digest it with `{}`, or remove it and run again",
+            dir.display(),
+            command_hint("digest", bug, opts)
+        ));
+    }
+    eprintln!(
+        "{} is already there (fedora-review will not run over it).\n  \
+         r) reuse it: digest the existing result (default){}\n  \
+         d) delete it and run fedora-review again\n  \
+         a) abort",
+        dir.display(),
+        if built_differently {
+            ", built without the build options given now"
+        } else {
+            ""
+        }
+    );
+    loop {
+        eprint!("Reuse, delete or abort? [R/d/a]: ");
+        let _ = std::io::stderr().flush();
+        let Some(answer) = read() else {
+            return Err("aborted".into());
+        };
+        match parse_existing(&answer) {
+            Some(Existing::Reuse) => return Ok(true),
+            Some(Existing::Abort) => return Err("aborted".into()),
+            Some(Existing::Delete) => {
+                if !confirm(&format!("Delete {}?", dir.display())) {
+                    return Err("aborted".into());
+                }
+                std::fs::remove_dir_all(dir)
+                    .map_err(|e| format!("removing {}: {e}", dir.display()))?;
+                eprintln!("Removed {}.", dir.display());
+                return Ok(false);
+            }
+            None => eprintln!("Answer r, d or a."),
+        }
     }
 }
 
@@ -786,6 +1065,16 @@ fn prompt_comment() -> Result<Option<String>, String> {
     })
 }
 
+/// A line from stdin, `None` at the end of input (or on a read error),
+/// told apart from an empty answer, which is a newline.
+fn read_answer() -> Option<String> {
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line),
+    }
+}
+
 /// Read a line from stdin; empty string signals EOF.
 fn read_line() -> Result<String, String> {
     let mut line = String::new();
@@ -825,5 +1114,134 @@ mod tests {
         );
         assert_eq!(bug_id_from_dirname("rust-foo"), None);
         assert_eq!(bug_id_from_dirname(""), None);
+    }
+
+    fn opts(reviews_dir: &str) -> DigestOpts {
+        DigestOpts {
+            comment: None,
+            diff_tool: None,
+            no_net: false,
+            post: false,
+            reviews_dir: PathBuf::from(reviews_dir),
+            yes: false,
+        }
+    }
+
+    #[test]
+    fn the_run_hint_carries_the_options_given() {
+        assert_eq!(
+            command_hint("run", "2575659", &opts(".")),
+            "fedora-review-digest run 2575659"
+        );
+        let mut o = opts("/home/me/reviews");
+        o.comment = Some("LGTM, it's fine".into());
+        o.diff_tool = Some("difft".into());
+        o.post = true;
+        o.yes = true;
+        assert_eq!(
+            command_hint("run", "2575659", &o),
+            "fedora-review-digest run --reviews-dir /home/me/reviews \
+             --comment 'LGTM, it'\\''s fine' --diff-tool difft --post -y 2575659"
+        );
+    }
+
+    #[test]
+    fn an_existing_result_is_reused_on_enter() {
+        assert_eq!(parse_existing(""), Some(Existing::Reuse));
+        assert_eq!(parse_existing(" R\n"), Some(Existing::Reuse));
+        assert_eq!(parse_existing("delete"), Some(Existing::Delete));
+        assert_eq!(parse_existing("a"), Some(Existing::Abort));
+        assert_eq!(parse_existing("x"), None);
+    }
+
+    #[test]
+    fn result_dirs_are_found_by_bug_id() {
+        let base = tempfile::tempdir().unwrap();
+        // A --reviews-dir that does not exist is an error, not "no result".
+        assert_eq!(
+            review_dirs(&base.path().join("missing"), "1"),
+            Err(format!(
+                "--reviews-dir {} does not exist",
+                base.path().join("missing").display()
+            ))
+        );
+        std::fs::create_dir(base.path().join("2575659-python-cstq")).unwrap();
+        std::fs::create_dir(base.path().join("25756590-other")).unwrap();
+        std::fs::write(base.path().join("2575659-file"), "").unwrap();
+        assert_eq!(
+            existing_result(base.path(), "2575659"),
+            Ok(Some(base.path().join("2575659-python-cstq")))
+        );
+        assert_eq!(existing_result(base.path(), "1"), Ok(None));
+        assert!(
+            find_review_dir(base.path(), "1")
+                .unwrap_err()
+                .starts_with("no review dir")
+        );
+        std::fs::create_dir(base.path().join("2575659-again")).unwrap();
+        assert!(
+            existing_result(base.path(), "2575659")
+                .unwrap_err()
+                .starts_with("multiple")
+        );
+    }
+
+    /// [`settle_existing`] at a terminal, answering `answers` in turn
+    /// (the end of input after them) and `delete` to the deletion.
+    fn settle(dir: &Path, answers: &[&str], delete: bool) -> Result<bool, String> {
+        let mut answers = answers.iter().map(|a| a.to_string());
+        settle_existing(
+            dir,
+            "1",
+            &opts("."),
+            true,
+            false,
+            &mut || answers.next(),
+            &mut |_| delete,
+        )
+    }
+
+    #[test]
+    fn an_existing_result_is_reused_deleted_or_left() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("1-x");
+        std::fs::create_dir(&dir).unwrap();
+        // Enter reuses; an answer it cannot read is asked again.
+        assert_eq!(settle(&dir, &["\n"], false), Ok(true));
+        assert_eq!(settle(&dir, &["maybe\n", "r\n"], false), Ok(true));
+        // The end of input, or a, stops.
+        assert_eq!(settle(&dir, &[], false), Err("aborted".into()));
+        assert_eq!(settle(&dir, &["a\n"], false), Err("aborted".into()));
+        // Delete, declined at the second question: stops, nothing removed.
+        assert_eq!(settle(&dir, &["d\n"], false), Err("aborted".into()));
+        assert!(dir.is_dir());
+        // Delete, confirmed: removed, and fedora-review runs again.
+        assert_eq!(settle(&dir, &["d\n"], true), Ok(false));
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn an_existing_result_without_a_terminal_says_how_to_go_on() {
+        let mut o = opts("/home/me/reviews");
+        o.yes = true;
+        o.post = true;
+        let err = settle_existing(
+            Path::new("/home/me/reviews/1-x"),
+            "1",
+            &o,
+            false,
+            false,
+            &mut || panic!("asked"),
+            &mut |_| panic!("asked"),
+        )
+        .unwrap_err();
+        // The options carry over, so the command works where this ran.
+        assert!(
+            err.contains(
+                "digest it with `fedora-review-digest digest --reviews-dir \
+                 /home/me/reviews --post -y 1`"
+            ),
+            "{err}"
+        );
     }
 }
