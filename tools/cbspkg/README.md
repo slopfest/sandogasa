@@ -251,18 +251,23 @@ the result:
 - what the build drops, red for a shared library's soname and yellow
   for anything else;
 - what another package still provides;
-- the packages that require something it drops, in bold red;
+- for each dropped capability, the packages that require it, in bold
+  red;
 - the version changes.
 
 When something requires what the build drops, or a repo could not be
 looked in for something it drops, Enter answers no to `Promote?`.
 `--dry-run` shows the check as well. Without koji's `cbs` profile, or
 with a hub that cannot be read, the plan says the builds were not
-checked; without fedrq, it says where it could not look. The whole
-check also goes into the build's comment on its tracking issue, the
-version changes in a collapsed list, ending with the cbspkg version and
-the command, so whoever tests or releases the build can see what was
-checked. When nothing could be checked, the comment says why.
+checked; without fedrq, it says where it could not look.
+
+The whole check also goes into the build's comment on its tracking
+issue, every version change listed in a collapsed list, ending with the
+cbspkg version and the command, so whoever tests or releases the build
+can see what was checked; when nothing could be checked, the comment
+says why. In the plan before `Promote?`, the comment's preview names
+the check shown above it rather than repeat it; `--dry-run` shows each
+comment exactly as it would be posted.
 
 Promoting to `-release` also untags the build from `-testing`, so a
 released build is not left in testing as well. A build released before

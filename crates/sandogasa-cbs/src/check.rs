@@ -20,6 +20,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use sandogasa_depfilter::{ProvideChange, compare_provides, is_solib_dep, provide_name};
 use sandogasa_kojihub::HubClient;
 
+/// A dropped capability and the source packages requiring it, in one
+/// place.
+pub type Required = (String, Vec<String>);
+
 /// One build's check against the build it replaces.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Check {
@@ -33,9 +37,12 @@ pub struct Check {
     /// Dropped capabilities that another source package still provides,
     /// as `(place, capability, providers)`: not a loss.
     pub still_provided: Vec<(String, String, Vec<String>)>,
-    /// For each place looked in (`CentOS Stream 10`), the source
-    /// packages there whose binaries require a dropped capability.
-    pub users: Vec<(String, Vec<String>)>,
+    /// For each place looked in (`CentOS Stream 10`), each dropped
+    /// capability that source packages there require at run time, with
+    /// those packages; empty when nothing there requires any. A
+    /// capability left empty (`""`) holds users whose Requires named
+    /// none of them plainly (a rich dependency).
+    pub users: Vec<(String, Vec<Required>)>,
     /// Places that could not be looked in, with why.
     pub unchecked: Vec<String>,
 }
@@ -43,7 +50,7 @@ pub struct Check {
 impl Check {
     /// Whether a package elsewhere requires something this build drops.
     pub fn breaks(&self) -> bool {
-        self.users.iter().any(|(_, users)| !users.is_empty())
+        self.users.iter().any(|(_, required)| !required.is_empty())
     }
 
     /// Whether the build drops something whose users could not all be
@@ -97,13 +104,16 @@ impl Check {
                 by.join(", ")
             ));
         }
-        for (place, users) in &self.users {
-            if !users.is_empty() {
-                out.push_str(&format!(
-                    "\n\n**Required in {place} by {}.**",
-                    users.join(", ")
-                ));
-            }
+        for (place, cap, users) in self.required() {
+            let what = if cap.is_empty() {
+                "Something it drops".to_string()
+            } else {
+                format!("`{cap}`")
+            };
+            out.push_str(&format!(
+                "\n\n**{what} is required in {place} by {}.**",
+                users.join(", ")
+            ));
         }
         // Only once a lookup ran: no place looked in proves nothing.
         if !dropped.is_empty()
@@ -134,6 +144,20 @@ impl Check {
             out.push_str("\n\n</details>");
         }
         out
+    }
+
+    /// Who requires what the build drops, as `(place, capability,
+    /// users)`, one row per capability someone requires; an empty
+    /// capability for users whose Requires named none plainly.
+    pub fn required(&self) -> Vec<(&str, &str, &[String])> {
+        self.users
+            .iter()
+            .flat_map(|(place, required)| {
+                required
+                    .iter()
+                    .map(move |(cap, users)| (place.as_str(), cap.as_str(), users.as_slice()))
+            })
+            .collect()
     }
 
     /// The dropped capabilities, by name, sorted and without repeats.
@@ -252,14 +276,44 @@ pub trait Lookup: Sync {
         capabilities: &[String],
     ) -> Result<Vec<(String, Vec<String>)>, String>;
 
-    /// The source packages in `branch` whose binary packages require
-    /// any of `capabilities` at run time.
-    fn users(&self, branch: &str, capabilities: &[String]) -> Result<Vec<String>, String>;
+    /// The binary packages in `branch` requiring any of `capabilities`
+    /// at run time, as `(source package, the binary's Requires)`.
+    fn users(
+        &self,
+        branch: &str,
+        capabilities: &[String],
+    ) -> Result<Vec<(String, Vec<String>)>, String>;
 }
 
 /// What one place says about some dropped capabilities: still provided
-/// by others, `(capability, providers)`, and the users of the rest.
-type Answer = Result<(Vec<(String, Vec<String>)>, Vec<String>), String>;
+/// by others, `(capability, providers)`, and per capability lost, its
+/// users.
+type Answer = Result<(Vec<(String, Vec<String>)>, Vec<(String, Vec<String>)>), String>;
+
+/// Whether the dependency `requirement` names `capability`: by name,
+/// any version, or as a whole term of a rich dependency
+/// (`(foo or bar)`), never as part of a longer name. A term keeps the
+/// parentheses of its own name (`libfoo.so.1()(64bit)`, `perl(Foo)`)
+/// and loses only those that group it.
+fn names(requirement: &str, capability: &str) -> bool {
+    requirement
+        .split_whitespace()
+        .any(|term| ungrouped(term) == capability)
+}
+
+/// `term` without the grouping parentheses of a rich dependency around
+/// it: a leading `(` or a trailing `)` that the term itself does not
+/// close or open.
+fn ungrouped(mut term: &str) -> &str {
+    let depth = |t: &str| t.matches('(').count() as i64 - t.matches(')').count() as i64;
+    while term.starts_with('(') && depth(term) > 0 {
+        term = &term[1..];
+    }
+    while term.ends_with(')') && depth(term) < 0 {
+        term = &term[..term.len() - 1];
+    }
+    term
+}
 
 /// One place's answer for `dropped`: which another source package (not
 /// in `ours`) still provides, and the users of the rest.
@@ -281,17 +335,34 @@ fn ask(lookup: &dyn Lookup, branch: &str, dropped: &[String], ours: &[&str]) -> 
             still.push((cap.clone(), others.into_iter().collect()));
         }
     }
-    let users = if lost.is_empty() {
-        Vec::new()
-    } else {
-        lookup
-            .users(branch, &lost)?
-            .into_iter()
-            .filter(|p| p != "(none)" && !ours.contains(&p.as_str()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    };
+    let mut by_cap: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if !lost.is_empty() {
+        for (source, requires) in lookup.users(branch, &lost)? {
+            if source == "(none)" || ours.contains(&source.as_str()) {
+                continue;
+            }
+            let caps: Vec<&String> = lost
+                .iter()
+                .filter(|cap| requires.iter().any(|r| names(r, cap)))
+                .collect();
+            if caps.is_empty() {
+                by_cap
+                    .entry(String::new())
+                    .or_default()
+                    .insert(source.clone());
+            }
+            for cap in caps {
+                by_cap
+                    .entry(cap.clone())
+                    .or_default()
+                    .insert(source.clone());
+            }
+        }
+    }
+    let users = by_cap
+        .into_iter()
+        .map(|(cap, users)| (cap, users.into_iter().collect()))
+        .collect();
     Ok((still, users))
 }
 
@@ -392,13 +463,41 @@ mod tests {
             }
         }
 
-        fn users(&self, branch: &str, caps: &[String]) -> Result<Vec<String>, String> {
+        fn users(
+            &self,
+            branch: &str,
+            caps: &[String],
+        ) -> Result<Vec<(String, Vec<String>)>, String> {
             self.asked
                 .lock()
                 .unwrap()
                 .push(("users".into(), branch.into(), caps.to_vec()));
-            Ok(vec!["bar".into(), "foo".into(), "(none)".into()])
+            let req = |r: &[&str]| r.iter().map(|s| s.to_string()).collect();
+            Ok(vec![
+                ("bar".into(), req(&["libfoo.so.1()(64bit)", "glibc"])),
+                ("baz".into(), req(&["foo-tools >= 1.0"])),
+                ("qux".into(), req(&["(foo-tools or other)"])),
+                ("odd".into(), req(&["something else"])),
+                ("foo".into(), req(&["libfoo.so.1()(64bit)"])),
+                ("(none)".into(), req(&["libfoo.so.1()(64bit)"])),
+            ])
         }
+    }
+
+    #[test]
+    fn a_requirement_names_a_capability_as_a_whole_term() {
+        assert!(names("foo", "foo"));
+        assert!(names("foo >= 1.0", "foo"));
+        assert!(names("(foo-tools or other)", "foo-tools"));
+        assert!(!names("(foo-tools or other)", "foo"));
+        assert!(names("libfoo.so.1()(64bit)", "libfoo.so.1()(64bit)"));
+        assert!(names(
+            "(libfoo.so.1()(64bit) if bar)",
+            "libfoo.so.1()(64bit)"
+        ));
+        assert!(names("((perl(Foo) >= 2) or baz)", "perl(Foo)"));
+        assert!(!names("(perl(Foo::Bar) or baz)", "perl(Foo)"));
+        assert!(!names("foo-tools", "foo"));
     }
 
     #[test]
@@ -411,7 +510,13 @@ mod tests {
             vec!["other".into()],
         )];
         c.users = vec![
-            ("CentOS Stream 10".into(), vec!["a".into(), "b".into()]),
+            (
+                "CentOS Stream 10".into(),
+                vec![
+                    ("".into(), vec!["c".into()]),
+                    ("libr.so.1()(64bit)".into(), vec!["a".into(), "b".into()]),
+                ],
+            ),
             ("EPEL 10".into(), vec![]),
         ];
         assert_eq!(
@@ -420,7 +525,8 @@ mod tests {
              - drops `libr.so.1()(64bit)`\n\
              - drops `r-tools = 1-1`\n\n\
              `r-tools` is still provided in CentOS Stream 10 by other.\n\n\
-             **Required in CentOS Stream 10 by a, b.**\n\n\
+             **Something it drops is required in CentOS Stream 10 by c.**\n\n\
+             **`libr.so.1()(64bit)` is required in CentOS Stream 10 by a, b.**\n\n\
              <details><summary>Changes 1 Provide to another version</summary>\n\n\
              - `r = 1-1` to `r = 2-1`\n\n\
              </details>"
@@ -523,11 +629,22 @@ mod tests {
                     vec!["compat".to_string()]
                 )]
             );
-            // Ours and fedrq's "(none)" are not users.
+            // Ours and fedrq's "(none)" are not users; each user goes
+            // under what it requires, by name, versioned or in a rich
+            // dependency, and one naming none plainly under "".
+            let s = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
             assert_eq!(
                 c.users,
-                [("CentOS Stream 10".to_string(), vec!["bar".to_string()])]
+                [(
+                    "CentOS Stream 10".to_string(),
+                    vec![
+                        (String::new(), s(&["odd"])),
+                        ("foo-tools".to_string(), s(&["baz", "qux"])),
+                        ("libfoo.so.1()(64bit)".to_string(), s(&["bar"])),
+                    ]
+                )]
             );
+            assert_eq!(c.required().len(), 3);
             assert!(c.breaks());
             assert_eq!(c.unchecked, ["EPEL 10: no such release"]);
             assert!(c.uncertain());
@@ -545,7 +662,7 @@ mod tests {
             ) -> Result<Vec<(String, Vec<String>)>, String> {
                 panic!("nothing dropped, nothing to look up")
             }
-            fn users(&self, _: &str, _: &[String]) -> Result<Vec<String>, String> {
+            fn users(&self, _: &str, _: &[String]) -> Result<Vec<(String, Vec<String>)>, String> {
                 panic!("nothing dropped, nothing to look up")
             }
         }

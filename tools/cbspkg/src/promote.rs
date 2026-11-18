@@ -250,13 +250,26 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         &steps,
         &sandogasa_cbs::packages::build_commits,
     );
-    // What the check found goes on the issue too, with the build.
+    // What the check found goes on the issue too, with the build. The
+    // plan shows the check once, in color, above the comments, so their
+    // preview stands in for it rather than repeat it.
+    let by = checked_by(&std::env::args().collect::<Vec<_>>());
+    let mut preview = notices.clone();
+    add_checks(
+        &mut preview,
+        &found,
+        &skipped,
+        unchecked.as_deref(),
+        &by,
+        false,
+    );
     add_checks(
         &mut notices,
         &found,
         &skipped,
         unchecked.as_deref(),
-        &checked_by(&std::env::args().collect::<Vec<_>>()),
+        &by,
+        true,
     );
 
     if !args.dry_run {
@@ -270,7 +283,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
                 &steps,
                 &found,
                 unchecked.as_deref(),
-                &notices,
+                &preview,
                 &replaced,
                 token.is_some(),
                 color
@@ -299,7 +312,8 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         untag_superseded(&hub, &replaced, args.dry_run)?;
     }
     if args.dry_run {
-        // After the steps, where a real run tells the issue.
+        // After the steps, where a real run tells the issue: the comments
+        // exactly as they would be posted, as nothing above asks.
         for notice in &notices {
             ui.step("Comment on the tracking issue, through GitLab's API");
             print!(
@@ -425,13 +439,19 @@ impl sandogasa_cbs::check::Lookup for FedrqLookup {
             .collect())
     }
 
-    fn users(&self, branch: &str, capabilities: &[String]) -> Result<Vec<String>, String> {
+    fn users(
+        &self,
+        branch: &str,
+        capabilities: &[String],
+    ) -> Result<Vec<(String, Vec<String>)>, String> {
         Ok(self
             .fedrq(branch)?
-            .whatrequires_notsrc(capabilities)
+            .whatrequires_notsrc_info(capabilities)
             .map_err(|e| e.to_string())?
             .into_iter()
-            .map(|(_, source)| source)
+            // A package without a source can be told from nothing: left
+            // out, as fedrq's "(none)" was.
+            .filter_map(|p| Some((p.source_name?, p.requires)))
             .collect())
     }
 }
@@ -442,20 +462,35 @@ impl sandogasa_cbs::check::Lookup for FedrqLookup {
 /// several collections (Stream and RHEL) has one check per collection.
 /// A build `skipped` says why it was not checked, and when nothing
 /// could be checked, `unchecked` says why, so a comment without a check
-/// does not read as one that found nothing.
+/// does not read as one that found nothing. Not `in_full`, for the
+/// plan that shows the check above, each check is a stand-in naming
+/// what it was against.
 fn add_checks(
     notices: &mut [sandogasa_cbs::notify::Notice],
     found: &[sandogasa_cbs::check::Check],
     skipped: &[(String, String)],
     unchecked: Option<&str>,
     by: &str,
+    in_full: bool,
 ) {
     use sandogasa_cbs::check::one_line;
+    let shown = |c: &sandogasa_cbs::check::Check| {
+        if in_full {
+            return c.markdown();
+        }
+        match &c.against {
+            Some(a) => format!(
+                "(the check against `{a}` shown above, with every version change \
+                 listed; `--dry-run` shows the comment in full)"
+            ),
+            None => "(the check shown above; `--dry-run` shows the comment in full)".to_string(),
+        }
+    };
     for notice in notices {
         let mut parts: Vec<String> = found
             .iter()
             .filter(|c| c.nvr == notice.nvr)
-            .map(|c| c.markdown())
+            .map(shown)
             .collect();
         parts.extend(
             skipped
@@ -907,6 +942,7 @@ mod tests {
             &[],
             None,
             "BY",
+            true,
         );
         assert_eq!(
             notices[0].note,
@@ -923,7 +959,14 @@ mod tests {
         );
         // Nothing could be checked: each comment says why.
         let mut notices = vec![notice("w-2-1.el9")];
-        add_checks(&mut notices, &[], &[], Some("no CBS hub\nconfigured"), "BY");
+        add_checks(
+            &mut notices,
+            &[],
+            &[],
+            Some("no CBS hub\nconfigured"),
+            "BY",
+            true,
+        );
         assert!(
             notices[0]
                 .note
@@ -944,6 +987,7 @@ mod tests {
             )],
             None,
             "BY",
+            true,
         );
         assert!(notices[0].note.contains(&format!(
             "{}\n\n{}\n\nBY",
@@ -954,6 +998,28 @@ mod tests {
             notices[1].note.contains(
                 "Not checked for what it drops: `cannot read w-2-1.el10's Provides`.\n\nBY"
             )
+        );
+        // The plan's preview: a stand-in, the check being shown above.
+        let mut notices = vec![notice("w-2-1.el9")];
+        add_checks(
+            &mut notices,
+            std::slice::from_ref(&checked),
+            &[],
+            None,
+            "BY",
+            false,
+        );
+        assert!(notices[0].note.contains(
+            "\n\n(the check against `w-1-1.el9` shown above, with every version \
+                     change listed; `--dry-run` shows the comment in full)\n\nBY\n\n"
+        ));
+        let mut notices = vec![notice("w-2-1.el9")];
+        let first = sandogasa_cbs::check::compare("w-2-1.el9", None, &set(&["w = 2-1"]));
+        add_checks(&mut notices, &[first], &[], None, "BY", false);
+        assert!(
+            notices[0]
+                .note
+                .contains("(the check shown above; `--dry-run` shows the comment in full)")
         );
         // The checkout's path stays private; arguments are quoted.
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -1090,10 +1156,14 @@ mod tests {
                 assert_eq!(caps, ["libr.so.1()(64bit)"]);
                 Ok(vec![])
             }
-            fn users(&self, branch: &str, caps: &[String]) -> Result<Vec<String>, String> {
+            fn users(
+                &self,
+                branch: &str,
+                caps: &[String],
+            ) -> Result<Vec<(String, Vec<String>)>, String> {
                 assert_eq!(caps, ["libr.so.1()(64bit)"]);
                 Ok(if branch == "c10s" {
-                    vec!["user".into()]
+                    vec![("user".into(), vec!["libr.so.1()(64bit)".into()])]
                 } else {
                     vec![]
                 })
@@ -1122,7 +1192,7 @@ mod tests {
         assert!(found[2].dropped().is_empty());
         let shown = crate::plan::checks(&found, None, false);
         assert!(
-            shown.contains("required in CentOS Stream 10 by user"),
+            shown.contains("libr.so.1()(64bit) is required in CentOS Stream 10 by user"),
             "{shown}"
         );
         assert!(
@@ -1179,7 +1249,7 @@ mod tests {
             ) -> Result<Vec<(String, Vec<String>)>, String> {
                 Ok(vec![])
             }
-            fn users(&self, _: &str, _: &[String]) -> Result<Vec<String>, String> {
+            fn users(&self, _: &str, _: &[String]) -> Result<Vec<(String, Vec<String>)>, String> {
                 Ok(vec![])
             }
         }

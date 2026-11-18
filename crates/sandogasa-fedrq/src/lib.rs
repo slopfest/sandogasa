@@ -660,6 +660,31 @@ impl Fedrq {
         Ok(binary_source_pairs(rows))
     }
 
+    /// Like [`Self::whatrequires_notsrc`], with each binary package's
+    /// runtime Requires, so a caller can tell which of `packages` (or
+    /// capabilities) each one requires: one fedrq invocation for all.
+    pub fn whatrequires_notsrc_info(&self, packages: &[String]) -> Result<Vec<PkgInfo>, Error> {
+        if packages.is_empty() {
+            return Ok(vec![]);
+        }
+        let raw = Self::run_raw(&mut self.whatrequires_notsrc_info_command(packages))?;
+        serde_json::from_str(&raw).map_err(|e| Error::Parse(e.to_string()))
+    }
+
+    /// The command [`Self::whatrequires_notsrc_info`] runs, separate so
+    /// a test can assert what it asks for.
+    fn whatrequires_notsrc_info_command(&self, packages: &[String]) -> Command {
+        self.json_command(
+            &[
+                "whatrequires",
+                "-S",
+                "-F",
+                "json:name,requires,source_name,repoid",
+            ],
+            packages,
+        )
+    }
+
     /// The command [`Self::whatrequires_notsrc`] runs, separate so a
     /// test can assert that it leaves source packages out.
     fn whatrequires_notsrc_command(&self, packages: &[String]) -> Command {
@@ -1361,6 +1386,36 @@ mod tests {
         );
         assert_eq!(args[sep + 1], "libical-devel", "{args:?}");
         assert!(f.whatrequires_notsrc(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn whatrequires_notsrc_info_asks_for_each_binarys_requires_and_source() {
+        let f = Fedrq {
+            branch: Some("c10s".to_string()),
+            repo: None,
+        };
+        let args = argv(&f.whatrequires_notsrc_info_command(&["libfoo.so.1()(64bit)".to_string()]));
+        let sep = args.iter().position(|a| a == "--").expect("separator");
+        let before = &args[..sep];
+        assert!(before.iter().any(|a| a == "-S"), "{args:?}");
+        assert!(
+            before
+                .windows(2)
+                .any(|w| w == ["-F", "json:name,requires,source_name,repoid"]),
+            "{args:?}"
+        );
+        assert_eq!(args[sep + 1], "libfoo.so.1()(64bit)", "{args:?}");
+        assert!(f.whatrequires_notsrc_info(&[]).unwrap().is_empty());
+        // What it parses: a binary with its source, and one without.
+        let parsed: Vec<PkgInfo> = serde_json::from_str(
+            r#"[{"name": "bar-libs", "source_name": "bar", "requires": ["libfoo.so.1()(64bit)"],
+                 "repoid": "baseos"},
+                {"name": "odd", "source_name": null, "requires": [], "repoid": "x"}]"#,
+        )
+        .unwrap();
+        assert_eq!(parsed[0].source_name.as_deref(), Some("bar"));
+        assert_eq!(parsed[0].requires, ["libfoo.so.1()(64bit)"]);
+        assert_eq!(parsed[1].source_name, None);
     }
 
     #[test]

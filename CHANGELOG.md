@@ -96,7 +96,8 @@ provides is not lost. For the rest, the packages whose binaries require
 them at run time are listed. The plan before `Promote?` shows:
 - what is dropped, red for a soname;
 - what is still provided elsewhere;
-- the packages that would break, in bold red;
+- for each dropped capability, the packages that would break, in
+  bold red;
 - the version changes.
 
 When something would break, or a repo could not be looked in for

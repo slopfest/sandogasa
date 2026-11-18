@@ -140,7 +140,8 @@ reads each build's binary RPMs and their Provides from the hub, two
 `multiCall`s for all builds together. `compare` lists what the build
 drops or moves to another version. `look_up` then asks stock CentOS
 Stream and EPEL (`user_repos`) which source packages still provide a
-dropped capability, and whose binary packages require the rest. It
+dropped capability, and whose binary packages require the rest, per
+capability (`Check::required`), from each user's Requires. It
 asks each place once per distinct set of dropped capabilities, the
 places concurrently, through a `Lookup` the caller implements (fedrq
 in cbspkg, #157). A version change is listed but not looked up.

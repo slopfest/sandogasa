@@ -99,17 +99,20 @@ pub fn checks(found: &[Check], unchecked: Option<&str>, color: bool) -> String {
                 by.join(", ")
             ));
         }
-        for (place, users) in &c.users {
-            if !users.is_empty() {
-                out.push_str(&format!(
-                    "  {}\n",
-                    paint(
-                        &format!("required in {place} by {}", users.join(", ")),
-                        &format!("{BOLD}{RED}"),
-                        color
-                    )
-                ));
-            }
+        for (place, cap, users) in c.required() {
+            let what = if cap.is_empty() {
+                "something it drops".to_string()
+            } else {
+                cap.to_string()
+            };
+            out.push_str(&format!(
+                "  {}\n",
+                paint(
+                    &format!("{what} is required in {place} by {}", users.join(", ")),
+                    &format!("{BOLD}{RED}"),
+                    color
+                )
+            ));
         }
         if !dropped.is_empty() && !c.breaks() && c.unchecked.is_empty() {
             out.push_str("  nothing in CentOS Stream or EPEL requires what it drops\n");
@@ -251,7 +254,10 @@ mod tests {
             "r-tools".into(),
             vec!["other".into()],
         )];
-        c.users = vec![("CentOS Stream 10".into(), vec!["user".into()])];
+        c.users = vec![(
+            "CentOS Stream 10".into(),
+            vec![("libr.so.1()(64bit)".into(), vec!["user".into()])],
+        )];
         c.unchecked = vec!["EPEL 10: no such release".into()];
         let shown = checks(std::slice::from_ref(&c), None, false);
         assert_eq!(
@@ -260,7 +266,7 @@ mod tests {
              drops libr.so.1()(64bit)\n  \
              drops r-tools = 1-1\n  \
              r-tools is still provided in CentOS Stream 10 by other\n  \
-             required in CentOS Stream 10 by user\n  \
+             libr.so.1()(64bit) is required in CentOS Stream 10 by user\n  \
              changes r = 1-1 to r = 2-1 and 1 more\n  \
              not looked in: EPEL 10: no such release\n"
         );
@@ -274,7 +280,7 @@ mod tests {
             "{colored}"
         );
         assert!(
-            colored.contains(&format!("{BOLD}{RED}required in")),
+            colored.contains(&format!("{BOLD}{RED}libr.so.1()(64bit) is required in")),
             "{colored}"
         );
         assert!(
