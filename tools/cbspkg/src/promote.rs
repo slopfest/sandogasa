@@ -6,7 +6,7 @@
 //! By hand that is `cbs tag-build <tag> <nvr>` with the tag spelled out
 //! and the NVR looked up, and for a release, a `cbs untag-build` from
 //! `-testing` that tends to be forgotten, leaving the build in both. The
-//! commands come from sandogasa-cbs (`packages::promote_argvs`), where
+//! changes come from sandogasa-cbs (`packages::promote_changes`), where
 //! hs-relmon's `review` can share them. Like every write to CBS, it is
 //! confirmed at a terminal and cannot be scripted past.
 
@@ -14,7 +14,8 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use sandogasa_cbs::packages::{furthest_stage, latest, promote_argvs, tags_of};
+use sandogasa_cbs::packages::{furthest_stage, latest, promote_changes, tags_of};
+use sandogasa_cbs::tags::{CbsCli, TagChange, TagHub};
 use sandogasa_cbs::{Collection, PROFILE, Stage};
 use sandogasa_cli::explain::Ui;
 
@@ -125,7 +126,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // Which build, where it is, and what promoting it takes, per
     // collection. Reading changes nothing, so a dry run does it too.
-    let mut steps: Vec<(String, Stage, Vec<Vec<String>>)> = Vec::new();
+    let mut steps: Vec<(String, Stage, Vec<TagChange>)> = Vec::new();
     // Where each build goes, to find the older builds it replaces there.
     let mut moves: Vec<(&Collection, String, Stage)> = Vec::new();
     // The collections a named build turned out not to be in: fine for
@@ -171,7 +172,11 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => return Err(e.into()),
         };
-        steps.push((nvr.clone(), to, promote_argvs(collection, &nvr, to, &tags)));
+        steps.push((
+            nvr.clone(),
+            to,
+            promote_changes(collection, &nvr, to, &tags),
+        ));
         moves.push((collection, nvr, to));
     }
     if let Some(nvr) = &args.nvr
@@ -215,10 +220,10 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     if !args.dry_run {
         // Set apart from the login check and the steps above.
         println!();
-        for (nvr, to, argvs) in &steps {
+        for (nvr, to, changes) in &steps {
             println!("{nvr} to -{}:", to.as_str());
-            for argv in argvs {
-                println!("  {}", sandogasa_cli::explain::command_line(argv));
+            for change in changes {
+                println!("  {}", sandogasa_cli::explain::command_line(&change.argv()));
             }
         }
         for notice in &notices {
@@ -226,8 +231,8 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         }
         if !replaced.is_empty() {
             println!("Then, asked separately, the older builds they replace:");
-            for argv in &replaced {
-                println!("  {}", sandogasa_cli::explain::command_line(argv));
+            for change in &replaced {
+                println!("  {}", sandogasa_cli::explain::command_line(&change.argv()));
             }
         }
         if !sandogasa_cli::confirm("Promote?", true)? {
@@ -239,10 +244,14 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     // builds that moved: a rerun would find them promoted, with nothing
     // left to do and so nothing to tell.
     let mut done: Vec<(String, Stage)> = Vec::new();
-    let moved = promote_all(&ui, &repo, &steps, args.dry_run, &mut done);
+    let hub = CbsCli {
+        ui: &ui,
+        cwd: &repo,
+    };
+    let moved = promote_all(&hub, &steps, args.dry_run, &mut done);
     // Only once the builds replacing them are in place.
     if moved.is_ok() {
-        untag_superseded(&ui, &repo, &replaced, args.dry_run)?;
+        untag_superseded(&hub, &replaced, args.dry_run)?;
     }
     if args.dry_run {
         // After the steps, where a real run tells the issue.
@@ -268,7 +277,7 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
 /// superseded builds do not pile up there. `-candidate` keeps the build
 /// history. The tags are read side by side; one that cannot be read is
 /// a warning, and its builds are left alone.
-fn superseded(ui: &Ui, package: &str, moves: &[(&Collection, String, Stage)]) -> Vec<Vec<String>> {
+fn superseded(ui: &Ui, package: &str, moves: &[(&Collection, String, Stage)]) -> Vec<TagChange> {
     let mut wanted: Vec<(String, &str)> = Vec::new();
     for (collection, nvr, to) in moves {
         let stages: &[Stage] = match to {
@@ -295,7 +304,7 @@ fn superseded(ui: &Ui, package: &str, moves: &[(&Collection, String, Stage)]) ->
             .map(|h| h.join().unwrap_or_else(|_| Err("koji panicked".into())))
             .collect()
     });
-    let mut argvs = Vec::new();
+    let mut changes = Vec::new();
     for ((tag, nvr), builds) in wanted.iter().zip(listed) {
         let builds = match builds {
             Ok(b) => b,
@@ -305,10 +314,10 @@ fn superseded(ui: &Ui, package: &str, moves: &[(&Collection, String, Stage)]) ->
             }
         };
         for old in older_than(&builds, nvr, package) {
-            argvs.push(["cbs", "untag-build", tag, &old].map(String::from).to_vec());
+            changes.push(TagChange::untag(tag, &old));
         }
     }
-    argvs
+    changes
 }
 
 /// The builds among `builds` of `package` older than `nvr`: the name
@@ -355,57 +364,56 @@ fn tagged(tag: &str, package: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// Offer to untag the superseded builds (`argvs`), after the promotion,
-/// confirmed on their own at a terminal; a dry run shows the commands.
-/// A failed untag is a warning: the promotion is done.
+/// Offer to untag the superseded builds (`changes`), after the
+/// promotion, confirmed on their own at a terminal; a dry run shows the
+/// commands. A failed untag is a warning: the promotion is done.
 fn untag_superseded(
-    ui: &Ui,
-    repo: &std::path::Path,
-    argvs: &[Vec<String>],
+    hub: &dyn TagHub,
+    changes: &[TagChange],
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if argvs.is_empty() {
+    if changes.is_empty() {
         return Ok(());
     }
     if !dry_run && !sandogasa_cli::confirm("Untag the older builds they replace?", true)? {
         println!("Older builds left tagged.");
         return Ok(());
     }
-    for argv in argvs {
-        ui.step(&format!(
+    for change in changes {
+        let why = format!(
             "Untag {} from {}, as a newer build replaces it",
-            argv[3], argv[2]
-        ));
-        if !ui.run(argv, repo).unwrap_or(false) {
+            change.nvr(),
+            change.tag_name()
+        );
+        if let Err(e) = hub.apply(change, &why) {
             eprintln!(
-                "warning: could not untag {} from {}; run `{}` by hand",
-                argv[3],
-                argv[2],
-                sandogasa_cli::explain::command_line(argv)
+                "warning: could not untag {} from {} ({e}); run `{}` by hand",
+                change.nvr(),
+                change.tag_name(),
+                sandogasa_cli::explain::command_line(&change.argv())
             );
         }
     }
     Ok(())
 }
 
-/// Run each step's `cbs` commands, recording in `done` each build that
+/// Make each step's tag changes, recording in `done` each build that
 /// got through all of its own.
 fn promote_all(
-    ui: &Ui,
-    repo: &std::path::Path,
-    steps: &[(String, Stage, Vec<Vec<String>>)],
+    hub: &dyn TagHub,
+    steps: &[(String, Stage, Vec<TagChange>)],
     dry_run: bool,
     done: &mut Vec<(String, Stage)>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    for (nvr, to, argvs) in steps {
-        for argv in argvs {
-            let what = if argv[1] == "untag-build" {
-                format!("Untag {nvr} from {}, as it is released", argv[2])
-            } else {
-                format!("Tag {nvr} into {}", argv[2])
+    for (nvr, to, changes) in steps {
+        for change in changes {
+            let why = match change {
+                TagChange::Untag { tag, .. } => {
+                    format!("Untag {nvr} from {tag}, as it is released")
+                }
+                TagChange::Tag { tag, .. } => format!("Tag {nvr} into {tag}"),
             };
-            ui.step(&what);
-            ui.run_required(argv, repo)?;
+            hub.apply(change, &why)?;
         }
         done.push((nvr.clone(), *to));
         if !dry_run {
@@ -453,6 +461,88 @@ mod tests {
                 ("list-tags", tags),
             ],
         );
+    }
+
+    /// A hub recording the changes asked of it, failing those whose
+    /// tag is in `refuse`.
+    #[derive(Default)]
+    struct FakeHub {
+        made: std::cell::RefCell<Vec<String>>,
+        refuse: Vec<&'static str>,
+    }
+
+    impl TagHub for FakeHub {
+        fn apply(&self, change: &TagChange, _why: &str) -> Result<(), Box<dyn std::error::Error>> {
+            if self.refuse.contains(&change.tag_name()) {
+                return Err("refused".into());
+            }
+            self.made.borrow_mut().push(change.argv().join(" "));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn each_promoted_build_is_recorded_once_its_changes_are_made() {
+        let steps = vec![
+            (
+                "a-1-1".to_string(),
+                Stage::Release,
+                vec![
+                    TagChange::tag("rel", "a-1-1"),
+                    TagChange::untag("test", "a-1-1"),
+                ],
+            ),
+            (
+                "b-1-1".to_string(),
+                Stage::Testing,
+                vec![TagChange::tag("test", "b-1-1")],
+            ),
+        ];
+        let hub = FakeHub::default();
+        let mut done = Vec::new();
+        promote_all(&hub, &steps, true, &mut done).unwrap();
+        assert_eq!(
+            *hub.made.borrow(),
+            [
+                "cbs tag-build rel a-1-1",
+                "cbs untag-build test a-1-1",
+                "cbs tag-build test b-1-1"
+            ]
+        );
+        assert_eq!(
+            done,
+            [
+                ("a-1-1".to_string(), Stage::Release),
+                ("b-1-1".to_string(), Stage::Testing)
+            ]
+        );
+        // A refused change stops there: the build before it is
+        // recorded, the one it belongs to is not.
+        let hub = FakeHub {
+            refuse: vec!["test"],
+            ..FakeHub::default()
+        };
+        let mut done = Vec::new();
+        let steps = [steps[1].clone(), steps[0].clone()];
+        assert!(promote_all(&hub, &steps, true, &mut done).is_err());
+        assert!(done.is_empty());
+    }
+
+    #[test]
+    fn a_failed_untag_of_a_superseded_build_is_only_a_warning() {
+        let hub = FakeHub {
+            refuse: vec!["test"],
+            ..FakeHub::default()
+        };
+        let changes = [
+            TagChange::untag("test", "a-0-1"),
+            TagChange::untag("rel", "a-0-1"),
+        ];
+        // A dry run asks nothing; the refused untag does not stop the
+        // next one.
+        untag_superseded(&hub, &changes, true).unwrap();
+        assert_eq!(*hub.made.borrow(), ["cbs untag-build rel a-0-1"]);
+        untag_superseded(&hub, &[], false).unwrap();
     }
 
     #[test]
@@ -503,10 +593,10 @@ mod tests {
             dry_run: true,
             quiet: false,
         };
-        let argvs = superseded(&ui, "rsync", &moves);
-        let lines: Vec<String> = argvs
+        let changes = superseded(&ui, "rsync", &moves);
+        let lines: Vec<String> = changes
             .iter()
-            .map(|a| sandogasa_cli::explain::command_line(a))
+            .map(|c| sandogasa_cli::explain::command_line(&c.argv()))
             .collect();
         assert_eq!(
             lines,

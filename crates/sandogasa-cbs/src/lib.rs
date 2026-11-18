@@ -27,6 +27,7 @@ pub mod login;
 pub mod lookaside;
 pub mod packages;
 pub mod remotes;
+pub mod tags;
 #[cfg(test)]
 mod test_support;
 pub mod tracking;

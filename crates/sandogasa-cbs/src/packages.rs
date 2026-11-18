@@ -8,6 +8,7 @@
 
 use std::process::{Command, Stdio};
 
+use crate::tags::TagChange;
 use crate::{Collection, PROFILE, Stage};
 
 /// The tags a collection's packages have to be listed in, in the order
@@ -58,35 +59,43 @@ pub fn furthest_stage(collection: &Collection, tags: &[String]) -> Option<Stage>
         .find(|s| tags.iter().any(|t| *t == collection.tag(*s)))
 }
 
-/// The commands that promote `nvr` in `collection` to `to`: tag it
+/// The changes that promote `nvr` in `collection` to `to`: tag it
 /// there unless `tags` (its tags) include it already, and, for a
 /// release, untag it from `-testing` when `tags` include that, so a
-/// released build does not stay in testing as well. Untagging was forgotten often enough by hand that it is part
-/// of the step, for every SIG.
+/// released build does not stay in testing as well. Untagging was
+/// forgotten often enough by hand that it is part of the step, for
+/// every SIG.
+pub fn promote_changes(
+    collection: &Collection,
+    nvr: &str,
+    to: Stage,
+    tags: &[String],
+) -> Vec<TagChange> {
+    let target = collection.tag(to);
+    let mut changes = Vec::new();
+    // A build released before untagging was part of the step is in
+    // -release already: only the untag is left.
+    if !tags.contains(&target) {
+        changes.push(TagChange::tag(&target, nvr));
+    }
+    let testing = collection.tag(Stage::Testing);
+    if to == Stage::Release && tags.contains(&testing) {
+        changes.push(TagChange::untag(&testing, nvr));
+    }
+    changes
+}
+
+/// The `cbs` commands of [`promote_changes`].
 pub fn promote_argvs(
     collection: &Collection,
     nvr: &str,
     to: Stage,
     tags: &[String],
 ) -> Vec<Vec<String>> {
-    let cbs = |args: &[&str]| -> Vec<String> {
-        std::iter::once("cbs")
-            .chain(args.iter().copied())
-            .map(String::from)
-            .collect()
-    };
-    let target = collection.tag(to);
-    let mut argvs = Vec::new();
-    // A build released before untagging was part of the step is in
-    // -release already: only the untag is left.
-    if !tags.contains(&target) {
-        argvs.push(cbs(&["tag-build", &target, nvr]));
-    }
-    let testing = collection.tag(Stage::Testing);
-    if to == Stage::Release && tags.contains(&testing) {
-        argvs.push(cbs(&["untag-build", &testing, nvr]));
-    }
-    argvs
+    promote_changes(collection, nvr, to, tags)
+        .iter()
+        .map(TagChange::argv)
+        .collect()
 }
 
 /// The tags `nvr` is in.
@@ -460,10 +469,11 @@ mod tests {
         let tags = |ss: &[Stage]| ss.iter().map(|s| c.tag(*s)).collect::<Vec<_>>();
         let nvr = "blktrace-1.3.0-13~proposed.el10";
         let lines = |to, t: &[String]| {
-            promote_argvs(&c, nvr, to, t)
-                .iter()
-                .map(|a| a.join(" "))
-                .collect::<Vec<_>>()
+            let changes = promote_changes(&c, nvr, to, t);
+            // The command lines are the changes', one for one.
+            let argvs: Vec<Vec<String>> = changes.iter().map(TagChange::argv).collect();
+            assert_eq!(promote_argvs(&c, nvr, to, t), argvs);
+            argvs.iter().map(|a| a.join(" ")).collect::<Vec<_>>()
         };
 
         let candidate = tags(&[Stage::Candidate]);

@@ -9,7 +9,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-sandogasa-cli = { workspace = true }
+# explain: tag changes run through sandogasa_cli::explain::Ui (tags.rs)
+sandogasa-cli = { workspace = true, features = ["explain"] }
 sandogasa-kojihub = { workspace = true }
 
 [dev-dependencies]

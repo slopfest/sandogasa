@@ -507,26 +507,24 @@ fn apply_promote(hub: &dyn Hub, item: &ReviewItem) -> Result<(), String> {
     let (collection, _) = sandogasa_cbs::Collection::from_tag(&item.testing_tag)
         .ok_or_else(|| format!("{} is not a SIG's -testing tag", item.testing_tag))?;
     let in_tags = [item.testing_tag.clone()];
-    for argv in sandogasa_cbs::packages::promote_argvs(
+    for change in sandogasa_cbs::packages::promote_changes(
         &collection,
         &item.nvr,
         sandogasa_cbs::Stage::Release,
         &in_tags,
     ) {
-        // `cbs <verb> <tag> <nvr>`, run as koji with the profile in use.
-        let (verb, tag) = (argv[1].as_str(), argv[2].as_str());
-        match verb {
-            "tag-build" => {
-                hub.tag(tag, &item.nvr)
-                    .map_err(|e| format!("tag-build {tag} {}: {e}", item.nvr))?;
-                eprintln!("tagged {} into {tag}", item.nvr);
+        use sandogasa_cbs::tags::TagChange;
+        match &change {
+            TagChange::Tag { tag, nvr } => {
+                hub.tag(tag, nvr)
+                    .map_err(|e| format!("tag-build {tag} {nvr}: {e}"))?;
+                eprintln!("tagged {nvr} into {tag}");
             }
-            "untag-build" => {
-                hub.untag(tag, &item.nvr)
-                    .map_err(|e| format!("untag-build {tag} {}: {e}", item.nvr))?;
-                eprintln!("untagged {} from {tag}", item.nvr);
+            TagChange::Untag { tag, nvr } => {
+                hub.untag(tag, nvr)
+                    .map_err(|e| format!("untag-build {tag} {nvr}: {e}"))?;
+                eprintln!("untagged {nvr} from {tag}");
             }
-            other => return Err(format!("unexpected promote step: {other}")),
         }
     }
     Ok(())

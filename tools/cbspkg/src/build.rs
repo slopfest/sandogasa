@@ -18,6 +18,7 @@ use std::process::{Command, ExitCode};
 
 use sandogasa_cbs::packages::latest;
 use sandogasa_cbs::remotes::Role;
+use sandogasa_cbs::tags::TagChange;
 use sandogasa_cbs::{Collection, Stage};
 use sandogasa_cli::explain::Ui;
 
@@ -197,12 +198,15 @@ fn tell_built(
     if built.is_empty() {
         return;
     }
-    let steps: Vec<(String, Stage, Vec<Vec<String>>)> = built
+    let steps: Vec<(String, Stage, Vec<TagChange>)> = built
         .iter()
         .map(|(c, nvr)| {
             let tag = c.tag(Stage::Candidate);
-            let argv = ["cbs", "tag-build", &tag, nvr].map(String::from).to_vec();
-            (nvr.clone(), Stage::Candidate, vec![argv])
+            (
+                nvr.clone(),
+                Stage::Candidate,
+                vec![TagChange::tag(&tag, nvr)],
+            )
         })
         .collect();
     let notices = crate::notify::plan(base, token, on, &steps, &|_| Ok(Some(commit.to_string())));
@@ -388,14 +392,17 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let preview = if tells {
         ui.step("Find the tracking issue to update, through GitLab's API");
-        let steps: Vec<(String, Stage, Vec<Vec<String>>)> = checkout
+        let steps: Vec<(String, Stage, Vec<TagChange>)> = checkout
             .collections
             .iter()
             .zip(&stand_ins)
             .map(|(c, nvr)| {
                 let tag = c.tag(Stage::Candidate);
-                let argv = ["cbs", "tag-build", &tag, nvr].map(String::from).to_vec();
-                (nvr.clone(), Stage::Candidate, vec![argv])
+                (
+                    nvr.clone(),
+                    Stage::Candidate,
+                    vec![TagChange::tag(&tag, nvr)],
+                )
             })
             .collect();
         crate::notify::plan(

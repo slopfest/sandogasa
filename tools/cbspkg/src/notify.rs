@@ -16,6 +16,7 @@ use std::process::Command;
 
 use std::cmp::Ordering;
 
+use sandogasa_cbs::tags::{TagChange, tag_and_untag};
 use sandogasa_cbs::tracking::{
     Provenance, proposed_release, requested_version, stage_label, stage_note, stage_noted,
     tracked_mr_url, tracks_proposed_branch,
@@ -91,7 +92,7 @@ pub fn plan(
     base: &str,
     token: Option<&str>,
     on: &Branch,
-    steps: &[(String, Stage, Vec<Vec<String>>)],
+    steps: &[(String, Stage, Vec<TagChange>)],
     commit_of: &dyn Fn(&str) -> Result<Option<String>, String>,
 ) -> Vec<Notice> {
     let Branch {
@@ -153,7 +154,7 @@ pub fn plan(
         Sig::Hyperscale => requested_version(&issue.title, package).map(str::to_string),
         _ => None,
     };
-    let pending: Vec<&(String, Stage, Vec<Vec<String>>)> = steps
+    let pending: Vec<&(String, Stage, Vec<TagChange>)> = steps
         .iter()
         .filter(|(nvr, stage, _)| {
             // A build's NVR is a stand-in until it is built.
@@ -222,8 +223,8 @@ pub fn plan(
         Vec::new()
     };
     let mut notices = Vec::new();
-    for ((nvr, stage, argvs), commit) in pending.into_iter().zip(&commits) {
-        let (tag, untagged) = tags_of_step(argvs);
+    for ((nvr, stage, changes), commit) in pending.into_iter().zip(&commits) {
+        let (tag, untagged) = tag_and_untag(changes);
         // Re-promoting a released build only finishes its untag from
         // -testing; the release tag is the testing one's sibling.
         let tag = match (tag, untagged, stage) {
@@ -696,20 +697,6 @@ fn hyperscale_release_tags(repo: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The tag a promotion's commands tag the build into, and the one they
-/// untag it from, if any: `cbs tag-build <tag> <nvr>`,
-/// `cbs untag-build <tag> <nvr>`.
-fn tags_of_step(argvs: &[Vec<String>]) -> (Option<&str>, Option<&str>) {
-    let tag = |verb: &str| {
-        argvs
-            .iter()
-            .find(|a| a.get(1).map(String::as_str) == Some(verb))
-            .and_then(|a| a.get(2))
-            .map(String::as_str)
-    };
-    (tag("tag-build"), tag("untag-build"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,13 +726,12 @@ mod tests {
     const TESTING: &str = "proposed_updates10s-packages-main-testing";
     const RELEASE: &str = "proposed_updates10s-packages-main-release";
 
-    fn step(stage: Stage) -> (String, Stage, Vec<Vec<String>>) {
-        let argv = |verb: &str, tag: &str| ["cbs", verb, tag, NVR].map(String::from).to_vec();
-        let argvs = match stage {
-            Stage::Release => vec![argv("tag-build", RELEASE), argv("untag-build", TESTING)],
-            _ => vec![argv("tag-build", TESTING)],
+    fn step(stage: Stage) -> (String, Stage, Vec<TagChange>) {
+        let changes = match stage {
+            Stage::Release => vec![TagChange::tag(RELEASE, NVR), TagChange::untag(TESTING, NVR)],
+            _ => vec![TagChange::tag(TESTING, NVR)],
         };
-        (NVR.to_string(), stage, argvs)
+        (NVR.to_string(), stage, changes)
     }
 
     /// git's c10s Proposed Update, its tracking issue #1 telling of a
@@ -832,11 +818,7 @@ mod tests {
         let untag_only = (
             NVR.to_string(),
             Stage::Release,
-            vec![
-                ["cbs", "untag-build", TESTING, NVR]
-                    .map(String::from)
-                    .to_vec(),
-            ],
+            vec![TagChange::untag(TESTING, NVR)],
         );
         let notices = plan(
             &server.url(),
@@ -1116,16 +1098,10 @@ mod tests {
         let steps = [(
             nvr.to_string(),
             Stage::Testing,
-            vec![
-                [
-                    "cbs",
-                    "tag-build",
-                    "proposed_updates9s-packages-main-testing",
-                    nvr,
-                ]
-                .map(String::from)
-                .to_vec(),
-            ],
+            vec![TagChange::tag(
+                "proposed_updates9s-packages-main-testing",
+                nvr,
+            )],
         )];
         let on = Branch {
             sig: Sig::ProposedUpdates,
@@ -1234,7 +1210,7 @@ mod tests {
             (
                 nvr.to_string(),
                 Stage::Testing,
-                vec![["cbs", "tag-build", tag, nvr].map(String::from).to_vec()],
+                vec![TagChange::tag(tag, nvr)],
             )
         };
         let on = Branch {
@@ -1334,15 +1310,8 @@ mod tests {
             nvr.to_string(),
             Stage::Release,
             vec![
-                ["cbs", "tag-build", r10, nvr].map(String::from).to_vec(),
-                [
-                    "cbs",
-                    "untag-build",
-                    "hyperscale10s-packages-main-testing",
-                    nvr,
-                ]
-                .map(String::from)
-                .to_vec(),
+                TagChange::tag(r10, nvr),
+                TagChange::untag("hyperscale10s-packages-main-testing", nvr),
             ],
         )];
         let on = Branch {

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-cbs: tag changes as values, made through one hub
+
+Each tool that moves SIG builds between CBS tags built its own `cbs
+tag-build`/`untag-build` command lines, and cbspkg read them back to
+learn where a promotion went. A new `sandogasa_cbs::tags` module makes a
+move a `TagChange`, rendered as the `cbs` command a person would type,
+and makes it through a `TagHub`: `CbsCli` runs it through
+`sandogasa_cli::explain::Ui`, shown under `--explain` and only shown
+under `--dry-run`, and a test can record the moves instead.
+`packages::promote_changes` returns a promotion's changes;
+`promote_argvs` stays, built on it. `cbspkg promote` uses them, with
+nothing changed in what it does; the trackers' untag and review
+commands follow (#144). sandogasa-cbs now enables sandogasa-cli's
+`explain` feature.
+
 ### fedora-review-digest says why Bugzilla refused its key
 
 `fedora-review-digest --post` with an expired Bugzilla API key failed
