@@ -210,19 +210,16 @@ fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if !args.dry_run {
-        // Set apart from the login check and the steps above.
-        println!();
-        for change in &changes {
-            println!("  {}", sandogasa_cli::explain::command_line(&change.argv()));
-        }
-        for notice in &notices {
-            print!(
-                "{}",
-                sandogasa_cbs::notify::describe(notice, token.is_some())
-            );
-        }
+        // The plan the confirmation asks about, on standard error with
+        // the question; set apart from the login check and the steps
+        // above.
+        let color = sandogasa_cli::style::stderr_color();
+        eprint!(
+            "\n{}",
+            crate::plan::untag(&args.nvr, &changes, &notices, token.is_some(), color)
+        );
         if !sandogasa_cli::confirm("Untag?", true)? {
-            println!("Nothing changed.");
+            eprintln!("Nothing changed.");
             return Ok(());
         }
     }
@@ -240,7 +237,11 @@ fn run_inner(args: &UntagArgs) -> Result<(), Box<dyn std::error::Error>> {
             ui.step("Comment on the tracking issue, through GitLab's API");
             print!(
                 "{}",
-                sandogasa_cbs::notify::describe(notice, token.is_some())
+                sandogasa_cbs::notify::describe_styled(
+                    notice,
+                    token.is_some(),
+                    sandogasa_cli::style::use_color(sandogasa_cli::style::ColorChoice::Auto),
+                )
             );
         }
     } else {

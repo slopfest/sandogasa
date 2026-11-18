@@ -2,23 +2,21 @@
 
 ## Unreleased
 
-### hs-relmon review comments on the tracking issue
+### cbspkg colors the plan it asks you to confirm
 
-`hs-relmon review` released or rejected Hyperscale builds without
-telling anyone: the package's `rfe::new-version` issue kept saying
-nothing, while `cbspkg promote` commented on it for the same move. Now
-a release gets the comment and `stage::release` label `promote` gives,
-and a rejection a comment saying so and `stage::rejected`. The comment
-is shown before it is posted, the verdict being the confirmation, as
-before. Closing an issue once every release has the version stays with
-`hs-relmon`'s scan, which knows the releases the SIG carries the
-package for. A release that fails partway names the `cbspkg promote`
-that finishes it.
-
-The review loop is now sandogasa-cbs's (`review::review`), shared with
-the coming `cpu-sig-tracker review` (#144). The tag changes run through
-`cbs` rather than `koji --profile cbs`, like cbspkg's, and `--explain`
-narrates them. `review --dry-run` no longer reads the keyring.
+Before `Start build?`, `Promote?` and `Untag?`, cbspkg listed the
+commands it would run and the tracking-issue comment it would post as
+plain text, though `--explain` shows the same commands in bold green
+just before running them. The plan now follows the color chart:
+headings bold (`untag`'s now has one, naming the build), the commands
+bold green, the comment's quote marks and cbspkg's hidden marker gray,
+and a comment that cannot be posted, or a label the project lacks,
+yellow. The plan, its question and the answer's outcome ("Nothing
+changed.") go to standard error, colored on a terminal only; a
+`--dry-run` shows the comments colored the same way. Control
+characters in a comment or URL are replaced before they reach the
+terminal. sandogasa-cbs gains `notify::describe_styled`; `describe`
+stays plain.
 
 ### cbspkg puts the next command on a line of its own
 
@@ -84,6 +82,24 @@ is copied in, with a note saying so. `--offline`, as in fedpkg, skips
 the upload, for someone who cannot upload. `upload-sources` stays, for
 packages that reuse CentOS Stream's `sources` file unchanged (Resolves
 #171).
+
+### hs-relmon review comments on the tracking issue
+
+`hs-relmon review` released or rejected Hyperscale builds without
+telling anyone: the package's `rfe::new-version` issue kept saying
+nothing, while `cbspkg promote` commented on it for the same move. Now
+a release gets the comment and `stage::release` label `promote` gives,
+and a rejection a comment saying so and `stage::rejected`. The comment
+is shown before it is posted, the verdict being the confirmation, as
+before. Closing an issue once every release has the version stays with
+`hs-relmon`'s scan, which knows the releases the SIG carries the
+package for. A release that fails partway names the `cbspkg promote`
+that finishes it.
+
+The review loop is now sandogasa-cbs's (`review::review`), shared with
+the coming `cpu-sig-tracker review` (#144). The tag changes run through
+`cbs` rather than `koji --profile cbs`, like cbspkg's, and `--explain`
+narrates them. `review --dry-run` no longer reads the keyring.
 
 ### cbspkg untag takes a build out of a stage and tells its tracking issue why
 

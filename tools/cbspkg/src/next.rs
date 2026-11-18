@@ -7,7 +7,7 @@
 //! terminal only.
 
 use sandogasa_cli::explain::command_line;
-use sandogasa_cli::style::{BOLD, DIM, GREEN, paint};
+use sandogasa_cli::style::{DIM, paint};
 
 /// `what` to do next, `command` that does it, and `by_hand`, the
 /// commands that do the same without cbspkg (none when there are
@@ -15,7 +15,7 @@ use sandogasa_cli::style::{BOLD, DIM, GREEN, paint};
 pub fn next_step(what: &str, command: &[String], by_hand: &[Vec<String>], color: bool) -> String {
     let mut out = format!(
         "Next, {what}:\n  {}\n",
-        paint(&command_line(command), &format!("{BOLD}{GREEN}"), color)
+        paint(&command_line(command), &crate::plan::command_style(), color)
     );
     for argv in by_hand {
         let line = format!("(or by hand: {})", command_line(argv));
@@ -76,6 +76,8 @@ pub fn promote_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use sandogasa_cli::style::{BOLD, GREEN};
 
     fn argv(words: &[&str]) -> Vec<String> {
         words.iter().map(|w| w.to_string()).collect()

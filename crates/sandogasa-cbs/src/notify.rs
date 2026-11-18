@@ -449,19 +449,60 @@ pub fn plan_untags(
     notices
 }
 
+/// `text` with control characters other than tabs replaced, so that
+/// text from git, GitLab or the person running the tool cannot move the
+/// cursor or change the colors of the plan it is shown in.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && c != '\t' {
+                '\u{fffd}'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 /// How the plan shows a notice: the issue, the comment indented, and
 /// the label; without a token to post with, that it will not be told.
+/// Plain text; [`describe_styled`] colors it for a terminal.
 pub fn describe(notice: &Notice, postable: bool) -> String {
+    describe_styled(notice, postable, false)
+}
+
+/// [`describe`], colored when `color` is on, as the workspace's color
+/// chart has it: the heading bold, or yellow when the comment cannot be
+/// posted; the quote marks and the comment's hidden marker gray, as
+/// secondary; a missing label yellow.
+pub fn describe_styled(notice: &Notice, postable: bool, color: bool) -> String {
+    use sandogasa_cli::style::{BOLD, DIM, YELLOW, paint};
+    let url = printable(&notice.issue_url);
     let mut out = if postable {
-        format!("Then comment on {}:\n", notice.issue_url)
+        format!(
+            "{}\n",
+            paint(&format!("Then comment on {url}:"), BOLD, color)
+        )
     } else {
         format!(
-            "Without a GitLab token (`{} config`, or GITLAB_TOKEN), no comment is posted on {}:\n",
-            notice.tool, notice.issue_url
+            "{}\n",
+            paint(
+                &format!(
+                    "Without a GitLab token (`{} config`, or GITLAB_TOKEN), no comment is posted on {url}:",
+                    notice.tool
+                ),
+                YELLOW,
+                color
+            )
         )
     };
     for line in notice.note.lines() {
-        out.push_str(&format!("  > {line}\n"));
+        let line = printable(line);
+        if line.trim_start().starts_with("<!-- sandogasa:") {
+            out.push_str(&format!("  {}\n", paint(&format!("> {line}"), DIM, color)));
+        } else {
+            out.push_str(&format!("  {} {line}\n", paint(">", DIM, color)));
+        }
     }
     if let Some(label) = notice.label {
         out.push_str(&format!("  and label it {label}\n"));
@@ -479,8 +520,15 @@ pub fn describe(notice: &Notice, postable: bool) -> String {
     }
     if let Some(label) = notice.missing_label {
         out.push_str(&format!(
-            "  (no {label} label exists in the project or the SIG's group: \
-             create one in the group for the issue to get it)\n"
+            "  {}\n",
+            paint(
+                &format!(
+                    "(no {label} label exists in the project or the SIG's group: \
+                     create one in the group for the issue to get it)"
+                ),
+                YELLOW,
+                color
+            )
         ));
     }
     out
@@ -883,6 +931,34 @@ mod tests {
         assert_eq!(n.label, Some("stage::rejected"));
         assert!(n.note.contains("rejected in review"), "{}", n.note);
         assert!(describe(n, true).contains("and label it stage::rejected"));
+        // Colored for a terminal: the heading bold, the quote marks and
+        // the hidden marker gray; plain otherwise.
+        use sandogasa_cli::style::{BOLD, DIM, RESET, YELLOW};
+        let styled = describe_styled(n, true, true);
+        assert!(
+            styled.starts_with(&format!("{BOLD}Then comment on")),
+            "{styled}"
+        );
+        assert!(styled.contains(&format!("  {DIM}>{RESET} ")), "{styled}");
+        assert!(
+            styled.contains(&format!("  {DIM}> <!-- sandogasa:")),
+            "{styled}"
+        );
+        assert_eq!(describe_styled(n, true, false), describe(n, true));
+        assert!(
+            describe_styled(n, false, true).starts_with(&format!("{YELLOW}Without a GitLab token"))
+        );
+        // Only the tool's own marker is grayed, and escape sequences
+        // from the comment's text do not reach the terminal.
+        assert_eq!(printable("a\x1b[0mb\tc"), "a\u{fffd}[0mb\tc");
+        let mut other = n.clone();
+        other.note = "<!-- see bug -->\nx\x1b[2Jy".to_string();
+        let styled = describe_styled(&other, true, true);
+        assert!(
+            styled.contains(&format!("  {DIM}>{RESET} <!-- see bug -->")),
+            "{styled}"
+        );
+        assert!(!styled.contains("\x1b[2J"), "{styled}");
         // Nothing to untag: nothing read.
         assert!(
             plan_untags(

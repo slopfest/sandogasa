@@ -124,7 +124,8 @@ from `-testing`.
 CBS: a comment saying what the build carries, the `stage::` label, the
 work item's status and, for a Hyperscale release every release has, the
 issue closed. `notify::plan` finds the issue and drafts the comments
-before the write is confirmed, `notify::describe` shows them, and
+before the write is confirmed, `notify::describe` shows them
+(`describe_styled` in color, for a terminal), and
 `notify::post` posts those whose build got there, once each. Proposed
 Updates' issues are the ones cpu-sig-tracker files per merge request;
 Hyperscale's are the `rfe::new-version` issues hs-relmon files per

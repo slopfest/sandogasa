@@ -476,27 +476,23 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         // The exact commands, whatever the narration: what would
         // otherwise be pieced together from shell history.
         // Set apart from the login check and the steps above.
-        println!(
-            "\n{package} {branch} at {}:",
-            &commit[..12.min(commit.len())]
-        );
-        for (_, argv) in &builds {
-            println!("  {}", sandogasa_cli::explain::command_line(argv));
-        }
+        let mut commands: Vec<Vec<String>> = builds.iter().map(|(_, argv)| argv.clone()).collect();
         if together && !args.nowait {
-            println!(
-                "  {}",
-                sandogasa_cli::explain::command_line(&watch_argv(&["<tasks>".into()]))
-            );
+            commands.push(watch_argv(&["<tasks>".into()]));
         }
-        for notice in &preview {
-            print!(
-                "{}",
-                sandogasa_cbs::notify::describe(notice, token.is_some())
-            );
-        }
+        let color = sandogasa_cli::style::stderr_color();
+        eprint!(
+            "\n{}",
+            crate::plan::build(
+                &format!("{package} {branch} at {}:", &commit[..12.min(commit.len())]),
+                &commands,
+                &preview,
+                token.is_some(),
+                color,
+            )
+        );
         if !sandogasa_cli::confirm(&format!("Start {kind}?"), true)? {
-            println!("Nothing built.");
+            eprintln!("Nothing built.");
             return Ok(());
         }
     }
@@ -570,7 +566,11 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
             ui.step("Comment on the tracking issue, through GitLab's API");
             print!(
                 "{}",
-                sandogasa_cbs::notify::describe(notice, token.is_some())
+                sandogasa_cbs::notify::describe_styled(
+                    notice,
+                    token.is_some(),
+                    sandogasa_cli::style::use_color(sandogasa_cli::style::ColorChoice::Auto),
+                )
             );
         }
     }

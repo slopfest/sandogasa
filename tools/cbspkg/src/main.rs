@@ -12,6 +12,7 @@ mod configure;
 mod local;
 mod new_sources;
 mod next;
+mod plan;
 mod promote;
 mod release_check;
 mod sig_repo;

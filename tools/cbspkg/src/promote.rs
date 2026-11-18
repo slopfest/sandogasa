@@ -231,28 +231,16 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if !args.dry_run {
-        // Set apart from the login check and the steps above.
-        println!();
-        for (nvr, to, changes) in &steps {
-            println!("{nvr} to -{}:", to.as_str());
-            for change in changes {
-                println!("  {}", sandogasa_cli::explain::command_line(&change.argv()));
-            }
-        }
-        for notice in &notices {
-            print!(
-                "{}",
-                sandogasa_cbs::notify::describe(notice, token.is_some())
-            );
-        }
-        if !replaced.is_empty() {
-            println!("Then, asked separately, the older builds they replace:");
-            for change in &replaced {
-                println!("  {}", sandogasa_cli::explain::command_line(&change.argv()));
-            }
-        }
+        // The plan the confirmation asks about, on standard error with
+        // the question; set apart from the login check and the steps
+        // above.
+        let color = sandogasa_cli::style::stderr_color();
+        eprint!(
+            "\n{}",
+            crate::plan::promote(&steps, &notices, &replaced, token.is_some(), color)
+        );
         if !sandogasa_cli::confirm("Promote?", true)? {
-            println!("Nothing changed.");
+            eprintln!("Nothing changed.");
             return Ok(());
         }
     }
@@ -275,7 +263,11 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             ui.step("Comment on the tracking issue, through GitLab's API");
             print!(
                 "{}",
-                sandogasa_cbs::notify::describe(notice, token.is_some())
+                sandogasa_cbs::notify::describe_styled(
+                    notice,
+                    token.is_some(),
+                    sandogasa_cli::style::use_color(sandogasa_cli::style::ColorChoice::Auto),
+                )
             );
         }
     } else {
@@ -459,7 +451,7 @@ fn untag_superseded(
         return Ok(());
     }
     if !dry_run && !sandogasa_cli::confirm("Untag the older builds they replace?", true)? {
-        println!("Older builds left tagged.");
+        eprintln!("Older builds left tagged.");
         return Ok(());
     }
     for change in changes {
