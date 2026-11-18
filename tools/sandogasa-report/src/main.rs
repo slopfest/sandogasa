@@ -177,6 +177,11 @@ struct ReportArgs {
     #[arg(long, help_heading = "Output")]
     json: bool,
 
+    /// Add the notes recorded with `note` in the period: each under
+    /// the item it is about, the rest in a section of their own.
+    #[arg(long, help_heading = "Output")]
+    notes: bool,
+
     /// Write output to file instead of stdout.
     #[arg(short, long, value_name = "PATH", help_heading = "Output")]
     output: Option<String>,
@@ -316,6 +321,33 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
+    };
+
+    // The notes first: reading them is cheap, and a notes directory
+    // that cannot be resolved should fail before the queries.
+    let period_notes = if cli.notes {
+        match notes::notes_dir(cfg.notes.dir.as_deref(), dirs::home_dir(), dirs::data_dir()) {
+            Ok(dir) => {
+                let (found, warnings) = notes::load_all(&dir);
+                for w in &warnings {
+                    eprintln!("warning: {w}");
+                }
+                notes::select(
+                    found,
+                    &notes::Filter {
+                        since: Some(since),
+                        until: Some(until),
+                        url: None,
+                    },
+                )
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        Vec::new()
     };
 
     // Resolve domains.
@@ -656,15 +688,34 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     let by_repo = cli.by.contains(&Axis::Repo);
     let output = if cli.json {
         let rows = by_repo.then(|| by_repo::gather(&unified));
-        serde_json::to_string_pretty(&serde_json::json!({
+        let mut json = serde_json::json!({
             "report": &unified,
             "by_repo": rows,
-        }))
-        .expect("JSON serialization failed")
+        });
+        // Only when asked for, so the shape stays as it was otherwise.
+        if cli.notes {
+            let notes: Vec<notes::ReportNote> = period_notes
+                .iter()
+                .map(|stored| notes::ReportNote {
+                    stored,
+                    key: stored.note.url.as_deref().map(notes::url_key),
+                })
+                .collect();
+            json["notes"] = serde_json::to_value(notes).expect("JSON serialization failed");
+        }
+        serde_json::to_string_pretty(&json).expect("JSON serialization failed")
     } else {
         let mut md = report::format_markdown(&unified, cli.detailed, &cfg.groups);
         if by_repo {
             md.push_str(&by_repo::format_markdown(&by_repo::gather(&unified)));
+        }
+        // Last, so each note sits under its item and the rest close
+        // the report.
+        if cli.notes {
+            let (attached, rest) = notes::attach(&md, &period_notes);
+            let rest: Vec<&notes::Stored> = rest.iter().map(|&i| &period_notes[i]).collect();
+            md = attached;
+            md.push_str(&notes::format_section(&rest));
         }
         md
     };
@@ -716,6 +767,7 @@ mod tests {
             no_sourcehut: false,
             detailed: 0,
             json: false,
+            notes: false,
             output: None,
             verbose: false,
         };
@@ -741,6 +793,7 @@ mod tests {
             no_sourcehut: false,
             detailed: 0,
             json: false,
+            notes: false,
             output: None,
             verbose: false,
         };

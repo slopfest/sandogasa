@@ -70,7 +70,7 @@ Only notes about this URL
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS sandogasa-report report
-\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
+\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-\-notes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
 .PP
 Generate an activity report across one or more domains
 .TP
@@ -135,6 +135,9 @@ Add detail. Once: counts per repo, project or component under each heading. Twic
 .TP
 \fB\-\-json\fR
 Output as JSON instead of Markdown
+.TP
+\fB\-\-notes\fR
+Add the notes recorded with `note` in the period: each under the item it is about, the rest in a section of their own
 .TP
 \fB\-o\fR, \fB\-\-output\fR \fI<PATH>\fR
 Write output to file instead of stdout

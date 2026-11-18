@@ -49,6 +49,17 @@ pub struct Stored {
     pub note: Note,
 }
 
+/// A note as `report --notes --json` gives it: the stored note and
+/// the key its URL is matched by.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportNote<'a> {
+    #[serde(flatten)]
+    pub stored: &'a Stored,
+    /// [`url_key`] of the note's URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
 /// What `notes` lists.
 #[derive(Debug, Default, Clone)]
 pub struct Filter {
@@ -349,6 +360,296 @@ pub fn format_list(notes: &[Stored]) -> String {
     out
 }
 
+/// What two URLs for the same item have in common: no scheme, a
+/// lowercase host, no fragment, trailing slash or tracking parameters
+/// (`utm_*`, `notification_referrer_id`); a Bugzilla bug as its
+/// `show_bug.cgi?id=N` page, from any form (`rhbz#N`, `/N`, other
+/// query parameters); a GitHub API URL as its web page; and on GitHub
+/// and GitLab, whose names ignore case, a lowercase path.
+pub fn url_key(url: &str) -> String {
+    let url = url.trim();
+    if let Some(id) = rhbz_id(url) {
+        return format!("bugzilla.redhat.com/show_bug.cgi?id={id}");
+    }
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    let rest = rest.split('#').next().unwrap_or("");
+    let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = host.to_lowercase();
+    let path = path.trim_end_matches('/');
+    let params: Vec<&str> = query
+        .split('&')
+        .filter(|kv| {
+            !kv.is_empty()
+                && !kv.starts_with("utm_")
+                && !kv.starts_with("notification_referrer_id=")
+        })
+        .collect();
+    let bug_id = params
+        .iter()
+        .find_map(|kv| kv.strip_prefix("id="))
+        .filter(|id| !id.is_empty());
+    if let (true, Some(id)) = (path.ends_with("show_bug.cgi"), bug_id) {
+        return format!("{host}/{path}?id={id}");
+    }
+    if host.starts_with("bugzilla.") && !path.is_empty() && path.bytes().all(|b| b.is_ascii_digit())
+    {
+        return format!("{host}/show_bug.cgi?id={path}");
+    }
+    if host == "api.github.com" {
+        let parts: Vec<&str> = path.split('/').collect();
+        if let ["repos", owner, repo, kind, n] = parts[..] {
+            let kind = match kind {
+                "pulls" => "pull",
+                "commits" => "commit",
+                other => other,
+            };
+            return format!("github.com/{owner}/{repo}/{kind}/{n}").to_lowercase();
+        }
+    }
+    let mut key = if path.is_empty() {
+        host.clone()
+    } else {
+        format!("{host}/{path}")
+    };
+    if !params.is_empty() {
+        key = format!("{key}?{}", params.join("&"));
+    }
+    if host == "github.com" || host.contains("gitlab") {
+        key = key.to_lowercase();
+    }
+    key
+}
+
+/// The bug number of a Red Hat Bugzilla short form: `rhbz#N`,
+/// `rhbz N`, `RHBZ:N`, any case.
+fn rhbz_id(url: &str) -> Option<&str> {
+    let head = url.get(..4)?;
+    if !head.eq_ignore_ascii_case("rhbz") {
+        return None;
+    }
+    let id = url[4..].trim_start_matches(['#', ':', ' ']);
+    (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(id)
+}
+
+/// The forge sections of a report, by their `###` heading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Forge {
+    Forgejo,
+    Github,
+    Gitlab,
+    Sourcehut,
+}
+
+impl Forge {
+    fn from_heading(line: &str) -> Option<Forge> {
+        match line.trim_end() {
+            "### Forgejo" => Some(Forge::Forgejo),
+            "### GitHub" => Some(Forge::Github),
+            "### GitLab" => Some(Forge::Gitlab),
+            "### Sourcehut" => Some(Forge::Sourcehut),
+            _ => None,
+        }
+    }
+}
+
+/// The forge and repository of a commit URL's key, which a report
+/// counts commits under: GitLab's `/-/commit/` form, a GitHub host,
+/// sourcehut's git.sr.ht, and any other `/commit/` taken as Forgejo.
+fn commit_repo(key: &str) -> Option<(Forge, &str)> {
+    let (host, path) = key.split_once('/')?;
+    if let Some((repo, _)) = path.split_once("/-/commit/") {
+        return Some((Forge::Gitlab, repo));
+    }
+    let (repo, _) = path.split_once("/commit/")?;
+    let forge = if host.contains("github") {
+        Forge::Github
+    } else if host == "git.sr.ht" {
+        Forge::Sourcehut
+    } else {
+        Forge::Forgejo
+    };
+    Some((forge, repo))
+}
+
+/// The repository a list item is about, when it opens with one in
+/// backticks (``- `owner/repo`: 12``).
+fn item_repo(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("- `")?;
+    let (repo, after) = rest.split_once('`')?;
+    after.starts_with(':').then_some(repo)
+}
+
+/// The URLs of the Markdown links on `line`, without a link title,
+/// with balanced parentheses kept inside the URL.
+fn link_urls(line: &str) -> Vec<&str> {
+    let mut urls = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find("](") {
+        let after = &rest[start + 2..];
+        let mut depth = 0usize;
+        let mut end = None;
+        for (i, c) in after.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    end = Some(i);
+                    break;
+                }
+                ')' => depth -= 1,
+                _ => {}
+            }
+        }
+        let Some(end) = end else { break };
+        let target = &after[..end];
+        urls.push(target.split_whitespace().next().unwrap_or(""));
+        rest = &after[end + 1..];
+    }
+    urls
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// `note`'s text as a quote at `indent`, with who wrote it.
+fn quoted(note: &Note, indent: usize) -> String {
+    let pad = " ".repeat(indent);
+    let mut out = String::new();
+    for line in note.text.lines() {
+        if line.trim().is_empty() {
+            out.push_str(&format!("{pad}>\n"));
+        } else {
+            out.push_str(&format!("{pad}> {}\n", line.trim_end()));
+        }
+    }
+    if let Some(by) = &note.by {
+        out.push_str(&format!("{pad}> (written by {by})\n"));
+    }
+    out
+}
+
+/// `markdown` with each note quoted under the first list item linking
+/// its URL, or for a commit, the first line about its repository in
+/// its forge's commit counts (a report counts commits per repository
+/// rather than listing them), and the indices of the notes no item
+/// took.
+pub fn attach(markdown: &str, notes: &[Stored]) -> (String, Vec<usize>) {
+    let keys: Vec<Option<String>> = notes
+        .iter()
+        .map(|s| s.note.url.as_deref().map(url_key))
+        .collect();
+    let commits: Vec<Option<(Forge, String)>> = keys
+        .iter()
+        .map(|k| {
+            k.as_deref()
+                .and_then(commit_repo)
+                .map(|(f, r)| (f, r.to_lowercase()))
+        })
+        .collect();
+    let lines: Vec<&str> = markdown.split_inclusive('\n').collect();
+    let mut placed = vec![false; notes.len()];
+    // (line the quote goes before, indent, note), in the order found.
+    let mut quotes: Vec<(usize, usize, usize)> = Vec::new();
+    let mut forge = None;
+    let mut in_commits = false;
+    for (i, line) in lines.iter().enumerate() {
+        if line.starts_with("### ") {
+            forge = Forge::from_heading(line);
+            in_commits = false;
+        } else if line.starts_with("#### ") {
+            in_commits = line.starts_with("#### Commits by repo")
+                || line.starts_with("#### Commits by project");
+        } else if line.starts_with("## ") {
+            forge = None;
+            in_commits = false;
+        }
+        if !line.trim_start().starts_with("- ") {
+            continue;
+        }
+        let linked: Vec<String> = link_urls(line).into_iter().map(url_key).collect();
+        let repo = item_repo(line)
+            .filter(|_| in_commits)
+            .map(str::to_lowercase);
+        let here: Vec<usize> = (0..notes.len())
+            .filter(|&n| {
+                if placed[n] {
+                    return false;
+                }
+                let by_link = keys[n]
+                    .as_ref()
+                    .is_some_and(|k| linked.iter().any(|l| l == k));
+                let by_repo = match (&commits[n], &repo, forge) {
+                    (Some((f, r)), Some(line_repo), Some(here)) => *f == here && r == line_repo,
+                    _ => false,
+                };
+                by_link || by_repo
+            })
+            .collect();
+        if here.is_empty() {
+            continue;
+        }
+        // After the item's own continuation lines and sub-items.
+        let indent = indent_of(line);
+        let mut end = i + 1;
+        while end < lines.len() && !lines[end].trim().is_empty() && indent_of(lines[end]) > indent {
+            end += 1;
+        }
+        for n in here {
+            placed[n] = true;
+            quotes.push((end, indent, n));
+        }
+    }
+    // A sub-item's quote and its parent's can end at the same line:
+    // the deeper one first, so each stays under its own item.
+    quotes.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let mut out = String::new();
+    let mut q = quotes.iter().peekable();
+    for (i, line) in lines.iter().enumerate() {
+        while let Some(&&(at, indent, n)) = q.peek() {
+            if at != i {
+                break;
+            }
+            out.push_str(&quoted(&notes[n].note, indent + 2));
+            q.next();
+        }
+        out.push_str(line);
+    }
+    for &(_, indent, n) in q {
+        out.push_str(&quoted(&notes[n].note, indent + 2));
+    }
+    let unplaced = (0..notes.len()).filter(|&n| !placed[n]).collect();
+    (out, unplaced)
+}
+
+/// The report's closing section for `notes` no item showed: those
+/// about something else, by URL, then those with none.
+pub fn format_section(notes: &[&Stored]) -> String {
+    if notes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## Notes\n\n");
+    let (linked, other): (Vec<&Stored>, Vec<&Stored>) =
+        notes.iter().partition(|s| s.note.url.is_some());
+    for s in linked {
+        let url = s.note.url.as_deref().unwrap_or_default();
+        out.push_str(&format!("- {} <{url}>\n", s.note.date));
+        out.push_str(&quoted(&s.note, 2));
+    }
+    if !other.is_empty() {
+        out.push_str("\n### Other notes\n\n");
+        for s in other {
+            out.push_str(&format!("- {}\n", s.note.date));
+            out.push_str(&quoted(&s.note, 2));
+        }
+    }
+    out.push('\n');
+    out
+}
+
 /// Whether `answer` to a `[Y/n]` question is yes.
 pub fn answered_yes(answer: &str) -> bool {
     matches!(answer.trim().to_lowercase().as_str(), "" | "y" | "yes")
@@ -481,6 +782,296 @@ mod tests {
                 .contains("after")
         );
         assert!(check_range(&Filter::default()).is_ok());
+    }
+
+    #[test]
+    fn urls_for_the_same_item_share_a_key() {
+        let key = "github.com/o/r/pull/12";
+        for url in [
+            "https://github.com/o/r/pull/12",
+            "http://GitHub.com/o/r/pull/12/",
+            "https://github.com/o/r/pull/12#issuecomment-1",
+            "https://github.com/o/r/pull/12?notification_referrer_id=x",
+            "https://api.github.com/repos/o/r/pulls/12",
+            " https://github.com/o/r/pull/12\n",
+        ] {
+            assert_eq!(url_key(url), key, "{url}");
+        }
+        assert_eq!(
+            url_key("https://api.github.com/repos/o/r/issues/3"),
+            "github.com/o/r/issues/3"
+        );
+        let bug = "bugzilla.redhat.com/show_bug.cgi?id=2575659";
+        for url in [
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2575659",
+            "https://bugzilla.redhat.com/show_bug.cgi?id=2575659#c3",
+            "https://bugzilla.redhat.com/show_bug.cgi?format=multiple&id=2575659",
+            "https://bugzilla.redhat.com/2575659",
+            "rhbz#2575659",
+        ] {
+            assert_eq!(url_key(url), bug, "{url}");
+        }
+        assert_eq!(
+            url_key("https://bugzilla.opensuse.org/1234"),
+            "bugzilla.opensuse.org/show_bug.cgi?id=1234"
+        );
+        assert_eq!(url_key("rhbz#"), "rhbz");
+        assert_eq!(
+            url_key("https://bodhi.fedoraproject.org/updates/FEDORA-2026-abc"),
+            "bodhi.fedoraproject.org/updates/FEDORA-2026-abc"
+        );
+        assert_eq!(url_key("https://example.org"), "example.org");
+        for form in ["Rhbz#2575659", "RHBZ:2575659", "rhbz 2575659"] {
+            assert_eq!(url_key(form), bug, "{form}");
+        }
+        assert_eq!(
+            url_key("https://api.github.com/repos/O/R/commits/ABC"),
+            "github.com/o/r/commit/abc"
+        );
+        assert_eq!(
+            url_key("https://github.com/Packit/Packit/pull/2794"),
+            url_key("https://github.com/packit/packit/pull/2794")
+        );
+        // Elsewhere case and the query can name the item.
+        assert_ne!(
+            url_key("https://koji.fedoraproject.org/koji/buildinfo?buildID=1"),
+            url_key("https://koji.fedoraproject.org/koji/buildinfo?buildID=2")
+        );
+        assert_eq!(
+            url_key("https://koji.fedoraproject.org/koji/buildinfo?buildID=1&utm_source=x"),
+            "koji.fedoraproject.org/koji/buildinfo?buildID=1"
+        );
+        assert_ne!(url_key("https://e.org/A"), url_key("https://e.org/a"));
+        assert_eq!(
+            url_key("https://api.github.com/user"),
+            "api.github.com/user"
+        );
+    }
+
+    /// Notes shaped like the first ones written by hand (2026-11-16
+    /// to 2026-11-18): a PR, a ticket on a forge the report does not
+    /// cover, commits, and one with no URL.
+    fn real_notes() -> Vec<Stored> {
+        let stored = |url: Option<&str>, text: &str| Stored {
+            path: PathBuf::from("n.md"),
+            note: Note {
+                url: url.map(String::from),
+                date: day("2026-11-18"),
+                by: Some("Claude Code:claude-opus-5-5".into()),
+                headers: Vec::new(),
+                text: text.into(),
+            },
+        };
+        vec![
+            stored(
+                Some("https://github.com/packit/packit/pull/2794"),
+                "Found while checking links\nfor the primer.",
+            ),
+            stored(
+                Some("https://forge.fedoraproject.org/security/tickets/issues/23"),
+                "Started a backlog report.",
+            ),
+            stored(
+                Some("https://github.com/slopfest/sandogasa/commit/8184d641"),
+                "Added so a CBS build is checked.",
+            ),
+            stored(
+                Some("https://gitlab.com/CentOS/Hyperscale/rpms/perf/-/commit/abc"),
+                "Rebased perf.",
+            ),
+            stored(None, "Mentoring session."),
+        ]
+    }
+
+    #[test]
+    fn notes_go_under_their_items_and_the_rest_to_the_end() {
+        let md = "\
+### GitHub
+
+#### Opened
+
+- [o/r#1](https://github.com/o/r/pull/1) other
+- [packit/packit#2794](https://github.com/packit/packit/pull/2794) Update links
+  (merged)
+- [packit/packit.dev#1189](https://github.com/packit/packit.dev/pull/1189) Copr
+
+#### Merged
+
+- [packit/packit#2794](https://github.com/packit/packit/pull/2794) Update links
+
+#### Commits by repo
+
+- `slopfest/sandogasa`: 33
+
+#### Tags pushed
+
+- `slopfest/sandogasa`: [v0.28.2](https://github.com/slopfest/sandogasa/tree/v0.28.2)
+
+### GitLab
+
+#### Commits by project
+
+- `CentOS/Hyperscale/rpms/perf`: 2 authored / 3 pushed
+";
+        let notes = real_notes();
+        let (out, rest) = attach(md, &notes);
+        assert_eq!(
+            out,
+            "\
+### GitHub
+
+#### Opened
+
+- [o/r#1](https://github.com/o/r/pull/1) other
+- [packit/packit#2794](https://github.com/packit/packit/pull/2794) Update links
+  (merged)
+  > Found while checking links
+  > for the primer.
+  > (written by Claude Code:claude-opus-5-5)
+- [packit/packit.dev#1189](https://github.com/packit/packit.dev/pull/1189) Copr
+
+#### Merged
+
+- [packit/packit#2794](https://github.com/packit/packit/pull/2794) Update links
+
+#### Commits by repo
+
+- `slopfest/sandogasa`: 33
+  > Added so a CBS build is checked.
+  > (written by Claude Code:claude-opus-5-5)
+
+#### Tags pushed
+
+- `slopfest/sandogasa`: [v0.28.2](https://github.com/slopfest/sandogasa/tree/v0.28.2)
+
+### GitLab
+
+#### Commits by project
+
+- `CentOS/Hyperscale/rpms/perf`: 2 authored / 3 pushed
+  > Rebased perf.
+  > (written by Claude Code:claude-opus-5-5)
+"
+        );
+        assert_eq!(rest, [1, 4]);
+        let rest: Vec<&Stored> = rest.iter().map(|&i| &notes[i]).collect();
+        assert_eq!(
+            format_section(&rest),
+            "## Notes\n\n\
+             - 2026-11-18 <https://forge.fedoraproject.org/security/tickets/issues/23>\n  \
+             > Started a backlog report.\n  \
+             > (written by Claude Code:claude-opus-5-5)\n\
+             \n### Other notes\n\n\
+             - 2026-11-18\n  \
+             > Mentoring session.\n  \
+             > (written by Claude Code:claude-opus-5-5)\n\n"
+        );
+        assert_eq!(format_section(&[]), "");
+    }
+
+    #[test]
+    fn a_commit_note_goes_to_its_own_forge_commit_counts() {
+        // --detailed once: per-repository counts precede the commits.
+        let md = "\
+### GitHub
+
+#### Opened
+
+- `o/r`: 1
+
+#### Commits by repo
+
+- `O/R`: 3
+
+### GitLab
+
+#### Commits by project
+
+- `o/r`: 2 authored / 2 pushed
+";
+        let mut notes = real_notes();
+        notes.truncate(1);
+        notes[0].note.url = Some("https://gitlab.com/o/r/-/commit/abc".into());
+        notes[0].note.by = None;
+        notes[0].note.text = "GitLab one.".into();
+        let mut github = notes[0].clone();
+        github.note.url = Some("https://github.com/o/r/commit/def".into());
+        github.note.text = "GitHub one.".into();
+        notes.push(github);
+        let (out, rest) = attach(md, &notes);
+        assert!(rest.is_empty());
+        assert!(out.contains("- `o/r`: 1\n\n"), "{out}");
+        assert!(out.contains("- `O/R`: 3\n  > GitHub one.\n"), "{out}");
+        assert!(
+            out.contains("- `o/r`: 2 authored / 2 pushed\n  > GitLab one.\n"),
+            "{out}"
+        );
+        // Outside a forge section, a repository line takes no commit.
+        let (_, rest) = attach("## By repository\n\n- `o/r`: 3\n", &notes);
+        assert_eq!(rest, [0, 1]);
+    }
+
+    #[test]
+    fn a_sub_item_keeps_its_own_note() {
+        let md = "- [p](https://e.org/p)\n  - [c](https://e.org/c)\n- [q](https://e.org/q)\n";
+        let mut parent = real_notes().remove(0);
+        parent.note.by = None;
+        parent.note.url = Some("https://e.org/p".into());
+        parent.note.text = "parent".into();
+        let mut child = parent.clone();
+        child.note.url = Some("https://e.org/c".into());
+        child.note.text = "child".into();
+        let mut last = parent.clone();
+        last.note.url = Some("https://e.org/q".into());
+        last.note.text = "last".into();
+        let (out, rest) = attach(md, &[parent, child, last]);
+        assert!(rest.is_empty());
+        assert_eq!(
+            out,
+            "- [p](https://e.org/p)\n  - [c](https://e.org/c)\n    > child\n  > parent\n\
+             - [q](https://e.org/q)\n  > last\n"
+        );
+    }
+
+    #[test]
+    fn a_paragraph_break_stays_in_the_quote() {
+        let n = note(None, "2026-11-18", "One.\n\nTwo.");
+        assert_eq!(quoted(&n, 0), "> One.\n>\n> Two.\n");
+    }
+
+    #[test]
+    fn items_and_commits_name_their_repository() {
+        assert_eq!(item_repo("- `o/r`: 3"), Some("o/r"));
+        assert_eq!(item_repo("  - `o/r`: [v1](u)"), Some("o/r"));
+        assert_eq!(item_repo("- `o/r` (FAS)"), None);
+        assert_eq!(item_repo("- [x](u)"), None);
+        assert_eq!(
+            commit_repo("github.com/o/r/commit/abc"),
+            Some((Forge::Github, "o/r"))
+        );
+        assert_eq!(
+            commit_repo("gitlab.com/a/b/c/-/commit/abc"),
+            Some((Forge::Gitlab, "a/b/c"))
+        );
+        assert_eq!(
+            commit_repo("salsa.debian.org/a/b/-/commit/abc"),
+            Some((Forge::Gitlab, "a/b"))
+        );
+        assert_eq!(
+            commit_repo("git.sr.ht/~u/r/commit/abc"),
+            Some((Forge::Sourcehut, "~u/r"))
+        );
+        assert_eq!(
+            commit_repo("codeberg.org/o/r/commit/abc"),
+            Some((Forge::Forgejo, "o/r"))
+        );
+        assert_eq!(commit_repo("github.com/o/r/pull/1"), None);
+        assert_eq!(commit_repo("nohost"), None);
+        assert_eq!(link_urls("[a](u1) and [b](u2) [c](broken"), ["u1", "u2"]);
+        assert_eq!(
+            link_urls("[w](https://e.org/wiki/Foo_(bar)) [t](u \"title\")"),
+            ["https://e.org/wiki/Foo_(bar)", "u"]
+        );
     }
 
     #[test]

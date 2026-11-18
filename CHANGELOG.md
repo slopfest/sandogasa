@@ -12,8 +12,12 @@ text, after showing the note and asking. Each note is its own file,
 named after the time and host it was written on, so machines syncing
 the notes directory never write the same file; `[notes] dir` in the
 per-user overlay says where. `sandogasa-report notes` lists them, by
-date or URL, or as JSON. Attaching notes to the items of a report comes
-next (Refs #167).
+date or URL, or as JSON. `report --notes` puts each note in the period
+under the item it is about (for a commit, its repository's line in
+that forge's commit counts), and the rest in a closing "Notes" section;
+URLs for the same item match across schemes, trailing slashes,
+fragments, tracking parameters, Bugzilla short links, GitHub API URLs
+and the case of GitHub and GitLab paths (Refs #167).
 
 ### cbspkg promote checks what a build drops before it reaches -testing
 

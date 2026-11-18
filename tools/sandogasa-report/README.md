@@ -235,6 +235,20 @@ path or one starting with `~/` for the home directory, else
 dir = "~/Nextcloud/projects/notes/sandogasa-report"
 ```
 
+`report --notes` adds the notes dated in the report's period. Each
+note goes under the first item in the report that links its URL, or,
+for a commit, under its repository's line in that forge's commit
+counts, since reports count commits rather than list them; items show
+only with `--detailed --detailed`. URLs match when they point at the
+same item: the scheme, the host's case, a trailing slash, a fragment
+and tracking parameters (`utm_*`) do not count, nor the path's case on
+GitHub and GitLab; a Bugzilla bug matches in any form (`rhbz#N`, `/N`,
+`show_bug.cgi?id=N` with other parameters), and a GitHub API URL
+matches the web page. Notes no item took close the
+report in a "Notes" section, those without a URL under "Other notes".
+With `--json`, the notes in the period come as a `notes` array beside
+`report`, each with the `key` its URL is matched by.
+
 `notes` lists them oldest first, filtered with `--since`, `--until`
 and `--url`, or as JSON with `--json`. A file that cannot be read as
 a note is skipped with a warning.
