@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 //! fedora-review-digest — turn a `fedora-review` result for an
-//! auto-generated spec (rust2rpm and cabal-rpm today; pyp2spec later) into the
+//! auto-generated spec (rust2rpm and cabal-rpm, and Python specs compared
+//! with pyp2spec's output) into the
 //! condensed, rust-sig-style Bugzilla review comment: a short checklist
 //! with a per-item verdict, plus the post-import task boilerplate. The
 //! noise of a full fedora-review template is dropped because, for a
@@ -12,6 +13,7 @@ pub mod checklist;
 pub mod config;
 pub mod cratesio;
 pub mod hackage;
+pub mod pyp2spec;
 pub mod review;
 pub mod runner;
 pub mod secrets;

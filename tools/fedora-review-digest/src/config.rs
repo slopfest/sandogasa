@@ -16,6 +16,35 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     #[serde(default)]
     pub bugzilla: BugzillaConfig,
+    #[serde(default, skip_serializing_if = "DiffConfig::is_empty")]
+    pub diff: DiffConfig,
+}
+
+/// `[diff]`: how to show a Python spec's changes from pyp2spec's output
+/// at the terminal (#160).
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct DiffConfig {
+    /// A diff command, such as `difft`, given the two specs as its last
+    /// arguments; unset, the unified diff is shown as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
+impl DiffConfig {
+    fn is_empty(&self) -> bool {
+        self.tool.is_none()
+    }
+}
+
+/// The diff tool from `[diff] tool` in the config files, if set.
+pub fn diff_tool() -> Option<String> {
+    diff_tool_in(&ConfigFile::for_tool("fedora-review-digest"))
+}
+
+/// [`diff_tool`], from `file`.
+fn diff_tool_in(file: &ConfigFile) -> Option<String> {
+    let cfg: Config = file.load().unwrap_or_default();
+    cfg.diff.tool.filter(|t| !t.trim().is_empty())
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -143,4 +172,33 @@ pub fn save(
 /// A non-empty environment variable, trimmed away when blank/unset.
 fn env_nonempty(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|v| !v.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_diff_tool_is_read_from_the_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let file = ConfigFile::from_path(path.clone());
+        // No file, or no [diff]: none.
+        assert_eq!(diff_tool_in(&file), None);
+        std::fs::write(&path, "[bugzilla]\nemail = \"a@b\"\n").unwrap();
+        assert_eq!(diff_tool_in(&file), None);
+        std::fs::write(&path, "[diff]\ntool = \"difft --display inline\"\n").unwrap();
+        assert_eq!(
+            diff_tool_in(&file).as_deref(),
+            Some("difft --display inline")
+        );
+        std::fs::write(&path, "[diff]\ntool = \"  \"\n").unwrap();
+        assert_eq!(diff_tool_in(&file), None);
+    }
+
+    #[test]
+    fn an_unset_diff_tool_is_not_written() {
+        let cfg = Config::default();
+        assert!(!serde_json::to_string(&cfg).unwrap().contains("diff"));
+    }
 }

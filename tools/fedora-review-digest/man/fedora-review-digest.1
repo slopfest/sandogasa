@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH fedora-review-digest 1 2026-11-16 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH fedora-review-digest 1 2026-11-18 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 fedora\-review\-digest \- Condense a fedora\-review run of an auto\-generated spec into a review comment
 .SH SYNOPSIS
-\fBfedora\-review\-digest\fR [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-\-reviews\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIDIR\-OR\-BUGID\fR] [\fIsubcommands\fR]
+\fBfedora\-review\-digest\fR [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-\-diff\-tool\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-\-reviews\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIDIR\-OR\-BUGID\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
 Condense a fedora\-review run of an auto\-generated spec into a review comment
 .SH OPTIONS
@@ -12,8 +12,11 @@ Condense a fedora\-review run of an auto\-generated spec into a review comment
 \fB\-c\fR, \fB\-\-comment\fR \fI<TEXT>\fR
 Reviewer note placed above the review ("LGTM!")
 .TP
+\fB\-\-diff\-tool\fR \fI<CMD>\fR
+Show a Python spec\*(Aqs changes from pyp2spec with CMD (e.g. difft)
+.TP
 \fB\-\-no\-net\fR
-Skip the crates.io latest\-version check
+Skip the registry version check and the pyp2spec comparison
 .TP
 \fB\-\-post\fR
 Post to Bugzilla: comment, review flag, claim
@@ -44,7 +47,7 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS fedora-review-digest run
-\fBfedora\-review\-digest run\fR [\fB\-\-copr\fR] [\fB\-m\fR|\fB\-\-mock\-config\fR] [\fB\-\-mock\-option\fR] [\fB\-\-no\-digest\fR] [\fB\-\-repo\fR] [\fB\-\-uniqueext\fR] [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-\-reviews\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUGID\fR>
+\fBfedora\-review\-digest run\fR [\fB\-\-copr\fR] [\fB\-m\fR|\fB\-\-mock\-config\fR] [\fB\-\-mock\-option\fR] [\fB\-\-no\-digest\fR] [\fB\-\-repo\fR] [\fB\-\-uniqueext\fR] [\fB\-c\fR|\fB\-\-comment\fR] [\fB\-\-diff\-tool\fR] [\fB\-\-no\-net\fR] [\fB\-\-post\fR] [\fB\-\-reviews\-dir\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIBUGID\fR>
 .PP
 Run fedora\-review on a bug, then digest the result
 .TP
@@ -77,8 +80,11 @@ Unique mock buildroot suffix (mock \-\-uniqueext)
 \fB\-c\fR, \fB\-\-comment\fR \fI<TEXT>\fR
 Reviewer note placed above the review ("LGTM!")
 .TP
+\fB\-\-diff\-tool\fR \fI<CMD>\fR
+Show a Python spec\*(Aqs changes from pyp2spec with CMD (e.g. difft)
+.TP
 \fB\-\-no\-net\fR
-Skip the crates.io latest\-version check
+Skip the registry version check and the pyp2spec comparison
 .TP
 \fB\-\-post\fR
 Post to Bugzilla: comment, review flag, claim

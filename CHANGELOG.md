@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### fedora-review-digest compares a Python spec with pyp2spec's output
+
+`fedora-review-digest` refused Python specs ("pyp2spec digests aren't
+implemented yet"), so a reviewer read the whole spec to find what the
+packager had changed in pyp2spec's template. A Python spec, recognized
+by its `%pyproject_*` macros or `%{pypi_source}`, is now compared with
+what pyp2spec generates for the same PyPI release, and the digest
+carries the unified diff, after leaving out pyp2spec's comments to the
+packager, the `Release:` line, the changelog and extra blank lines,
+with links to the upstream project and the PyPI release to check the
+summary and description against, followed by `fedora-review`'s issues.
+On rhbz#2575659 (python-cstq)
+that is the summary and description written in, the pytest
+BuildRequires, `%pytest -v` and `%doc`. There is no Python checklist
+yet (#161), so the comment carries no verdict, and `--post` sets
+`fedora-review?` only on a bug without the flag, leaving one the
+reviewer set as it is. `--diff-tool`, or `[diff] tool` in the config
+file, shows the difference at the terminal with a program such as
+`difft`.
+
 ### cbspkg prints a tracking-issue comment it could not post
 
 When `cbspkg build` or `promote` could not post its comment on a

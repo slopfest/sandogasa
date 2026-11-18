@@ -363,17 +363,10 @@ pub fn approved(items: &[Item], issues: &[ReviewedIssue]) -> bool {
         && !issues.iter().any(|i| i.resolution == Resolution::Keep)
 }
 
-/// Render the condensed-review block (the part between the first and
-/// second `===`): intro line, any open MUST issues to address, any issues
-/// the reviewer addressed (with their justification), the marked
-/// checklist, and the verdict.
-pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIssue]) -> String {
+/// The issues to address and those the reviewer addressed (with their
+/// justification), each list followed by a blank line.
+fn render_issues(issues: &[ReviewedIssue]) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "Package was generated with {}, simplifying the review.\n\n",
-        generator_name(generator)
-    ));
-
     let open: Vec<&ReviewedIssue> = issues
         .iter()
         .filter(|i| i.resolution == Resolution::Keep)
@@ -397,6 +390,21 @@ pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIss
         }
         out.push('\n');
     }
+    out
+}
+
+/// Render the condensed-review block (the part between the first and
+/// second `===`): intro line, any open MUST issues to address, any issues
+/// the reviewer addressed (with their justification), the marked
+/// checklist, and the verdict.
+pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIssue]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Package was generated with {}, simplifying the review.\n\n",
+        generator_name(generator)
+    ));
+
+    out.push_str(&render_issues(issues));
 
     for it in items {
         out.push_str(it.mark.emoji());
@@ -414,6 +422,18 @@ pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIss
     } else {
         out.push_str("Package not yet approved — please address the above.\n");
     }
+    out
+}
+
+/// The review block for a Python spec (#160): how it differs from
+/// pyp2spec's output (`compared`, from `pyp2spec::render`), the issues as
+/// [`render_review`] lists them, and the verdict left to the reviewer,
+/// as there is no Python checklist yet (#161).
+pub fn render_python_review(compared: &str, issues: &[ReviewedIssue]) -> String {
+    let mut out = String::new();
+    out.push_str(compared.trim_end());
+    out.push_str("\n\n");
+    out.push_str(&render_issues(issues));
     out
 }
 
@@ -503,6 +523,7 @@ mod tests {
         issues: Vec<Issue>,
     ) -> Review {
         Review {
+            spec_text: String::new(),
             spec: SpecInfo {
                 generator: Generator::Rust2Rpm,
                 name: "rust-foo".to_string(),

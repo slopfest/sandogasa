@@ -16,6 +16,7 @@ sandogasa-config = { workspace = true }
 sandogasa-review = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [build-dependencies]
@@ -25,4 +26,3 @@ sandogasa-build = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["man"] }
 sandogasa-config = { workspace = true, features = ["test-support"] }
 serial_test = { workspace = true }
-tempfile = { workspace = true }

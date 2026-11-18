@@ -6,9 +6,8 @@ Condense a `fedora-review` run of an **auto-generated** spec into a short
 review comment.
 
 A spec produced by a generator — `rust2rpm` for Rust crates, `cabal-rpm`
-for Haskell packages (and, later, `pyp2spec` for Python packages) — is
-mechanically correct by
-construction, so most of `fedora-review`'s template is not
+for Haskell packages, `pyp2spec` for Python packages — is mechanically
+correct by construction, so most of `fedora-review`'s template is not
 decision-relevant. Pasting the whole thing into Bugzilla buries the few
 points that actually matter. `fedora-review-digest` reads a finished
 `fedora-review` result and emits just the rust-sig-style summary: a short
@@ -92,12 +91,41 @@ an optional free-form comment for the top.
 - `-y`/`--yes` accepts every inferred mark without prompting (and skips
   the comment prompt — pair with `--comment`). Required when stdin isn't
   a terminal.
-- `--no-net` skips the crates.io / Hackage check.
+- `--no-net` skips the crates.io / Hackage check, and pyp2spec.
 - `--reviews-dir <DIR>` is where a bare bug id is resolved.
 - `--post` writes the result back to the bug (see below).
 
 The finished comment is written to **stdout**, ready to paste into
 Bugzilla.
+
+## Python packages
+
+A Python spec (one using the `%pyproject_*` macros or
+`%{pypi_source}`) is compared with what `pyp2spec` generates for the
+same PyPI release, whether or not pyp2spec wrote it, and the digest
+shows the difference as a unified diff, so the review covers what the
+packager changed: the summary and description, the tests, the files.
+The PyPI name comes from `%{pypi_source}` (or `%{pypi_name}`), and the
+version is the spec's with RPM's `~` dropped (`2.0~rc1` is `2.0rc1`).
+Both specs are cleaned first: pyp2spec's comments to the packager (in
+the submitted spec too, where they were kept as they are), rpmautospec's
+preamble, the `Release:` line and the changelog are left out, and runs
+of blank lines count as one. The comment names the pyp2spec version used, since
+another version generates a different template, and links the upstream
+project (pyp2spec's `URL:`, from PyPI's metadata) and the release on
+PyPI, to check the summary and description against, which pyp2spec
+leaves to the packager. The digest then lists
+`fedora-review`'s issues as above. There is no Python checklist yet, so
+the comment carries no verdict, and `--post` sets `fedora-review?` only
+on a bug without the flag, leaving a `+` or `-` you set as it is.
+
+- `pyp2spec` has to be installed (`dnf install pyp2spec`), and it
+  downloads the release from PyPI; `--no-net` skips the comparison.
+- `--diff-tool <CMD>`, or `tool` under `[diff]` in
+  `~/.config/fedora-review-digest/config.toml`, shows the difference at
+  the terminal with another program, such as `difft`, given the two
+  cleaned specs as its last two arguments. The comment always carries
+  the unified diff.
 
 ## Running fedora-review for you
 
