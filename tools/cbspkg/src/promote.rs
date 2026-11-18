@@ -290,8 +290,66 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             &done,
             &sandogasa_cbs::notify::cbs_latest,
         );
+        if moved.is_ok()
+            && let Some((what, command, by_hand)) = release_next(args, &steps)
+        {
+            eprintln!();
+            crate::next::print_next_step(&what, &command, &by_hand);
+        }
     }
     moved
+}
+
+/// What to run, once tested, to release the builds `steps` took to
+/// `-testing`: one `cbspkg promote` as the build's own suggests, and by
+/// hand the tag into `-release` and the untag from `-testing` per build.
+/// `None` when no build went to `-testing`.
+fn release_next(
+    args: &PromoteArgs,
+    steps: &[(String, Stage, Vec<TagChange>)],
+) -> Option<(String, Vec<String>, Vec<Vec<String>>)> {
+    let tested: Vec<(&str, &str)> = steps
+        .iter()
+        .filter(|(_, to, _)| *to == Stage::Testing)
+        .filter_map(|(nvr, _, changes)| {
+            changes.iter().find_map(|c| match c {
+                TagChange::Tag { tag, .. } => Some((nvr.as_str(), tag.as_str())),
+                TagChange::Untag { .. } => None,
+            })
+        })
+        .collect();
+    if tested.is_empty() {
+        return None;
+    }
+    let nvrs: Vec<&str> = tested.iter().map(|(nvr, _)| *nvr).collect();
+    let mut by_hand = Vec::new();
+    for (nvr, testing) in &tested {
+        let release = testing
+            .strip_suffix("-testing")
+            .map_or_else(|| testing.to_string(), |base| format!("{base}-release"));
+        by_hand.push(TagChange::tag(&release, nvr).argv());
+        by_hand.push(TagChange::untag(testing, nvr).argv());
+    }
+    // A build named on the command line is the one to release; without
+    // one, the same selection finds each collection's newest in testing.
+    let nvr_given: Vec<&str> = args.nvr.iter().map(String::as_str).collect();
+    let command = crate::next::promote_command(
+        if nvr_given.is_empty() {
+            &nvrs
+        } else {
+            &nvr_given
+        },
+        args.repo.as_deref(),
+        args.branch.as_deref(),
+        &args.variants,
+    );
+    let verb = if nvrs.len() == 1 { "has" } else { "have" };
+    let what = format!(
+        "once {} {verb} been tested, to release {}",
+        crate::next::listed(&nvrs),
+        if nvrs.len() == 1 { "it" } else { "them" }
+    );
+    Some((what, command, by_hand))
 }
 
 /// The commands untagging the builds of `package` that each move in
@@ -441,13 +499,8 @@ fn promote_all(
             hub.apply(change, &why)?;
         }
         done.push((nvr.clone(), *to));
-        if !dry_run {
-            match to {
-                Stage::Testing => {
-                    println!("\n{nvr} is in -testing. Once it has been tested: cbspkg promote")
-                }
-                _ => println!("{nvr} is released."),
-            }
+        if !dry_run && *to == Stage::Release {
+            println!("{nvr} is released.");
         }
     }
     Ok(())
@@ -463,6 +516,62 @@ mod tests {
     const CANDIDATE: &str = "proposed_updates10s-packages-main-candidate";
     const TESTING: &str = "proposed_updates10s-packages-main-testing";
     const RELEASE: &str = "proposed_updates10s-packages-main-release";
+
+    #[test]
+    fn the_release_is_suggested_once_builds_reach_testing() {
+        let step = |nvr: &str, tag: &str| {
+            (
+                nvr.to_string(),
+                Stage::Testing,
+                vec![TagChange::tag(tag, nvr)],
+            )
+        };
+        let mut args = PromoteArgs {
+            nvr: None,
+            branch: None,
+            repo: None,
+            variants: Default::default(),
+            to: None,
+            dry_run: false,
+            explain: false,
+        };
+        let one = [step("r-1-1.hs.el10", "hyperscale10s-packages-main-testing")];
+        let (what, command, by_hand) = release_next(&args, &one).unwrap();
+        assert_eq!(what, "once r-1-1.hs.el10 has been tested, to release it");
+        assert_eq!(command.join(" "), "cbspkg promote r-1-1.hs.el10");
+        assert_eq!(
+            by_hand.iter().map(|a| a.join(" ")).collect::<Vec<_>>(),
+            [
+                "cbs tag-build hyperscale10s-packages-main-release r-1-1.hs.el10",
+                "cbs untag-build hyperscale10s-packages-main-testing r-1-1.hs.el10",
+            ]
+        );
+        args.variants.variant = vec!["main".into(), "facebook".into()];
+        let two = [
+            one[0].clone(),
+            step(
+                "r-1-1.hs+fb.el10",
+                "hyperscale10s-packages-facebook-testing",
+            ),
+        ];
+        let (what, command, by_hand) = release_next(&args, &two).unwrap();
+        assert_eq!(
+            what,
+            "once r-1-1.hs.el10 and r-1-1.hs+fb.el10 have been tested, to release them"
+        );
+        assert_eq!(
+            command.join(" "),
+            "cbspkg promote --variant main --variant facebook"
+        );
+        assert_eq!(by_hand.len(), 4);
+        // A release has no next step.
+        let released = [(
+            "r-1-1.hs.el10".to_string(),
+            Stage::Release,
+            vec![TagChange::tag("t-release", "r-1-1.hs.el10")],
+        )];
+        assert!(release_next(&args, &released).is_none());
+    }
 
     fn dry_run(nvr: Option<&str>, to: Option<To>, f: &Fixture) -> PromoteArgs {
         PromoteArgs {

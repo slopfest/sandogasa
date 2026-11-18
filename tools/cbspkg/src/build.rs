@@ -277,6 +277,37 @@ pub fn locate(checkout: &Checkout, repo: &Path) -> Result<Located, Box<dyn std::
     })
 }
 
+/// What to run to offer `built` for testing: the step, the command and
+/// the `cbs tag-build` per build that does it by hand. One build is
+/// promoted by its NVR, whichever branch or variant the command is run
+/// from. Several, as a build for more than one collection makes, are
+/// promoted in one command with the selection the build was given
+/// (`-C`, `--branch`, `--variant`, `--rhel`): without an NVR, promote
+/// takes each collection's newest `-candidate` build, and a package's
+/// configured variants apply to it as they did to the build. `None` when
+/// nothing was built.
+fn promote_next(
+    args: &BuildArgs,
+    built: &[(&Collection, String)],
+) -> Option<(String, Vec<String>, Vec<Vec<String>>)> {
+    if built.is_empty() {
+        return None;
+    }
+    let by_hand: Vec<Vec<String>> = built
+        .iter()
+        .map(|(collection, nvr)| TagChange::tag(&collection.tag(Stage::Testing), nvr).argv())
+        .collect();
+    let nvrs: Vec<&str> = built.iter().map(|(_, nvr)| nvr.as_str()).collect();
+    let command = crate::next::promote_command(
+        &nvrs,
+        args.repo.as_deref(),
+        args.branch.as_deref(),
+        &args.variants,
+    );
+    let what = format!("to offer {} for testing", crate::next::listed(&nvrs));
+    Some((what, command, by_hand))
+}
+
 fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     let ui = Ui {
         explain: args.explain,
@@ -552,14 +583,8 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
             package,
             &sandogasa_cbs::packages::task_builds,
         );
-        for (collection, nvr) in &built {
-            // Named by NVR, so the command promotes this build whichever
-            // branch or variant it is run from.
-            crate::next::print_next_step(
-                &format!("to offer {nvr} for testing"),
-                &["cbspkg", "promote", nvr].map(String::from),
-                &[TagChange::tag(&collection.tag(Stage::Testing), nvr).argv()],
-            );
+        if let Some((what, command, by_hand)) = promote_next(args, &built) {
+            crate::next::print_next_step(&what, &command, &by_hand);
         }
         if tells {
             let on = sandogasa_cbs::notify::Branch {
@@ -638,6 +663,80 @@ mod tests {
     }
 
     use crate::test_support::Fixture;
+
+    #[test]
+    fn one_promote_command_offers_what_one_build_command_built() {
+        let mut args = BuildArgs {
+            branch: None,
+            repo: None,
+            variants: Default::default(),
+            background: false,
+            nowait: false,
+            owner: None,
+            scratch: false,
+            dry_run: false,
+            explain: false,
+        };
+        let main_fb = sandogasa_cbs::hyperscale_collections(
+            10,
+            &["main".to_string(), "facebook".to_string()],
+            &[],
+        )
+        .unwrap();
+        let (main, fb) = (&main_fb[0], &main_fb[1]);
+        let line = |argv: &Vec<String>| argv.join(" ");
+
+        // One build: by its NVR, whatever the selection.
+        let one = [(main, "rasdaemon-1.0.0-1.hs.el10".to_string())];
+        let (what, command, by_hand) = promote_next(&args, &one).unwrap();
+        assert_eq!(what, "to offer rasdaemon-1.0.0-1.hs.el10 for testing");
+        assert_eq!(line(&command), "cbspkg promote rasdaemon-1.0.0-1.hs.el10");
+        assert_eq!(
+            line(&by_hand[0]),
+            "cbs tag-build hyperscale10s-packages-main-testing rasdaemon-1.0.0-1.hs.el10"
+        );
+
+        // Several: one command with the build's own selection.
+        args.repo = Some(PathBuf::from("/w/rasdaemon"));
+        args.branch = Some("c10s-hs".to_string());
+        args.variants.variant = vec!["main".to_string(), "facebook".to_string()];
+        args.variants.rhel = vec!["facebook".to_string()];
+        let two = [
+            (main, "rasdaemon-1.0.0-1.hs.el10".to_string()),
+            (fb, "rasdaemon-1.0.0-1.hs+fb.el10".to_string()),
+        ];
+        let (what, command, by_hand) = promote_next(&args, &two).unwrap();
+        assert_eq!(
+            what,
+            "to offer rasdaemon-1.0.0-1.hs.el10 and rasdaemon-1.0.0-1.hs+fb.el10 for testing"
+        );
+        assert_eq!(
+            line(&command),
+            "cbspkg promote -C /w/rasdaemon --branch c10s-hs --variant main \
+             --variant facebook --rhel facebook"
+        );
+        assert_eq!(by_hand.len(), 2);
+        assert!(line(&by_hand[1]).contains("hyperscale10s-packages-facebook-testing"));
+
+        // Configured variants: nothing to repeat.
+        args = BuildArgs {
+            repo: None,
+            branch: None,
+            variants: Default::default(),
+            ..args
+        };
+        let (_, command, _) = promote_next(&args, &two).unwrap();
+        assert_eq!(line(&command), "cbspkg promote");
+
+        // Three name every build.
+        let three = [two[0].clone(), two[1].clone(), (fb, "x-1-1".to_string())];
+        let (what, _, _) = promote_next(&args, &three).unwrap();
+        assert!(
+            what.contains(".hs.el10, rasdaemon-1.0.0-1.hs+fb.el10 and x-1-1"),
+            "{what}"
+        );
+        assert!(promote_next(&args, &[]).is_none());
+    }
 
     fn dry_run(branch: Option<&str>, repo: &Fixture) -> BuildArgs {
         BuildArgs {

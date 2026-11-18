@@ -11,7 +11,12 @@ branch's own collections rather than that build: run from a Hyperscale
 branch, it would not promote a facebook variant's build. The command
 now names the build (`cbspkg promote NVR`) and has a line of its own,
 bold green on a terminal, with the `cbs tag-build` that does it by hand
-in gray below; `sig-repo`'s `cpu-sig-tracker file-issue` suggestion
+in gray below. A build for several collections (`--variant main
+--variant facebook`) gets one `cbspkg promote` with the same selection,
+not one command per build. `cbspkg promote` to `-testing` ends the same
+way, with the `promote` that releases the builds once tested (it said
+"Once it has been tested: cbspkg promote" for each build, the bare
+command again); `sig-repo`'s `cpu-sig-tracker file-issue` suggestion
 looks the same. Both go to standard error, as does `sig-repo`'s note
 that a branch is already tracked.
 
