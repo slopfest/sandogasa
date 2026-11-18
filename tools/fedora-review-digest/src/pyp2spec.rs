@@ -246,9 +246,18 @@ pub fn compare(
     })
 }
 
+/// Who reads a rendered comparison: the reviewer at the terminal, told
+/// what to check, or the bug in the posted comment, told what was
+/// checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader {
+    Reviewer,
+    Comment,
+}
+
 /// The digest's paragraph for `comparison`: what was compared, then the
-/// diff, or that the specs match.
-pub fn render(c: &Comparison) -> String {
+/// diff and [`sources`], or that the specs match.
+pub fn render(c: &Comparison, reader: Reader) -> String {
     let by = match &c.pyp2spec_version {
         Some(v) => format!("pyp2spec {v}"),
         None => "pyp2spec".to_string(),
@@ -266,15 +275,21 @@ pub fn render(c: &Comparison) -> String {
         c.name,
         c.version,
         c.diff,
-        sources(c)
+        sources(c, reader)
     )
 }
 
-/// Where to check what pyp2spec leaves to the packager, the summary and
-/// the description: the upstream project and the release on PyPI.
-pub fn sources(c: &Comparison) -> String {
+/// What pyp2spec leaves to the packager, the summary and the
+/// description, and the upstream project and the release on PyPI to
+/// compare them with: for the reviewer, to check; in the comment, as
+/// what was checked (a packager may find nothing usable there, so the
+/// list is not where the text came from).
+pub fn sources(c: &Comparison, reader: Reader) -> String {
     let pypi = format!("https://pypi.org/project/{}/{}/", c.name, c.version);
-    let mut out = String::from("Check the summary and description against:\n");
+    let mut out = String::from(match reader {
+        Reader::Reviewer => "Check the summary and description against:\n",
+        Reader::Comment => "Summary and description checked against:\n",
+    });
     if let Some(u) = &c.upstream_url
         && u.trim_end_matches('/') != pypi.trim_end_matches('/')
     {
@@ -519,7 +534,11 @@ mod tests {
         }
         // No line ends in whitespace, a blank context line included.
         assert!(!c.diff.lines().any(|l| l.ends_with(' ')), "{}", c.diff);
-        assert!(!render(&c).lines().any(|l| l.ends_with(' ')));
+        assert!(
+            !render(&c, Reader::Comment)
+                .lines()
+                .any(|l| l.ends_with(' '))
+        );
         // Neither pyp2spec's comments nor the blank lines around them.
         assert!(!c.diff.contains("Fill in"), "{}", c.diff);
         assert!(
@@ -529,12 +548,12 @@ mod tests {
             "{}",
             c.diff
         );
-        let text = render(&c);
+        let text = render(&c, Reader::Comment);
         assert!(text.starts_with("Changes from what pyp2spec 0.16.0 generates for cstq 0.0.20"));
         // Where to check the summary and description.
         assert!(
             text.ends_with(
-                " %changelog\n\nCheck the summary and description against:\n\
+                " %changelog\n\nSummary and description checked against:\n\
                  - upstream: https://github.com/aleivag/cstq\n\
                  - PyPI: https://pypi.org/project/cstq/0.0.20/\n"
             ),
@@ -547,7 +566,7 @@ mod tests {
         let c = compare(GENERATED, "python-cstq", "0.0.20", &fake(GENERATED)).unwrap();
         assert!(c.diff.is_empty());
         assert_eq!(
-            render(&c),
+            render(&c, Reader::Comment),
             "The spec matches what pyp2spec 0.16.0 generates for cstq 0.0.20.\n"
         );
     }
@@ -564,12 +583,17 @@ mod tests {
         let mut c = compare(SUBMITTED, "python-cstq", "0.0.20", &fake(GENERATED)).unwrap();
         c.upstream_url = None;
         assert_eq!(
-            sources(&c),
-            "Check the summary and description against:\n\
+            sources(&c, Reader::Comment),
+            "Summary and description checked against:\n\
              - PyPI: https://pypi.org/project/cstq/0.0.20/\n"
         );
         c.upstream_url = Some("https://pypi.org/project/cstq/0.0.20".into());
-        assert!(!sources(&c).contains("upstream"));
+        assert!(!sources(&c, Reader::Comment).contains("upstream"));
+        // The reviewer is told what to check.
+        assert!(
+            sources(&c, Reader::Reviewer)
+                .starts_with("Check the summary and description against:\n")
+        );
     }
 
     #[test]

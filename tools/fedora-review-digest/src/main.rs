@@ -422,14 +422,12 @@ fn run_python(
             &pyp2spec::run_pyp2spec,
         )
     };
-    let compared = match &comparison {
-        Ok(c) => pyp2spec::render(c),
-        Err(e) => {
-            if !cli.opts.no_net {
-                eprintln!("warning: {e}");
-            }
-            format!("The spec was not compared with pyp2spec's output: {e}.\n")
-        }
+    if let (Err(e), false) = (&comparison, cli.opts.no_net) {
+        eprintln!("warning: {e}");
+    }
+    let compared = |reader| match &comparison {
+        Ok(c) => pyp2spec::render(c, reader),
+        Err(e) => format!("The spec was not compared with pyp2spec's output: {e}.\n"),
     };
 
     // The checklist's evidence from PyPI: the release's name and version
@@ -472,13 +470,13 @@ fn run_python(
         let tool = cli.opts.diff_tool.clone().or_else(config::diff_tool);
         match (&comparison, tool) {
             (Ok(c), Some(tool)) if !c.diff.is_empty() => match pyp2spec::show_with(&tool, c) {
-                Ok(()) => eprint!("\n{}", pyp2spec::sources(c)),
+                Ok(()) => eprint!("\n{}", pyp2spec::sources(c, pyp2spec::Reader::Reviewer)),
                 Err(e) => {
                     eprintln!("warning: {e}; the unified diff follows");
-                    eprint!("{compared}");
+                    eprint!("{}", compared(pyp2spec::Reader::Reviewer));
                 }
             },
-            _ => eprint!("{compared}"),
+            _ => eprint!("{}", compared(pyp2spec::Reader::Reviewer)),
         }
         eprintln!("\n── inferred checklist ──\n");
         eprint!(
@@ -489,7 +487,8 @@ fn run_python(
         finalize(&mut items)?;
         finalize_issues(&mut issues)?;
     }
-    let review_block = checklist::render_python_review(&compared, &items, &issues);
+    let review_block =
+        checklist::render_python_review(&compared(pyp2spec::Reader::Comment), &items, &issues);
     let post_block =
         checklist::render_post_import(review.spec.generator, &pypi_name, &review.spec.name);
     let verdict = if checklist::approved(&items, &issues) {
