@@ -6,10 +6,10 @@ use clap::{Parser, Subcommand};
 
 mod add_pkg;
 mod build;
+mod checkout;
 mod config;
 mod configure;
 mod local;
-mod notify;
 mod promote;
 mod release_check;
 mod sig_repo;

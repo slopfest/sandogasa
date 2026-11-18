@@ -4,7 +4,8 @@ The CentOS Build System (CBS) conventions shared by the sandogasa tools
 that work for CentOS SIGs: which collection a SIG's dist-git branch
 builds into, that collection's build target and tags, the GitLab group
 holding the SIG's package repositories, the mock config matching its
-buildroot, and the login CBS's `cbs` koji profile needs.
+buildroot, the login CBS's `cbs` koji profile needs, moving builds
+between tags, and telling a build's tracking issue what happened to it.
 
 Known SIGs: Hyperscale and Proposed Updates.
 
@@ -105,6 +106,30 @@ ships no matching config.
 failure names its cause, such as a missing or expired `~/.centos.cert`,
 with the `kinit` and `centos-cert` commands that fix it, and at a
 terminal offers to run `centos-cert`.
+
+## Tag changes
+
+`tags::TagChange` is one build tagged into, or untagged from, one tag,
+rendered as the `cbs tag-build` or `cbs untag-build` command a person
+would type. A tool makes its changes through a `tags::TagHub`:
+`tags::CbsCli` runs each through `sandogasa_cli::explain::Ui`, so it is
+narrated under `--explain` and only shown under `--dry-run`, and a test
+can record them with a fake hub. `packages::promote_changes` gives the
+changes that promote a build to a stage, untagging a released build
+from `-testing`.
+
+## Tracking issues
+
+`notify` tells a build's tracking issue on GitLab what happened to it in
+CBS: a comment saying what the build carries, the `stage::` label, the
+work item's status and, for a Hyperscale release every release has, the
+issue closed. `notify::plan` finds the issue and drafts the comments
+before the write is confirmed, `notify::describe` shows them, and
+`notify::post` posts those whose build got there, once each. Proposed
+Updates' issues are the ones cpu-sig-tracker files per merge request;
+Hyperscale's are the `rfe::new-version` issues hs-relmon files per
+package. What the comments need from the package's git checkout comes
+through `notify::Checkout`, which the calling tool implements.
 
 ## License
 

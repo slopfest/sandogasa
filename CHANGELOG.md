@@ -17,6 +17,14 @@ nothing changed in what it does; the trackers' untag and review
 commands follow (#144). sandogasa-cbs now enables sandogasa-cli's
 `explain` feature.
 
+The tracking-issue updates moved with it: `sandogasa_cbs::notify` is
+cbspkg's former `notify` module (`plan`, `describe`, `post`), so the
+trackers can tell an issue what happened to a build as cbspkg does.
+What it needs from the package's git checkout comes through a
+`Checkout` trait, which cbspkg implements; `Branch` names the tool, for
+the hint about setting a GitLab token. sandogasa-cbs now depends on
+sandogasa-gitlab and sandogasa-rpmvercmp.
+
 ### fedora-review-digest says why Bugzilla refused its key
 
 `fedora-review-digest --post` with an expired Bugzilla API key failed

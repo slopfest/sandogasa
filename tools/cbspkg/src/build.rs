@@ -191,7 +191,7 @@ fn builds_of<'a>(
 fn tell_built(
     base: &str,
     token: Option<&str>,
-    on: &crate::notify::Branch,
+    on: &sandogasa_cbs::notify::Branch,
     commit: &str,
     built: &[(&Collection, String)],
 ) {
@@ -209,12 +209,19 @@ fn tell_built(
             )
         })
         .collect();
-    let notices = crate::notify::plan(base, token, on, &steps, &|_| Ok(Some(commit.to_string())));
+    let notices =
+        sandogasa_cbs::notify::plan(base, token, on, &steps, &|_| Ok(Some(commit.to_string())));
     let done: Vec<(String, Stage)> = built
         .iter()
         .map(|(_, nvr)| (nvr.clone(), Stage::Candidate))
         .collect();
-    crate::notify::post(base, token, &notices, &done, &crate::notify::cbs_latest);
+    sandogasa_cbs::notify::post(
+        base,
+        token,
+        &notices,
+        &done,
+        &sandogasa_cbs::notify::cbs_latest,
+    );
 }
 
 /// Find the SIG's remote and the branch's commit: the branch itself or,
@@ -360,7 +367,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     // The tracking issue is told of a build cbspkg waits for, which it
     // knows by its task.
-    let tells = !args.scratch && !args.nowait && crate::notify::covers(checkout.sig);
+    let tells = !args.scratch && !args.nowait && sandogasa_cbs::notify::covers(checkout.sig);
     // Several builds run at once: each started with --nowait, then
     // waited on together. One waits as it runs, unless asked not to, or
     // its task is wanted for its NVR.
@@ -405,15 +412,16 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
                 )
             })
             .collect();
-        crate::notify::plan(
+        sandogasa_cbs::notify::plan(
             &base,
             token.as_deref(),
-            &crate::notify::Branch {
+            &sandogasa_cbs::notify::Branch {
                 sig: checkout.sig,
                 package,
                 branch,
-                repo: &repo,
+                checkout: &crate::checkout::GitCheckout { repo: &repo },
                 dry_run: args.dry_run,
+                tool: "cbspkg",
             },
             &steps,
             &|_| Ok(Some(commit.clone())),
@@ -421,7 +429,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         Vec::new()
     };
-    if args.nowait && !args.scratch && crate::notify::covers(checkout.sig) {
+    if args.nowait && !args.scratch && sandogasa_cbs::notify::covers(checkout.sig) {
         println!(
             "Builds left running get no comment on the tracking issue: cbspkg is not there when they end."
         );
@@ -444,7 +452,10 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         for notice in &preview {
-            print!("{}", crate::notify::describe(notice, token.is_some()));
+            print!(
+                "{}",
+                sandogasa_cbs::notify::describe(notice, token.is_some())
+            );
         }
         if !sandogasa_cli::confirm(&format!("Start {kind}?"), true)? {
             println!("Nothing built.");
@@ -519,7 +530,10 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         // After the steps, where a real run tells the issue.
         for notice in &preview {
             ui.step("Comment on the tracking issue, through GitLab's API");
-            print!("{}", crate::notify::describe(notice, token.is_some()));
+            print!(
+                "{}",
+                sandogasa_cbs::notify::describe(notice, token.is_some())
+            );
         }
     }
     if !args.scratch && !args.dry_run {
@@ -533,12 +547,13 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         if tells {
-            let on = crate::notify::Branch {
+            let on = sandogasa_cbs::notify::Branch {
                 sig: checkout.sig,
                 package,
                 branch,
-                repo: &repo,
+                checkout: &crate::checkout::GitCheckout { repo: &repo },
                 dry_run: false,
+                tool: "cbspkg",
             };
             tell_built(&base, token.as_deref(), &on, &commit, &built);
         }
@@ -858,12 +873,13 @@ mod tests {
             .with_status(200)
             .with_body(r#"{"data": {"project": {"workItems": {"nodes": []}}}}"#)
             .create();
-        let on = crate::notify::Branch {
+        let on = sandogasa_cbs::notify::Branch {
             sig: checkout.sig,
             package: "ethtool",
             branch: "c9s-hs",
-            repo: &f.repo,
+            checkout: &crate::checkout::GitCheckout { repo: &f.repo },
             dry_run: false,
+            tool: "cbspkg",
         };
         tell_built(&server.url(), Some("t"), &on, "abc123", &built);
         comment.assert();

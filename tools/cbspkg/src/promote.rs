@@ -200,18 +200,19 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
     // with the promotion and confirmed with it.
     let base = crate::config::gitlab_base();
     let token = crate::config::gitlab_token();
-    if crate::notify::covers(checkout.sig) {
+    if sandogasa_cbs::notify::covers(checkout.sig) {
         ui.step("Find the tracking issue to update, through GitLab's API");
     }
-    let notices = crate::notify::plan(
+    let notices = sandogasa_cbs::notify::plan(
         &base,
         token.as_deref(),
-        &crate::notify::Branch {
+        &sandogasa_cbs::notify::Branch {
             sig: checkout.sig,
             package,
             branch: &checkout.branch,
-            repo: &repo,
+            checkout: &crate::checkout::GitCheckout { repo: &repo },
             dry_run: args.dry_run,
+            tool: "cbspkg",
         },
         &steps,
         &sandogasa_cbs::packages::build_commit,
@@ -227,7 +228,10 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         for notice in &notices {
-            print!("{}", crate::notify::describe(notice, token.is_some()));
+            print!(
+                "{}",
+                sandogasa_cbs::notify::describe(notice, token.is_some())
+            );
         }
         if !replaced.is_empty() {
             println!("Then, asked separately, the older builds they replace:");
@@ -257,15 +261,18 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         // After the steps, where a real run tells the issue.
         for notice in &notices {
             ui.step("Comment on the tracking issue, through GitLab's API");
-            print!("{}", crate::notify::describe(notice, token.is_some()));
+            print!(
+                "{}",
+                sandogasa_cbs::notify::describe(notice, token.is_some())
+            );
         }
     } else {
-        crate::notify::post(
+        sandogasa_cbs::notify::post(
             &base,
             token.as_deref(),
             &notices,
             &done,
-            &crate::notify::cbs_latest,
+            &sandogasa_cbs::notify::cbs_latest,
         );
     }
     moved

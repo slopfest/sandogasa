@@ -25,6 +25,7 @@
 
 pub mod login;
 pub mod lookaside;
+pub mod notify;
 pub mod packages;
 pub mod remotes;
 pub mod tags;
