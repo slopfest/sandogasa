@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### hs-relmon tracks SIG-only packages against nothing, and the manifest finds 17 more
+
+`hs-relmon check-manifest` warned for 22 of the 62 packages in the
+Hyperscale manifest that their reference version could not be
+resolved. Ten have a different name in Repology (anaconda is
+`anaconda-installer`, kernel is `linux`, python-blivet is
+`python:blivet`), seven are not in CentOS Stream, against which the
+manifest compares by default, and five are SIG-only packages no
+distribution carries. The manifest now names the Repology project for
+the first group and compares the second against Fedora's newest stable
+release. For the third, `--track none` (`track = "none"` in a
+manifest) skips the freshness check, its warning and the issue.
+
 ### sandogasa-report records why a piece of work was done
 
 A report listed what was done but not why ("reviewed to unblock X",

@@ -113,6 +113,7 @@ $ hs-relmon check-latest ethtool --json
 | `fedora-rawhide` | Fedora Rawhide |
 | `fedora-stable` | Latest stable Fedora |
 | `centos` / `centos-stream` | Latest CentOS Stream |
+| `none` | Nothing: for SIG-only packages no distribution carries. No freshness check, no warning, no issue |
 
 ### Filing GitLab issues
 

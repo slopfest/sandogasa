@@ -105,7 +105,8 @@ Valid names:
   fedora-rawhide   Fedora Rawhide
   fedora-stable    Latest stable Fedora
   centos           Latest CentOS Stream
-  centos-stream    Latest CentOS Stream"
+  centos-stream    Latest CentOS Stream
+  none             Nothing: no freshness check, no issue"
         )]
         track: String,
     },
@@ -671,6 +672,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 if let Some(reason) = project_issue_block_reason(&project_url) {
                     eprintln!("{package}: skipping issue filing ({reason})");
+                } else if track == TrackRef::Untracked {
+                    eprintln!("{package}: skipping issue filing (--track none)");
                 } else if result.ref_version().is_none() {
                     // Without a reference version nothing counts as
                     // outdated, so the issue can never be filed or
@@ -747,7 +750,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 };
 
-                if pkg.file_issue {
+                // A package tracked against nothing has no issue to file.
+                if pkg.file_issue && pkg.track != TrackRef::Untracked {
                     let project_url = pkg
                         .issue_url
                         .as_deref()

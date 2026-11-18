@@ -79,19 +79,23 @@ pub enum TrackRef {
     FedoraRawhide,
     FedoraStable,
     CentosStream,
+    /// No reference: for SIG-only packages no distribution carries,
+    /// whose freshness cannot be judged. No warning, no issue.
+    Untracked,
 }
 
 impl TrackRef {
     /// Parse a track reference name.
     ///
     /// Valid names: `upstream`, `fedora-rawhide`, `fedora-stable`, `centos`,
-    /// `centos-stream`.
+    /// `centos-stream`, `none`.
     pub fn parse(input: &str) -> Result<Self, String> {
         match input.trim() {
             "upstream" => Ok(Self::Upstream),
             "fedora-rawhide" => Ok(Self::FedoraRawhide),
             "fedora-stable" => Ok(Self::FedoraStable),
             "centos" | "centos-stream" => Ok(Self::CentosStream),
+            "none" => Ok(Self::Untracked),
             other => Err(format!("unknown track reference: {other:?}")),
         }
     }
@@ -103,6 +107,7 @@ impl TrackRef {
             Self::FedoraRawhide => "fedora-rawhide",
             Self::FedoraStable => "fedora-stable",
             Self::CentosStream => "centos-stream",
+            Self::Untracked => "none",
         }
     }
 
@@ -119,6 +124,7 @@ impl TrackRef {
             Self::CentosStream => {
                 repology::latest_centos_stream(packages).map(|p| p.version.clone())
             }
+            Self::Untracked => None,
         }
     }
 }
@@ -388,7 +394,7 @@ pub fn check(
     // otherwise silently skip filing/updating (observed with perf,
     // whose repology project is empty — the kernel's perf lives
     // under repology project "linux").
-    if ref_version.is_none() {
+    if ref_version.is_none() && *track != TrackRef::Untracked {
         eprintln!(
             "warning: {package}: cannot resolve the '{}' reference version \
              (repology project '{repology_name}' has no matching entries); \
@@ -799,6 +805,9 @@ mod tests {
             TrackRef::parse("centos-stream").unwrap(),
             TrackRef::CentosStream
         );
+        assert_eq!(TrackRef::parse("none").unwrap(), TrackRef::Untracked);
+        assert_eq!(TrackRef::Untracked.name(), "none");
+        assert_eq!(TrackRef::Untracked.resolve(&[]), None);
         assert!(TrackRef::parse("bogus").is_err());
     }
 
