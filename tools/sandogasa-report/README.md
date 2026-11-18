@@ -77,7 +77,8 @@ Four subcommands:
   forge instance used by the domains in the main config and prompts
   for the full credential set a report can need: your FAS username,
   Bugzilla email, git author emails (for Sourcehut commit
-  attribution), then per-instance usernames and API tokens for
+  attribution), the notes directory (see [Notes](#notes)), then
+  per-instance usernames and API tokens for
   GitLab, GitHub, Forgejo, and Sourcehut. Because it covers every
   domain in the config, one run sets you up for **any** `report -d`
   combination drawn from that config. Existing values show as
@@ -226,8 +227,9 @@ Files are named `<year>/<date>T<HHMM>-<host>.md` after the local time
 they were written and the machine's short host name, with `-2`, `-3`
 for more in the same minute, so machines syncing the directory never
 write the same file. Headers other than `url`, `date` and `by` are
-kept as they are. Notes go in `[notes] dir` from the per-user overlay, an absolute
-path or one starting with `~/` for the home directory, else
+kept as they are. Notes go in `[notes] dir` from the per-user overlay (`config` asks for
+it), an absolute path or one starting with `~/` for the home
+directory, else
 `~/.local/share/sandogasa-report/notes`:
 
 ```toml

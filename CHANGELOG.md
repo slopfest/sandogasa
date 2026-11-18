@@ -24,7 +24,8 @@ item's URL or none (a meeting, mentoring), the day and who wrote the
 text, after showing the note and asking. Each note is its own file,
 named after the time and host it was written on, so machines syncing
 the notes directory never write the same file; `[notes] dir` in the
-per-user overlay says where. `sandogasa-report notes` lists them, by
+per-user overlay says where, and `sandogasa-report config` asks for
+it. `sandogasa-report notes` lists them, by
 date or URL, or as JSON. `report --notes` puts each note in the period
 under the item it is about (for a commit, its repository's line in
 that forge's commit counts), and the rest in a closing "Notes" section;

@@ -137,6 +137,29 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         read,
     )?;
 
+    // Where `note` writes notes, and `notes` and `report --notes` read
+    // them (#167).
+    eprintln!("\nNotes:");
+    let notes_dir = ask_with(
+        &Setting::new("notes", "directory")
+            .optional()
+            .hint(
+                "Where `note` writes notes: an absolute path or one under ~/; \
+                 empty for ~/.local/share/sandogasa-report/notes",
+            )
+            .validated(&crate::notes::check_dir),
+        merged.notes.dir.as_deref().unwrap_or(""),
+        true,
+        read,
+    )?;
+    let notes_dir_changed = overlay_update(
+        &mut overlay,
+        &["notes", "dir"],
+        merged.notes.dir.as_deref(),
+        &notes_dir,
+    );
+    changed |= notes_dir_changed;
+
     // Token section: one prompt per unique instance, per forge.
     // Existing tokens are validated first so re-runs don't force
     // re-entry unless they've been revoked. Each goes in the keyring
@@ -165,6 +188,11 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     ];
     let mut stored = false;
     let mut out_of_file: Vec<(&str, String)> = Vec::new();
+    // Saving lays the overlay over the file and never removes a key, so
+    // a cleared directory is taken out of the file by name.
+    if notes_dir_changed && notes_dir.is_empty() {
+        out_of_file.push(("notes", "dir".to_string()));
+    }
     for (instances, heading, kind) in forges {
         if !instances.is_empty() {
             eprintln!("\n{heading}");
@@ -1360,8 +1388,14 @@ mod tests {
         };
         let asked = std::cell::RefCell::new(Vec::new());
         // Profile, FAS (keeping the profile's name), Bugzilla email,
-        // openSUSE's email.
-        let answers = ["me", "", "me@example.com", "me@suse.example"];
+        // openSUSE's email, notes directory.
+        let answers = [
+            "me",
+            "",
+            "me@example.com",
+            "me@suse.example",
+            "~/Nextcloud/notes",
+        ];
         run_inner(&args, &mut scripted(&answers, &asked)).unwrap();
         let cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
         let saved = parse_overlay(&std::fs::read_to_string(cf.path()).unwrap()).unwrap();
@@ -1381,12 +1415,25 @@ mod tests {
             .as_deref(),
             Some("me@suse.example")
         );
-        assert_eq!(asked.borrow().len(), 4, "{:?}", asked.borrow());
+        assert_eq!(
+            overlay_get_str(&saved, &["notes", "dir"]).as_deref(),
+            Some("~/Nextcloud/notes")
+        );
+        assert_eq!(asked.borrow().len(), 5, "{:?}", asked.borrow());
 
         // The same answers again, empty ones keeping what is saved.
         let before = std::fs::read_to_string(cf.path()).unwrap();
-        run_inner(&args, &mut scripted(&["me", "", "", ""], &asked)).unwrap();
+        run_inner(&args, &mut scripted(&["me", "", "", "", ""], &asked)).unwrap();
         assert_eq!(std::fs::read_to_string(cf.path()).unwrap(), before);
+
+        // A relative directory is refused and asked again; `-` clears it.
+        run_inner(
+            &args,
+            &mut scripted(&["me", "", "", "", "notes", "-"], &asked),
+        )
+        .unwrap();
+        let saved = parse_overlay(&std::fs::read_to_string(cf.path()).unwrap()).unwrap();
+        assert_eq!(overlay_get_str(&saved, &["notes", "dir"]), None);
 
         // No profile named: nothing else asked, nothing written.
         asked.borrow_mut().clear();

@@ -170,6 +170,19 @@ pub fn host() -> Result<String, String> {
         })
 }
 
+/// Check a configured notes directory: absolute, or under `~/`, so
+/// it does not depend on where a command runs.
+pub fn check_dir(dir: &str) -> Result<(), String> {
+    if dir == "~" || dir.starts_with("~/") || Path::new(dir).is_absolute() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{dir:?} is neither absolute nor under ~/; \
+             a relative path would depend on where the command runs"
+        ))
+    }
+}
+
 /// Where notes go: the configured directory, `~/` expanded against
 /// `home`, else `<data_dir>/sandogasa-report/notes`.
 pub fn notes_dir(
@@ -184,11 +197,9 @@ pub fn notes_dir(
             )?;
             Ok(home.join(dir.trim_start_matches('~').trim_start_matches('/')))
         }
-        Some(dir) if Path::new(dir).is_absolute() => Ok(PathBuf::from(dir)),
-        Some(dir) => Err(format!(
-            "[notes] dir {dir:?} is neither absolute nor under ~/; \
-             a relative path would depend on where the command runs"
-        )),
+        Some(dir) => check_dir(dir)
+            .map(|()| PathBuf::from(dir))
+            .map_err(|e| format!("[notes] dir {e}")),
         None => data_dir
             .map(|d| d.join("sandogasa-report").join("notes"))
             .ok_or_else(|| {
