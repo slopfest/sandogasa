@@ -597,6 +597,11 @@ newer than the released build."
         #[arg(long)]
         dry_run: bool,
 
+        /// Narrate each tag change and show its command, pausing
+        /// before each
+        #[arg(long)]
+        explain: bool,
+
         /// Comma-separated Hyperscale repositories to scan.
         #[arg(
             long,
@@ -1375,16 +1380,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             skip,
             changelog_lines,
             dry_run,
+            explain,
             verbose,
         } => {
             let repos = prune_tags::parse_repositories(&repositories);
+            // Without a token the comments are shown, not posted; a dry
+            // run, which only lists, does not read the keyring.
+            let token = if dry_run {
+                None
+            } else {
+                gitlab::load_token(keyring())
+                    .map_err(|e| {
+                        eprintln!(
+                            "warning: no GitLab token ({e}); the tracking issues' \
+                             comments are shown, not posted"
+                        )
+                    })
+                    .ok()
+            };
             review::run(
                 &repos,
                 target.as_deref(),
                 &skip,
                 changelog_lines,
                 dry_run,
+                explain,
                 verbose,
+                token.as_deref(),
             )?;
         }
         Command::Config(args) => {

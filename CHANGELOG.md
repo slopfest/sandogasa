@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### hs-relmon review comments on the tracking issue
+
+`hs-relmon review` released or rejected Hyperscale builds without
+telling anyone: the package's `rfe::new-version` issue kept saying
+nothing, while `cbspkg promote` commented on it for the same move. Now
+a release gets the comment and `stage::release` label `promote` gives,
+and a rejection a comment saying so and `stage::rejected`. The comment
+is shown before it is posted, the verdict being the confirmation, as
+before. Closing an issue once every release has the version stays with
+`hs-relmon`'s scan, which knows the releases the SIG carries the
+package for. A release that fails partway names the `cbspkg promote`
+that finishes it.
+
+The review loop is now sandogasa-cbs's (`review::review`), shared with
+the coming `cpu-sig-tracker review` (#144). The tag changes run through
+`cbs` rather than `koji --profile cbs`, like cbspkg's, and `--explain`
+narrates them. `review --dry-run` no longer reads the keyring.
+
 ### cbspkg puts the next command on a line of its own
 
 After a build, `cbspkg build` ended with "Next, to offer NVR for

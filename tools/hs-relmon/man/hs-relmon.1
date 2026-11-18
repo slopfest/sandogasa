@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-relmon 1 2026-11-16 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH hs-relmon 1 2026-11-18 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 hs\-relmon \- Release monitoring tool for CentOS Hyperscale SIG packages
 .SH SYNOPSIS
@@ -415,7 +415,7 @@ Print help
 <\fIPACKAGE\fR>
 Package(s) to retire
 .SS hs-relmon review
-\fBhs\-relmon review\fR [\fB\-\-changelog\-lines\fR] [\fB\-\-dry\-run\fR] [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fITARGET\fR]
+\fBhs\-relmon review\fR [\fB\-\-changelog\-lines\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-\-repositories\fR] [\fB\-\-skip\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fITARGET\fR]
 .PP
 Interactively review builds in hyperscale `\-testing` tags and promote (+1), reject (\-1), or skip (0) each one
 .TP
@@ -428,6 +428,9 @@ newer than the released build.
 .TP
 \fB\-\-dry\-run\fR
 List the builds that would be reviewed, then exit
+.TP
+\fB\-\-explain\fR
+Narrate each tag change and show its command, pausing before each
 .TP
 \fB\-\-repositories\fR \fI<REPOSITORIES>\fR [default: main]
 Comma\-separated Hyperscale repositories to scan.

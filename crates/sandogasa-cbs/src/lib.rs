@@ -28,6 +28,7 @@ pub mod lookaside;
 pub mod notify;
 pub mod packages;
 pub mod remotes;
+pub mod review;
 pub mod tags;
 #[cfg(test)]
 mod test_support;

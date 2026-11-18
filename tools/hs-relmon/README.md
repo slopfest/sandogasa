@@ -13,6 +13,10 @@ Hyperscale to identify outdated packages.
 cargo install hs-relmon
 ```
 
+`review` changes tags through the `cbs` command
+(`sudo dnf install centos-packager`); the other CBS commands use `koji`
+with the `cbs` profile.
+
 ## Usage
 
 ```
@@ -616,6 +620,19 @@ changelog (via `koji buildinfo --changelog`), then prompts:
 - `-1` — reject: untag from `-testing`.
 - `0` / `s` / Enter — skip, leave the build as-is.
 - `q` / Ctrl-D — stop reviewing.
+
+The verdict is the confirmation: the tag changes run at once, through
+`cbs` (`--explain` narrates each and shows its command). The package's
+tracking issue, the `rfe::new-version` issue `hs-relmon` filed, is told
+of each: a release gets the comment and `stage::release` label
+`cbspkg promote` gives (closing the issue once every release has the
+version stays with the scan, which knows the releases); a rejection
+gets a comment
+saying so and the `stage::rejected` label, which flags the update for
+attention until the next build reaches a stage. The comment is shown
+before it is posted. A build older than the version the issue asks for
+tells it nothing. Posting needs the GitLab token from `hs-relmon config`;
+without one the comments are shown and not posted.
 
 The changelog is scoped to what changed: for a package already
 in release, only the entries newer than the released build are

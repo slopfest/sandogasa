@@ -131,6 +131,18 @@ Hyperscale's are the `rfe::new-version` issues hs-relmon files per
 package. What the comments need from the package's git checkout comes
 through `notify::Checkout`, which the calling tool implements.
 
+## Reviews
+
+`review::review` is the karma-style review loop SIG trackers share,
+after fedora-easy-karma: each build in a `-testing` tag is shown by the
+tracker, and the verdict acts on it at once, `+1` releasing it
+(`-release` tagged, `-testing` untagged), `-1` rejecting it (`-testing`
+untagged), Enter skipping it, and its tracking issue is updated
+through `notify`, a rejection with the `stage::rejected` label. The tracker
+supplies what to list and show, and where each build's issue is
+(`review::ItemContext`). A review does not close an issue: it has no
+checkout to tell which releases the SIG carries the package for.
+
 ## License
 
 Licensed under either of

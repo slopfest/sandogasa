@@ -3,16 +3,13 @@
 //! `review` subcommand — interactive karma-style review of
 //! builds sitting in Hyperscale `-testing` tags.
 //!
-//! Modeled on `fedora-easy-karma`: walk each build awaiting
-//! review and prompt for a verdict. Here the verdict drives Koji
-//! tag operations directly:
-//!
-//! - `+1` promotes — tag the build into the sibling `-release`
-//!   tag and untag it from `-testing` (a released build
-//!   shouldn't linger in testing, matching the prune-tags
-//!   promotion-dedup rule).
-//! - `-1` rejects — untag from `-testing`.
-//! - `0` / skip — leave the build where it is.
+//! The loop is sandogasa-cbs's ([`sandogasa_cbs::review`]), shared with
+//! cpu-sig-tracker: `+1` releases a build (tagged into the sibling
+//! `-release` tag, untagged from `-testing`), `-1` rejects it (untagged
+//! from `-testing`), `0` or Enter leaves it, and its tracking issue, the
+//! package's `rfe::new-version` issue, is told of what changed (#144).
+//! What is here is Hyperscale's part: which builds to list and what to
+//! show about each.
 //!
 //! Target resolution (the unit of review is a `(testing-tag,
 //! build)` pair, since EL9 and EL10 are distinct artifacts):
@@ -24,38 +21,22 @@
 //! - an NVR → that exact build, wherever it's tagged for testing.
 
 use std::cmp::Ordering;
-use std::io::{BufRead, Write};
 
 use sandogasa_koji::{parse_nvr, parse_nvr_name};
+
+pub use sandogasa_cbs::review::{ItemContext, Karma, ReviewItem, Tracking};
+use sandogasa_cbs::tags::TagHub;
 
 use crate::prune_tags::{self, KOJI_PROFILE};
 use crate::rpmvercmp::compare_evr;
 
+/// Where the Hyperscale SIG's package repositories, and their tracking
+/// issues, are.
+const GITLAB_BASE: &str = "https://gitlab.com";
+
 /// Default cap on changelog lines shown for a brand-new package
 /// (one with nothing yet in the release tag to diff against).
 pub const DEFAULT_CHANGELOG_LINES: usize = 20;
-
-/// One build to review, with the tag it's in and the release tag
-/// a promotion would move it to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReviewItem {
-    pub testing_tag: String,
-    pub release_tag: String,
-    pub nvr: String,
-}
-
-/// A reviewer's verdict for one build.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Karma {
-    /// Tag into release and untag from testing.
-    Promote,
-    /// Untag from testing.
-    Reject,
-    /// Leave the build untouched.
-    Skip,
-    /// Stop reviewing.
-    Quit,
-}
 
 /// How the positional argument was interpreted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,19 +65,6 @@ pub fn classify_target(arg: Option<&str>) -> Target {
         None => Target::All,
         Some(s) if s.contains(".el") && parse_nvr(s).is_some() => Target::Nvr(s.to_string()),
         Some(s) => Target::Package(s.to_string()),
-    }
-}
-
-/// Parse a karma prompt response. Accepts `+1`/`1`, `-1`,
-/// `0`/`s`/empty (skip), `q` (quit). Unrecognized input returns
-/// `None` so the caller can re-prompt.
-pub fn parse_karma(input: &str) -> Option<Karma> {
-    match input.trim() {
-        "+1" | "1" => Some(Karma::Promote),
-        "-1" => Some(Karma::Reject),
-        "0" | "s" | "S" | "" => Some(Karma::Skip),
-        "q" | "Q" => Some(Karma::Quit),
-        _ => None,
     }
 }
 
@@ -138,9 +106,9 @@ pub fn filter_skipped(items: Vec<ReviewItem>, skip: &[String]) -> Vec<ReviewItem
         .collect()
 }
 
-/// What the review asks of the hub, and the two changes it makes.
-/// Behind a trait so a test can answer from tables and see the tag
-/// operations without running `koji`.
+/// What the review reads from the hub. Behind a trait so a test can
+/// answer from tables without running `koji`; the tag changes go through
+/// a [`TagHub`].
 pub(crate) trait Hub {
     /// Every build in `tag`, not only the latest of each package.
     fn all_tagged(&self, tag: &str) -> Result<Vec<String>, String>;
@@ -148,8 +116,6 @@ pub(crate) trait Hub {
     fn latest_tagged(&self, tag: &str) -> Result<Vec<String>, String>;
     /// `koji buildinfo --changelog` of `nvr`.
     fn build_info(&self, nvr: &str) -> Result<String, String>;
-    fn tag(&self, tag: &str, nvr: &str) -> Result<(), String>;
-    fn untag(&self, tag: &str, nvr: &str) -> Result<(), String>;
 }
 
 /// The hub a real run talks to: CBS, through the `koji` CLI.
@@ -170,46 +136,82 @@ impl Hub for CbsCli {
     fn build_info(&self, nvr: &str) -> Result<String, String> {
         sandogasa_koji::build_info_with_changelog(nvr, Some(KOJI_PROFILE))
     }
-
-    fn tag(&self, tag: &str, nvr: &str) -> Result<(), String> {
-        sandogasa_koji::tag_build(tag, nvr, Some(KOJI_PROFILE))
-    }
-
-    fn untag(&self, tag: &str, nvr: &str) -> Result<(), String> {
-        sandogasa_koji::untag_build(tag, nvr, Some(KOJI_PROFILE))
-    }
 }
 
-/// Run the review flow.
+/// Run the review flow: the tag changes through `cbs`, narrated under
+/// `explain`, and each build's tracking issue told when there is a
+/// GitLab `token` (shown, not posted, without one).
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     repositories: &[String],
     target_arg: Option<&str>,
     skip: &[String],
     changelog_lines: usize,
     dry_run: bool,
+    explain: bool,
     verbose: bool,
+    token: Option<&str>,
 ) -> Result<(), String> {
     let testing_tags: Vec<String> = prune_tags::candidate_tags(repositories)
         .into_iter()
         .filter(|t| t.ends_with("-testing"))
         .collect();
+    if !dry_run {
+        sandogasa_cli::require_tools(&[(
+            "cbs",
+            "sudo dnf install centos-packager",
+            Some("--help"),
+        )])
+        .map_err(|e| e.to_string())?;
+    }
+    let ui = sandogasa_cli::explain::Ui {
+        explain,
+        dry_run,
+        quiet: false,
+    };
+    let tag_hub = sandogasa_cbs::tags::CbsCli {
+        ui: &ui,
+        cwd: std::path::Path::new("."),
+    };
+    let tracking = Tracking {
+        base: GITLAB_BASE,
+        token,
+        tool: "hs-relmon",
+    };
     run_with(
         &CbsCli,
+        &tag_hub,
+        Some(&tracking),
         &testing_tags,
         target_arg,
         skip,
         changelog_lines,
         dry_run,
         verbose,
-        &mut prompt_karma,
+        &mut sandogasa_cbs::review::prompt_karma,
+        &item_context,
     )
 }
 
-/// [`run`] over `testing_tags` on `hub`, taking each verdict from
-/// `karma` (`None` ends the review, as end of input does).
+/// Where `item`'s tracking issue is: the package's `rfe::new-version`
+/// issue, found by its package; the testing tag names the build's line
+/// in messages.
+fn item_context(item: &ReviewItem) -> Option<ItemContext> {
+    Some(ItemContext {
+        sig: sandogasa_cbs::Sig::Hyperscale,
+        package: parse_nvr_name(&item.nvr)?.to_string(),
+        branch: item.testing_tag.clone(),
+    })
+}
+
+/// [`run`] over `testing_tags`, reading from `hub` and changing tags
+/// through `tag_hub`, taking each verdict from `karma` (`None` ends the
+/// review, as end of input does).
 #[allow(clippy::too_many_arguments)]
 fn run_with(
     hub: &dyn Hub,
+    tag_hub: &dyn TagHub,
+    tracking: Option<&Tracking>,
     testing_tags: &[String],
     target_arg: Option<&str>,
     skip: &[String],
@@ -217,6 +219,7 @@ fn run_with(
     dry_run: bool,
     verbose: bool,
     karma: &mut dyn FnMut() -> Result<Option<Karma>, String>,
+    context: &dyn Fn(&ReviewItem) -> Option<ItemContext>,
 ) -> Result<(), String> {
     let target = classify_target(target_arg);
     let collected = collect_items(hub, testing_tags, &target, verbose);
@@ -242,39 +245,18 @@ fn run_with(
         return Ok(());
     }
 
-    let total = items.len();
-    let mut promoted = 0usize;
-    let mut rejected = 0usize;
-    let mut skipped = 0usize;
-    for (i, item) in items.iter().enumerate() {
-        print_item(hub, item, i + 1, total, changelog_lines);
-        let verdict = match karma()? {
-            Some(k) => k,
-            None => {
-                // EOF — stop the loop.
-                eprintln!("\n(exiting)");
-                break;
-            }
-        };
-        match verdict {
-            Karma::Promote => {
-                apply_promote(hub, item)?;
-                promoted += 1;
-            }
-            Karma::Reject => {
-                apply_reject(hub, item)?;
-                rejected += 1;
-            }
-            Karma::Skip => {
-                skipped += 1;
-            }
-            Karma::Quit => {
-                break;
-            }
-        }
-    }
-
-    eprintln!("\n{promoted} promoted, {rejected} rejected, {skipped} skipped.");
+    let tally = sandogasa_cbs::review::review(
+        &items,
+        &mut |item, idx, total| print_item(hub, item, idx, total, changelog_lines),
+        karma,
+        tag_hub,
+        tracking,
+        context,
+    )?;
+    eprintln!(
+        "\n{} promoted, {} rejected, {} skipped.",
+        tally.promoted, tally.rejected, tally.skipped
+    );
     Ok(())
 }
 
@@ -501,64 +483,6 @@ pub fn changelog_since(
     }
 }
 
-fn apply_promote(hub: &dyn Hub, item: &ReviewItem) -> Result<(), String> {
-    // The same step as `cbspkg promote` (sandogasa-cbs), so the two
-    // cannot drift: tag into -release, untag from -testing.
-    let (collection, _) = sandogasa_cbs::Collection::from_tag(&item.testing_tag)
-        .ok_or_else(|| format!("{} is not a SIG's -testing tag", item.testing_tag))?;
-    let in_tags = [item.testing_tag.clone()];
-    for change in sandogasa_cbs::packages::promote_changes(
-        &collection,
-        &item.nvr,
-        sandogasa_cbs::Stage::Release,
-        &in_tags,
-    ) {
-        use sandogasa_cbs::tags::TagChange;
-        match &change {
-            TagChange::Tag { tag, nvr } => {
-                hub.tag(tag, nvr)
-                    .map_err(|e| format!("tag-build {tag} {nvr}: {e}"))?;
-                eprintln!("tagged {nvr} into {tag}");
-            }
-            TagChange::Untag { tag, nvr } => {
-                hub.untag(tag, nvr)
-                    .map_err(|e| format!("untag-build {tag} {nvr}: {e}"))?;
-                eprintln!("untagged {nvr} from {tag}");
-            }
-        }
-    }
-    Ok(())
-}
-
-fn apply_reject(hub: &dyn Hub, item: &ReviewItem) -> Result<(), String> {
-    hub.untag(&item.testing_tag, &item.nvr)
-        .map_err(|e| format!("untag-build {} {}: {e}", item.testing_tag, item.nvr))?;
-    eprintln!("untagged {} from {}", item.nvr, item.testing_tag);
-    Ok(())
-}
-
-/// Prompt until a valid karma value is entered. Returns
-/// `Ok(None)` on EOF (Ctrl-D on an empty line) so the caller can
-/// stop cleanly.
-fn prompt_karma() -> Result<Option<Karma>, String> {
-    loop {
-        eprint!("karma [+1=promote / -1=reject / Enter=skip / q=quit]: ");
-        std::io::stderr().flush().map_err(|e| e.to_string())?;
-        let mut line = String::new();
-        let n = std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?;
-        if n == 0 {
-            return Ok(None);
-        }
-        match parse_karma(&line) {
-            Some(k) => return Ok(Some(k)),
-            None => eprintln!("unrecognized input: {:?}", line.trim()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,19 +520,6 @@ mod tests {
             classify_target(Some("systemd-261~devel-20260519010708.hs+fb.el9_z")),
             Target::Nvr("systemd-261~devel-20260519010708.hs+fb.el9_z".to_string())
         );
-    }
-
-    #[test]
-    fn parse_karma_accepts_all_forms() {
-        assert_eq!(parse_karma("+1"), Some(Karma::Promote));
-        assert_eq!(parse_karma("1"), Some(Karma::Promote));
-        assert_eq!(parse_karma(" 1 "), Some(Karma::Promote));
-        assert_eq!(parse_karma("-1"), Some(Karma::Reject));
-        assert_eq!(parse_karma("0"), Some(Karma::Skip));
-        assert_eq!(parse_karma("s"), Some(Karma::Skip));
-        assert_eq!(parse_karma(""), Some(Karma::Skip));
-        assert_eq!(parse_karma("q"), Some(Karma::Quit));
-        assert_eq!(parse_karma("maybe"), None);
     }
 
     #[test]
@@ -834,12 +745,21 @@ Changelog:
                 .cloned()
                 .ok_or_else(|| format!("No such build: {nvr}"))
         }
-        fn tag(&self, tag: &str, nvr: &str) -> Result<(), String> {
-            self.ops.borrow_mut().push(format!("tag {tag} {nvr}"));
-            Ok(())
-        }
-        fn untag(&self, tag: &str, nvr: &str) -> Result<(), String> {
-            self.ops.borrow_mut().push(format!("untag {tag} {nvr}"));
+    }
+
+    impl TagHub for FakeHub {
+        fn apply(
+            &self,
+            change: &sandogasa_cbs::tags::TagChange,
+            _why: &str,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            let verb = match change {
+                sandogasa_cbs::tags::TagChange::Tag { .. } => "tag",
+                sandogasa_cbs::tags::TagChange::Untag { .. } => "untag",
+            };
+            self.ops
+                .borrow_mut()
+                .push(format!("{verb} {} {}", change.tag_name(), change.nvr()));
             Ok(())
         }
     }
@@ -851,6 +771,8 @@ Changelog:
         let mut karma = || Ok(answers.next());
         run_with(
             hub,
+            hub,
+            None,
             &[TESTING.to_string(), "missing-testing".to_string()],
             target,
             &[],
@@ -858,6 +780,7 @@ Changelog:
             dry_run,
             true,
             &mut karma,
+            &|_| None,
         )
         .unwrap();
     }
@@ -943,13 +866,42 @@ Changelog:
 
     #[test]
     fn promoting_from_a_tag_no_sig_owns_is_an_error() {
-        let hub = FakeHub::default();
-        let item = ReviewItem {
-            testing_tag: "not-a-sig-tag".into(),
-            release_tag: "not-a-sig-tag".into(),
-            nvr: "foo-1-1".into(),
-        };
-        let err = apply_promote(&hub, &item).unwrap_err();
+        let mut hub = FakeHub::default();
+        hub.tagged
+            .insert("not-a-sig-testing".into(), vec!["foo-1-1.hs.el10".into()]);
+        let mut answers = [Karma::Promote].into_iter();
+        let err = run_with(
+            &hub,
+            &hub,
+            None,
+            &["not-a-sig-testing".to_string()],
+            None,
+            &[],
+            DEFAULT_CHANGELOG_LINES,
+            false,
+            false,
+            &mut || Ok(answers.next()),
+            &|_| None,
+        )
+        .unwrap_err();
         assert!(err.contains("is not a SIG's -testing tag"), "{err}");
+        assert!(hub.ops.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_reviewed_builds_issue_is_found_from_its_package() {
+        let item = ReviewItem {
+            testing_tag: TESTING.into(),
+            release_tag: RELEASE.into(),
+            nvr: "ethtool-7.1-1.hs.el10".into(),
+        };
+        let c = item_context(&item).unwrap();
+        assert_eq!(c.sig, sandogasa_cbs::Sig::Hyperscale);
+        assert_eq!(c.package, "ethtool");
+        let odd = ReviewItem {
+            nvr: "nonsense".into(),
+            ..item
+        };
+        assert!(item_context(&odd).is_none());
     }
 }
