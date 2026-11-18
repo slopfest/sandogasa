@@ -71,8 +71,10 @@ pub struct Notice {
 pub struct Closing {
     pub package: String,
     pub version: String,
-    /// The `-release` tag of each release the package has a SIG branch
-    /// for.
+    /// The `-release` tag of each collection the package has a SIG
+    /// branch for. One the package has no build in (none in its
+    /// `-candidate`, `-testing` or `-release`: a branch made but never
+    /// built from) does not count.
     pub tags: Vec<String>,
 }
 
@@ -512,10 +514,10 @@ pub fn describe_styled(notice: &Notice, postable: bool, color: bool) -> String {
     }
     if let Some(c) = notice.closing.as_ref().filter(|_| postable) {
         out.push_str(&format!(
-            "  and close it as Done if {} then {} {} or newer\n",
-            c.tags.join(", "),
-            if c.tags.len() == 1 { "has" } else { "all have" },
-            c.version
+            "  and close it as Done once these have {} or newer, leaving out any without a build of {}: {}\n",
+            c.version,
+            c.package,
+            c.tags.join(", ")
         ));
     }
     if let Some(label) = notice.missing_label {
@@ -719,10 +721,33 @@ fn merge_request_of(
 }
 
 /// The paragraph saying a Hyperscale issue is done, when every tag of
-/// `closing` has its version or newer; `None`, saying why, when one is
-/// behind or cannot be read.
+/// `closing` the package has builds for has its version or newer;
+/// `None`, saying why, when one is behind or cannot be read. A
+/// collection with no build of the package in its `-release`,
+/// `-candidate` or `-testing` is left out, and the paragraph names it:
+/// its branch was never built from. A tag not named `…-release` always
+/// counts.
 fn done_note(closing: &Closing, issue_url: &str, latest: LatestIn) -> Option<String> {
-    let found = match latest(&closing.tags, &closing.package) {
+    // The same collection's other tags, all asked in the one call.
+    let sibling = |stage: &str| -> Vec<String> {
+        closing
+            .tags
+            .iter()
+            .map(|t| match t.strip_suffix("-release") {
+                Some(base) => format!("{base}-{stage}"),
+                None => t.clone(),
+            })
+            .collect()
+    };
+    let (candidates, testing) = (sibling("candidate"), sibling("testing"));
+    let asked: Vec<String> = closing
+        .tags
+        .iter()
+        .chain(&candidates)
+        .chain(&testing)
+        .cloned()
+        .collect();
+    let found = match latest(&asked, &closing.package) {
         Ok(found) => found,
         Err(e) => {
             eprintln!(
@@ -731,16 +756,23 @@ fn done_note(closing: &Closing, issue_url: &str, latest: LatestIn) -> Option<Str
             return None;
         }
     };
-    if found.len() != closing.tags.len() {
+    if found.len() != asked.len() {
         eprintln!(
-            "warning: the hub answered {} of {} release tags; {issue_url} stays open",
+            "warning: the hub answered {} of {} tags; {issue_url} stays open",
             found.len(),
-            closing.tags.len()
+            asked.len()
         );
         return None;
     }
+    let n = closing.tags.len();
+    let (released, candidate, testing) = (&found[..n], &found[n..2 * n], &found[2 * n..]);
     let mut lines = Vec::new();
-    for (tag, nvr) in closing.tags.iter().zip(&found) {
+    let mut unbuilt = Vec::new();
+    for (i, (tag, nvr)) in closing.tags.iter().zip(released).enumerate() {
+        if nvr.is_none() && candidate[i].is_none() && testing[i].is_none() {
+            unbuilt.push(format!("`{tag}`"));
+            continue;
+        }
         match nvr {
             Some(nvr) if reaches(nvr, &closing.version) => {
                 lines.push(format!("- `{tag}`: `{nvr}`"));
@@ -761,11 +793,27 @@ fn done_note(closing: &Closing, issue_url: &str, latest: LatestIn) -> Option<Str
             }
         }
     }
-    Some(format!(
-        "Every release now has {} or newer, so this is done:\n\n{}",
+    if lines.is_empty() {
+        eprintln!(
+            "warning: none of {} has a build of {}; {issue_url} stays open",
+            closing.tags.join(", "),
+            closing.package
+        );
+        return None;
+    }
+    let mut note = format!(
+        "Every release {} is built for now has {} or newer, so this is done:\n\n{}",
+        closing.package,
         closing.version,
         lines.join("\n")
-    ))
+    );
+    if !unbuilt.is_empty() {
+        note.push_str(&format!(
+            "\n\nNot built for, so left out: {}.",
+            unbuilt.join(", ")
+        ));
+    }
+    Some(note)
 }
 
 /// `note` with `paragraph` added before its closing marker.
@@ -1336,6 +1384,65 @@ mod tests {
         assert_eq!(nvrs, ["ethtool-7.1-1.hs.el9"]);
     }
 
+    /// wprof, with experimental and main branches but built only in
+    /// experimental 9: the collections never built in are left out.
+    #[test]
+    fn a_collection_never_built_in_does_not_keep_the_issue_open() {
+        // wprof: c9s-hsx and c10s-hsx (experimental) and a c9s-hs
+        // (main) branch, built only in experimental 9.
+        let tags = [
+            "hyperscale10s-packages-experimental-release",
+            "hyperscale9s-packages-experimental-release",
+            "hyperscale9s-packages-main-release",
+        ];
+        let closing = Closing {
+            package: "wprof".into(),
+            version: "0.7.1".into(),
+            tags: tags.map(String::from).into(),
+        };
+        let answer = |released9: Option<&str>| {
+            let r = released9.map(String::from);
+            move |asked: &[String], _: &str| {
+                assert_eq!(asked.len(), 9);
+                assert_eq!(asked[4], "hyperscale9s-packages-experimental-candidate");
+                assert_eq!(asked[8], "hyperscale9s-packages-main-testing");
+                Ok(vec![
+                    None,
+                    r.clone(),
+                    None,
+                    None,
+                    Some("wprof-0.7.1-1.hsx.el9".to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                ])
+            }
+        };
+        assert_eq!(
+            done_note(&closing, "u", &answer(Some("wprof-0.7.1-1.hsx.el9"))).as_deref(),
+            Some(
+                "Every release wprof is built for now has 0.7.1 or newer, so this is done:\n\n\
+                 - `hyperscale9s-packages-experimental-release`: `wprof-0.7.1-1.hsx.el9`\n\n\
+                 Not built for, so left out: `hyperscale10s-packages-experimental-release`, \
+                 `hyperscale9s-packages-main-release`."
+            )
+        );
+        // Built but not released yet: open.
+        assert_eq!(done_note(&closing, "u", &answer(None)), None);
+        // Built nowhere at all: open.
+        let nowhere = |asked: &[String], _: &str| Ok(vec![None; asked.len()]);
+        assert_eq!(done_note(&closing, "u", &nowhere), None);
+        // A build only in main 9's -testing: main 9 counts, and is behind.
+        let in_testing = |asked: &[String], _: &str| {
+            let mut v = vec![None; asked.len()];
+            v[1] = Some("wprof-0.7.1-1.hsx.el9".to_string());
+            v[8] = Some("wprof-0.7.0-1.hs.el9".to_string());
+            Ok(v)
+        };
+        assert_eq!(done_note(&closing, "u", &in_testing), None);
+    }
+
     /// ethtool 7.1 released to Hyperscale 10, with the checkout having
     /// branches for 9 and 10: the issue closes only once 9 has it too.
     #[test]
@@ -1397,7 +1504,8 @@ mod tests {
         );
         assert!(
             describe(&notices[0], true).contains(&format!(
-                "and close it as Done if {r10}, {r9} then all have 7.1 or newer"
+                "and close it as Done once these have 7.1 or newer, leaving out any \
+                 without a build of ethtool: {r10}, {r9}"
             )),
             "{}",
             describe(&notices[0], true)
@@ -1432,13 +1540,29 @@ mod tests {
             .with_body(r#"{"iid": 2, "title": "t", "state": "closed", "web_url": "h2"}"#)
             .expect(1)
             .create();
+        // The -release tags, then the -candidate ones: 9 has always
+        // had builds, so it counts even with nothing released.
         let latest = |have9: Option<&'static str>| {
             move |tags: &[String], package: &str| {
                 assert_eq!(package, "ethtool");
-                assert_eq!(tags.len(), 2);
+                assert_eq!(
+                    tags,
+                    [
+                        r10,
+                        r9,
+                        "hyperscale10s-packages-main-candidate",
+                        "hyperscale9s-packages-main-candidate",
+                        "hyperscale10s-packages-main-testing",
+                        "hyperscale9s-packages-main-testing"
+                    ]
+                );
                 Ok(vec![
                     Some("ethtool-7.1-1.hs.el10".to_string()),
                     have9.map(String::from),
+                    Some("ethtool-7.1-1.hs.el10".to_string()),
+                    Some("ethtool-7.0-3.hs.el9".to_string()),
+                    None,
+                    None,
                 ])
             }
         };
@@ -1449,7 +1573,8 @@ mod tests {
             &done,
             &latest(Some("ethtool-7.0-3.hs.el9")),
         );
-        // Without a build in 9, or with the hub unreadable: the same.
+        // Nothing released in 9 though it has builds, or with the hub
+        // unreadable: the same.
         post(&server.url(), Some("t"), &notices, &done, &latest(None));
         post(
             &server.url(),
@@ -1475,7 +1600,7 @@ mod tests {
         with_done.insert_str(
             marker,
             &format!(
-                "\n\nEvery release now has 7.1 or newer, so this is done:\n\n\
+                "\n\nEvery release ethtool is built for now has 7.1 or newer, so this is done:\n\n\
                  - `{r10}`: `ethtool-7.1-1.hs.el10`\n- `{r9}`: `ethtool-7.2-1.hs.el9`"
             ),
         );

@@ -110,10 +110,12 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The `-release` tags of the Hyperscale releases the checkout at `repo`
-/// has a SIG branch for (`c10s-sig-hyperscale`, `c9s-hs`), in its own
-/// branches or its remotes', newest release first; only releases the
-/// SIG still releases for, so an EOL branch does not keep issues open.
+/// The `-release` tags of the Hyperscale collections the checkout at
+/// `repo` has a SIG branch for, in its own branches or its remotes':
+/// each branch's own collection (`c10s-sig-hyperscale` and `c9s-hs`
+/// main, `c9s-hsx` experimental, `c9s-hs+fb` facebook), newest release
+/// first; only releases the SIG still releases for and variants not
+/// deprecated, so an EOL branch does not keep issues open.
 fn hyperscale_release_tags(repo: &Path) -> Vec<String> {
     let refs = git(
         repo,
@@ -125,19 +127,21 @@ fn hyperscale_release_tags(repo: &Path) -> Vec<String> {
         ],
     )
     .unwrap_or_default();
-    let mut majors: Vec<u32> = refs
+    // Each branch's own collection: c9s-hs builds into main, c9s-hsx
+    // into experimental, and so on.
+    let mut collections: Vec<sandogasa_cbs::Collection> = refs
         .lines()
         // `origin/c10s-sig-hyperscale` is the branch after the remote.
         .map(|r| r.rsplit('/').next().unwrap_or(r))
-        .filter_map(|b| Sig::Hyperscale.own_branch_major(b))
-        .filter(|m| sandogasa_cbs::HYPERSCALE_MAJORS.contains(m))
+        .filter_map(|b| Sig::Hyperscale.collection_for_branch(b).ok())
+        .filter(|c| sandogasa_cbs::HYPERSCALE_MAJORS.contains(&c.major))
+        // A deprecated variant's old builds would keep issues open.
+        .filter(|c| sandogasa_cbs::hyperscale_variant(&c.repository).is_none_or(|v| !v.deprecated))
         .collect();
-    majors.sort_unstable_by(|a, b| b.cmp(a));
-    majors.dedup();
-    majors
-        .into_iter()
-        .map(|m| sandogasa_cbs::Collection::new("hyperscale", m, true, "main").tag(Stage::Release))
-        .collect()
+    collections.sort_by(|a, b| b.major.cmp(&a.major).then(a.repository.cmp(&b.repository)));
+    let mut tags: Vec<String> = collections.iter().map(|c| c.tag(Stage::Release)).collect();
+    tags.dedup();
+    tags
 }
 
 #[cfg(test)]
@@ -170,9 +174,15 @@ mod tests {
         git(&["update-ref", "refs/remotes/origin/c9s-hs", "HEAD"]);
         git(&["branch", "c10s"]);
         git(&["branch", "c8s-sig-hyperscale"]);
+        // Each branch's own collection, once: c9s-hsx is experimental.
+        // A deprecated variant's branch does not count.
+        git(&["branch", "c9s-hsx"]);
+        git(&["branch", "c9s-hs+gnome"]);
+        git(&["update-ref", "refs/remotes/origin/c9s-hsx", "HEAD"]);
         let r10 = "hyperscale10s-packages-main-release";
         let r9 = "hyperscale9s-packages-main-release";
-        assert_eq!(GitCheckout { repo }.release_tags(), [r10, r9]);
+        let x9 = "hyperscale9s-packages-experimental-release";
+        assert_eq!(GitCheckout { repo }.release_tags(), [r10, x9, r9]);
         assert!(
             GitCheckout {
                 repo: Path::new("/nonexistent")

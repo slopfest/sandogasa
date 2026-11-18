@@ -122,8 +122,8 @@ from `-testing`.
 
 `notify` tells a build's tracking issue on GitLab what happened to it in
 CBS: a comment saying what the build carries, the `stage::` label, the
-work item's status and, for a Hyperscale release every release has, the
-issue closed. `notify::plan` finds the issue and drafts the comments
+work item's status and, once every collection the package is built
+for has a Hyperscale release's version, the issue closed. `notify::plan` finds the issue and drafts the comments
 before the write is confirmed, `notify::describe` shows them
 (`describe_styled` in color, for a terminal), and
 `notify::post` posts those whose build got there, once each. Proposed

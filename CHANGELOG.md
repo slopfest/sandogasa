@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### cbspkg promote closes the tracking issue of a package outside main
+
+Releasing wprof 0.7.1 into the experimental collection would never
+have closed its tracking issue: `cbspkg promote` waited for
+`hyperscale9s-packages-main-release` to have 0.7.1, although wprof is
+built only in experimental. It took only `hs` branches into account and
+counted every one as main. Each SIG branch now stands for its own
+collection (`c9s-hsx` experimental, `c9s-hs+fb` facebook), deprecated
+variants are left out, and a collection the package has never been
+built in, with nothing in its `-candidate`, `-testing` or `-release`,
+does not count; the closing comment names those it left out (Fixes
+#178).
+
 ### hs-relmon tracks SIG-only packages against nothing, and the manifest finds 17 more
 
 `hs-relmon check-manifest` warned for 22 of the 62 packages in the

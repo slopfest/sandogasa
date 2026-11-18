@@ -293,13 +293,17 @@ SIG-only commits an earlier one listed, from `build` or the promotion
 before, instead of listing them again; a different list, as after the
 merge request was updated, is listed in full.
 
-A Hyperscale issue is done once every release the SIG carries the
-package for has the version it asks for, or a newer one, released. The
-releases are those the checkout has a SIG branch for (`c9s-hs`,
-`c10s-sig-hyperscale`, its own or a remote's). Promoting the last of
-them to `-release` adds that to the comment, with each release's build,
-sets the issue to `Done` and closes it. While another release is behind
-the issue stays open, and hs-relmon closes it once that one catches up.
+A Hyperscale issue is done once every collection the package is built
+for has the version it asks for, or a newer one, released. The
+collections are those the checkout has a SIG branch for, its own or a
+remote's, each branch its own: `c9s-hs` and `c10s-sig-hyperscale` are
+main, `c9s-hsx` experimental, `c9s-hs+fb` facebook; deprecated variants
+are left out. A collection with no build of the package in its
+`-candidate`, `-testing` or `-release`, a branch made but never built
+from, does not count, and the comment names it. Promoting the last of
+them to `-release` adds that to the comment, with each collection's
+build, sets the issue to `Done` and closes it. While another is behind
+the issue stays open; hs-relmon closes it once main 9 and 10 catch up.
 
 Each comment ends in a hidden marker, so a promotion already commented
 on gets no second comment, and a build that reached its stage gets its
