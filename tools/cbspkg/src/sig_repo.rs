@@ -1264,14 +1264,15 @@ pub fn run_configured(
     // The tracking issue next, unless the SIG has one for it.
     if let Some(issues) = issues {
         if !changes.is_empty() {
-            println!();
+            eprintln!();
         }
         for change in &changes {
             match tracking_issue(&issues, &change.mr_url) {
-                Some(i) => println!("{} is already tracked in {}.", change.branch, i.web_url),
-                None => println!(
-                    "Next, the SIG's tracking issue for {}: cpu-sig-tracker file-issue {}",
-                    change.branch, change.mr_url
+                Some(i) => eprintln!("{} is already tracked in {}.", change.branch, i.web_url),
+                None => crate::next::print_next_step(
+                    &format!("the SIG's tracking issue for {}", change.branch),
+                    &["cpu-sig-tracker", "file-issue", &change.mr_url].map(String::from),
+                    &[],
                 ),
             }
         }

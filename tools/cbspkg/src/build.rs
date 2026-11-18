@@ -545,7 +545,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
     if !args.scratch && !args.dry_run {
         // Set apart from the build's own output, which ends just above.
-        println!();
+        eprintln!();
         let built = builds_of(
             &checkout.collections,
             &tasks,
@@ -553,9 +553,12 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
             &sandogasa_cbs::packages::task_builds,
         );
         for (collection, nvr) in &built {
-            println!(
-                "Next, to offer {nvr} for testing: cbspkg promote (cbs tag-build {} {nvr})",
-                collection.tag(Stage::Testing)
+            // Named by NVR, so the command promotes this build whichever
+            // branch or variant it is run from.
+            crate::next::print_next_step(
+                &format!("to offer {nvr} for testing"),
+                &["cbspkg", "promote", nvr].map(String::from),
+                &[TagChange::tag(&collection.tag(Stage::Testing), nvr).argv()],
             );
         }
         if tells {

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### cbspkg puts the next command on a line of its own
+
+After a build, `cbspkg build` ended with "Next, to offer NVR for
+testing: cbspkg promote (cbs tag-build …)" on one line, the command
+buried in the sentence, and a bare `cbspkg promote` that promotes the
+branch's own collections rather than that build: run from a Hyperscale
+branch, it would not promote a facebook variant's build. The command
+now names the build (`cbspkg promote NVR`) and has a line of its own,
+bold green on a terminal, with the `cbs tag-build` that does it by hand
+in gray below; `sig-repo`'s `cpu-sig-tracker file-issue` suggestion
+looks the same. Both go to standard error, as does `sig-repo`'s note
+that a branch is already tracked.
+
 ### cbspkg srpm and verrel read a spec as an EL buildroot does
 
 `cbspkg srpm` left out a patch declared under `%if 0%{?rhel} &&
