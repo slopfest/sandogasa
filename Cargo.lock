@@ -2359,6 +2359,7 @@ version = "0.28.2"
 dependencies = [
  "chrono",
  "clap",
+ "dirs",
  "reqwest",
  "sandogasa-bodhi",
  "sandogasa-bugclass",

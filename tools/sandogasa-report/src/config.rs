@@ -51,6 +51,19 @@ pub struct ReportConfig {
     /// meta.sr.ht/oauth2/personal-token.
     #[serde(default)]
     pub sourcehut_tokens: BTreeMap<String, String>,
+
+    /// Where `note` writes notes and `notes` reads them.
+    #[serde(default)]
+    pub notes: NotesConfig,
+}
+
+/// The `[notes]` table.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct NotesConfig {
+    /// The notes directory; `~/` is the home directory. Unset, notes
+    /// go under the data directory (`~/.local/share/sandogasa-report/notes`).
+    #[serde(default)]
+    pub dir: Option<String>,
 }
 
 /// A person's identity across multiple services. The profile key

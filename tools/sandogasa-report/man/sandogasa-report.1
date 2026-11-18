@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-report 1 2026-11-16 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH sandogasa-report 1 2026-11-18 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 sandogasa\-report \- Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
 .SH SYNOPSIS
@@ -25,6 +25,47 @@ Also go over the instances whose token is turned off ("\-"), offering the keyrin
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<PATH>\fR
 Main config file to enumerate domains / forge instances from. Without one, there are no instances to configure
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SS sandogasa-report note
+\fBsandogasa\-report note\fR [\fB\-\-by\fR] [\fB\-\-date\fR] [\fB\-\-url\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITEXT\fR>
+.PP
+Record a note on why a piece of work was done
+.TP
+\fB\-\-by\fR \fI<NAME>\fR
+Who wrote the text, when not you (e.g. an assistant, as `Agent:model`)
+.TP
+\fB\-\-date\fR \fI<DATE>\fR
+The day the work was done (YYYY\-MM\-DD, default: today)
+.TP
+\fB\-\-url\fR \fI<URL>\fR
+The web page of the item the note is about (a PR, bug or Bodhi update); leave it out for work no report lists
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Write the note without showing it first
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fITEXT\fR>
+The note; `\-` reads it from standard input
+.SS sandogasa-report notes
+\fBsandogasa\-report notes\fR [\fB\-\-json\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-url\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+List recorded notes
+.TP
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-since\fR \fI<SINCE>\fR
+Only notes from this day on (YYYY\-MM\-DD)
+.TP
+\fB\-\-until\fR \fI<UNTIL>\fR
+Only notes up to this day (YYYY\-MM\-DD)
+.TP
+\fB\-\-url\fR \fI<URL>\fR
+Only notes about this URL
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

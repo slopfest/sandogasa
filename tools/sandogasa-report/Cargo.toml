@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 chrono = { workspace = true }
 clap = { workspace = true }
+dirs = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-bodhi = { workspace = true }
 sandogasa-bugclass = { workspace = true }

@@ -70,10 +70,8 @@ Requires `koji` CLI for CentOS SIG reporting
 
 ## Usage
 
-Two subcommands:
+Four subcommands:
 
-- `sandogasa-report report` — generate an activity report. Takes
-  the date range, domain list, and output format.
 - `sandogasa-report config` — interactive setup of the per-user
   overlay (see [Configuration](#configuration)). Walks **every**
   forge instance used by the domains in the main config and prompts
@@ -90,6 +88,11 @@ Two subcommands:
   them only where no keyring can be used. An instance whose token is
   turned off (`"-"` in the overlay) is skipped; `--all` goes over it
   too, offering the keyring's token again where it has one.
+- `sandogasa-report note` — record why a piece of work was done (see
+  [Notes](#notes)).
+- `sandogasa-report notes` — list recorded notes.
+- `sandogasa-report report` — generate an activity report. Takes
+  the date range, domain list, and output format.
 
 ```sh
 # One-time interactive setup: asks for every credential the
@@ -189,6 +192,52 @@ by = ["repo"]
 `--no-defaults` ignores that for a single run. It is not on by
 default: these reports are often committed and diffed, so the output
 shape does not change under anyone who did not ask for it.
+
+## Notes
+
+A report lists what was done, not why: "reviewed to unblock X",
+"rebuilt for Y's Change". `note` keeps that reason next to the item,
+one file per note:
+
+```sh
+sandogasa-report note --url https://github.com/o/r/pull/12 \
+    Reviewed to unblock the foo update
+# No URL, for work no report lists; the text from standard input
+sandogasa-report note --date 2026-11-17 - < mentoring.txt
+```
+
+The note is shown with the file it goes to and written once
+confirmed, asked at the terminal even when the text comes from
+standard input; `--yes` writes it without asking, and is needed where
+there is no terminal at all. `--url` and `--by` take one line each. `--by` names who wrote the text
+when it was not you, such as an assistant (`Claude Code:<model>`).
+
+Each note is a file of header lines, a blank line, then the text:
+
+```text
+url: https://github.com/o/r/pull/12
+date: 2026-11-18
+by: Claude Code:claude-opus-5-5
+
+Reviewed to unblock the foo update.
+```
+
+Files are named `<year>/<date>T<HHMM>-<host>.md` after the local time
+they were written and the machine's short host name, with `-2`, `-3`
+for more in the same minute, so machines syncing the directory never
+write the same file. Headers other than `url`, `date` and `by` are
+kept as they are. Notes go in `[notes] dir` from the per-user overlay, an absolute
+path or one starting with `~/` for the home directory, else
+`~/.local/share/sandogasa-report/notes`:
+
+```toml
+[notes]
+dir = "~/Nextcloud/projects/notes/sandogasa-report"
+```
+
+`notes` lists them oldest first, filtered with `--since`, `--until`
+and `--url`, or as JSON with `--json`. A file that cannot be read as
+a note is skipped with a warning.
 
 ## Configuration
 

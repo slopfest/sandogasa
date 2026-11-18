@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### sandogasa-report records why a piece of work was done
+
+A report listed what was done but not why ("reviewed to unblock X",
+"rebuilt for Y's Change"); the reason came up in a chat and was gone by
+the time of a self-review. `sandogasa-report note` records it, with the
+item's URL or none (a meeting, mentoring), the day and who wrote the
+text, after showing the note and asking. Each note is its own file,
+named after the time and host it was written on, so machines syncing
+the notes directory never write the same file; `[notes] dir` in the
+per-user overlay says where. `sandogasa-report notes` lists them, by
+date or URL, or as JSON. Attaching notes to the items of a report comes
+next (Refs #167).
+
 ### cbspkg promote checks what a build drops before it reaches -testing
 
 `cbspkg promote` tagged a build into `-testing` without looking at what
@@ -16,9 +29,9 @@ Stream and EPEL with fedrq. One that another source package still
 provides is not lost. For the rest, the packages whose binaries
 require them at run time are listed. The plan before `Promote?` shows:
 - what is dropped, red for a soname;
-- what is still provided elsewhere, in gray;
+- what is still provided elsewhere;
 - the packages that would break, in bold red;
-- the version changes, in gray.
+- the version changes.
 
 When something would break, or a repo could not be looked in for
 something dropped, Enter answers no; when the check could not run at

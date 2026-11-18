@@ -16,6 +16,7 @@ mod forgejo;
 mod github;
 mod gitlab;
 mod koji;
+mod notes;
 mod report;
 mod secrets;
 mod sourcehut;
@@ -38,8 +39,56 @@ enum Command {
     /// Interactively set per-user overrides in
     /// `~/.config/sandogasa-report/config.toml`.
     Config(configure::ConfigArgs),
+    /// Record a note on why a piece of work was done.
+    Note(NoteArgs),
+    /// List recorded notes.
+    Notes(NotesArgs),
     /// Generate an activity report across one or more domains.
     Report(ReportArgs),
+}
+
+#[derive(clap::Args)]
+struct NoteArgs {
+    /// The note; `-` reads it from standard input.
+    #[arg(required = true, value_name = "TEXT")]
+    text: Vec<String>,
+
+    /// Who wrote the text, when not you (e.g. an assistant, as
+    /// `Agent:model`).
+    #[arg(long, value_name = "NAME")]
+    by: Option<String>,
+
+    /// The day the work was done (YYYY-MM-DD, default: today).
+    #[arg(long)]
+    date: Option<NaiveDate>,
+
+    /// The web page of the item the note is about (a PR, bug or Bodhi
+    /// update); leave it out for work no report lists.
+    #[arg(long)]
+    url: Option<String>,
+
+    /// Write the note without showing it first.
+    #[arg(short, long)]
+    yes: bool,
+}
+
+#[derive(clap::Args)]
+struct NotesArgs {
+    /// Output as JSON.
+    #[arg(long)]
+    json: bool,
+
+    /// Only notes from this day on (YYYY-MM-DD).
+    #[arg(long)]
+    since: Option<NaiveDate>,
+
+    /// Only notes up to this day (YYYY-MM-DD).
+    #[arg(long)]
+    until: Option<NaiveDate>,
+
+    /// Only notes about this URL.
+    #[arg(long)]
+    url: Option<String>,
 }
 
 /// An axis a report can be broken down along.
@@ -162,8 +211,94 @@ fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     match cli.command {
         Command::Config(args) => configure::run(&args),
+        Command::Note(args) => report_error(run_note(&args)),
+        Command::Notes(args) => report_error(run_notes(&args)),
         Command::Report(args) => run_report(&args),
     }
+}
+
+fn report_error(result: Result<(), String>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The notes directory, from the user's config.
+fn notes_dir() -> Result<std::path::PathBuf, String> {
+    let cfg = config::load_config(None)?;
+    notes::notes_dir(cfg.notes.dir.as_deref(), dirs::home_dir(), dirs::data_dir())
+}
+
+fn run_note(args: &NoteArgs) -> Result<(), String> {
+    use std::io::IsTerminal;
+    let dir = notes_dir()?;
+    let host = notes::host()?;
+    let text = notes::text_from(&args.text, &mut std::io::stdin())?;
+    let now = chrono::Local::now().naive_local();
+    let one_line = |name, v: &Option<String>| {
+        v.as_deref()
+            .map(|v| notes::header_value(name, v))
+            .transpose()
+    };
+    let note = notes::Note {
+        url: one_line("url", &args.url)?,
+        date: args.date.unwrap_or(now.date()),
+        by: one_line("by", &args.by)?,
+        headers: Vec::new(),
+        text,
+    };
+    // The text may have come from standard input; then the answer is
+    // read from the terminal itself.
+    let from_stdin = args.text.len() == 1 && args.text[0] == "-";
+    let mut confirm = |preview: &str| -> Result<bool, String> {
+        if args.yes {
+            return Ok(true);
+        }
+        if !from_stdin && std::io::stdin().is_terminal() {
+            eprint!("{preview}");
+            return sandogasa_cli::confirm("Write this note?", true).map_err(|e| e.to_string());
+        }
+        let tty = std::io::stderr()
+            .is_terminal()
+            .then(|| std::fs::File::open("/dev/tty").ok())
+            .flatten()
+            .ok_or("a note is confirmed at a terminal; run it in one, or pass --yes")?;
+        eprint!("{preview}Write this note? [Y/n]: ");
+        let mut answer = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(tty), &mut answer)
+            .map_err(|e| e.to_string())?;
+        Ok(notes::answered_yes(&answer))
+    };
+    match notes::record(&dir, &note, now, &host, &mut confirm)? {
+        Some(path) => println!("{}", path.display()),
+        None => eprintln!("Nothing written."),
+    }
+    Ok(())
+}
+
+fn run_notes(args: &NotesArgs) -> Result<(), String> {
+    let filter = notes::Filter {
+        since: args.since,
+        until: args.until,
+        url: args.url.clone(),
+    };
+    notes::check_range(&filter)?;
+    let (found, warnings) = notes::load_all(&notes_dir()?);
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    let selected = notes::select(found, &filter);
+    if args.json {
+        let json = serde_json::to_string_pretty(&selected).map_err(|e| e.to_string())?;
+        println!("{json}");
+    } else {
+        print!("{}", notes::format_list(&selected));
+    }
+    Ok(())
 }
 
 fn run_report(cli: &ReportArgs) -> ExitCode {
