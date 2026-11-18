@@ -308,6 +308,34 @@ itself keeps the sweep from quietly becoming vacuous.
 
 [RFC 3676]: https://www.rfc-editor.org/rfc/rfc3676#section-4.1
 
+## Colors mean the same thing in every tool
+
+Color is for scanning, so a color has to mean the same thing wherever
+a reader meets it. Before adding one, find its meaning here; a new
+meaning gets a row in this table in the same change.
+
+| Style | Meaning | Where |
+|---|---|---|
+| bold green | something for the user to do: a command to run, a comment to post | `--explain` commands (`sandogasa_cli::explain`), fedora-review-digest's "Post this comment" heading |
+| green | good: up to date, ahead, unchanged | hs-relmon `retire` (ahead), koji-diff (same) |
+| yellow | look at it: a warning, a compatible change, a rebase to do | dbranch `check` warnings, hs-relmon (rebase), koji-diff (compatible) |
+| orange (256-color 208) | worse than yellow, short of red | koji-diff (minor breaking) |
+| red, bold for a blocker | broken or blocking | dbranch `check` blockers, hs-relmon (retire), koji-diff (major breaking) |
+| magenta | missing declaration | hs-relmon (declare) |
+| bold | a heading, or the item a list is about | `--explain` step headings, hs-relmon (release) |
+| gray (bright black, SGR 90) | secondary: notes, the `$` prompt, nothing to show | dbranch `check` notes, commands and `see:` citations, `--explain` prompts, hs-relmon (none) |
+
+Plain green and bold green are deliberately apart: a status table's
+green says "nothing to do", the bold green of an instruction says
+"your turn". Use gray rather than SGR 2 ("faint"), which some
+terminals render like normal text (see `sandogasa_cli::style::DIM`).
+
+Color only a terminal and only without `NO_COLOR`: `style::use_color`
+for stdout behind a `--color` flag, `style::stderr_color` for prompts
+and headings on stderr, or `anstream`, which strips color itself. Text
+meant to be pasted or piped, such as a review comment on stdout, is
+never colored.
+
 ## A prompt is a thin shell around something testable
 
 Code that reads the terminal cannot be reached by `cargo test`, so

@@ -43,6 +43,8 @@ pub struct Comparison {
     /// The upstream project, from pyp2spec's `URL:` line (PyPI's
     /// metadata), where the summary and description come from.
     pub upstream_url: Option<String>,
+    /// The license PyPI's metadata gives, from pyp2spec's `License:`.
+    pub upstream_license: Option<String>,
 }
 
 /// Whether `spec` builds a Python package with the pyproject macros or
@@ -90,6 +92,14 @@ pub fn pypi_version(spec: &str, version: &str) -> String {
     expand_global(spec, version)
         .unwrap_or_else(|| version.to_string())
         .replace('~', "")
+}
+
+/// The PyPI release a spec packages, `(name, version)`: [`pypi_name`],
+/// falling back to the `Name:` (`name`) without its `python-` prefix, and
+/// [`pypi_version`] of its `Version:` (`version`).
+pub fn release(spec: &str, name: &str, version: &str) -> (String, String) {
+    let fallback = name.strip_prefix("python-").unwrap_or(name);
+    (pypi_name(spec, fallback), pypi_version(spec, version))
 }
 
 /// Whether the spec uses the declarative buildsystem (`BuildSystem:`),
@@ -180,8 +190,13 @@ pub fn unified_diff(
         .output()
         .map_err(|e| format!("cannot run diff: {e}"))?;
     // diff exits 0 for no difference, 1 for one, 2 for trouble.
+    // A blank context line is a lone space; nothing we print ends a line
+    // in whitespace (DEVELOPMENT.md), and the diff reads the same.
     match out.status.code() {
-        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| format!("{}\n", l.trim_end()))
+            .collect()),
         _ => Err(format!(
             "diff failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
@@ -210,9 +225,7 @@ pub fn compare(
     version: &str,
     generate: Generate<'_>,
 ) -> Result<Comparison, String> {
-    let fallback = name.strip_prefix("python-").unwrap_or(name);
-    let pypi = pypi_name(spec, fallback);
-    let version = pypi_version(spec, version);
+    let (pypi, version) = release(spec, name, version);
     let dir = tempfile::tempdir().map_err(|e| format!("cannot make a temporary directory: {e}"))?;
     let generated = generate(&pypi, &version, is_declarative(spec), dir.path())?;
     let label = match &generated.version {
@@ -223,6 +236,7 @@ pub fn compare(
     let diff = unified_diff(&g, &s, &label, "submitted")?;
     Ok(Comparison {
         upstream_url: url_of(&generated.spec),
+        upstream_license: field(&generated.spec, "license"),
         name: pypi,
         version,
         pyp2spec_version: generated.version,
@@ -325,16 +339,19 @@ fn expand_global(spec: &str, value: &str) -> Option<String> {
     })
 }
 
+/// The value of a spec's `key:` tag, when it has one and no macro.
+fn field(spec: &str, key: &str) -> Option<String> {
+    spec.lines().find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        let v = v.trim();
+        (k.trim().eq_ignore_ascii_case(key) && !v.is_empty() && !v.contains('%'))
+            .then(|| v.to_string())
+    })
+}
+
 /// The `URL:` of a spec, when it is a plain http(s) URL.
 fn url_of(spec: &str) -> Option<String> {
-    spec.lines().find_map(|l| {
-        let (key, value) = l.split_once(':')?;
-        let value = value.trim();
-        (key.trim().eq_ignore_ascii_case("url")
-            && (value.starts_with("https://") || value.starts_with("http://"))
-            && !value.contains('%'))
-        .then(|| value.to_string())
-    })
+    field(spec, "url").filter(|v| v.starts_with("https://") || v.starts_with("http://"))
 }
 
 /// Where `program` is on `$PATH`.
@@ -481,6 +498,7 @@ mod tests {
     fn the_diff_shows_only_what_the_packager_changed() {
         let c = compare(SUBMITTED, "python-cstq", "0.0.20", &fake(GENERATED)).unwrap();
         assert_eq!(c.name, "cstq");
+        assert_eq!(c.upstream_license.as_deref(), Some("MIT"));
         assert!(
             c.diff.starts_with("--- pyp2spec 0.16.0\n+++ submitted\n"),
             "{}",
@@ -499,11 +517,14 @@ mod tests {
                 c.diff
             );
         }
+        // No line ends in whitespace, a blank context line included.
+        assert!(!c.diff.lines().any(|l| l.ends_with(' ')), "{}", c.diff);
+        assert!(!render(&c).lines().any(|l| l.ends_with(' ')));
         // Neither pyp2spec's comments nor the blank lines around them.
         assert!(!c.diff.contains("Fill in"), "{}", c.diff);
         assert!(
             c.diff.contains(
-                "\n %check\n %pyproject_check_import\n+%pytest -v\n \n %files -n python3-cstq"
+                "\n %check\n %pyproject_check_import\n+%pytest -v\n\n %files -n python3-cstq"
             ),
             "{}",
             c.diff

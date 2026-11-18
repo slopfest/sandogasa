@@ -37,7 +37,10 @@ pub fn use_color(choice: ColorChoice) -> bool {
     match choice {
         ColorChoice::Always => true,
         ColorChoice::Never => false,
-        ColorChoice::Auto => no_color_unset() && std::io::stdout().is_terminal(),
+        ColorChoice::Auto => auto(
+            std::env::var_os("NO_COLOR").as_deref(),
+            std::io::stdout().is_terminal(),
+        ),
     }
 }
 
@@ -51,8 +54,20 @@ pub fn paint(text: &str, sgr: &str, color: bool) -> String {
     }
 }
 
-fn no_color_unset() -> bool {
-    std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+/// Whether to color what goes to stderr (prompts, headings, warnings):
+/// on a terminal when `NO_COLOR` is unset, whatever stdout is, so output
+/// meant for a pipe stays clean while the prompts beside it are colored.
+pub fn stderr_color() -> bool {
+    auto(
+        std::env::var_os("NO_COLOR").as_deref(),
+        std::io::stderr().is_terminal(),
+    )
+}
+
+/// The automatic choice: color on a terminal (`tty`) unless `NO_COLOR`
+/// is set to something non-empty.
+fn auto(no_color: Option<&std::ffi::OsStr>, tty: bool) -> bool {
+    tty && no_color.is_none_or(|v| v.is_empty())
 }
 
 #[cfg(test)]
@@ -69,5 +84,21 @@ mod tests {
     fn explicit_choices_ignore_the_terminal() {
         assert!(use_color(ColorChoice::Always));
         assert!(!use_color(ColorChoice::Never));
+    }
+
+    #[test]
+    fn auto_colors_a_terminal_unless_no_color_is_set() {
+        use std::ffi::OsStr;
+        assert!(auto(None, true));
+        assert!(auto(Some(OsStr::new("")), true));
+        assert!(!auto(Some(OsStr::new("1")), true));
+        assert!(!auto(None, false));
+        // Whatever this test runs under, the answers agree with auto().
+        let tty = std::io::stderr().is_terminal();
+        assert_eq!(
+            stderr_color(),
+            auto(std::env::var_os("NO_COLOR").as_deref(), tty)
+        );
+        let _ = use_color(ColorChoice::Auto);
     }
 }

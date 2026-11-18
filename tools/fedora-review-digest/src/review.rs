@@ -95,6 +95,19 @@ pub struct Review {
     /// evidence (build-log summary vs the spec's folded `License:`);
     /// `None` for a library crate or when the section can't be found.
     pub static_deps: Option<StaticDeps>,
+    /// For a Python spec, the `%license` files in the built binary RPMs
+    /// (empty when they have none; `None` when there are no binary RPMs,
+    /// or `rpm` could not read them, which is warned about).
+    pub license_files: Option<Vec<LicenseFile>>,
+}
+
+/// A `%license` file in a built RPM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LicenseFile {
+    /// The binary package that ships it.
+    pub package: String,
+    /// Its installed path.
+    pub path: String,
 }
 
 /// Statically-linked dependency license evidence for a binary crate: the
@@ -191,6 +204,7 @@ impl Review {
             None
         };
 
+        let spec_generator = spec.generator;
         Ok(Review {
             spec,
             spec_text,
@@ -201,6 +215,9 @@ impl Review {
             rpmlint_clean,
             issues,
             static_deps,
+            license_files: (spec_generator == Generator::Pyp2Spec)
+                .then(|| license_files(dir))
+                .flatten(),
         })
     }
 }
@@ -683,6 +700,72 @@ pub fn upstream_name(spec: &str, name: &str) -> String {
         .to_string()
 }
 
+/// The `rpm --qf` query for every file with its package and flags. The
+/// package name is a single value, so it is written `%{=NAME}` to repeat
+/// on each file's line; a plain `%{NAME}` inside `[…]` prints nothing
+/// after the first.
+const LICENSE_QUERY: &str = "[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\\n]";
+
+/// The `%license` files in the binary RPMs in `results/`, read with one
+/// `rpm -qp` over them all; `None` without any, or when `rpm` fails,
+/// which is warned about.
+fn license_files(dir: &Path) -> Option<Vec<LicenseFile>> {
+    let mut rpms: Vec<PathBuf> = std::fs::read_dir(dir.join("results"))
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let n = p.file_name().unwrap_or_default().to_string_lossy();
+            n.ends_with(".rpm") && !n.ends_with(".src.rpm")
+        })
+        .collect();
+    if rpms.is_empty() {
+        return None;
+    }
+    rpms.sort();
+    let out = match std::process::Command::new("rpm")
+        .args(["-qp", "--qf", LICENSE_QUERY])
+        .args(&rpms)
+        .output()
+    {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!(
+                "warning: cannot run rpm ({e}), so the license files in the \
+                 built RPMs are not checked; install rpm"
+            );
+            return None;
+        }
+    };
+    if !out.status.success() {
+        eprintln!(
+            "warning: rpm could not read the built RPMs ({}), so their license \
+             files are not checked",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        return None;
+    }
+    Some(parse_license_listing(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// The `%license` files in
+/// `rpm -qp --qf '[%{=NAME} %{FILEFLAGS:fflags} %{FILENAMES}\n]'` output:
+/// those whose flags include `l`. A file with no flags has an empty
+/// field, so the fields are split one at a time.
+pub fn parse_license_listing(listing: &str) -> Vec<LicenseFile> {
+    listing
+        .lines()
+        .filter_map(|l| {
+            let (package, rest) = l.split_once(' ')?;
+            let (flags, path) = rest.split_once(' ')?;
+            flags.contains('l').then(|| LicenseFile {
+                package: package.to_string(),
+                path: path.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Whether the build produced a binary (non-`.src`) RPM in `results/`.
 fn built_binary_rpm(dir: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(dir.join("results")) else {
@@ -752,6 +835,38 @@ License:        Apache-2.0
                 .unwrap_err()
                 .starts_with("no .spec found")
         );
+    }
+
+    #[test]
+    fn license_files_are_those_flagged_l() {
+        let listing = "python3-cstq  /usr/lib/python3.15/site-packages/cstq\n\
+                       python3-cstq l /usr/lib/python3.15/site-packages/cstq-0.0.20.dist-info/licenses/LICENSE.txt\n\
+                       python3-cstq d /usr/share/doc/python3-cstq/README.md\n\
+                       python-cstq-doc l /usr/share/licenses/python-cstq-doc/COPYING\n";
+        let file = |package: &str, path: &str| LicenseFile {
+            package: package.into(),
+            path: path.into(),
+        };
+        assert_eq!(
+            parse_license_listing(listing),
+            [
+                file(
+                    "python3-cstq",
+                    "/usr/lib/python3.15/site-packages/cstq-0.0.20.dist-info/licenses/LICENSE.txt"
+                ),
+                file(
+                    "python-cstq-doc",
+                    "/usr/share/licenses/python-cstq-doc/COPYING"
+                ),
+            ]
+        );
+        // No RPMs to read.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(license_files(dir.path()), None);
+        // One rpm cannot read: warned about, and not checked.
+        std::fs::create_dir(dir.path().join("results")).unwrap();
+        std::fs::write(dir.path().join("results/x-1-1.noarch.rpm"), "not an rpm").unwrap();
+        assert_eq!(license_files(dir.path()), None);
     }
 
     #[test]

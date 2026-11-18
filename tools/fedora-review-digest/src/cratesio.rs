@@ -40,20 +40,12 @@ pub fn parse_max_stable_version(json: &str) -> Option<String> {
 /// when the response carried no version; `Err` when curl is missing or
 /// the request failed (network down, HTTP error, unknown crate).
 pub fn fetch_max_stable_version(name: &str) -> Result<Option<String>, String> {
-    let argv = crates_io_argv(name);
-    let out = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .output()
-        .map_err(|e| format!("running curl: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "crates.io lookup for {name} failed (curl exit {:?})",
-            out.status.code()
-        ));
-    }
-    Ok(parse_max_stable_version(&String::from_utf8_lossy(
-        &out.stdout,
-    )))
+    crate::registry::fetch(
+        &crates_io_argv(name),
+        "crates.io",
+        name,
+        parse_max_stable_version,
+    )
 }
 
 #[cfg(test)]

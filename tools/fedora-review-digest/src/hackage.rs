@@ -38,18 +38,7 @@ pub fn parse_latest_version(json: &str) -> Option<String> {
 /// the response listed no version; `Err` when curl is missing or the
 /// request failed (network down, HTTP error, unknown package).
 pub fn fetch_latest_version(name: &str) -> Result<Option<String>, String> {
-    let argv = hackage_argv(name);
-    let out = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .output()
-        .map_err(|e| format!("running curl: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "Hackage lookup for {name} failed (curl exit {:?})",
-            out.status.code()
-        ));
-    }
-    Ok(parse_latest_version(&String::from_utf8_lossy(&out.stdout)))
+    crate::registry::fetch(&hackage_argv(name), "Hackage", name, parse_latest_version)
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 //! boilerplate. Marks are *inferred* from the [`Review`] here and then
 //! finalized by the user (see `main`); all rendering is pure.
 
-use crate::review::{Generator, Issue, Review};
+use crate::review::{Generator, Issue, LicenseFile, Review};
 pub use sandogasa_review::Resolution;
 
 /// A checklist verdict for one item — maps to +1 / 0 / -1 at the prompt.
@@ -79,7 +79,7 @@ pub fn generator_name(g: Generator) -> &'static str {
 /// The inferred checklist for a review. `latest` is the latest version
 /// the registry reports — crates.io for rust2rpm, Hackage for
 /// cabal-rpm — as evidence for the version item (`None` if not checked
-/// / unreachable). pyp2spec gets its own list later.
+/// / unreachable). A Python spec has its own list ([`python_checklist`]).
 pub fn infer(review: &Review, latest: Option<&str>) -> Vec<Item> {
     match review.spec.generator {
         Generator::CabalRpm => haskell_checklist(review, latest),
@@ -101,11 +101,85 @@ fn haskell_checklist(r: &Review, latest: Option<&str>) -> Vec<Item> {
         ),
         builds_item(r),
         tests_item(r),
-        version_item(r, latest, "package", "Hackage"),
+        version_item(&r.spec.version, latest, "package", "Hackage"),
         license_item(r, ".cabal"),
         license_file_item(r),
         Item::new(
             "package complies with Haskell Packaging Guidelines",
+            Mark::Pass,
+            None,
+        ),
+    ]
+}
+
+/// What a Python checklist judges by, besides the review: from PyPI and
+/// pyp2spec's output.
+pub struct PythonEvidence<'a> {
+    /// The packaged version in PyPI's form (`2.0rc1` for `2.0~rc1`).
+    pub version: &'a str,
+    /// PyPI's latest version, when it was looked up.
+    pub latest: Option<&'a str>,
+    /// The license PyPI's metadata gives, as pyp2spec writes it.
+    pub upstream_license: Option<&'a str>,
+    /// Why the spec was not compared with pyp2spec's output, if it was
+    /// not: the review then rests on the reviewer reading it.
+    pub not_compared: Option<&'a str>,
+}
+
+/// The Python review criteria (#161): the build, the tests, the version
+/// on PyPI, the license against PyPI's metadata, the license files the
+/// built package ships, and the pyproject macros pyp2spec's template
+/// uses for the file list and the BuildRequires.
+pub fn python_checklist(r: &Review, e: &PythonEvidence<'_>) -> Vec<Item> {
+    let upstream = Review {
+        upstream_license: e.upstream_license.map(str::to_string),
+        ..r.clone()
+    };
+    let declarative = pyproject_buildsystem(&r.spec_text);
+    let compared = match e.not_compared {
+        None => Item::new("spec compared with pyp2spec's output", Mark::Pass, None),
+        // Nothing else in the list stands in for the comparison, so it
+        // blocks approval until the reviewer has read the spec.
+        Some(why) => Item {
+            label: "spec compared with pyp2spec's output".into(),
+            mark: Mark::Fail,
+            note: Some(format!("not compared: {why} — read the spec, then mark it")),
+        },
+    };
+    vec![
+        Item::new(
+            "package contains only permissible content",
+            Mark::Pass,
+            None,
+        ),
+        compared,
+        builds_item(r),
+        python_tests_item(&r.spec_text, r.spec.tests_enabled),
+        python_version_item(e.version, e.latest),
+        match e.upstream_license {
+            Some(_) => license_item(&upstream, "PyPI"),
+            None => Item::new(
+                "license matches upstream specification and is acceptable for Fedora",
+                Mark::Caveat,
+                Some("PyPI's metadata not checked — compare by hand"),
+            ),
+        },
+        python_license_file_item(&r.spec_text, r.license_files.as_deref()),
+        // The declarative BuildSystem: pyproject calls both macros itself.
+        macro_item(
+            "files are listed with %pyproject_save_files",
+            (uses(&r.spec_text, "%pyproject_save_files") || declarative)
+                && (uses(&r.spec_text, "%{pyproject_files}")
+                    || uses(&r.spec_text, "%pyproject_files")),
+            "listed by hand",
+        ),
+        macro_item(
+            "BuildRequires are generated with %pyproject_buildrequires",
+            uses(&r.spec_text, "%pyproject_buildrequires") || declarative,
+            "listed by hand",
+        ),
+        Item::new(
+            "package complies with Python Packaging Guidelines",
             Mark::Pass,
             None,
         ),
@@ -123,7 +197,7 @@ fn rust_checklist(r: &Review, crate_latest: Option<&str>) -> Vec<Item> {
         ),
         builds_item(r),
         tests_item(r),
-        version_item(r, crate_latest, "crate", "crates.io"),
+        version_item(&r.spec.version, crate_latest, "crate", "crates.io"),
         license_item(r, "Cargo.toml"),
     ];
     // A shipped binary statically links its dependencies, so its
@@ -138,6 +212,286 @@ fn rust_checklist(r: &Review, crate_latest: Option<&str>) -> Vec<Item> {
         None,
     ));
     items
+}
+
+/// Whether the tests run: a line of `%check` that runs a test runner
+/// passes, an import check alone is a caveat.
+fn python_tests_item(spec: &str, enabled: bool) -> Item {
+    let label = "test suite is run and all unit tests pass";
+    if !enabled {
+        return Item::new(label, Mark::Caveat, Some("disabled — justify"));
+    }
+    let check = section(spec, "%check");
+    let first = |l: &str| l.split_whitespace().next().unwrap_or("").to_string();
+    let runs = check.lines().any(|l| {
+        let word = first(l);
+        [
+            "%pytest",
+            "%{pytest}",
+            "%tox",
+            "%{tox}",
+            "pytest",
+            "py.test",
+        ]
+        .contains(&word.as_str())
+            || l.contains("-m pytest")
+            || l.contains("-m unittest")
+    });
+    let imports = check.lines().any(|l| {
+        let word = first(l);
+        ["%pyproject_check_import", "%py3_check_import"].contains(&word.as_str())
+    });
+    if runs {
+        Item::new(label, Mark::Pass, None)
+    } else if imports {
+        Item::new(
+            label,
+            Mark::Caveat,
+            Some("import check only — run the tests or justify"),
+        )
+    } else {
+        Item::new(label, Mark::Caveat, Some("no tests run — justify"))
+    }
+}
+
+/// Whether a line of `spec` that is not a comment contains `needle`.
+fn uses(spec: &str, needle: &str) -> bool {
+    spec.lines()
+        .any(|l| !l.trim_start().starts_with('#') && l.contains(needle))
+}
+
+/// The license files, judged against how `%pyproject_save_files` was
+/// asked to treat them. The macro adds every license file the wheel
+/// declares (PEP 639 `License-File`) as `%license` in its dist-info
+/// directory, whatever its flag; `-l` only fails the build when there is
+/// none. A license file also listed by hand in the same package is then
+/// shipped twice, which rpmbuild does not flag, as the copies have
+/// different paths; another subpackage listing its own copy is fine.
+/// `license_files` are the `%license` files in the built RPMs (`None`
+/// when there are none to read).
+fn python_license_file_item(spec: &str, license_files: Option<&[LicenseFile]>) -> Item {
+    let label = "license file is included with %license in %files";
+    let assert_license = save_files_flags(spec).contains(&"-l");
+    let Some(files) = license_files else {
+        return if assert_license {
+            Item::new(label, Mark::Pass, Some("%pyproject_save_files -l"))
+        } else {
+            Item::new(label, Mark::Pass, Some("built package not checked"))
+        };
+    };
+    let base = |f: &LicenseFile| f.path.rsplit('/').next().unwrap_or(&f.path).to_string();
+    let (declared, by_hand): (Vec<&LicenseFile>, Vec<&LicenseFile>) =
+        files.iter().partition(|f| f.path.contains(".dist-info/"));
+    let mut twice: Vec<String> = by_hand
+        .iter()
+        .filter(|h| {
+            declared
+                .iter()
+                .any(|d| d.package == h.package && base(d) == base(h))
+        })
+        .map(|h| base(h))
+        .collect();
+    twice.sort();
+    twice.dedup();
+    if !twice.is_empty() {
+        let fix = if assert_license {
+            "drop the %license line"
+        } else {
+            "use %pyproject_save_files -l and drop the %license line"
+        };
+        return Item {
+            label: label.into(),
+            mark: Mark::Caveat,
+            note: Some(format!(
+                "{} shipped twice, by hand and from the wheel — {fix}",
+                twice.join(", ")
+            )),
+        };
+    }
+    match (declared.is_empty(), by_hand.is_empty()) {
+        (true, true) => Item::new(label, Mark::Fail, Some("no license file shipped")),
+        (false, _) if !assert_license => Item::new(
+            label,
+            Mark::Pass,
+            Some("from the wheel; %pyproject_save_files -l would keep it so"),
+        ),
+        (false, _) => Item::new(label, Mark::Pass, None),
+        (true, false) => Item::new(
+            label,
+            Mark::Pass,
+            Some("listed by hand; the wheel declares none"),
+        ),
+    }
+}
+
+/// The options `%pyproject_save_files` is called with in `spec`, or
+/// that `BuildOption(install):` passes it under the declarative
+/// `BuildSystem: pyproject`.
+fn save_files_flags(spec: &str) -> Vec<&str> {
+    spec.lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            t.strip_prefix("%pyproject_save_files").or_else(|| {
+                t.strip_prefix("BuildOption(install):")
+                    .filter(|_| pyproject_buildsystem(spec))
+            })
+        })
+        .flat_map(str::split_whitespace)
+        .filter(|w| w.starts_with('-'))
+        .collect()
+}
+
+/// The version item for PyPI: the versions compared after PEP 440
+/// normalization, and a packaged pre-release newer than PyPI's latest
+/// stable release (what `info.version` gives) is not an update to make;
+/// one older than it is.
+fn python_version_item(packaged: &str, latest: Option<&str>) -> Item {
+    match latest {
+        Some(l) if pep440(l) == pep440(packaged) => {
+            version_item(packaged, Some(packaged), "package", "PyPI")
+        }
+        Some(l) if is_pre_release(packaged) && release_of(packaged) > release_of(l) => Item {
+            label: "latest version of the package is packaged".into(),
+            mark: Mark::Pass,
+            note: Some(format!(
+                "spec: {packaged}, a pre-release; PyPI's latest stable: {l}"
+            )),
+        },
+        _ => version_item(packaged, latest, "package", "PyPI"),
+    }
+}
+
+/// `version` in a PEP 440 normal form, enough to compare two spellings:
+/// lowercase, `alpha`/`beta`/`c`/`pre`/`preview` as `a`/`b`/`rc`, an
+/// implicit post-release (`1.0-1`) as `post`, and no separator before a
+/// letter (`1.0.dev3` and `1.0dev3` are the same).
+fn pep440(version: &str) -> String {
+    let v = version
+        .to_ascii_lowercase()
+        .replace("alpha", "a")
+        .replace("beta", "b")
+        .replace("preview", "rc")
+        .replace("pre", "rc");
+    let chars: Vec<char> = v.chars().collect();
+    let digit = |i: usize| chars.get(i).is_some_and(|c| c.is_ascii_digit());
+    let mut out = String::new();
+    for (i, c) in chars.iter().enumerate() {
+        let before_letter = chars.get(i + 1).is_some_and(|n| n.is_ascii_alphabetic());
+        if matches!(c, '.' | '-' | '_') && before_letter {
+            continue;
+        }
+        // An implicit post-release: `1.0-1` is `1.0.post1`.
+        if *c == '-' && digit(i + 1) {
+            out.push_str("post");
+            continue;
+        }
+        // `c` alone is `rc`: `1.0c1`.
+        if *c == 'c' && (i == 0 || chars[i - 1] != 'r') && digit(i + 1) {
+            out.push_str("rc");
+            continue;
+        }
+        out.push(*c);
+    }
+    out
+}
+
+/// The release segment of `version`, the numbers before any letter, to
+/// order two versions by, without trailing zeros, so `2` and `2.0` are
+/// equal: `2.0rc1` gives `[2]`, `2.1rc1` `[2, 1]`.
+fn release_of(version: &str) -> Vec<u64> {
+    let mut release: Vec<u64> = pep440(version)
+        .split(|c: char| c.is_ascii_alphabetic())
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    while release.last() == Some(&0) {
+        release.pop();
+    }
+    release
+}
+
+/// Whether `version` is a PEP 440 pre-release or development release.
+fn is_pre_release(version: &str) -> bool {
+    let v = pep440(version);
+    ["a", "b", "rc", "dev"].iter().any(|t| {
+        v.match_indices(t).any(|(at, _)| {
+            v[..at].ends_with(|c: char| c.is_ascii_digit())
+                && v[at + t.len()..].starts_with(|c: char| c.is_ascii_digit())
+        })
+    })
+}
+
+/// Whether `spec` uses the declarative `BuildSystem: pyproject`, which
+/// generates the BuildRequires itself.
+fn pyproject_buildsystem(spec: &str) -> bool {
+    spec.lines().any(|l| {
+        l.split_once(':').is_some_and(|(k, v)| {
+            k.trim().eq_ignore_ascii_case("buildsystem") && v.trim() == "pyproject"
+        })
+    })
+}
+
+/// An item that passes when pyp2spec's macro is used, else a caveat
+/// with `otherwise`.
+fn macro_item(label: &str, used: bool, otherwise: &str) -> Item {
+    if used {
+        Item::new(label, Mark::Pass, None)
+    } else {
+        Item::new(label, Mark::Caveat, Some(otherwise))
+    }
+}
+
+/// The body of the spec section starting with `header` (`%check`), up to
+/// the next section.
+fn section(spec: &str, header: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for line in spec.lines() {
+        let t = line.trim();
+        if t.starts_with('%') && is_section_header(t) {
+            inside = t.split_whitespace().next() == Some(header);
+            continue;
+        }
+        if inside && !t.starts_with('#') {
+            out.push_str(t);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Whether `line` starts a spec section, a scriptlet or a trigger.
+fn is_section_header(line: &str) -> bool {
+    const SECTIONS: [&str; 15] = [
+        "%description",
+        "%package",
+        "%prep",
+        "%generate_buildrequires",
+        "%conf",
+        "%build",
+        "%install",
+        "%check",
+        "%files",
+        "%changelog",
+        "%verifyscript",
+        "%sourcelist",
+        "%patchlist",
+        "%clean",
+        "%posttrans",
+    ];
+    let word = line.split_whitespace().next().unwrap_or("");
+    SECTIONS.contains(&word)
+        || [
+            "%pre",
+            "%post",
+            "%trigger",
+            "%filetrigger",
+            "%transfiletrigger",
+        ]
+        .iter()
+        .any(|p| word.starts_with(p))
 }
 
 /// Builds and installs. The build is ok when a binary RPM landed in
@@ -191,9 +545,8 @@ fn tests_item(r: &Review) -> Item {
 /// <v>` when the packaged version is the latest; 🫤 noting the newer
 /// version otherwise; ✅ + "not checked" when the registry wasn't
 /// queried.
-fn version_item(r: &Review, latest: Option<&str>, noun: &str, registry: &str) -> Item {
+fn version_item(packaged: &str, latest: Option<&str>, noun: &str, registry: &str) -> Item {
     let label = format!("latest version of the {noun} is packaged");
-    let packaged = &r.spec.version;
     match latest {
         Some(v) if v == packaged => Item {
             label,
@@ -393,19 +746,9 @@ fn render_issues(issues: &[ReviewedIssue]) -> String {
     out
 }
 
-/// Render the condensed-review block (the part between the first and
-/// second `===`): intro line, any open MUST issues to address, any issues
-/// the reviewer addressed (with their justification), the marked
-/// checklist, and the verdict.
-pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIssue]) -> String {
+/// The marked checklist and the verdict.
+fn render_marks(items: &[Item], issues: &[ReviewedIssue]) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "Package was generated with {}, simplifying the review.\n\n",
-        generator_name(generator)
-    ));
-
-    out.push_str(&render_issues(issues));
-
     for it in items {
         out.push_str(it.mark.emoji());
         out.push(' ');
@@ -416,7 +759,6 @@ pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIss
         out.push('\n');
     }
     out.push('\n');
-
     if approved(items, issues) {
         out.push_str("Package APPROVED.\n");
     } else {
@@ -425,15 +767,30 @@ pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIss
     out
 }
 
-/// The review block for a Python spec (#160): how it differs from
-/// pyp2spec's output (`compared`, from `pyp2spec::render`), the issues as
-/// [`render_review`] lists them, and the verdict left to the reviewer,
-/// as there is no Python checklist yet (#161).
-pub fn render_python_review(compared: &str, issues: &[ReviewedIssue]) -> String {
+/// Render the condensed-review block (the part between the first and
+/// second `===`): intro line, any open MUST issues to address, any issues
+/// the reviewer addressed (with their justification), the marked
+/// checklist, and the verdict.
+pub fn render_review(generator: Generator, items: &[Item], issues: &[ReviewedIssue]) -> String {
+    let mut out = format!(
+        "Package was generated with {}, simplifying the review.\n\n",
+        generator_name(generator)
+    );
+    out.push_str(&render_issues(issues));
+    out.push_str(&render_marks(items, issues));
+    out
+}
+
+/// The review block for a Python spec (#160, #161): how it differs from
+/// pyp2spec's output (`compared`, from `pyp2spec::render`) in place of
+/// [`render_review`]'s intro line, then the issues, the checklist and
+/// the verdict.
+pub fn render_python_review(compared: &str, items: &[Item], issues: &[ReviewedIssue]) -> String {
     let mut out = String::new();
     out.push_str(compared.trim_end());
     out.push_str("\n\n");
     out.push_str(&render_issues(issues));
+    out.push_str(&render_marks(items, issues));
     out
 }
 
@@ -443,10 +800,29 @@ pub fn render_python_review(compared: &str, issues: &[ReviewedIssue]) -> String 
 /// a library but the bare name for a binary).
 pub fn render_post_import(generator: Generator, upstream_name: &str, package: &str) -> String {
     match generator {
-        Generator::Pyp2Spec => String::new(), // TODO: python post-import tasks
+        Generator::Pyp2Spec => python_post_import(upstream_name, package),
         Generator::CabalRpm => haskell_post_import(upstream_name, package),
         _ => rust_post_import(upstream_name),
     }
+}
+
+fn python_post_import(name: &str, package: &str) -> String {
+    format!(
+        "Recommended post-import tasks:
+
+- set up package on release-monitoring.org:
+  project: {name}
+  homepage: https://pypi.org/project/{name}/
+  backend: PyPI
+  version scheme: RPM
+  distro: Fedora
+  Package: {package}
+
+- consider adding @python-packagers-sig as package co-maintainer
+
+- track package in koschei for all built branches
+"
+    )
 }
 
 fn haskell_post_import(name: &str, package: &str) -> String {
@@ -524,6 +900,7 @@ mod tests {
     ) -> Review {
         Review {
             spec_text: String::new(),
+            license_files: None,
             spec: SpecInfo {
                 generator: Generator::Rust2Rpm,
                 name: "rust-foo".to_string(),
@@ -544,6 +921,324 @@ mod tests {
             issues,
             static_deps: None,
         }
+    }
+
+    /// A Python review of `spec`, built, with these `%license` files,
+    /// each as `package path` (`python3-cstq` when no package is named).
+    fn python_review(spec: &str, license_files: Option<&[&str]>) -> Review {
+        let mut r = review(true, true, true, vec![]);
+        r.spec.generator = Generator::Pyp2Spec;
+        r.spec.name = "python-cstq".into();
+        r.spec.version = "0.0.20".into();
+        r.spec_text = spec.to_string();
+        r.license_files = license_files.map(|f| {
+            f.iter()
+                .map(|s| {
+                    let (package, path) = s.split_once(' ').unwrap_or(("python3-cstq", s));
+                    LicenseFile {
+                        package: package.into(),
+                        path: path.into(),
+                    }
+                })
+                .collect()
+        });
+        r
+    }
+
+    const CSTQ: &str = include_str!("../tests/data/pyp2spec/cstq.submitted.spec");
+    const DIST_INFO_LICENSE: &str =
+        "/usr/lib/python3.15/site-packages/cstq-0.0.20.dist-info/licenses/LICENSE.txt";
+
+    fn mark_of(items: &[Item], label_start: &str) -> (Mark, Option<String>) {
+        let it = items
+            .iter()
+            .find(|i| i.label.starts_with(label_start))
+            .unwrap_or_else(|| panic!("no item {label_start}"));
+        (it.mark, it.note.clone())
+    }
+
+    #[test]
+    fn a_python_review_as_cstq_passes() {
+        let r = python_review(CSTQ, Some(&[DIST_INFO_LICENSE]));
+        let e = PythonEvidence {
+            version: "0.0.20",
+            latest: Some("0.0.20"),
+            upstream_license: Some("MIT"),
+            not_compared: None,
+        };
+        let items = python_checklist(&r, &e);
+        assert_eq!(items.len(), 10);
+        assert!(items.iter().all(|i| i.mark == Mark::Pass), "{items:?}");
+        let block = render_python_review("Changes from …", &items, &[]);
+        assert!(block.starts_with("Changes from …\n\n✅ package contains only"));
+        assert!(block.contains("(spec & PyPI: 0.0.20)"));
+        assert!(block.contains("(spec & PyPI: MIT)"));
+        assert!(block.ends_with("Package APPROVED.\n"));
+    }
+
+    #[test]
+    fn python_tests_need_a_runner_not_just_an_import_check() {
+        let only_import = CSTQ.replace("%pytest -v\n", "");
+        let r = python_review(&only_import, None);
+        assert_eq!(
+            python_tests_item(&r.spec_text, true).note.as_deref(),
+            Some("import check only — run the tests or justify")
+        );
+        let none = only_import.replace("%pyproject_check_import\n", "");
+        assert_eq!(
+            python_tests_item(&none, true).note.as_deref(),
+            Some("no tests run — justify")
+        );
+        assert_eq!(python_tests_item(CSTQ, true).mark, Mark::Pass);
+        assert_eq!(python_tests_item(CSTQ, false).mark, Mark::Caveat);
+        // A runner named outside %check does not count.
+        let elsewhere = "%build\npytest\n%check\n%pyproject_check_import\n";
+        assert_eq!(python_tests_item(elsewhere, true).mark, Mark::Caveat);
+    }
+
+    #[test]
+    fn a_license_file_shipped_twice_is_a_caveat() {
+        let by_hand = "/usr/share/licenses/python3-cstq/LICENSE.txt";
+        let item = |spec: &str, files: Option<&[&str]>| {
+            let r = python_review(spec, files);
+            python_license_file_item(&r.spec_text, r.license_files.as_deref())
+        };
+        // -l, from the wheel only: as it should be.
+        let it = item(CSTQ, Some(&[DIST_INFO_LICENSE]));
+        assert_eq!((it.mark, it.note), (Mark::Pass, None));
+        // Listed by hand too: shipped twice.
+        let it = item(CSTQ, Some(&[DIST_INFO_LICENSE, by_hand]));
+        assert_eq!(it.mark, Mark::Caveat);
+        assert_eq!(
+            it.note.as_deref(),
+            Some("LICENSE.txt shipped twice, by hand and from the wheel — drop the %license line")
+        );
+        // The same with -L also suggests -l.
+        let no_assert = CSTQ.replace("save_files -l cstq", "save_files -L cstq");
+        let it = item(&no_assert, Some(&[DIST_INFO_LICENSE, by_hand]));
+        assert!(
+            it.note
+                .unwrap()
+                .ends_with("use %pyproject_save_files -l and drop the %license line")
+        );
+        // -L, from the wheel only: fine, -l suggested.
+        let it = item(&no_assert, Some(&[DIST_INFO_LICENSE]));
+        assert_eq!(it.mark, Mark::Pass);
+        assert!(it.note.unwrap().contains("-l would keep it so"));
+        // By hand only: the wheel declares none.
+        let it = item(&no_assert, Some(&[by_hand]));
+        assert_eq!(
+            (it.mark, it.note.as_deref()),
+            (Mark::Pass, Some("listed by hand; the wheel declares none"))
+        );
+        // None at all.
+        assert_eq!(item(&no_assert, Some(&[])).mark, Mark::Fail);
+        // Without the built package: -l is enough evidence; else unchecked.
+        assert_eq!(
+            item(CSTQ, None).note.as_deref(),
+            Some("%pyproject_save_files -l")
+        );
+        assert_eq!(
+            item(&no_assert, None).note.as_deref(),
+            Some("built package not checked")
+        );
+    }
+
+    #[test]
+    fn another_subpackages_own_license_is_not_a_duplicate() {
+        let doc = "python-cstq-doc /usr/share/licenses/python-cstq-doc/LICENSE.txt";
+        let r = python_review(CSTQ, Some(&[DIST_INFO_LICENSE, doc]));
+        let it = python_license_file_item(&r.spec_text, r.license_files.as_deref());
+        assert_eq!((it.mark, it.note), (Mark::Pass, None));
+    }
+
+    #[test]
+    fn a_declarative_spec_uses_the_macros_through_its_buildsystem() {
+        let declarative = "BuildSystem:    pyproject\nBuildOption(install): -l cstq\n\
+                           %files -n python3-cstq -f %{pyproject_files}\n";
+        assert_eq!(save_files_flags(declarative), ["-l"]);
+        // BuildOption(install) means nothing without BuildSystem: pyproject.
+        assert!(save_files_flags("BuildOption(install): -l x\n").is_empty());
+        let r = python_review(declarative, None);
+        let e = PythonEvidence {
+            version: "0.0.20",
+            latest: None,
+            upstream_license: None,
+            not_compared: None,
+        };
+        let items = python_checklist(&r, &e);
+        assert_eq!(mark_of(&items, "files are listed").0, Mark::Pass);
+        assert_eq!(mark_of(&items, "BuildRequires").0, Mark::Pass);
+        assert_eq!(
+            mark_of(&items, "license file").1.as_deref(),
+            Some("%pyproject_save_files -l")
+        );
+        // PyPI's license unknown: compared by hand.
+        assert_eq!(mark_of(&items, "license matches").0, Mark::Caveat);
+    }
+
+    #[test]
+    fn pypi_versions_compare_in_normal_form() {
+        assert_eq!(pep440("1.0dev3"), pep440("1.0.dev3"));
+        assert_eq!(pep440("2.0-RC1"), "2.0rc1");
+        assert_eq!(pep440("1.0.Alpha2"), "1.0a2");
+        assert_eq!(pep440("1.0.post1"), "1.0post1");
+        assert!(is_pre_release("2.0rc1"));
+        assert!(is_pre_release("1.0.dev3"));
+        assert!(!is_pre_release("1.0.post1"));
+        assert!(!is_pre_release("2.0"));
+        let item = |p, l| python_version_item(p, Some(l));
+        assert_eq!(item("1.0dev3", "1.0.dev3").mark, Mark::Pass);
+        assert_eq!(
+            item("2.0rc1", "1.9").note.as_deref(),
+            Some("spec: 2.0rc1, a pre-release; PyPI's latest stable: 1.9")
+        );
+        // A pre-release older than the stable release is behind.
+        assert_eq!(item("1.0rc1", "1.0").mark, Mark::Caveat);
+        assert_eq!(item("1.0rc1", "2.3").mark, Mark::Caveat);
+        assert_eq!(release_of("2.0rc1"), [2]);
+        assert_eq!(release_of("2.1.0rc1"), [2, 1]);
+        // 2.0rc1 comes before 2, written either way.
+        assert_eq!(item("2.0rc1", "2").mark, Mark::Caveat);
+        // PEP 440's other spellings.
+        assert_eq!(pep440("1.0c1"), pep440("1.0rc1"));
+        assert_eq!(pep440("1.0-1"), pep440("1.0.post1"));
+        assert_eq!(item("1.0c1", "1.0rc1").mark, Mark::Pass);
+        assert_eq!(item("1.8", "1.9").mark, Mark::Caveat);
+        assert_eq!(python_version_item("1.8", None).mark, Mark::Pass);
+    }
+
+    #[test]
+    fn a_commented_runner_and_a_later_scriptlet_do_not_count() {
+        let commented = "%check\n%pyproject_check_import\n# %pytest -- needs network\n";
+        assert_eq!(python_tests_item(commented, true).mark, Mark::Caveat);
+        let scriptlet = "%check\n%pyproject_check_import\n%posttrans\npytest\n";
+        assert_eq!(python_tests_item(scriptlet, true).mark, Mark::Caveat);
+        assert!(is_section_header("%filetriggerin -- /usr/lib"));
+        assert!(is_section_header("%postun -n python3-foo"));
+        assert!(!is_section_header("%pytest -v"));
+    }
+
+    #[test]
+    fn a_review_without_the_comparison_is_not_approved() {
+        let r = python_review(CSTQ, Some(&[DIST_INFO_LICENSE]));
+        let e = PythonEvidence {
+            version: "0.0.20",
+            latest: None,
+            upstream_license: None,
+            not_compared: Some("--no-net"),
+        };
+        let items = python_checklist(&r, &e);
+        assert_eq!(
+            mark_of(&items, "spec compared"),
+            (
+                Mark::Fail,
+                Some("not compared: --no-net — read the spec, then mark it".to_string())
+            )
+        );
+        assert!(!approved(&items, &[]));
+    }
+
+    #[test]
+    fn macros_and_runners_count_only_when_used() {
+        // Unbraced %pyproject_files is the same macro.
+        let unbraced = CSTQ.replace("-f %{pyproject_files}", "-f %pyproject_files");
+        let items = python_checklist(
+            &python_review(&unbraced, None),
+            &PythonEvidence {
+                version: "0.0.20",
+                latest: None,
+                upstream_license: Some("MIT"),
+                not_compared: None,
+            },
+        );
+        assert_eq!(mark_of(&items, "files are listed").0, Mark::Pass);
+        // A commented-out macro is not used.
+        let commented = CSTQ.replace("%pyproject_buildrequires", "# %pyproject_buildrequires");
+        assert!(!uses(&commented, "%pyproject_buildrequires"));
+        // An import check excluding a pytest plugin runs no tests.
+        let plugin = "%check\n%pyproject_check_import -e '*.pytest_plugin'\n";
+        assert_eq!(
+            python_tests_item(plugin, true).note.as_deref(),
+            Some("import check only — run the tests or justify")
+        );
+        let older = "%check\n%py3_check_import foo\n";
+        assert_eq!(
+            python_tests_item(older, true).note.as_deref(),
+            Some("import check only — run the tests or justify")
+        );
+        let module = "%check\n%{python3} -m pytest -v\n";
+        assert_eq!(python_tests_item(module, true).mark, Mark::Pass);
+    }
+
+    #[test]
+    fn a_file_shipped_twice_by_two_packages_is_named_once() {
+        let r = python_review(
+            CSTQ,
+            Some(&[
+                "a /usr/lib/x/a.dist-info/licenses/LICENSE",
+                "a /usr/share/licenses/a/LICENSE",
+                "b /usr/lib/x/b.dist-info/licenses/COPYING",
+                "b /usr/share/licenses/b/COPYING",
+                "c /usr/lib/x/c.dist-info/licenses/LICENSE",
+                "c /usr/share/licenses/c/LICENSE",
+            ]),
+        );
+        let it = python_license_file_item(&r.spec_text, r.license_files.as_deref());
+        assert!(
+            it.note
+                .unwrap()
+                .starts_with("COPYING, LICENSE shipped twice")
+        );
+    }
+
+    #[test]
+    fn hand_written_file_lists_and_buildrequires_are_caveats() {
+        let by_hand = CSTQ
+            .replace("%pyproject_save_files -l cstq\n", "")
+            .replace(" -f %{pyproject_files}", "")
+            .replace("%pyproject_buildrequires\n", "");
+        let r = python_review(&by_hand, None);
+        let e = PythonEvidence {
+            version: "0.0.20",
+            latest: Some("0.0.21"),
+            upstream_license: Some("Apache-2.0"),
+            not_compared: None,
+        };
+        let items = python_checklist(&r, &e);
+        for label in ["files are listed", "BuildRequires are generated"] {
+            assert_eq!(
+                mark_of(&items, label),
+                (Mark::Caveat, Some("listed by hand".to_string()))
+            );
+        }
+        assert_eq!(mark_of(&items, "latest version").0, Mark::Caveat);
+        assert_eq!(mark_of(&items, "license matches").0, Mark::Caveat);
+        // The declarative buildsystem generates them itself.
+        assert!(pyproject_buildsystem("BuildSystem:    pyproject\n"));
+        assert!(!pyproject_buildsystem("BuildSystem: meson\n"));
+    }
+
+    #[test]
+    fn save_files_flags_and_sections_are_read() {
+        assert_eq!(save_files_flags(CSTQ), ["-l"]);
+        assert_eq!(
+            save_files_flags("%pyproject_save_files -L -M\n"),
+            ["-L", "-M"]
+        );
+        assert_eq!(
+            section(CSTQ, "%check"),
+            "%pyproject_check_import\n%pytest -v\n\n"
+        );
+        assert_eq!(section(CSTQ, "%conf"), "");
+    }
+
+    #[test]
+    fn python_post_import_tasks_name_pypi() {
+        let text = render_post_import(Generator::Pyp2Spec, "cstq", "python-cstq");
+        assert!(text.contains("backend: PyPI"));
+        assert!(text.contains("homepage: https://pypi.org/project/cstq/"));
+        assert!(text.contains("Package: python-cstq"));
     }
 
     #[test]

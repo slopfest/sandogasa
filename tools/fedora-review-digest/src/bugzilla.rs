@@ -23,8 +23,6 @@ pub enum Verdict {
     Approved,
     /// The checklist found something to address.
     NotApproved,
-    /// No verdict: the reviewer gives it (a Python review, #160).
-    None,
 }
 
 /// The Bugzilla `update` body for posting a review:
@@ -32,9 +30,7 @@ pub enum Verdict {
 ///   `POST` (ready for import);
 /// - **not approved** → the digest comment and, unless the flag is
 ///   already `?`, `fedora-review?` (review in progress) — no status
-///   change;
-/// - **no verdict** → the digest comment, and `fedora-review?` only when
-///   the bug has no flag yet, so a `+` or `-` the reviewer set stays.
+///   change.
 ///
 /// `claim` is the reviewer's login to assign the bug to (claiming it);
 /// `None` leaves the assignee unchanged (it's already the reviewer).
@@ -93,7 +89,6 @@ fn sets_in_progress(verdict: Verdict, current: Option<&str>) -> bool {
     match verdict {
         Verdict::Approved => false,
         Verdict::NotApproved => current != Some("?"),
-        Verdict::None => current.is_none(),
     }
 }
 
@@ -148,23 +143,5 @@ mod tests {
         // Claiming is called out when it will happen.
         assert!(action_summary(Verdict::Approved, Some("?"), true).contains("claim the bug"));
         assert!(!action_summary(Verdict::Approved, Some("?"), false).contains("claim"));
-    }
-
-    #[test]
-    fn a_post_without_a_verdict_leaves_a_set_flag_alone() {
-        // An approval given by hand is not taken back.
-        let b = update_body("DIGEST", Verdict::None, Some("+"), None);
-        assert!(b.get("flags").is_none(), "{b}");
-        assert!(b.get("status").is_none(), "{b}");
-        assert!(
-            update_body("DIGEST", Verdict::None, Some("-"), None)
-                .get("flags")
-                .is_none()
-        );
-        // No flag yet: the review is under way.
-        let b = update_body("DIGEST", Verdict::None, None, None);
-        assert_eq!(b["flags"][0]["status"], "?");
-        assert!(!action_summary(Verdict::None, Some("+"), false).contains("fedora-review"));
-        assert!(action_summary(Verdict::None, None, false).contains("fedora-review ?"));
     }
 }

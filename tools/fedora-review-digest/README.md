@@ -91,7 +91,7 @@ an optional free-form comment for the top.
 - `-y`/`--yes` accepts every inferred mark without prompting (and skips
   the comment prompt — pair with `--comment`). Required when stdin isn't
   a terminal.
-- `--no-net` skips the crates.io / Hackage check, and pyp2spec.
+- `--no-net` skips the crates.io / Hackage / PyPI check, and pyp2spec.
 - `--reviews-dir <DIR>` is where a bare bug id is resolved.
 - `--post` writes the result back to the bug (see below).
 
@@ -110,17 +110,34 @@ version is the spec's with RPM's `~` dropped (`2.0~rc1` is `2.0rc1`).
 Both specs are cleaned first: pyp2spec's comments to the packager (in
 the submitted spec too, where they were kept as they are), rpmautospec's
 preamble, the `Release:` line and the changelog are left out, and runs
-of blank lines count as one. The comment names the pyp2spec version used, since
-another version generates a different template, and links the upstream
-project (pyp2spec's `URL:`, from PyPI's metadata) and the release on
-PyPI, to check the summary and description against, which pyp2spec
-leaves to the packager. The digest then lists
-`fedora-review`'s issues as above. There is no Python checklist yet, so
-the comment carries no verdict, and `--post` sets `fedora-review?` only
-on a bug without the flag, leaving a `+` or `-` you set as it is.
+of blank lines count as one. The comment names the pyp2spec version
+used, since another version generates a different template, and links
+the upstream project (pyp2spec's `URL:`, from PyPI's metadata) and the
+release on PyPI, to check the summary and description against, which
+pyp2spec leaves to the packager.
+
+The digest then lists `fedora-review`'s issues and the Python checklist,
+confirmed item by item as above:
+
+- the tests: a test runner in `%check` (`%pytest`, `%tox`, unittest)
+  passes, `%pyproject_check_import` alone is a caveat;
+- the latest version on PyPI;
+- the `License:` against PyPI's metadata (pyp2spec's `License:`);
+- the license files in the built RPMs: a file the wheel declares
+  (PEP 639 `License-File`, which `%pyproject_save_files` always adds
+  under the dist-info directory) that is also listed by hand is shipped
+  twice, a caveat that suggests `%pyproject_save_files -l` and dropping
+  the `%license` line; none at all fails;
+- the file list from `%pyproject_save_files` and the BuildRequires from
+  `%pyproject_buildrequires` (or `BuildSystem: pyproject`), rather than
+  by hand.
+
+The post-import tasks are set up for PyPI: release-monitoring.org with
+the PyPI backend, and koschei.
 
 - `pyp2spec` has to be installed (`dnf install pyp2spec`), and it
   downloads the release from PyPI; `--no-net` skips the comparison.
+  `rpm` reads the license files out of the built RPMs.
 - `--diff-tool <CMD>`, or `tool` under `[diff]` in
   `~/.config/fedora-review-digest/config.toml`, shows the difference at
   the terminal with another program, such as `difft`, given the two

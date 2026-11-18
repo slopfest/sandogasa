@@ -10,7 +10,7 @@ use sandogasa_config::ConfigFile;
 use fedora_review_digest::bugzilla::{self, Verdict};
 use fedora_review_digest::checklist::{self, Item, Mark, Resolution, ReviewedIssue};
 use fedora_review_digest::review::{Generator, Review};
-use fedora_review_digest::{config, cratesio, hackage, pyp2spec, runner};
+use fedora_review_digest::{config, cratesio, hackage, pyp2spec, pypi, runner};
 use sandogasa_bugzilla::BzClient;
 use sandogasa_review::resolve_interactive;
 
@@ -372,22 +372,38 @@ fn finish(
     post_block: &str,
     verdict: Verdict,
 ) -> Result<String, String> {
+    let prompted = cli.opts.comment.is_none() && interactive;
     let comment = match &cli.opts.comment {
         Some(c) => Some(c.clone()),
-        None if interactive => prompt_comment()?,
+        None if prompted => prompt_comment()?,
         None => None,
     };
     let text = checklist::assemble(comment.as_deref(), review_block, post_block);
     if cli.opts.post {
         post_to_bugzilla(input, dir, &text, verdict, cli.opts.yes)?;
+    } else if interactive {
+        // The comment goes to stdout next; set it apart from the prompts,
+        // and say it was not posted.
+        // Something for the user to do: bold green, as --explain shows a
+        // command to run (DEVELOPMENT.md, "Colors").
+        use sandogasa_cli::style;
+        // The comment prompt ends with an empty line already.
+        eprintln!(
+            "{}{}\n",
+            if prompted { "" } else { "\n" },
+            style::paint(
+                "── Post this comment on the bug (or rerun with --post) ──",
+                &format!("{}{}", style::BOLD, style::GREEN),
+                style::stderr_color(),
+            )
+        );
     }
     Ok(text)
 }
 
-/// The digest of a Python spec (#160): how it differs from what
-/// pyp2spec generates for the same release, and fedora-review's issues.
-/// There is no Python checklist yet (#161), so the verdict is left to
-/// the reviewer and the review is never marked approved.
+/// The digest of a Python spec: how it differs from what pyp2spec
+/// generates for the same release (#160), then fedora-review's issues
+/// and the Python checklist with its verdict (#161).
 fn run_python(
     cli: &DigestArgs,
     input: &str,
@@ -396,7 +412,7 @@ fn run_python(
 ) -> Result<String, String> {
     let interactive = interactive(&cli.opts, "accept the findings")?;
     let comparison = if cli.opts.no_net {
-        Err("not compared with pyp2spec's output (--no-net)".to_string())
+        Err("--no-net was given".to_string())
     } else {
         eprintln!("Generating the spec with pyp2spec, from PyPI...");
         pyp2spec::compare(
@@ -409,11 +425,44 @@ fn run_python(
     let compared = match &comparison {
         Ok(c) => pyp2spec::render(c),
         Err(e) => {
-            eprintln!("warning: {e}");
+            if !cli.opts.no_net {
+                eprintln!("warning: {e}");
+            }
             format!("The spec was not compared with pyp2spec's output: {e}.\n")
         }
     };
 
+    // The checklist's evidence from PyPI: the release's name and version
+    // in PyPI's form, its latest version, and the license its metadata
+    // gives (pyp2spec's License:).
+    let (pypi_name, version) = match &comparison {
+        Ok(c) => (c.name.clone(), c.version.clone()),
+        Err(_) => pyp2spec::release(&review.spec_text, &review.spec.name, &review.spec.version),
+    };
+    let latest = if cli.opts.no_net {
+        None
+    } else {
+        match pypi::fetch_latest_version(&pypi_name) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("warning: {e}; skipping the latest-version check");
+                None
+            }
+        }
+    };
+    let upstream_license = comparison
+        .as_ref()
+        .ok()
+        .and_then(|c| c.upstream_license.as_deref());
+    let mut items = checklist::python_checklist(
+        review,
+        &checklist::PythonEvidence {
+            version: &version,
+            latest: latest.as_deref(),
+            upstream_license,
+            not_compared: comparison.as_ref().err().map(String::as_str),
+        },
+    );
     let mut issues = checklist::reviewed(&review.issues);
     if interactive {
         eprintln!(
@@ -431,22 +480,31 @@ fn run_python(
             },
             _ => eprint!("{compared}"),
         }
-        // Apart from what follows: the issues, or the comment prompt.
-        eprintln!();
-        if !issues.is_empty() {
-            eprintln!("\n── fedora-review's issues ──");
-            finalize_issues(&mut issues)?;
-        }
+        eprintln!("\n── inferred checklist ──\n");
+        eprint!(
+            "{}",
+            checklist::render_python_review("", &items, &issues).trim_start()
+        );
+        eprintln!("\n── confirm each item ──");
+        finalize(&mut items)?;
+        finalize_issues(&mut issues)?;
     }
-    let review_block = checklist::render_python_review(&compared, &issues);
+    let review_block = checklist::render_python_review(&compared, &items, &issues);
+    let post_block =
+        checklist::render_post_import(review.spec.generator, &pypi_name, &review.spec.name);
+    let verdict = if checklist::approved(&items, &issues) {
+        Verdict::Approved
+    } else {
+        Verdict::NotApproved
+    };
     finish(
         cli,
         input,
         dir,
         interactive,
         &review_block,
-        "",
-        Verdict::None,
+        &post_block,
+        verdict,
     )
 }
 
