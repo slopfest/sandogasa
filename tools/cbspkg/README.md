@@ -239,9 +239,10 @@ or the package's newest in `-candidate` for each collection the branch
 (checked out, or `--branch`) builds into; `--to` names the stage when it
 is not the next one, such as `--to release` straight from `-candidate`.
 
-A build going to `-testing` is checked first. Its Provides, read from
-CBS, are compared with those of the build it replaces: the package's
-newest in the collection's `-testing`, or else `-release`. For each
+A build is checked before it moves. Its Provides, read from CBS, are
+compared with those of the package's newest build in the collection's
+`-release`, which is what everyone using the SIG's repos has, whether
+the build goes to `-testing` or `-release`. For each
 capability it drops, fedrq looks in stock CentOS Stream and EPEL (`-b
 c10s`, `-b epel10`). A capability another source package there still
 provides is not lost. For the rest, it lists the packages whose binary

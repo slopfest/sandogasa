@@ -76,7 +76,7 @@ pub fn checks(found: &[Check], unchecked: Option<&str>, color: bool) -> String {
     for c in found {
         let Some(against) = &c.against else {
             out.push_str(&format!(
-                "{}: nothing in -testing or -release to compare it with\n",
+                "{}: nothing in -release to compare it with\n",
                 c.nvr
             ));
             continue;

@@ -49,19 +49,20 @@ needs `--private` to keep them. The other forges' sections are not
 filtered yet. sandogasa-github's `Event` gains `public`, and `Client`
 gains `repository_public` (Refs #167).
 
-### cbspkg promote checks what a build drops before it reaches -testing
+### cbspkg promote checks what a build drops before it moves
 
-`cbspkg promote` tagged a build into `-testing` without looking at what
-it changed for other packages. A SIG build that drops a shared library,
-or another capability that packages in stock CentOS Stream or EPEL
-require, would break them for everyone testing the SIG's repo. A build
-going to `-testing` is now checked first. Its Provides, read from the
-CBS hub before it can be installed, are compared with those of the
-build it replaces: the collection's newest in `-testing`, or else
-`-release`. Each capability it drops is looked up in stock CentOS
+`cbspkg promote` tagged a build into `-testing` or `-release` without
+looking at what it changed for other packages. A SIG build that drops a
+shared library, or another capability that packages in stock CentOS
+Stream or EPEL require, would break them for everyone using the SIG's
+repo. A build is now checked before it moves. Its Provides, read from
+the CBS hub before it can be installed, are compared with those of the
+package's newest build in the collection's `-release`, which is what
+everyone using the SIG's repos has, whether the build goes to `-testing`
+or `-release`. Each capability it drops is looked up in stock CentOS
 Stream and EPEL with fedrq. One that another source package still
-provides is not lost. For the rest, the packages whose binaries
-require them at run time are listed. The plan before `Promote?` shows:
+provides is not lost. For the rest, the packages whose binaries require
+them at run time are listed. The plan before `Promote?` shows:
 - what is dropped, red for a soname;
 - what is still provided elsewhere;
 - the packages that would break, in bold red;

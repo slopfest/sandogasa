@@ -428,14 +428,15 @@ impl sandogasa_cbs::check::Lookup for FedrqLookup {
     }
 }
 
-/// The checks of the builds that `moves` take to `-testing` (#157):
-/// each against the newest build of `package` in its collection's
-/// `-testing`, else `-release`, read from the CBS hub at `hub_url`
-/// (both tags of every collection, and then every build's Provides, in
+/// The checks of the builds that `moves` take to `-testing` or
+/// `-release` (#157), each against the newest build of `package` in its
+/// collection's `-release`, which is what everyone using the SIG's
+/// repos has; read from the CBS hub at `hub_url`
+/// (every collection's `-release`, and then every build's Provides, in
 /// one `multiCall` each), with the users of what a build drops looked
 /// up through `lookup` in stock CentOS Stream and EPEL. Also, when
 /// nothing could be checked, why: no hub configured, or one that cannot
-/// be read. A collection whose `-testing` cannot be read is not checked,
+/// be read. A collection whose tag cannot be read is not checked,
 /// rather than compared with an older build.
 fn check_moves(
     ui: &Ui,
@@ -447,7 +448,7 @@ fn check_moves(
     use sandogasa_cbs::check::{compare, look_up, provides_of, user_repos};
     let to_testing: Vec<&(&Collection, String, Stage)> = moves
         .iter()
-        .filter(|(_, _, to)| *to == Stage::Testing)
+        .filter(|(_, _, to)| matches!(to, Stage::Testing | Stage::Release))
         .collect();
     if to_testing.is_empty() {
         return (Vec::new(), None);
@@ -469,7 +470,7 @@ fn check_moves(
     let hub = sandogasa_kojihub::HubClient::new(hub_url);
     let tags: Vec<String> = to_testing
         .iter()
-        .flat_map(|(c, _, _)| [c.tag(Stage::Testing), c.tag(Stage::Release)])
+        .map(|(c, _, _)| c.tag(Stage::Release))
         .collect();
     let latest = match hub.latest_in_tags(&tags, package) {
         Ok(l) => l,
@@ -480,17 +481,16 @@ fn check_moves(
             );
         }
     };
-    // Per collection, the build it replaces: newest in -testing, else
-    // -release; Err when -testing could not be read.
+    // Per move, the build it is compared with: the newest in the
+    // collection's -release, which is what everyone using the SIG's
+    // repos has, whichever stage the build goes to. Err, with the
+    // tag, when it could not be read.
     let against: Vec<Result<Option<String>, String>> = latest
-        .chunks(2)
-        .map(|pair| match &pair[0] {
-            Err(e) => Err(e.to_string()),
-            Ok(Some(b)) => Ok(Some(b.nvr.clone())),
-            Ok(None) => match &pair[1] {
-                Err(e) => Err(e.to_string()),
-                Ok(b) => Ok(b.as_ref().map(|b| b.nvr.clone())),
-            },
+        .iter()
+        .zip(&to_testing)
+        .map(|(latest, (c, _, _))| match latest {
+            Err(e) => Err(format!("{}: {e}", c.tag(Stage::Release))),
+            Ok(b) => Ok(b.as_ref().map(|b| b.nvr.clone())),
         })
         .collect();
     let mut nvrs: Vec<String> = to_testing.iter().map(|(_, nvr, _)| nvr.clone()).collect();
@@ -525,10 +525,7 @@ fn check_moves(
         };
         let old = match against {
             Err(e) => {
-                eprintln!(
-                    "warning: cannot read {} ({e}); {nvr} not checked",
-                    collection.tag(Stage::Testing)
-                );
+                eprintln!("warning: cannot read {e}; {nvr} not checked");
                 continue;
             }
             Ok(None) => None,
@@ -769,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_going_to_testing_are_checked_against_what_they_replace() {
+    fn builds_are_checked_against_what_they_replace() {
         let collections = sandogasa_cbs::hyperscale_collections(
             10,
             &["main".to_string(), "facebook".to_string()],
@@ -812,15 +809,16 @@ mod tests {
             ))
         };
         let mut server = mockito::Server::new();
-        // main has 1-1 in -testing; facebook has nothing anywhere.
+        // main has 0-1 in -release (1-1 in -testing is not asked
+        // about); facebook has nothing released. Asked per move: main,
+        // facebook, main.
         server
             .mock("POST", "/")
             .match_body(mockito::Matcher::Regex("getLatestBuilds".into()))
             .with_body(answer(&[
-                build("r-1-1.hs.el10"),
                 build("r-0-1.hs.el10"),
                 none.clone(),
-                none.clone(),
+                build("r-0-1.hs.el10"),
             ]))
             .expect(1)
             .create();
@@ -840,6 +838,14 @@ mod tests {
                     "<value><array><data>{}</data></array></value>",
                     rpm("r", "1-1.hs.el10")
                 )),
+                value(&format!(
+                    "<value><array><data>{}</data></array></value>",
+                    rpm("r", "0-1.hs.el10")
+                )),
+                value(&format!(
+                    "<value><array><data>{}</data></array></value>",
+                    rpm("r", "0-1.hs.el10")
+                )),
             ]))
             .expect(1)
             .create();
@@ -849,6 +855,8 @@ mod tests {
             .with_body(answer(&[
                 provide("r"),
                 provide("r"),
+                provide("libr.so.1()(64bit)"),
+                provide("libr.so.1()(64bit)"),
                 provide("libr.so.1()(64bit)"),
             ]))
             .expect(1)
@@ -880,22 +888,26 @@ mod tests {
         let moves = [
             (main, "r-2-1.hs.el10".to_string(), Stage::Testing),
             (fb, "r-2-1.hs+fb.el10".to_string(), Stage::Testing),
-            (main, "r-0-1.hs.el10".to_string(), Stage::Release),
+            (main, "r-1-1.hs.el10".to_string(), Stage::Release),
         ];
         let (found, unchecked) = check_moves(&ui, "r", &moves, Some(&server.url()), &Repos);
         assert_eq!(unchecked, None);
-        assert_eq!(found.len(), 2);
-        assert_eq!(found[0].against.as_deref(), Some("r-1-1.hs.el10"));
+        assert_eq!(found.len(), 3);
+        // Going to -testing, against -release too.
+        assert_eq!(found[0].against.as_deref(), Some("r-0-1.hs.el10"));
         assert_eq!(found[0].dropped(), ["libr.so.1()(64bit)"]);
         assert!(found[0].breaks());
         assert_eq!(found[1].against, None);
+        assert_eq!(found[2].nvr, "r-1-1.hs.el10");
+        assert_eq!(found[2].against.as_deref(), Some("r-0-1.hs.el10"));
+        assert!(found[2].dropped().is_empty());
         let shown = crate::plan::checks(&found, None, false);
         assert!(
             shown.contains("required in CentOS Stream 10 by user"),
             "{shown}"
         );
         assert!(
-            shown.contains("nothing in -testing or -release to compare it with"),
+            shown.contains("nothing in -release to compare it with"),
             "{shown}"
         );
         // No hub configured, or one that cannot be read: nothing
@@ -906,29 +918,26 @@ mod tests {
         let (found, why) = check_moves(&ui, "r", &moves, Some("http://127.0.0.1:1"), &Repos);
         assert!(found.is_empty() && why.is_some());
         assert!(crate::plan::checks(&found, why.as_deref(), false).starts_with("Not checked"));
-        // Nothing going to -testing: nothing asked.
-        let (found, why) = check_moves(&ui, "r", &moves[2..], Some("http://127.0.0.1:1"), &Repos);
+        // Nothing to move: nothing asked.
+        let (found, why) = check_moves(&ui, "r", &moves[..0], Some("http://127.0.0.1:1"), &Repos);
         assert!(found.is_empty() && why.is_none());
     }
 
     #[test]
-    fn a_testing_tag_that_cannot_be_read_leaves_its_build_unchecked() {
+    fn a_release_tag_that_cannot_be_read_leaves_its_build_unchecked() {
         let collections =
             sandogasa_cbs::hyperscale_collections(10, &["main".to_string()], &[]).unwrap();
         let fault = "<value><struct>\
              <member><name>faultCode</name><value><int>1000</int></value></member>\
              <member><name>faultString</name><value><string>No such tag</string></value></member>\
              </struct></value>";
-        let release = "<value><array><data><value><array><data><value><struct>\
-             <member><name>nvr</name><value><string>r-0-1.hs.el10</string></value></member>\
-             </struct></value></data></array></value></data></array></value>";
         let mut server = mockito::Server::new();
         server
             .mock("POST", "/")
             .match_body(mockito::Matcher::Regex("getLatestBuilds".into()))
             .with_body(format!(
                 "<?xml version='1.0'?><methodResponse><params><param>\
-                 <value><array><data>{fault}{release}</data></array></value>\
+                 <value><array><data>{fault}</data></array></value>\
                  </param></params></methodResponse>"
             ))
             .create();
@@ -960,7 +969,7 @@ mod tests {
             quiet: true,
         };
         let moves = [(&collections[0], "r-2-1.hs.el10".to_string(), Stage::Testing)];
-        // Not compared with the -release build it does not replace.
+        // Not checked, rather than taken as the first build released.
         let (found, why) = check_moves(&ui, "r", &moves, Some(&server.url()), &Nothing);
         assert!(found.is_empty(), "{found:?}");
         assert_eq!(why, None);
