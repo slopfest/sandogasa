@@ -96,7 +96,7 @@ nothing, and hands the command it shows to a person; never without
 `--dry-run`, and never with `--yes`. A person running it with `--yes`
 is answerable for it, so the tools keep the flag.
 
-Among them: cbspkg's `add-pkg`, `build`, `promote` and
+Among them: cbspkg's `add-pkg`, `build`, `promote`, `untag` and
 `upload-sources`; cpu-sig-tracker's `untag`; hs-relmon's `prune-*`,
 `retire`, `review` and `dupe-subpkgs --untag`; ebranch's
 `check-update --submit` or `--give-karma` and `copr-prune`; dbranch's

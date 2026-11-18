@@ -17,19 +17,28 @@ use std::cmp::Ordering;
 
 use crate::tags::{TagChange, tag_and_untag};
 use crate::tracking::{
-    Provenance, proposed_release, requested_version, stage_label, stage_note, stage_noted,
-    tracked_mr_url, tracks_proposed_branch,
+    Provenance, UntagReason, proposed_release, requested_version, stage_label, stage_note,
+    stage_noted, tracked_mr_url, tracks_proposed_branch, untag_label, untag_note, untag_noted,
 };
 use crate::{Sig, Stage};
 use sandogasa_gitlab::{Client, IssueUpdate};
 
+/// What happened to a build that an issue is told of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Event {
+    /// It reached a stage.
+    Reached(Stage),
+    /// It was untagged from a tag, for a reason the comment gives.
+    Untagged(String),
+}
+
 /// One comment to post, and the label to set with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Notice {
-    /// The build and stage it tells of, to post it only once the build
-    /// got there.
+    /// The build and what happened to it, to post it only once it has.
     pub nvr: String,
-    pub stage: Stage,
+    pub event: Event,
     pub path: String,
     pub iid: u64,
     pub issue_url: String,
@@ -40,6 +49,10 @@ pub struct Notice {
     pub label: Option<&'static str>,
     /// The `stage::` label the stage has but nothing defines yet.
     pub missing_label: Option<&'static str>,
+    /// A label to take off the issue: `stage::rejected`, once a build
+    /// reaches a stage again, which `-candidate`, having no label of
+    /// its own, would not replace.
+    pub unlabel: Option<&'static str>,
     /// The version the issue asks for, for a Hyperscale one: a build of
     /// an older version is not what it is about, and gets no comment.
     pub at_least: Option<String>,
@@ -123,60 +136,26 @@ pub fn plan(
     let Branch {
         sig,
         package,
-        branch,
         checkout,
         dry_run,
         tool,
+        ..
     } = *on;
     if steps.is_empty() {
         return Vec::new();
     }
-    // Which issues to read, and which of them is this branch's.
-    let labels = match sig {
-        // The release's issues only: GitLab ANDs the labels.
-        Sig::ProposedUpdates => match proposed_release(branch) {
-            Some(release) => format!("cpu-sig-tracker,{release}"),
-            None => return Vec::new(),
-        },
-        Sig::Hyperscale => "rfe::new-version".to_string(),
-    };
-    let tracks = |i: &sandogasa_gitlab::Issue| match sig {
-        Sig::ProposedUpdates => {
-            tracks_proposed_branch(&i.labels, i.description.as_deref().unwrap_or(""), branch)
-        }
-        Sig::Hyperscale => requested_version(&i.title, package).is_some(),
-    };
-    let path = format!("{}/{package}", sig.gitlab_group());
     let nvrs: Vec<&str> = steps.iter().map(|(nvr, _, _)| nvr.as_str()).collect();
-    let read = Client::new(base, &path, token.unwrap_or("")).and_then(|client| {
-        let issues: Vec<sandogasa_gitlab::Issue> = client
-            .list_issues(&labels, Some("opened"))?
-            .into_iter()
-            .filter(|i| tracks(i))
-            .collect();
-        let Some(issue) = pick_issue(issues, sig, package, &nvrs) else {
-            return Ok(None);
-        };
-        let notes = client.issue_notes(issue.iid)?;
-        Ok(Some((client, issue, notes)))
-    });
-    let (client, issue, notes) = match read {
-        Ok(Some(found)) => found,
-        Ok(None) => {
-            eprintln!("{path} has no open tracking issue for {branch}: no comment to post.");
-            return Vec::new();
-        }
-        Err(e) => {
-            eprintln!(
-                "warning: cannot read {path}'s tracking issues ({e}); no comment will be posted"
-            );
-            return Vec::new();
-        }
+    let Some(Found {
+        client,
+        issue,
+        notes,
+        path,
+    }) = find_issue(base, token, on, &nvrs)
+    else {
+        return Vec::new();
     };
-    let at_least = match sig {
-        Sig::Hyperscale => requested_version(&issue.title, package).map(str::to_string),
-        _ => None,
-    };
+    let at_least = requested_at_least(sig, &issue, package);
+    let rejected = issue.labels.iter().any(|l| l == REJECTED);
     let pending: Vec<&(String, Stage, Vec<TagChange>)> = steps
         .iter()
         .filter(|(nvr, stage, _)| {
@@ -270,7 +249,7 @@ pub fn plan(
         };
         notices.push(Notice {
             nvr: nvr.clone(),
-            stage: *stage,
+            event: Event::Reached(*stage),
             path: path.clone(),
             iid: issue.iid,
             issue_url: issue.web_url.clone(),
@@ -287,6 +266,7 @@ pub fn plan(
             ),
             label: stage_label(*stage),
             missing_label: None,
+            unlabel: rejected.then_some(REJECTED),
             closing: match (&at_least, stage) {
                 (Some(version), Stage::Release) if !release_tags.is_empty() => Some(Closing {
                     package: package.to_string(),
@@ -300,20 +280,172 @@ pub fn plan(
         });
     }
     // Which stage labels exist, read only when one is wanted.
-    if notices.iter().any(|n| n.label.is_some()) {
-        let labels = client.label_names().unwrap_or_else(|e| {
-            eprintln!("warning: cannot read {path}'s labels ({e}); no stage label is set");
-            Vec::new()
-        });
-        for n in &mut notices {
-            if let Some(wanted) = n.label
-                && !labels.iter().any(|l| l == wanted)
-            {
-                n.label = None;
-                n.missing_label = Some(wanted);
-            }
+    check_labels(&client, &path, &mut notices);
+    notices
+}
+
+/// The label a rejected build leaves on its issue
+/// ([`crate::tracking::untag_label`]).
+const REJECTED: &str = "stage::rejected";
+
+/// The version a Hyperscale issue asks for, which a build has to reach
+/// for the issue to be told of it; `None` for Proposed Updates.
+fn requested_at_least(sig: Sig, issue: &sandogasa_gitlab::Issue, package: &str) -> Option<String> {
+    match sig {
+        Sig::Hyperscale => requested_version(&issue.title, package).map(str::to_string),
+        Sig::ProposedUpdates => None,
+    }
+}
+
+/// A tracking issue found for a branch: its client, the issue and its
+/// comments, and the project's path.
+struct Found {
+    client: Client,
+    issue: sandogasa_gitlab::Issue,
+    notes: Vec<sandogasa_gitlab::Note>,
+    path: String,
+}
+
+/// The open tracking issue of `on`'s branch, for builds `nvrs` (a
+/// Hyperscale package's issue is the one asking for the newest version
+/// they reach), with its comments; `None`, saying why, when there is
+/// none or GitLab cannot be read.
+fn find_issue(base: &str, token: Option<&str>, on: &Branch, nvrs: &[&str]) -> Option<Found> {
+    let Branch {
+        sig,
+        package,
+        branch,
+        ..
+    } = *on;
+    // Which issues to read, and which of them is this branch's.
+    let labels = match sig {
+        // The release's issues only: GitLab ANDs the labels.
+        Sig::ProposedUpdates => format!("cpu-sig-tracker,{}", proposed_release(branch)?),
+        Sig::Hyperscale => "rfe::new-version".to_string(),
+    };
+    let tracks = |i: &sandogasa_gitlab::Issue| match sig {
+        Sig::ProposedUpdates => {
+            tracks_proposed_branch(&i.labels, i.description.as_deref().unwrap_or(""), branch)
+        }
+        Sig::Hyperscale => requested_version(&i.title, package).is_some(),
+    };
+    let path = format!("{}/{package}", sig.gitlab_group());
+    let read = Client::new(base, &path, token.unwrap_or("")).and_then(|client| {
+        let issues: Vec<sandogasa_gitlab::Issue> = client
+            .list_issues(&labels, Some("opened"))?
+            .into_iter()
+            .filter(|i| tracks(i))
+            .collect();
+        let Some(issue) = pick_issue(issues, sig, package, nvrs) else {
+            return Ok(None);
+        };
+        let notes = client.issue_notes(issue.iid)?;
+        Ok(Some((client, issue, notes)))
+    });
+    match read {
+        Ok(Some((client, issue, notes))) => Some(Found {
+            client,
+            issue,
+            notes,
+            path,
+        }),
+        Ok(None) => {
+            eprintln!("{path} has no open tracking issue for {branch}: no comment to post.");
+            None
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: cannot read {path}'s tracking issues ({e}); no comment will be posted"
+            );
+            None
         }
     }
+}
+
+/// Keep the `stage::` label of each of `notices` that the project at
+/// `path`, or one of its groups, has; one nothing defines yet is set
+/// aside as missing, as adding it by name would make a project label.
+fn check_labels(client: &Client, path: &str, notices: &mut [Notice]) {
+    if !notices.iter().any(|n| n.label.is_some()) {
+        return;
+    }
+    let labels = client.label_names().unwrap_or_else(|e| {
+        eprintln!("warning: cannot read {path}'s labels ({e}); no stage label is set");
+        Vec::new()
+    });
+    for n in notices {
+        if let Some(wanted) = n.label
+            && !labels.iter().any(|l| l == wanted)
+        {
+            n.label = None;
+            n.missing_label = Some(wanted);
+        }
+    }
+}
+
+/// What to tell the tracking issue of `on`'s branch of the builds in
+/// `untags` (`(nvr, tag)`), untagged for `reason`, leaving out what it
+/// has been told already: a comment saying why, and the `stage::` label
+/// the reason gives (`stage::rejected`, `stage::retired`). Housekeeping
+/// untags, which say nothing about the update, are not planned (#144).
+pub fn plan_untags(
+    base: &str,
+    token: Option<&str>,
+    on: &Branch,
+    untags: &[(String, String)],
+    reason: &UntagReason,
+) -> Vec<Notice> {
+    if untags.is_empty() {
+        return Vec::new();
+    }
+    let nvrs: Vec<&str> = untags.iter().map(|(nvr, _)| nvr.as_str()).collect();
+    let Some(Found {
+        client,
+        issue,
+        notes,
+        path,
+    }) = find_issue(base, token, on, &nvrs)
+    else {
+        return Vec::new();
+    };
+    // As for a stage reached: a Hyperscale build older than the version
+    // its issue asks for is not what the issue is about.
+    let at_least = requested_at_least(on.sig, &issue, on.package);
+    let mut notices: Vec<Notice> = untags
+        .iter()
+        .filter(|(nvr, _)| match &at_least {
+            Some(v) if !reaches(nvr, v) => {
+                eprintln!(
+                    "{nvr} is older than the {v} {} asks for: no comment to post.",
+                    issue.web_url
+                );
+                false
+            }
+            _ => true,
+        })
+        .filter(|(nvr, tag)| {
+            let told = untag_noted(notes.iter().map(|n| n.body.as_str()), nvr, tag);
+            if told {
+                eprintln!("{} says {nvr} left {tag} already.", issue.web_url);
+            }
+            !told
+        })
+        .map(|(nvr, tag)| Notice {
+            nvr: nvr.clone(),
+            event: Event::Untagged(tag.clone()),
+            path: path.clone(),
+            iid: issue.iid,
+            issue_url: issue.web_url.clone(),
+            note: untag_note(nvr, tag, reason),
+            label: untag_label(reason),
+            missing_label: None,
+            unlabel: None,
+            at_least: None,
+            closing: None,
+            tool: on.tool,
+        })
+        .collect();
+    check_labels(&client, &path, &mut notices);
     notices
 }
 
@@ -334,6 +466,9 @@ pub fn describe(notice: &Notice, postable: bool) -> String {
     if let Some(label) = notice.label {
         out.push_str(&format!("  and label it {label}\n"));
     }
+    if let Some(label) = notice.unlabel {
+        out.push_str(&format!("  and take off {label}\n"));
+    }
     if let Some(c) = notice.closing.as_ref().filter(|_| postable) {
         out.push_str(&format!(
             "  and close it as Done if {} then {} {} or newer\n",
@@ -351,22 +486,24 @@ pub fn describe(notice: &Notice, postable: bool) -> String {
     out
 }
 
-/// Post the notices of `notices` whose build reached its stage, as
-/// `done` says, warning about each part that fails. A Hyperscale
-/// release closes its issue when every release has the version
-/// (`latest` reads what they have).
+/// Post the notices of `notices` whose event happened, as `done` says
+/// (a stage reached, a tag left), warning about each part that fails:
+/// the comment, then the labels. A stage reached also moves the work
+/// item from `To do` to `In progress`, and a Hyperscale release closes
+/// its issue when every release has the version (`latest` reads what
+/// they have); an untag leaves the status to the tracker.
 pub fn post(
     base: &str,
     token: Option<&str>,
     notices: &[Notice],
-    done: &[(String, Stage)],
+    done: &[(String, Event)],
     latest: LatestIn,
 ) {
     let notices: Vec<&Notice> = notices
         .iter()
         .filter(|n| {
             done.iter()
-                .any(|(nvr, stage)| *nvr == n.nvr && *stage == n.stage)
+                .any(|(nvr, event)| *nvr == n.nvr && *event == n.event)
         })
         .filter(|n| match &n.at_least {
             Some(v) if !reaches(&n.nvr, v) => {
@@ -418,19 +555,18 @@ pub fn post(
                 continue;
             }
         }
-        if let Some(label) = notice.label {
+        if notice.label.is_some() || notice.unlabel.is_some() {
             let update = IssueUpdate {
-                add_labels: Some(label.to_string()),
+                add_labels: notice.label.map(str::to_string),
+                remove_labels: notice.unlabel.map(str::to_string),
                 ..Default::default()
             };
             if let Err(e) = client.edit_issue(notice.iid, &update) {
-                eprintln!(
-                    "warning: could not label {} {label} ({e})",
-                    notice.issue_url
-                );
+                eprintln!("warning: could not relabel {} ({e})", notice.issue_url);
             }
         }
-        if done_note.is_some() {
+        // An untag leaves the work item's status to the tracker.
+        if done_note.is_some() || !matches!(notice.event, Event::Reached(_)) {
             continue;
         }
         // A tracked update being promoted is in progress, whatever the
@@ -724,6 +860,148 @@ mod tests {
             .create();
     }
 
+    /// git's c10s build rejected in review: its issue is told why, and
+    /// labeled `stage::rejected`; an issue told already is not told
+    /// again, and posting it leaves the work item's status alone.
+    #[test]
+    fn an_untag_is_told_to_its_tracking_issue_once() {
+        let mut server = mockito::Server::new();
+        serve(&mut server, false, r#"[{"name": "stage::rejected"}]"#);
+        let branch = "c10s-proposed-RHEL-306261";
+        let untags = [(NVR.to_string(), TESTING.to_string())];
+        let notices = plan_untags(
+            &server.url(),
+            Some("t"),
+            &on(Sig::ProposedUpdates, branch),
+            &untags,
+            &UntagReason::Rejected,
+        );
+        assert_eq!(notices.len(), 1);
+        let n = &notices[0];
+        assert_eq!(n.event, Event::Untagged(TESTING.to_string()));
+        assert_eq!(n.iid, 1);
+        assert_eq!(n.label, Some("stage::rejected"));
+        assert!(n.note.contains("rejected in review"), "{}", n.note);
+        assert!(describe(n, true).contains("and label it stage::rejected"));
+        // Nothing to untag: nothing read.
+        assert!(
+            plan_untags(
+                "http://127.0.0.1:1",
+                Some("t"),
+                &on(Sig::ProposedUpdates, branch),
+                &[],
+                &UntagReason::Rejected,
+            )
+            .is_empty()
+        );
+
+        // Posted: the comment and the label, and no status change.
+        let comment = server
+            .mock("POST", format!("{PATH}/issues/1/notes").as_str())
+            .with_status(201)
+            .with_body(r#"{"id": 10, "body": "b"}"#)
+            .expect(1)
+            .create();
+        let label = server
+            .mock("PUT", format!("{PATH}/issues/1").as_str())
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"add_labels": "stage::rejected"}),
+            ))
+            .with_status(200)
+            .with_body(r#"{"iid": 1, "title": "t", "state": "opened", "web_url": "u1"}"#)
+            .expect(1)
+            .create();
+        let status = server.mock("POST", "/api/graphql").expect(0).create();
+        let done = [(NVR.to_string(), Event::Untagged(TESTING.to_string()))];
+        post(&server.url(), Some("t"), &notices, &done, &no_latest);
+        comment.assert();
+        label.assert();
+        status.assert();
+
+        // Told already: nothing to plan.
+        // The comment told mocked first: mockito answers with the first
+        // mock that matches.
+        let mut told = mockito::Server::new();
+        told.mock("GET", format!("{PATH}/issues/1/notes").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(serde_json::json!([{"id": 9, "body": n.note.clone()}]).to_string())
+            .create();
+        serve(&mut told, false, "[]");
+        let again = plan_untags(
+            &told.url(),
+            Some("t"),
+            &on(Sig::ProposedUpdates, branch),
+            &untags,
+            &UntagReason::Rejected,
+        );
+        assert!(again.is_empty());
+    }
+
+    /// A rejected update's next build: reaching a stage takes
+    /// `stage::rejected` off its issue, even at `-candidate`, which has no
+    /// label of its own to replace it.
+    #[test]
+    fn a_new_build_takes_the_rejected_label_off() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", format!("{PATH}/issues").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(
+                serde_json::json!([{"iid": 1, "title": "git c10s", "state": "opened",
+                    "web_url": "u1", "labels": ["c10s", "cpu-sig-tracker", "stage::rejected"],
+                    "description": "- **JIRA**: [RHEL-306261](j) — New"}])
+                .to_string(),
+            )
+            .create();
+        server
+            .mock("GET", format!("{PATH}/issues/1/notes").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let steps = [(
+            NVR.to_string(),
+            Stage::Candidate,
+            vec![TagChange::tag(
+                "proposed_updates10s-packages-main-candidate",
+                NVR,
+            )],
+        )];
+        let notices = plan(
+            &server.url(),
+            Some("t"),
+            &on(Sig::ProposedUpdates, "c10s-proposed-RHEL-306261"),
+            &steps,
+            &none,
+        );
+        assert_eq!(notices[0].unlabel, Some("stage::rejected"));
+        assert!(describe(&notices[0], true).contains("and take off stage::rejected"));
+        server
+            .mock("POST", format!("{PATH}/issues/1/notes").as_str())
+            .with_status(201)
+            .with_body(r#"{"id": 10, "body": "b"}"#)
+            .create();
+        let relabel = server
+            .mock("PUT", format!("{PATH}/issues/1").as_str())
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"remove_labels": "stage::rejected"}),
+            ))
+            .with_status(200)
+            .with_body(r#"{"iid": 1, "title": "t", "state": "opened", "web_url": "u1"}"#)
+            .expect(1)
+            .create();
+        server
+            .mock("POST", "/api/graphql")
+            .with_status(200)
+            .with_body(r#"{"data": {"project": {"workItems": {"nodes": []}}}}"#)
+            .create();
+        let done = [(NVR.to_string(), Event::Reached(Stage::Candidate))];
+        post(&server.url(), Some("t"), &notices, &done, &no_latest);
+        relabel.assert();
+    }
+
     #[test]
     fn a_promotion_is_told_to_its_tracking_issue_once() {
         let mut server = mockito::Server::new();
@@ -864,7 +1142,7 @@ mod tests {
             .create();
         // Posted only for a stage the build reached.
         post(&server.url(), Some("t"), &notices, &[], &no_latest);
-        let done = [(NVR.to_string(), Stage::Testing)];
+        let done = [(NVR.to_string(), Event::Reached(Stage::Testing))];
         post(&server.url(), Some("t"), &notices, &done, &no_latest);
         comment.assert();
         label.assert();
@@ -967,9 +1245,19 @@ mod tests {
             nvr: "ethtool-7.0-4.hs.el9".to_string(),
             ..notices.into_iter().nth(1).unwrap()
         };
-        let done = [(older.nvr.clone(), Stage::Testing)];
+        let done = [(older.nvr.clone(), Event::Reached(Stage::Testing))];
         post(&server.url(), Some("t"), &[older], &done, &no_latest);
         posts.assert();
+
+        // An untag is held to the same version: the 7.0 build's says
+        // nothing to the issue asking for 7.1.
+        let untags = [
+            ("ethtool-7.0-3.hs.el9".to_string(), "t".to_string()),
+            ("ethtool-7.1-1.hs.el9".to_string(), "t".to_string()),
+        ];
+        let notices = plan_untags(&server.url(), None, &on, &untags, &UntagReason::Retired);
+        let nvrs: Vec<&str> = notices.iter().map(|n| n.nvr.as_str()).collect();
+        assert_eq!(nvrs, ["ethtool-7.1-1.hs.el9"]);
     }
 
     /// ethtool 7.1 released to Hyperscale 10, with the checkout having
@@ -1039,7 +1327,7 @@ mod tests {
             describe(&notices[0], true)
         );
         assert!(!describe(&notices[0], false).contains("close it"));
-        let done = [(nvr.to_string(), Stage::Release)];
+        let done = [(nvr.to_string(), Event::Reached(Stage::Release))];
 
         // Hyperscale 9 is still at 7.0: commented on, left open.
         let behind = server

@@ -15,6 +15,7 @@ mod release_check;
 mod sig_repo;
 #[cfg(test)]
 mod test_support;
+mod untag;
 mod upload_sources;
 
 use add_pkg::AddPkgArgs;
@@ -22,6 +23,7 @@ use build::BuildArgs;
 use local::{MockbuildArgs, SrpmArgs, VerrelArgs};
 use promote::PromoteArgs;
 use sig_repo::SigRepoArgs;
+use untag::UntagArgs;
 use upload_sources::UploadSourcesArgs;
 
 /// Packaging for CentOS SIGs that build in the CentOS Build System
@@ -29,7 +31,7 @@ use upload_sources::UploadSourcesArgs;
 /// which branch builds into which collection, and what its targets and
 /// tags are called. Proposed Updates and Hyperscale are known.
 ///
-/// add-pkg, build, promote and upload-sources act in CBS or the SIG
+/// add-pkg, build, promote, untag and upload-sources act in CBS or the SIG
 /// lookaside in your name; see "Commands run by a person" in
 /// sandogasa's README.
 #[derive(Parser)]
@@ -73,6 +75,10 @@ enum Command {
     /// would give it
     Srpm(SrpmArgs),
 
+    /// Take a build out of -testing or -release, and tell its tracking
+    /// issue why
+    Untag(UntagArgs),
+
     /// Upload the files a branch's sources names to the SIG lookaside,
     /// where CBS fetches them
     UploadSources(UploadSourcesArgs),
@@ -93,6 +99,7 @@ fn main() -> ExitCode {
         Command::Promote(args) => promote::run(&args),
         Command::SigRepo(args) => sig_repo::run(&args),
         Command::Srpm(args) => local::run_srpm(&args),
+        Command::Untag(args) => untag::run(&args),
         Command::UploadSources(args) => upload_sources::run(&args),
         Command::Verrel(args) => local::run_verrel(&args),
     }

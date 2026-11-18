@@ -397,6 +397,40 @@ using `%autorelease` or `%autochangelog` is read, and its SRPM built,
 from a copy that `rpmautospec process-distgit` fills in from the
 branch's history, as fedpkg, centpkg and CBS do.
 
+### `untag`
+
+```sh
+cbspkg untag NVR --reason rejected|retired|landed [--landed-in NVR] \
+    [--from testing|release]… [-C DIR] [--branch BRANCH] \
+    [--variant VARIANT]… [--rhel VARIANT]… [--explain] [--dry-run]
+```
+
+Takes a build out of its collection's `-testing` and `-release` tags,
+wherever it is in them, or only those `--from` names, for each
+collection the branch (checked out, or `--branch`) builds into.
+`-candidate` keeps the build history and is not touched.
+
+The build's tracking issue, found as `promote` finds it (a Hyperscale
+build older than the version its issue asks for tells it nothing), gets
+a comment
+saying where the build left and why, from `--reason`:
+
+- `rejected`: turned down in review, so the update needs another
+  build. The issue is labeled `stage::rejected`, which flags it for
+  attention until the next build reaches a stage: `build` and
+  `promote` take the label off then.
+- `retired`: the package is retired from the SIG, labeled
+  `stage::retired`.
+- `landed`: the change landed in stock CentOS Stream, in the build
+  `--landed-in` names.
+
+Each label is set only when the project or the SIG's group has it. The
+comment ends in a hidden marker, so an untag already told is not told
+again, and the work item's status is left alone. Each `cbs
+untag-build` is shown in the confirmation, with the comment, which is
+asked at a terminal after the CBS login is checked, and refused
+without one; `--explain` and `--dry-run` show each step's command.
+
 ### `upload-sources`
 
 ```sh

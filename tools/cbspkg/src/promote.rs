@@ -14,6 +14,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use sandogasa_cbs::notify::Event;
 use sandogasa_cbs::packages::{furthest_stage, latest, promote_changes, tags_of};
 use sandogasa_cbs::tags::{CbsCli, TagChange, TagHub};
 use sandogasa_cbs::{Collection, PROFILE, Stage};
@@ -143,7 +144,16 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             Some(n) => n.clone(),
             None => {
                 ui.show_command(
-                    &["cbs", "list-tagged", "--latest", &candidate, package].map(String::from),
+                    &[
+                        "koji",
+                        "--profile",
+                        "cbs",
+                        "list-tagged",
+                        "--latest",
+                        &candidate,
+                        package,
+                    ]
+                    .map(String::from),
                 );
                 match latest(&candidate, package) {
                     Some(n) => n,
@@ -154,7 +164,9 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         };
-        ui.show_command(&["cbs", "list-tags", "--build", &nvr].map(String::from));
+        ui.show_command(
+            &["koji", "--profile", "cbs", "list-tags", "--build", &nvr].map(String::from),
+        );
         let tags = tags_of(&nvr)?;
         let Some(at) = furthest_stage(collection, &tags) else {
             if args.nvr.is_some() && checkout.collections.len() > 1 {
@@ -267,6 +279,10 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     } else {
+        let done: Vec<(String, Event)> = done
+            .into_iter()
+            .map(|(nvr, stage)| (nvr, Event::Reached(stage)))
+            .collect();
         sandogasa_cbs::notify::post(
             &base,
             token.as_deref(),
@@ -299,7 +315,9 @@ fn superseded(ui: &Ui, package: &str, moves: &[(&Collection, String, Stage)]) ->
         "Find older builds of {package} the promoted ones replace"
     ));
     for (tag, _) in &wanted {
-        ui.show_command(&["cbs", "list-tagged", tag, package].map(String::from));
+        ui.show_command(
+            &["koji", "--profile", "cbs", "list-tagged", tag, package].map(String::from),
+        );
     }
     let listed: Vec<Result<Vec<String>, String>> = std::thread::scope(|s| {
         let handles: Vec<_> = wanted

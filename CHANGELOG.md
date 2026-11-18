@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### cbspkg untag takes a build out of a stage and tells its tracking issue why
+
+Untagging a SIG build was `cbs untag-build` by hand, once per tag, and
+nothing told the build's tracking issue: whoever followed the update
+had to check CBS to learn that a build was rejected, or that the
+package was retired. `cbspkg untag NVR --reason
+rejected|retired|landed` untags the build from its collections'
+`-testing` and `-release` tags (`--from` narrows that; `-candidate`
+keeps the history) and comments on the tracking issue with the reason.
+A rejected build's issue is labeled `stage::rejected`, which flags it
+for attention until the next build reaches a stage (`build` and
+`promote` then take it off), and a retired package's `stage::retired`;
+a change that landed in stock CentOS Stream names the stock build
+(`--landed-in`, which goes with `--reason landed` only). As with `promote`, the
+commands and the comment are confirmed at a terminal, and an untag
+already told is not told again. sandogasa-cbs gains the wording
+(`tracking::UntagReason`, `untag_note`) and
+`notify::plan_untags`; a notice now carries an `Event`, a stage
+reached or a tag left, and `notify::post` takes the events done (the
+module is new since v0.28.2, so nothing released breaks). cbspkg's
+`--explain` now shows the `koji --profile cbs list-tags` and
+`list-tagged` commands it runs, rather than `cbs` ones.
+Refs #144.
+
 ### cbspkg asks Koji once per run, not once per build
 
 The 0.28.2 release review found `cbspkg` asking Koji once per item:

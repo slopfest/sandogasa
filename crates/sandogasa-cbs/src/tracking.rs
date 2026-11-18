@@ -173,6 +173,61 @@ pub fn stage_note(
     format!("{what}{from}{invite}\n\n{}", stage_marker(nvr, stage))
 }
 
+/// Why a build was untagged, as a tracking issue is told (#144).
+/// Housekeeping untags (a newer build replacing it, retention pruning)
+/// are not told: they say nothing about the update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UntagReason {
+    /// Turned down in review: the update needs another build.
+    Rejected,
+    /// The package is retired from the SIG.
+    Retired,
+    /// The change landed in stock CentOS Stream, in the build named,
+    /// so the SIG's build is no longer needed.
+    Landed(String),
+}
+
+/// The marker ending the comment for `nvr` untagged from `tag`.
+pub fn untag_marker(nvr: &str, tag: &str) -> String {
+    format!("<!-- sandogasa: {nvr} untagged from {tag} -->")
+}
+
+/// Whether one of `notes` (comment bodies) says `nvr` was untagged from
+/// `tag` already.
+pub fn untag_noted<'a>(mut notes: impl Iterator<Item = &'a str>, nvr: &str, tag: &str) -> bool {
+    let marker = untag_marker(nvr, tag);
+    notes.any(|n| n.contains(&marker))
+}
+
+/// The comment for `nvr` untagged from `tag`, and why.
+pub fn untag_note(nvr: &str, tag: &str, reason: &UntagReason) -> String {
+    let why = match reason {
+        UntagReason::Rejected => {
+            "it was rejected in review, so the update needs another build".to_string()
+        }
+        UntagReason::Retired => "the package is retired from the SIG".to_string(),
+        UntagReason::Landed(stock) => {
+            format!("the change landed in stock CentOS Stream, in `{stock}`")
+        }
+    };
+    format!(
+        "`{nvr}` is untagged from `{tag}`: {why}.\n\n{}",
+        untag_marker(nvr, tag)
+    )
+}
+
+/// The scoped label for an issue whose build was untagged for
+/// `reason`, if it gets one: `stage::rejected` flags that the update
+/// needs attention, until a new build's stage replaces it.
+pub fn untag_label(reason: &UntagReason) -> Option<&'static str> {
+    match reason {
+        UntagReason::Rejected => Some("stage::rejected"),
+        UntagReason::Retired => Some("stage::retired"),
+        UntagReason::Landed(_) => None,
+    }
+}
+
 /// The scoped label for a build at `stage`, if the stage has one.
 pub fn stage_label(stage: Stage) -> Option<&'static str> {
     match stage {
@@ -398,5 +453,33 @@ mod tests {
             requested_version("rust-foo-bar-1.2 is available", "rust-foo"),
             None
         );
+    }
+
+    #[test]
+    fn an_untag_is_told_with_its_reason_once() {
+        let tag = "proposed_updates10s-packages-main-testing";
+        let nvr = "git-2.52.1-1~proposed.el10";
+        let rejected = untag_note(nvr, tag, &UntagReason::Rejected);
+        assert_eq!(
+            rejected,
+            format!(
+                "`{nvr}` is untagged from `{tag}`: it was rejected in review, so the \
+                 update needs another build.\n\n<!-- sandogasa: {nvr} untagged from {tag} -->"
+            )
+        );
+        assert!(untag_noted([rejected.as_str()].into_iter(), nvr, tag));
+        assert!(!untag_noted(
+            [rejected.as_str()].into_iter(),
+            nvr,
+            "other-tag"
+        ));
+        assert!(
+            untag_note(nvr, tag, &UntagReason::Landed("git-2.52.1-2.el10".into()))
+                .contains("landed in stock CentOS Stream, in `git-2.52.1-2.el10`.")
+        );
+        assert!(untag_note(nvr, tag, &UntagReason::Retired).contains("retired from the SIG."));
+        assert_eq!(untag_label(&UntagReason::Rejected), Some("stage::rejected"));
+        assert_eq!(untag_label(&UntagReason::Retired), Some("stage::retired"));
+        assert_eq!(untag_label(&UntagReason::Landed(String::new())), None);
     }
 }

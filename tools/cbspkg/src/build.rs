@@ -16,6 +16,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use sandogasa_cbs::notify::Event;
 use sandogasa_cbs::packages::latest;
 use sandogasa_cbs::remotes::Role;
 use sandogasa_cbs::tags::TagChange;
@@ -221,9 +222,9 @@ fn tell_built(
     let notices = sandogasa_cbs::notify::plan(base, token, on, &steps, &|nvrs: &[String]| {
         Ok(vec![Some(commit.to_string()); nvrs.len()])
     });
-    let done: Vec<(String, Stage)> = built
+    let done: Vec<(String, Event)> = built
         .iter()
-        .map(|(_, nvr)| (nvr.clone(), Stage::Candidate))
+        .map(|(_, nvr)| (nvr.clone(), Event::Reached(Stage::Candidate)))
         .collect();
     sandogasa_cbs::notify::post(
         base,

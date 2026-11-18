@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cbspkg 1 2026-11-16 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH cbspkg 1 2026-11-18 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 cbspkg \- Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedora
 .SH SYNOPSIS
@@ -8,7 +8,7 @@ cbspkg \- Package and build for CentOS SIGs in CBS, the way fedpkg does for Fedo
 .SH DESCRIPTION
 Packaging for CentOS SIGs that build in the CentOS Build System (CBS), knowing each SIG\*(Aqs conventions: where its package repos live, which branch builds into which collection, and what its targets and tags are called. Proposed Updates and Hyperscale are known.
 .PP
-add\-pkg, build, promote and upload\-sources act in CBS or the SIG lookaside in your name; see "Commands run by a person" in sandogasa\*(Aqs README.
+add\-pkg, build, promote, untag and upload\-sources act in CBS or the SIG lookaside in your name; see "Commands run by a person" in sandogasa\*(Aqs README.
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
@@ -239,6 +239,69 @@ A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or br
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SS cbspkg untag
+\fBcbspkg untag\fR [\fB\-\-branch\fR] [\fB\-\-from\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-rhel\fR] [\fB\-\-variant\fR] [\fB\-\-landed\-in\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-reason\fR> <\fINVR\fR>
+.PP
+Take a build out of \-testing or \-release, and tell its tracking issue why
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fINVR\fR>
+The build to untag
+.SH SELECTION
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+The branch whose collections to untag in (default: the one checked out)
+.TP
+\fB\-\-from\fR \fI<FROM>\fR
+Untag only from this stage (repeatable; default: \-testing and \-release, wherever the build is)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+testing
+.IP \(bu 2
+release
+.RE
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs dist\-git checkout (default: the current directory)
+.TP
+\fB\-\-rhel\fR \fI<VARIANT>\fR
+A Hyperscale variant to build against RHEL rather than CentOS Stream (repeatable; facebook is the one there is)
+.TP
+\fB\-\-variant\fR \fI<VARIANT>\fR
+A Hyperscale variant to use instead of the branch\*(Aqs: a name (facebook) or branch suffix (hs+fb); repeatable
+.SH REASON
+.TP
+\fB\-\-reason\fR \fI<REASON>\fR
+Why the build is untagged, as its tracking issue is told
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+rejected: Rejected in review: the update needs another build
+.IP \(bu 2
+retired: The package is retired from the SIG
+.IP \(bu 2
+landed: The change landed in stock CentOS Stream (\-\-landed\-in)
+.RE
+.TP
+\fB\-\-landed\-in\fR \fI<NVR>\fR
+The stock build the change landed in (with \-\-reason landed)
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without running anything
+.SH OUTPUT
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
 .SS cbspkg upload-sources
 \fBcbspkg upload\-sources\fR [\fB\-\-branch\fR] [\fB\-\-dry\-run\fR] [\fB\-\-explain\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
