@@ -170,10 +170,12 @@ async fn bodhi_report_with_client(
     // window.
     let submitted_since = since - chrono::Duration::days(30);
     let submitted_before = until + chrono::Duration::days(1);
+    // Every page: the window bounds the query, and a cap would drop
+    // the oldest updates first, the ones the buffer above is for.
     let updates = client
         .updates_for_user(
             username,
-            500,
+            u32::MAX,
             Some(submitted_since),
             Some(submitted_before),
             |page, total_pages, count| {
@@ -730,6 +732,64 @@ mod tests {
         assert_eq!(report.pushed_to_stable, 1);
         assert!(report.by_release.contains_key("F45"));
         assert!(!report.by_release.contains_key("EPEL-9"));
+    }
+
+    #[tokio::test]
+    async fn bodhi_report_reads_every_page() {
+        // Six pages, newest first: an update submitted before the
+        // period that went stable inside it sits on the last one, past
+        // the first 500 updates.
+        let server = MockServer::start().await;
+        let client = sandogasa_bodhi::BodhiClient::with_base_url(&server.uri());
+        let update = |n: u64, submitted: &str, stable: &str| {
+            serde_json::json!({
+                "alias": format!("FEDORA-2026-{n}"),
+                "status": "stable",
+                "builds": [{"nvr": format!("pkg{n}-1.0-1.fc45")}],
+                "release": {"name": "F45"},
+                "date_submitted": submitted,
+                "date_stable": stable,
+            })
+        };
+        for page in 1..=6u64 {
+            let updates: Vec<_> = if page < 6 {
+                (0..100)
+                    .map(|i| update(page * 100 + i, "2026-02-15 10:00:00", "2026-02-16 10:00:00"))
+                    .collect()
+            } else {
+                vec![update(600, "2025-12-20 10:00:00", "2026-01-10 10:00:00")]
+            };
+            Mock::given(method("GET"))
+                .and(path_regex("/updates/.*"))
+                .and(wiremock::matchers::query_param("page", page.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "updates": updates,
+                    "total": 501,
+                    "page": page,
+                    "pages": 6
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        let report = bodhi_report_with_client(
+            &client,
+            "testuser",
+            &DomainConfig {
+                bodhi: true,
+                ..Default::default()
+            },
+            NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.total_updates, 501);
+        assert_eq!(report.submitted, 500);
+        assert_eq!(report.pushed_to_stable, 501);
     }
 
     #[tokio::test]

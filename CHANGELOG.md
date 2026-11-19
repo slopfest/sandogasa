@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### sandogasa-report reads every page of a user's Bodhi updates
+
+The Bodhi section stopped after a user's first 500 updates without
+saying so. A report from 2026-07-01 to 2026-11-19 had 580, so the last
+of its six pages was never read. Bodhi lists the newest first, so the
+updates left out were the oldest: those submitted before `--since` that
+went to testing or stable inside the period, which the query reaches
+back 30 days to find. The query is bounded by the report's dates, so it
+now reads every page.
+
 ### sandogasa-bodhi asks again for a page of updates that fails
 
 sandogasa-report's Bodhi section failed the whole run on one bad page
