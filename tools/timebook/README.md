@@ -157,17 +157,22 @@ looked for under its calendar's name and its title as a topic (`fesco`,
 within an hour of it, preferably in the room it is booked in. Series are
 grouped as held, rarely held, without minutes, unchecked (a meetbot
 search failed, so nothing can be said), and video calls (which meetbot
-does not log); minutes found in another room than the one booked are
-pointed out, and for a series without minutes the owners' last activity
-on Discourse is shown. For a series held at least sometimes whose
-searches all answered, the days without minutes are listed with the
-`timebook cancel` command that takes them off the calendar, for its
-owners to run if those meetings did not take place; occurrences of the
-last day are left out unless `--refresh` is given, since meetbot's
-answers are kept for a day. `--calendar` (its exact name) and
-`--meeting` (part of a title) look at those series alone, which saves
-meetbot the other searches. The topics searched are listed, so a series
-filed under another topic can be checked by hand.
+does not log: a location linking to Zoom, Google Meet, Jitsi,
+BigBlueButton, Teams, Webex, Whereby or BlueJeans, self-hosted servers
+counting when named for the service, such as `meet.` or `bbb.`; a series
+also counts when the entry going on with it has such a link, as editing
+a series from its next occurrence leaves the earlier ones without it);
+minutes found in another room than the one booked are pointed out, and
+for a series without minutes the owners' last activity on Discourse is
+shown. For a series held at least sometimes whose searches all answered,
+the days without minutes are listed with the `timebook cancel` command
+that takes them off the calendar, for its owners to run if those
+meetings did not take place; occurrences of the last day are left out
+unless `--refresh` is given, since meetbot's answers are kept for a day.
+`--calendar` (its exact name) and `--meeting` (part of a title) look at
+those series alone, which saves meetbot the other searches. The topics
+searched are listed, so a series filed under another topic can be
+checked by hand.
 
 ```
 $ timebook stale

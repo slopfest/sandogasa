@@ -26,6 +26,10 @@ const SLACK_MINUTES: i64 = 60;
 /// is not judged before then.
 const MINUTES_LAG: Duration = Duration::hours(2);
 
+/// How far ahead the entry going on with a series is looked for, for a
+/// video link: past a monthly meeting's next occurrence.
+const VIDEO_AHEAD_WEEKS: i64 = 8;
+
 /// fedocal's default end for a series with none, until 2026-05-29
 /// (fedocal 98fdece): a series created without an end stopped there.
 pub const OLD_DEFAULT_END: &str = "2025-12-31";
@@ -44,6 +48,12 @@ pub struct Series {
     pub occurrences: Vec<DateTime<Utc>>,
     /// The time zone it was booked in, whose days name its occurrences.
     pub timezone: String,
+    /// The next occurrence of a later entry going on with it, of the same
+    /// calendar and title, with a video link as its location: the link
+    /// was added from an occurrence on, which leaves the earlier ones as
+    /// this entry, without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_next: Option<NaiveDate>,
 }
 
 /// One meeting meetbot keeps minutes of.
@@ -191,6 +201,7 @@ pub fn series(meetings: &[Meeting]) -> Vec<Series> {
             owners: m.meeting_manager.clone(),
             occurrences: Vec::new(),
             timezone: m.meeting_timezone.clone(),
+            video_next: None,
         });
         s.occurrences.push(start);
     }
@@ -203,6 +214,27 @@ pub fn series(meetings: &[Meeting]) -> Vec<Series> {
         })
         .filter(|s| s.occurrences.len() >= 2)
         .collect()
+}
+
+/// Fills in [`Series::video_next`] for each of `list` without a video
+/// link: the day, in its own time zone, of the first occurrence in
+/// `coming` of an entry of the same calendar and title, after it, with
+/// one.
+pub fn video_continuations(list: &mut [Series], coming: &[Meeting]) {
+    for s in list.iter_mut().filter(|s| !is_video_call(&s.location)) {
+        let last = s.occurrences.last().copied();
+        s.video_next = coming
+            .iter()
+            .filter(|m| {
+                m.meeting_id != s.meeting_id
+                    && m.calendar_name == s.calendar
+                    && m.meeting_name.trim().eq_ignore_ascii_case(s.name.trim())
+                    && is_video_call(&m.meeting_location)
+                    && m.starts_at().is_some_and(|t| last.is_none_or(|l| t > l))
+            })
+            .min_by_key(|m| m.starts_at())
+            .and_then(|m| m.local_date());
+    }
 }
 
 /// The topics to search meetbot for: the calendar's name, and the title
@@ -252,20 +284,52 @@ pub fn channel_room(channel: &str) -> Option<String> {
     sandogasa_fedocal::room::Room::parse(name).map(|r| r.name)
 }
 
-/// Whether `location` is a video call, which meetbot does not log.
+/// Whether `location` is a video call, which meetbot does not log: a
+/// link to a hosted service (Zoom, Google Meet, Jitsi's meet.jit.si and
+/// 8x8.vc, Microsoft Teams, Webex, Whereby, BlueJeans), or to a server
+/// named for one, as self-hosted Jitsi and BigBlueButton usually are
+/// (`meet.`, `jitsi.`, `bbb.`, `bigbluebutton.`, `greenlight.`, `video.`,
+/// or `jitsi` or `bigbluebutton` anywhere in the host). A self-hosted
+/// server under another name is not recognized. Each word of the
+/// location is looked at, so a label before the link does not hide it.
 pub fn is_video_call(location: &str) -> bool {
-    let l = location.to_ascii_lowercase();
-    [
-        "meet.google.",
-        "zoom.us",
+    const SERVICES: [&str; 9] = [
+        "8x8.vc",
+        "bluejeans.com",
+        "meet.google.com",
         "meet.jit.si",
-        "jitsi",
-        "bluejeans",
-        "/meet/",
+        "teams.live.com",
+        "teams.microsoft.com",
+        "webex.com",
+        "whereby.com",
+        "zoom.us",
+    ];
+    const NAMED: [&str; 6] = [
+        "bbb.",
+        "bigbluebutton.",
+        "greenlight.",
+        "jitsi.",
         "meet.",
-    ]
-    .iter()
-    .any(|v| l.contains(v))
+        "video.",
+    ];
+    let is_video = |word: &str| {
+        // The host: after the scheme, before any path, port or query,
+        // and after any user.
+        let rest = word.split_once("://").map_or(word, |(_, r)| r);
+        let host = rest.split(['/', '?', '#', ':']).next().unwrap_or("");
+        let host = host.rsplit('@').next().unwrap_or(host);
+        host.contains('.')
+            && (SERVICES
+                .iter()
+                .any(|s| host == *s || host.ends_with(&format!(".{s}")))
+                || NAMED.iter().any(|p| host.starts_with(p))
+                || host.contains("jitsi")
+                || host.contains("bigbluebutton"))
+    };
+    location
+        .to_ascii_lowercase()
+        .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '<' | '>' | ','))
+        .any(is_video)
 }
 
 /// How `s` fared against `minutes`: the occurrences with minutes
@@ -318,7 +382,7 @@ pub fn judge(s: &Series, minutes: &[Minutes]) -> Judgment {
         Verdict::Held
     } else if held > 0 {
         Verdict::RarelyHeld
-    } else if is_video_call(&s.location) {
+    } else if is_video_call(&s.location) || s.video_next.is_some() {
         Verdict::VideoCall
     } else {
         Verdict::NotHeld
@@ -564,7 +628,14 @@ pub async fn report(
     // is on 2026-01-01 in UTC.
     let before = series(&read(client, end - Duration::days(28), end + Duration::days(1)).await?);
     let after = read(client, end + Duration::days(1), end + Duration::days(28)).await?;
-    let (recurring, dropped) = chosen(all, &before, &after, end, filter);
+    let (mut recurring, dropped) = chosen(all, &before, &after, end, filter);
+    // A video link added from the next occurrence on is in the entry
+    // going on, ahead.
+    if recurring.iter().any(|s| !is_video_call(&s.location)) {
+        let today = now.date_naive();
+        let coming = read(client, today, today + Duration::weeks(VIDEO_AHEAD_WEEKS)).await?;
+        video_continuations(&mut recurring, &coming);
+    }
 
     let found = search_for(recurring.iter().chain(&dropped), sources, refresh).await;
     let settled = settled_by(now, refresh);
@@ -676,7 +747,13 @@ pub fn describe(
                     "    searched meetbot for: {}\n",
                     r.searched.join(", ")
                 )),
-                Verdict::VideoCall => {}
+                Verdict::VideoCall => {
+                    if let Some(day) = r.series.video_next {
+                        out.push_str(&format!(
+                            "    the entry going on with it has a video link (next on {day})\n"
+                        ));
+                    }
+                }
                 Verdict::Unchecked => out.push_str(&format!(
                     "    meetbot search failed for: {}\n",
                     r.failed.join(", ")
@@ -1132,9 +1209,37 @@ mod tests {
         );
         assert_eq!(channel_room("fedora-townhall"), None);
         assert_eq!(channel_room("centos-meeting"), None);
-        assert!(is_video_call("https://meet.google.com/hfy-jpoo-muq"));
-        assert!(is_video_call("https://us05web.zoom.us/j/1"));
-        assert!(!is_video_call("meeting@fedoraproject.org"));
+        for video in [
+            "https://meet.google.com/hfy-jpoo-muq",
+            "https://us05web.zoom.us/j/1?pwd=x",
+            "meet.google.com/abc-defg-hij",
+            "https://meet.jit.si/FedoraRoom",
+            "https://8x8.vc/vpaas-magic-cookie-x/room",
+            "https://meet.example.org/room",
+            "https://jitsi.example.org/room",
+            "https://video.fosdem.org/room",
+            "https://bbb.example.org/b/abc-def-ghi",
+            "https://greenlight.example.org/rooms/abc/join",
+            "https://bigbluebutton.example.org/room",
+            "https://teams.microsoft.com/l/meetup-join/x",
+            "https://example.webex.com/meet/x",
+            "https://whereby.com/room",
+            "Video: meet.example.org/room",
+            "Jitsi (https://jitsi.example.org/x)",
+        ] {
+            assert!(is_video_call(video), "{video}");
+        }
+        for not in [
+            "meeting@fedoraproject.org",
+            "meeting-1@chat.fedoraproject.org",
+            "https://matrix.to/#/#meeting:fedoraproject.org",
+            "fedora-meeting@irc.libera.chat",
+            "https://notzoom.us/x",
+            "https://example.org/meet/x",
+            "",
+        ] {
+            assert!(!is_video_call(not), "{not}");
+        }
     }
 
     #[test]
@@ -1290,6 +1395,36 @@ mod tests {
     }
 
     #[test]
+    fn a_video_link_in_the_entry_going_on_makes_a_video_call() {
+        let zoom = "https://us06web.zoom.us/j/1";
+        let mut list = series(&[
+            meeting(1, "2026-10-07", "22:00:00", "hs", "Hangout", ""),
+            meeting(1, "2026-11-04", "22:00:00", "hs", "Hangout", ""),
+            meeting(5, "2026-10-08", "16:00:00", "hs", "Other", ""),
+            meeting(5, "2026-11-05", "16:00:00", "hs", "Other", ""),
+        ]);
+        let coming = [
+            meeting(2, "2026-12-30", "22:00:00", "hs", "hangout ", zoom),
+            meeting(2, "2026-12-02", "22:00:00", "hs", "hangout ", zoom),
+            // Another calendar, or no link: not it.
+            meeting(3, "2026-11-25", "22:00:00", "other", "Hangout", zoom),
+            meeting(
+                4,
+                "2026-11-25",
+                "16:00:00",
+                "hs",
+                "Other",
+                "meeting@fedoraproject.org",
+            ),
+        ];
+        video_continuations(&mut list, &coming);
+        assert_eq!(list[0].video_next, NaiveDate::from_ymd_opt(2026, 12, 2));
+        assert_eq!(list[1].video_next, None);
+        assert_eq!(judge(&list[0], &[]).verdict, Verdict::VideoCall);
+        assert_eq!(judge(&list[1], &[]).verdict, Verdict::NotHeld);
+    }
+
+    #[test]
     fn a_filter_keeps_series_but_still_sees_their_replacements() {
         let end = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
         let before = series(&[
@@ -1389,6 +1524,7 @@ mod tests {
         let mut video = report(Verdict::VideoCall, 0, &[]);
         video.series.room = None;
         video.series.location = String::new();
+        video.series.video_next = NaiveDate::from_ymd_opt(2026, 12, 2);
         let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
         let dropped = [
             Dropped {
@@ -1427,6 +1563,7 @@ mod tests {
             "\nNo minutes found (1):\n  Some SIG (SIGs [shared calendar]): Wed 16:00 UTC, in meeting, 2 occurrence(s)\n",
             "    searched meetbot for: sigs, some-sig\n    owners: a (seen 2026-11-01), b (not on Discourse), c (Discourse lookup failed)\n",
             "\nVideo calls, which meetbot does not log (1):\n  Some SIG (SIGs [shared calendar]): Wed 16:00 UTC, no location,",
+            "    the entry going on with it has a video link (next on 2026-12-02)\n",
             "\nHeld (1):\n",
             "    held 2 of 2, last https://meetbot/x\n    no minutes on 2026-11-11, 2026-11-18; if not held, the owners can take them off with\n      timebook cancel SIGs --meeting 'Some SIG' 2026-11-11 2026-11-18\n    minutes are in meeting-1, not the room booked\n",
             "Stopped at 2025-12-31, fedocal's old default end for a series without one (3):\n",
@@ -1481,6 +1618,16 @@ mod tests {
             .and(path("/api/meetings/"))
             .and(query_param("start", "2026-01-01"))
             .respond_with(answer(vec![]))
+            .mount(&server)
+            .await;
+        // Ahead, for an entry going on with a video link: none. Not read
+        // when no series is kept (the third report below).
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .and(query_param("start", "2026-11-19"))
+            .and(query_param("end", "2027-01-14"))
+            .respond_with(answer(vec![]))
+            .expect(2)
             .mount(&server)
             .await;
         let minute = |channel: &str, at: &str| {

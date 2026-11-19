@@ -40,11 +40,15 @@ new entry, after each cancelled occurrence) and checking it is gone.
 `stale` lists the days a series held otherwise has no minutes for, with
 the `timebook cancel` command for its owners, so cancelled meetings stop
 counting as missed and holding their room; `--calendar` and `--meeting`
-limit it to the series asked for. `cancel` and `edit` take a meeting by
-its calendar (`timebook cancel fesco 2026-10-27`), with `--meeting` and
-part of its title when the calendar holds several, as well as by an
-entry's id or page. Asking owners to drop stale entries comes next
-(#142).
+limit it to the series asked for. A series counts as a video call, not
+as missed, when its location links to a video service (self-hosted Jitsi
+and BigBlueButton servers included when named for them, such as `meet.`
+or `bbb.`), or when the entry going on with it does: adding a link from
+the next occurrence on leaves the earlier ones as an entry without it
+(#189). `cancel` and `edit` take a meeting by its calendar (`timebook
+cancel fesco 2026-10-27`), with `--meeting` and part of its title when
+the calendar holds several, as well as by an entry's id or page. Asking
+owners to drop stale entries comes next (#142).
 
 sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and
 the `room` module. Its `Client::meetings` converts the answer to a
