@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### New tool: timebook
+
+Fedora's shared meeting rooms are booked in Fedora Calendar, but a
+meeting's location is free text, so nothing said which room a slot
+holds, and there was no way to see whether a room was free for a
+planned meeting, let alone for a whole series of them.
+
+timebook reads every name a room goes by
+(`meeting-1@chat.fedoraproject.org`, a matrix.to link, the IRC channel
+it replaced) as the room, and compares times in UTC. `timebook check
+ROOM AT` says, for each meeting of a
+planned series (`--every`, `--count`, `--minutes`, `--tz`), whether the
+room is free or what it clashes with; `timebook find AT` does the same
+for every room, the free ones first; `timebook rooms` lists what each
+room holds in a period. Checking whether booked meetings still happen,
+and acting on stale ones, come next (#141, #142).
+
+sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and
+the `room` module. Its `Client::meetings` converts the answer to a
+calendar-and-location query, which fedocal leaves in each entry's own
+time zone, to UTC like every other answer.
+
+Refs #141
+
 ### hattrack shows who is away, and files your own absence
 
 hattrack's `last-seen` showed a contributor's Discourse vacation status,

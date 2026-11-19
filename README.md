@@ -44,6 +44,7 @@ associated with "slum" or post-apocalyptic robots in popular culture.
 - **[sandogasa-pkg-health](tools/sandogasa-pkg-health/)** — audit package health across a sandogasa inventory (pluggable checks, selective update)
 - **[sandogasa-report](tools/sandogasa-report/)** — activity reporting for Fedora, EPEL, and CentOS SIG packaging
 - **[specport](tools/specport/)** — port an RPM spec to a new build system when upstream switches, starting with autotools to Meson: maps the configure options, keeps the old ones in a comment and flags what needs a person
+- **[timebook](tools/timebook/)** — Fedora's shared meeting rooms as Fedora Calendar books them: free rooms for a planned meeting or series, and what each room holds
 
 ## Library crates
 

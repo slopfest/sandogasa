@@ -50,6 +50,7 @@ members = [
     "tools/sandogasa-pkg-health",
     "tools/sandogasa-report",
     "tools/specport",
+    "tools/timebook",
 ]
 
 # sandogasa (菅笠, a Japanese straw hat) is often associated with

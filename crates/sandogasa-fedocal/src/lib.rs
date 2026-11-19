@@ -25,9 +25,10 @@
 //! # }
 //! ```
 
+pub mod room;
 pub mod session;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc};
 use serde::Deserialize;
 
 /// Fedora Calendar's production instance.
@@ -117,6 +118,49 @@ impl Meeting {
         } else {
             self.meeting_date_end
         }
+    }
+
+    /// When it starts, in UTC; `None` when its time does not read. The
+    /// API gives an entry's date and times in UTC, while
+    /// `meeting_timezone` still names the time zone it was booked in
+    /// ([`Client::meetings`] sees to the one kind of query that does
+    /// not).
+    pub fn starts_at(&self) -> Option<DateTime<Utc>> {
+        utc(self.meeting_date, &self.meeting_time_start)
+    }
+
+    /// When it ends, in UTC, as [`Meeting::starts_at`] reads it.
+    pub fn ends_at(&self) -> Option<DateTime<Utc>> {
+        utc(self.meeting_date_end, &self.meeting_time_stop)
+    }
+
+    /// The shared room its location names, if any.
+    pub fn room(&self) -> Option<room::Room> {
+        room::Room::from_location(&self.meeting_location)
+    }
+
+    /// Its date and times read in `meeting_timezone` and given in UTC,
+    /// for an answer that left them local. A time or time zone that does
+    /// not read leaves it as it is.
+    fn into_utc(mut self) -> Self {
+        let Ok(tz) = self.meeting_timezone.parse::<chrono_tz::Tz>() else {
+            return self;
+        };
+        let local = |date: NaiveDate, time: &str| {
+            let t = parse_time(time)?;
+            let at = tz.from_local_datetime(&date.and_time(t)).earliest()?;
+            Some(at.with_timezone(&Utc))
+        };
+        if let (Some(start), Some(stop)) = (
+            local(self.meeting_date, &self.meeting_time_start),
+            local(self.meeting_date_end, &self.meeting_time_stop),
+        ) {
+            self.meeting_date = start.date_naive();
+            self.meeting_time_start = start.format("%H:%M:%S").to_string();
+            self.meeting_date_end = stop.date_naive();
+            self.meeting_time_stop = stop.format("%H:%M:%S").to_string();
+        }
+        self
     }
 
     /// Whether it covers any of `from..=to`.
@@ -226,6 +270,11 @@ impl Client {
         let answer: Answer = sandogasa_cli::http::json_ok(resp, &format!("GET {url}"))
             .await
             .map_err(Error::Http)?;
+        // fedocal gives every answer in UTC but this one: a calendar and
+        // a location together come back in each entry's own time zone.
+        if query.calendar.is_some() && query.location.is_some() {
+            return Ok(answer.meetings.into_iter().map(Meeting::into_utc).collect());
+        }
         Ok(answer.meetings)
     }
 
@@ -249,6 +298,18 @@ impl Client {
         found.dedup_by_key(|m| m.meeting_id);
         Ok(found)
     }
+}
+
+/// `HH:MM:SS` or `HH:MM`.
+fn parse_time(time: &str) -> Option<NaiveTime> {
+    NaiveTime::parse_from_str(time, "%H:%M:%S")
+        .or_else(|_| NaiveTime::parse_from_str(time, "%H:%M"))
+        .ok()
+}
+
+/// `time` on `date`, in UTC.
+fn utc(date: NaiveDate, time: &str) -> Option<DateTime<Utc>> {
+    Some(date.and_time(parse_time(time)?).and_utc())
 }
 
 /// A field that may be `null` as its default (empty).
@@ -289,6 +350,83 @@ mod tests {
             "meeting_timezone": "UTC", "meeting_manager": [who],
             "meeting_information": "", "meeting_location": ""
         })
+    }
+
+    #[test]
+    fn times_are_utc_as_the_api_gives_them() {
+        // Booked as 11:00 US/Eastern; the API gives it in UTC.
+        let mut e = entry(1, "me", "2026-12-02", "2026-12-02", "16:00:00");
+        e["meeting_time_stop"] = serde_json::json!("17:00:00");
+        e["meeting_timezone"] = serde_json::json!("US/Eastern");
+        e["meeting_location"] = serde_json::json!("meeting@fedoraproject.org");
+        let m: Meeting = serde_json::from_value(e).unwrap();
+        assert_eq!(
+            m.starts_at().unwrap().to_rfc3339(),
+            "2026-12-02T16:00:00+00:00"
+        );
+        assert_eq!(
+            m.ends_at().unwrap().to_rfc3339(),
+            "2026-12-02T17:00:00+00:00"
+        );
+        assert_eq!(m.room().unwrap().name, "meeting");
+        // Local times, as a calendar-and-location answer gives them:
+        // 18:00 London summer time is 17:00 UTC.
+        let mut e = entry(2, "me", "2026-07-07", "2026-07-07", "18:00");
+        e["meeting_time_stop"] = serde_json::json!("23:30");
+        e["meeting_timezone"] = serde_json::json!("Europe/London");
+        let m: Meeting = serde_json::from_value(e).unwrap();
+        let m = m.into_utc();
+        assert_eq!(
+            m.starts_at().unwrap().to_rfc3339(),
+            "2026-07-07T17:00:00+00:00"
+        );
+        assert_eq!(
+            m.ends_at().unwrap().to_rfc3339(),
+            "2026-07-07T22:30:00+00:00"
+        );
+        // A time zone or time that does not read: left as it is.
+        let mut e = entry(3, "me", "2026-07-07", "2026-07-07", "18:00:00");
+        e["meeting_timezone"] = serde_json::json!("Mars/Olympus");
+        let m: Meeting = serde_json::from_value(e).unwrap();
+        assert_eq!(m.clone().into_utc(), m);
+        assert!(m.room().is_none());
+        let mut e = entry(4, "me", "2026-07-07", "2026-07-07", "noon");
+        e["meeting_timezone"] = serde_json::json!("UTC");
+        let m: Meeting = serde_json::from_value(e).unwrap();
+        assert!(m.starts_at().is_none());
+        assert_eq!(m.clone().into_utc(), m);
+    }
+
+    #[tokio::test]
+    async fn a_calendar_and_location_answer_is_read_in_utc() {
+        let server = MockServer::start().await;
+        let mut e = entry(5, "me", "2026-07-07", "2026-07-07", "18:00:00");
+        e["meeting_timezone"] = serde_json::json!("Europe/London");
+        e["calendar_name"] = serde_json::json!("fesco");
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"arguments": {}, "meetings": [e]})),
+            )
+            .mount(&server)
+            .await;
+        let client = Client::with_base_url(&server.uri());
+        let local = client
+            .meetings(
+                &MeetingQuery::default()
+                    .calendar("fesco")
+                    .location("meeting@fedoraproject.org"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(local[0].meeting_time_start, "17:00:00");
+        // Any other query: as given.
+        let utc = client
+            .meetings(&MeetingQuery::default().calendar("fesco"))
+            .await
+            .unwrap();
+        assert_eq!(utc[0].meeting_time_start, "18:00:00");
     }
 
     #[test]

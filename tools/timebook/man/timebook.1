@@ -1,0 +1,91 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH timebook 1 2026-11-19 "sandogasa 0.28.2" "Sandogasa Manual"
+.SH NAME
+timebook \- Find free Fedora meeting rooms and check bookings in Fedora Calendar
+.SH SYNOPSIS
+\fBtimebook\fR [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Fedora\*(Aqs shared meeting rooms (meeting, meeting\-1, ...) as Fedora Calendar books them: which rooms a planned meeting, or a series of them, would find free, and what each room holds.
+.PP
+A calendar entry\*(Aqs location is free text, so one room appears under many names (meeting\-1@chat.fedoraproject.org, a matrix.to link, the IRC channel it replaced); timebook reads them all as the room. Times are compared in UTC.
+.SH OPTIONS
+.TP
+\fB\-\-json\fR
+Print JSON instead of text
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH COMMANDS
+.SS timebook check
+\fBtimebook check\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIROOM\fR> <\fIAT\fR>
+.PP
+Check whether a room is free for a planned meeting or series
+.TP
+\fB\-\-count\fR \fI<COUNT>\fR [default: 1]
+How many meetings in the series (1 to 520)
+.TP
+\fB\-\-json\fR
+Print JSON instead of text
+.TP
+\fB\-\-every\fR \fI<EVERY>\fR [default: 7]
+Days between meetings (1 to 366)
+.TP
+\fB\-\-minutes\fR \fI<MINUTES>\fR [default: 60]
+How long each meeting is, in minutes (1 to 1440)
+.TP
+\fB\-\-tz\fR \fI<TZ>\fR [default: UTC]
+The time zone of \-\-at, e.g. Europe/Dublin
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIROOM\fR>
+The room: meeting, meeting\-1, or any name of it
+.TP
+<\fIAT\fR>
+When the first one starts: YYYY\-MM\-DD HH:MM, in \-\-tz
+.SS timebook find
+\fBtimebook find\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIAT\fR>
+.PP
+Find the rooms free for a planned meeting or series
+.TP
+\fB\-\-count\fR \fI<COUNT>\fR [default: 1]
+How many meetings in the series (1 to 520)
+.TP
+\fB\-\-json\fR
+Print JSON instead of text
+.TP
+\fB\-\-every\fR \fI<EVERY>\fR [default: 7]
+Days between meetings (1 to 366)
+.TP
+\fB\-\-minutes\fR \fI<MINUTES>\fR [default: 60]
+How long each meeting is, in minutes (1 to 1440)
+.TP
+\fB\-\-tz\fR \fI<TZ>\fR [default: UTC]
+The time zone of \-\-at, e.g. Europe/Dublin
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIAT\fR>
+When the first one starts: YYYY\-MM\-DD HH:MM, in \-\-tz
+.SS timebook rooms
+\fBtimebook rooms\fR [\fB\-\-days\fR] [\fB\-\-json\fR] [\fB\-\-from\fR] [\fB\-h\fR|\fB\-\-help\fR]
+.PP
+List what each room holds in a period
+.TP
+\fB\-\-days\fR \fI<DAYS>\fR [default: 28]
+Days to cover (1 to 366)
+.TP
+\fB\-\-json\fR
+Print JSON instead of text
+.TP
+\fB\-\-from\fR \fI<FROM>\fR
+First day (YYYY\-MM\-DD; default today)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

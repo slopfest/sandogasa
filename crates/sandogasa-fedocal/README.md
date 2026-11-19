@@ -11,6 +11,15 @@ and adding entries as a logged-in user.
   vacation calendar.
 - `Meeting::last_day` gives a full-day entry's last day: fedocal stores
   those from 00:00 to 00:00 UTC, ending on the day after.
+  `Meeting::starts_at` and `ends_at` give an occurrence's times in UTC,
+  as the API gives them; `meeting_timezone` names the time zone it was
+  booked in. The one query shape that answers in local times, a
+  calendar and a location together, is converted to UTC by
+  `Client::meetings`.
+- `room::Room` reads the free-text locations entries give as Fedora's
+  shared meeting rooms (`meeting`, `meeting-N`):
+  `meeting-1@chat.fedoraproject.org`, a matrix.to link, a Matrix alias,
+  and the IRC channel the room replaced all read as `meeting-1`.
 - `session::Session::kerberos(base_url)` logs in with the user's
   Kerberos ticket (`fkinit`). fedocal has no API for writing, and logs
   in through id.fedoraproject.org's OpenID Connect provider, which
