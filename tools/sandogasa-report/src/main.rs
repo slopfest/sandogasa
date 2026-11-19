@@ -441,6 +441,9 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     // shorthand, not a username on any service, so rendering it
     // would be misleading.
     let mut domain_reports: Vec<report::DomainReport> = Vec::new();
+    // A user's GitLab activity, read once per instance for the domains
+    // on it.
+    let mut gitlab_activity = gitlab::Activity::default();
     let mut block_cli_idx: Vec<usize> = Vec::new();
     let mut bugzillas: Vec<BugzillaAggregate> = Vec::new();
 
@@ -534,6 +537,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                         since,
                         until,
                         &cfg.gitlab_tokens,
+                        &mut gitlab_activity,
                         cli.verbose,
                     ) {
                         Ok(gl_report) => dr.gitlab = Some(gl_report),

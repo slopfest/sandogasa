@@ -156,6 +156,22 @@ missing project.
 
 Resolves #191
 
+### sandogasa-report reads each GitLab instance once
+
+sandogasa-report's GitLab section read the user's events, and looked up
+the path of every project in them one request at a time, separately for
+each domain on the instance. For a report since 2026-07-01 with three
+gitlab.com domains, that was the same 890 events and the same 76 project
+lookups three times, 228 requests one after another, with nothing
+printed unless `-v` was given.
+
+The events and paths are now read once per instance and user and shared
+by its domains, and the per-project requests (paths, merge request
+states, tags, authored commit counts, releases) run eight at a time.
+Resolving the projects says so in one line.
+
+Resolves #195
+
 ### sandogasa-report counts the GitLab merge requests a user merged
 
 No GitLab section ever counted a merge request the user merged: "MRs

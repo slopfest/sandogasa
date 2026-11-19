@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use sandogasa_gitlab::{
-    Event, count_authored_commits, list_tags, project_releases, project_summary, user_by_username,
-    user_events,
+    Event, User, count_authored_commits, list_tags, project_releases, project_summary,
+    user_by_username, user_events,
 };
 use serde::Serialize;
 
@@ -165,46 +165,46 @@ pub struct ReleaseRef {
     pub upcoming: bool,
 }
 
-/// Build the GitLab activity report for one domain.
+/// What users did on GitLab instances in the report's period, read
+/// once per instance and user and shared by the domains on it.
+#[derive(Default)]
+pub struct Activity {
+    reads: BTreeMap<(String, String), Read>,
+}
+
+/// One user's events on one instance, with their projects' paths.
+struct Read {
+    user: User,
+    events: Vec<Event>,
+    paths: BTreeMap<u64, String>,
+}
+
+/// How many requests to a GitLab instance are in flight at once.
+const PARALLEL: usize = 8;
+
+/// Build the GitLab activity report for one domain, from `activity`'s
+/// read of the user on the domain's instance, made on first use.
 pub fn gitlab_report(
     cfg: &GitlabConfig,
     user: &str,
     since: NaiveDate,
     until: NaiveDate,
     tokens: &std::collections::BTreeMap<String, String>,
+    activity: &mut Activity,
     verbose: bool,
 ) -> Result<GitlabReport, String> {
     let token = find_token(&cfg.instance, tokens)?;
     let base = cfg.instance.trim_end_matches('/');
-
-    if verbose {
-        eprintln!("[gitlab] {base}: resolving user {user}");
+    let key = (base.to_string(), user.to_string());
+    if !activity.reads.contains_key(&key) {
+        let read = read_activity(base, &token, user, since, until, verbose)?;
+        activity.reads.insert(key.clone(), read);
     }
-
-    let user_obj = user_by_username(base, &token, user)
-        .map_err(|e| format!("GitLab user lookup on {base}: {e}"))?
-        .ok_or_else(|| format!("user '{user}' not found on {base}"))?;
-
-    // GitLab events are half-open on both ends: after/before days
-    // are excluded. Widen by one day and re-clamp client-side.
-    let after = since - chrono::Duration::days(1);
-    let before = until + chrono::Duration::days(1);
-
-    if verbose {
-        eprintln!(
-            "[gitlab] {base}: fetching events for user id {} ({user})",
-            user_obj.id
-        );
-    }
-
-    let events = user_events(base, &token, user_obj.id, None, after, before)
-        .map_err(|e| format!("GitLab events on {base}: {e}"))?;
-
-    if verbose {
-        eprintln!("[gitlab] {base}: fetched {} events", events.len());
-    }
-
-    let paths = resolve_project_paths(base, &token, &events, verbose);
+    let Read {
+        user: user_obj,
+        events,
+        paths,
+    } = &activity.reads[&key];
 
     let mut report = GitlabReport {
         instance: base.to_string(),
@@ -228,7 +228,7 @@ pub fn gitlab_report(
     // only fire authored-count lookups for the projects the
     // report actually covers.
     let mut project_ids_in_group: BTreeSet<u64> = BTreeSet::new();
-    for ev in &events {
+    for ev in events {
         if !date_in_range(&ev.created_at, since, until) {
             continue;
         }
@@ -255,9 +255,11 @@ pub fn gitlab_report(
     // The events say an MR was opened, not what became of it: look each
     // one up, and for one closed without merging ask whether its commit
     // landed on the target branch anyway.
-    for mr in report.opened_mrs.iter_mut() {
-        settle_opened_mr(base, &token, mr, verbose);
-    }
+    report.opened_mrs = forge::in_parallel(&report.opened_mrs, PARALLEL, |mr| {
+        let mut mr = mr.clone();
+        settle_opened_mr(base, &token, &mut mr, verbose);
+        mr
+    });
 
     // Fill in any tags we couldn't name from events alone by
     // listing each tagged project's tags and adding those whose
@@ -271,9 +273,15 @@ pub fn gitlab_report(
             tagged_project_ids.len(),
         );
     }
-    for pid in &tagged_project_ids {
-        let Some(path) = paths.get(pid) else { continue };
-        let tags = match list_tags(base, &token, *pid) {
+    let tagged: Vec<(u64, &String)> = tagged_project_ids
+        .iter()
+        .filter_map(|pid| Some((*pid, paths.get(pid)?)))
+        .collect();
+    let listed = forge::in_parallel(&tagged, PARALLEL, |(pid, _)| {
+        list_tags(base, &token, *pid).map_err(|e| e.to_string())
+    });
+    for ((_, path), tags) in tagged.into_iter().zip(listed) {
+        let tags = match tags {
             Ok(t) => t,
             Err(e) => {
                 if verbose {
@@ -306,8 +314,8 @@ pub fn gitlab_report(
         .tags_pushed
         .sort_by(|a, b| a.project.cmp(&b.project).then(a.tag.cmp(&b.tag)));
 
-    // Authored-commit counts, one call per in-scope project. Runs
-    // only where the user already pushed; projects the user
+    // Authored-commit counts, one call per in-scope project, a few at a
+    // time. Runs only where the user already pushed; projects the user
     // only commented on or approved MRs for don't count here.
     if verbose {
         eprintln!(
@@ -315,20 +323,25 @@ pub fn gitlab_report(
             report.commits_pushed.len()
         );
     }
-    let pushed_paths: Vec<String> = report.commits_pushed.keys().cloned().collect();
-    for path in &pushed_paths {
-        // project_id isn't stored in commits_pushed; look up by
-        // inverting `paths`. This is linear but the map is tiny
-        // (one entry per touched project).
-        let Some((pid, _)) = paths.iter().find(|(_, p)| *p == path) else {
-            continue;
-        };
-        if !project_ids_in_group.contains(pid) {
-            continue;
-        }
-        match count_authored_commits(base, &token, *pid, user, since, until) {
+    // project_id isn't stored in commits_pushed; look it up by
+    // inverting `paths`.
+    let pushed: Vec<(u64, String)> = report
+        .commits_pushed
+        .keys()
+        .filter_map(|path| {
+            let (pid, _) = paths.iter().find(|(_, p)| *p == path)?;
+            project_ids_in_group
+                .contains(pid)
+                .then(|| (*pid, path.clone()))
+        })
+        .collect();
+    let counted = forge::in_parallel(&pushed, PARALLEL, |(pid, _)| {
+        count_authored_commits(base, &token, *pid, user, since, until).map_err(|e| e.to_string())
+    });
+    for ((_, path), count) in pushed.into_iter().zip(counted) {
+        match count {
             Ok(n) => {
-                report.commits_authored.insert(path.clone(), n);
+                report.commits_authored.insert(path, n);
             }
             Err(e) if verbose => {
                 eprintln!("[gitlab] {base}: authored-commit lookup failed for {path}: {e}");
@@ -347,9 +360,15 @@ pub fn gitlab_report(
             project_ids_in_group.len()
         );
     }
-    for pid in &project_ids_in_group {
-        let Some(path) = paths.get(pid) else { continue };
-        let releases = match project_releases(base, &token, *pid) {
+    let scoped: Vec<(u64, &String)> = project_ids_in_group
+        .iter()
+        .filter_map(|pid| Some((*pid, paths.get(pid)?)))
+        .collect();
+    let found = forge::in_parallel(&scoped, PARALLEL, |(pid, _)| {
+        project_releases(base, &token, *pid).map_err(|e| e.to_string())
+    });
+    for ((_, path), releases) in scoped.into_iter().zip(found) {
+        let releases = match releases {
             Ok(r) => r,
             Err(e) => {
                 if verbose {
@@ -561,22 +580,76 @@ fn resolve_project_paths(
     events: &[Event],
     verbose: bool,
 ) -> BTreeMap<u64, String> {
-    let mut paths: BTreeMap<u64, String> = BTreeMap::new();
-    let unique_ids: BTreeSet<u64> = events.iter().map(|e| e.project_id).collect();
-    for pid in &unique_ids {
-        match project_summary(base, token, *pid) {
-            Ok(p) => {
-                paths.insert(*pid, p.path_with_namespace);
-            }
-            Err(e) => {
-                if verbose {
-                    eprintln!("[gitlab] {base}: project {pid} lookup failed: {e}");
-                }
-                paths.insert(*pid, format!("project-{pid}"));
-            }
-        }
+    let unique_ids: Vec<u64> = events
+        .iter()
+        .map(|e| e.project_id)
+        .collect::<BTreeSet<u64>>()
+        .into_iter()
+        .collect();
+    if !unique_ids.is_empty() {
+        eprintln!(
+            "Resolving {} GitLab project(s) on {base}...",
+            unique_ids.len()
+        );
     }
-    paths
+    let found = forge::in_parallel(&unique_ids, PARALLEL, |pid| {
+        project_summary(base, token, *pid).map_err(|e| e.to_string())
+    });
+    unique_ids
+        .into_iter()
+        .zip(found)
+        .map(|(pid, found)| {
+            let path = match found {
+                Ok(p) => p.path_with_namespace,
+                Err(e) => {
+                    if verbose {
+                        eprintln!("[gitlab] {base}: project {pid} lookup failed: {e}");
+                    }
+                    format!("project-{pid}")
+                }
+            };
+            (pid, path)
+        })
+        .collect()
+}
+
+/// `user`'s events on `base` in the period, with their projects'
+/// paths: what every domain on the instance reads from.
+fn read_activity(
+    base: &str,
+    token: &str,
+    user: &str,
+    since: NaiveDate,
+    until: NaiveDate,
+    verbose: bool,
+) -> Result<Read, String> {
+    if verbose {
+        eprintln!("[gitlab] {base}: resolving user {user}");
+    }
+    let user_obj = user_by_username(base, token, user)
+        .map_err(|e| format!("GitLab user lookup on {base}: {e}"))?
+        .ok_or_else(|| format!("user '{user}' not found on {base}"))?;
+    // GitLab events are half-open on both ends: after/before days
+    // are excluded. Widen by one day and re-clamp client-side.
+    let after = since - chrono::Duration::days(1);
+    let before = until + chrono::Duration::days(1);
+    if verbose {
+        eprintln!(
+            "[gitlab] {base}: fetching events for user id {} ({user})",
+            user_obj.id
+        );
+    }
+    let events = user_events(base, token, user_obj.id, None, after, before)
+        .map_err(|e| format!("GitLab events on {base}: {e}"))?;
+    if verbose {
+        eprintln!("[gitlab] {base}: fetched {} events", events.len());
+    }
+    let paths = resolve_project_paths(base, token, &events, verbose);
+    Ok(Read {
+        user: user_obj,
+        events,
+        paths,
+    })
 }
 
 /// Is `ev` any kind of user tag push — singleton or batched? We
@@ -1373,7 +1446,16 @@ mod tests {
         let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
         let since = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
         let until = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
-        let r = gitlab_report(&cfg, "me", since, until, &tokens, true).unwrap();
+        let r = gitlab_report(
+            &cfg,
+            "me",
+            since,
+            until,
+            &tokens,
+            &mut Activity::default(),
+            true,
+        )
+        .unwrap();
 
         let mrs = |v: &[MrRef]| -> Vec<(String, u64)> {
             v.iter().map(|m| (m.project.clone(), m.iid)).collect()
@@ -1447,7 +1529,16 @@ mod tests {
         let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
         let since = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
         let until = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
-        let r = gitlab_report(&cfg, "me", since, until, &tokens, false).unwrap();
+        let r = gitlab_report(
+            &cfg,
+            "me",
+            since,
+            until,
+            &tokens,
+            &mut Activity::default(),
+            false,
+        )
+        .unwrap();
         let opened: Vec<(&str, u64)> = r
             .opened_mrs
             .iter()
@@ -1474,6 +1565,30 @@ mod tests {
             extra_groups: vec![],
         };
         assert!(in_scope("any/thing", &all));
+    }
+
+    #[test]
+    fn domains_on_one_instance_read_its_activity_once() {
+        let (rt, server) = mock_gitlab();
+        let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
+        let since = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+        let until = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
+        let mut activity = Activity::default();
+        for group in ["grp", "other"] {
+            let cfg = GitlabConfig {
+                instance: server.uri(),
+                group: Some(group.to_string()),
+                extra_groups: vec![],
+            };
+            gitlab_report(&cfg, "me", since, until, &tokens, &mut activity, false).unwrap();
+        }
+        let asked = rt.block_on(server.received_requests()).unwrap();
+        let times = |p: &str| asked.iter().filter(|r| r.url.path() == p).count();
+        assert_eq!(times("/api/v4/users/7/events"), 1);
+        // Each of the three projects once, not once per domain.
+        for id in [10, 20, 30] {
+            assert_eq!(times(&format!("/api/v4/projects/{id}")), 1, "project {id}");
+        }
     }
 
     #[test]
@@ -1506,7 +1621,16 @@ mod tests {
         };
         let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
         let day = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
-        let err = gitlab_report(&cfg, "nobody", day, day, &tokens, false).unwrap_err();
+        let err = gitlab_report(
+            &cfg,
+            "nobody",
+            day,
+            day,
+            &tokens,
+            &mut Activity::default(),
+            false,
+        )
+        .unwrap_err();
         assert!(
             err.contains("GitLab user lookup") || err.contains("not found"),
             "{err}"

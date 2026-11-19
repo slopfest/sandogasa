@@ -183,9 +183,53 @@ pub fn stat_across(out: &mut String, label: &str, total: u64, n: usize, unit: &s
     }
 }
 
+/// `f` over `items`, at most `limit` at a time, the results in the
+/// items' order: for remote calls with no batch form, which shared
+/// services should not get all at once.
+pub fn in_parallel<T: Sync, R: Send>(
+    items: &[T],
+    limit: usize,
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    let f = &f;
+    let mut out = Vec::with_capacity(items.len());
+    for chunk in items.chunks(limit.max(1)) {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|item| scope.spawn(move || f(item)))
+                .collect();
+            out.extend(
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("a parallel task panicked")),
+            );
+        });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Landed, rebased_onto};
+    use super::{Landed, in_parallel, rebased_onto};
+
+    #[test]
+    fn in_parallel_keeps_the_order_and_the_bound() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let running = AtomicUsize::new(0);
+        let most = AtomicUsize::new(0);
+        let items: Vec<u32> = (0..20).collect();
+        let doubled = in_parallel(&items, 3, |n| {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            running.fetch_sub(1, Ordering::SeqCst);
+            n * 2
+        });
+        assert_eq!(doubled, items.iter().map(|n| n * 2).collect::<Vec<_>>());
+        assert!(most.load(Ordering::SeqCst) <= 3);
+        assert!(in_parallel(&[] as &[u32], 3, |n| *n).is_empty());
+    }
 
     fn landed(title: &str, name: &str, email: &str) -> Landed {
         Landed {
