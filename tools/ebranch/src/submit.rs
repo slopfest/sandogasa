@@ -1006,7 +1006,10 @@ mod tests {
             new: "0.28.1-1.fc46".to_string(),
         }];
         let bz = sandogasa_bugzilla::BzClient::new(&server.uri());
-        let bodhi = BodhiClient::with_base_url(&server.uri());
+        // One attempt: a failing Bodhi is the case under test, not its
+        // retries.
+        let bodhi = BodhiClient::with_base_url(&server.uri())
+            .with_retry(sandogasa_cli::retry::Policy::immediate(1));
         gather_bugs(&bz, &bodhi, &report, &[], None, None, true).await
     }
 

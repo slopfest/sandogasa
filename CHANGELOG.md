@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### sandogasa-bodhi asks again for a page of updates that fails
+
+sandogasa-report's Bodhi section failed the whole run on one bad page
+of a user's updates (`error decoding response body`, on page 2 of
+`--since 2026-07-01` and on page 4 the next time), although the same
+page came back whole when fetched again. Every query that reads updates
+page by page (by user, package, build or bug, used by sandogasa-report,
+ebranch, fedora-cve-triage, poi-tracker and sandogasa-hattrack) now
+retries a page that fails to connect, comes back with a transient
+status, or arrives cut short or garbled, up to four attempts with
+waits of 1, 2 and 4 s, naming the error on stderr. `BodhiClient::with_retry`
+sets another policy.
+
 ### sandogasa-report names Gitea along with Forgejo
 
 sandogasa-report called every instance of the Forgejo API family

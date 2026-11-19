@@ -2,6 +2,7 @@
 
 use reqwest::Client;
 use sandogasa_cli::http;
+use sandogasa_cli::retry::{self, Policy};
 
 use crate::models::{
     BodhiRelease, BugFeedbackItem, Comment, CommentsResponse, NewUpdateFromTag, NewUpdateResponse,
@@ -82,6 +83,7 @@ pub struct BodhiClient {
     base_url: String,
     client: Client,
     token: Option<String>,
+    retry: Policy,
 }
 
 impl Default for BodhiClient {
@@ -115,6 +117,51 @@ impl BodhiClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: build_http_client(),
             token: None,
+            retry: Policy::DEFAULT,
+        }
+    }
+
+    /// Retry a page of updates that fails under `policy` instead of
+    /// the default (four attempts, waiting 1, 2 and 4 s).
+    pub fn with_retry(mut self, policy: Policy) -> Self {
+        self.retry = policy;
+        self
+    }
+
+    /// One page of updates, from the request `build` makes. A page that
+    /// cannot be fetched, comes back with a transient status, or is cut
+    /// short or garbled on the way (Bodhi's proxy sends one now and
+    /// then, with a 200) is asked for again under the retry policy.
+    async fn updates_page<F>(&self, build: F) -> Result<UpdatesResponse, reqwest::Error>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let attempts = self.retry.attempts.max(1);
+        let mut retry = 0;
+        loop {
+            let result = match retry::send("Bodhi", &self.retry, &build).await {
+                Ok(resp) => match resp.error_for_status() {
+                    Ok(resp) => resp.json::<UpdatesResponse>().await,
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(e),
+            };
+            match result {
+                Err(e) if retry + 1 < attempts && (e.is_decode() || e.is_body()) => {
+                    retry += 1;
+                    let wait = self.retry.delay(retry, None);
+                    let why = std::error::Error::source(&e)
+                        .map(|s| format!(" ({s})"))
+                        .unwrap_or_default();
+                    eprintln!(
+                        "Bodhi: {e}{why}; retrying in {}s ({retry}/{})",
+                        wait.as_secs_f32(),
+                        attempts - 1
+                    );
+                    tokio::time::sleep(wait).await;
+                }
+                result => return result,
+            }
         }
     }
 
@@ -163,14 +210,7 @@ impl BodhiClient {
                 self.base_url, package, release, status_params, page
             );
 
-            let resp: UpdatesResponse = self
-                .client
-                .get(&url)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
+            let resp = self.updates_page(|| self.client.get(&url)).await?;
 
             all_updates.extend(resp.updates);
 
@@ -190,18 +230,17 @@ impl BodhiClient {
         let mut all_updates = Vec::new();
         let mut page = 1;
         loop {
-            let resp: UpdatesResponse = self
-                .client
-                .get(format!("{}/updates/", self.base_url))
-                .query(&[
-                    ("builds", nvr),
-                    ("rows_per_page", "100"),
-                    ("page", &page.to_string()),
-                ])
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
+            let page_s = page.to_string();
+            let resp = self
+                .updates_page(|| {
+                    self.client
+                        .get(format!("{}/updates/", self.base_url))
+                        .query(&[
+                            ("builds", nvr),
+                            ("rows_per_page", "100"),
+                            ("page", page_s.as_str()),
+                        ])
+                })
                 .await?;
             all_updates.extend(resp.updates);
             if page >= resp.pages {
@@ -247,14 +286,12 @@ impl BodhiClient {
                     chunk.iter().map(|v| (param, v.clone())).collect();
                 query.push(("rows_per_page", "100".to_string()));
                 query.push(("page", page.to_string()));
-                let resp: UpdatesResponse = self
-                    .client
-                    .get(format!("{}/updates/", self.base_url))
-                    .query(&query)
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json()
+                let resp = self
+                    .updates_page(|| {
+                        self.client
+                            .get(format!("{}/updates/", self.base_url))
+                            .query(&query)
+                    })
                     .await?;
                 for update in resp.updates {
                     if !all.iter().any(|u| u.alias == update.alias) {
@@ -339,7 +376,8 @@ impl BodhiClient {
     /// Paginates at 100 rows per request until either `limit`
     /// updates have been collected or the last page is reached.
     /// Smaller per-request windows avoid Bodhi's tendency to
-    /// time out on very large single fetches.
+    /// time out on very large single fetches, and a page that fails
+    /// is retried (see [`Self::with_retry`]).
     ///
     /// `on_page` is invoked after each successful page with
     /// `(page_number, total_pages, running_count)` so callers
@@ -376,14 +414,7 @@ impl BodhiClient {
                 "{}/updates/?user={}{}&rows_per_page={rows}&chrome=0&page={}",
                 self.base_url, username, date_filters, page
             );
-            let resp: UpdatesResponse = self
-                .client
-                .get(&url)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
+            let resp = self.updates_page(|| self.client.get(&url)).await?;
             all.extend(resp.updates);
             on_page(resp.page, resp.pages, all.len());
             if all.len() >= limit as usize || page >= resp.pages {
@@ -760,6 +791,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_page_cut_short_is_asked_for_again() {
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri()).with_retry(Policy::immediate(3));
+        let good = serde_json::json!({
+            "updates": [{"alias": "FEDORA-2026-a", "status": "stable"}],
+            "page": 1, "pages": 1, "total": 1,
+        });
+        let cut = good.to_string()[..40].to_string();
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(cut.clone()))
+            .up_to_n_times(2)
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(good))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let updates = client
+            .updates_for_user("salimma", 100, None, None, |_, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(updates[0].alias, "FEDORA-2026-a");
+
+        // A page that never comes back whole is an error once the
+        // attempts run out.
+        let server = MockServer::start().await;
+        let client = BodhiClient::with_base_url(&server.uri()).with_retry(Policy::immediate(2));
+        Mock::given(method("GET"))
+            .and(wiremock::matchers::path("/updates/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(cut))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let err = client
+            .updates_for_build("foo-1.0-1.fc45")
+            .await
+            .unwrap_err();
+        assert!(err.is_decode(), "{err}");
+    }
+
+    #[tokio::test]
     async fn comments_for_user_asks_for_the_limit() {
         let server = MockServer::start().await;
         let client = BodhiClient::with_base_url(&server.uri());
@@ -788,7 +864,7 @@ mod tests {
     #[tokio::test]
     async fn a_failing_bodhi_is_an_error_not_an_empty_answer() {
         let server = MockServer::start().await;
-        let client = BodhiClient::with_base_url(&server.uri());
+        let client = BodhiClient::with_base_url(&server.uri()).with_retry(Policy::immediate(2));
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(503))
             .mount(&server)
