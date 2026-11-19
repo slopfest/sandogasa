@@ -98,6 +98,17 @@ pub fn gather(report: &crate::report::Report) -> Vec<RepoActivity> {
             for (project, n) in &gl.commits_pushed {
                 at(&mut rows, key(&gl.instance, project)).commits += n;
             }
+            for issue in gl
+                .opened_issues
+                .iter()
+                .chain(&gl.closed_issues)
+                .chain(&gl.commented_issues)
+            {
+                issues
+                    .entry(key(&gl.instance, &issue.project))
+                    .or_default()
+                    .insert(issue.iid);
+            }
         }
         if let Some(gh) = &domain.github {
             for (list, field) in [
@@ -305,6 +316,12 @@ mod tests {
             ..Default::default()
         };
         // GitLab and Forgejo/Gitea rows, gathered the same way.
+        let gl_issue = |iid: u64| crate::gitlab::IssueRef {
+            project: "g/p".into(),
+            iid,
+            title: String::new(),
+            work_item: false,
+        };
         let gl = crate::gitlab::GitlabReport {
             instance: "https://gitlab.com".into(),
             opened_mrs: vec![crate::gitlab::MrRef {
@@ -316,6 +333,10 @@ mod tests {
                 applied: false,
             }],
             commits_pushed: BTreeMap::from([("g/p".to_string(), 4)]),
+            // #1 opened and closed, #2 commented on: two issues.
+            opened_issues: vec![gl_issue(1)],
+            closed_issues: vec![gl_issue(1)],
+            commented_issues: vec![gl_issue(2)],
             ..Default::default()
         };
         let pr = crate::forgejo::PrRef {
@@ -370,7 +391,7 @@ mod tests {
         assert_eq!(
             shown,
             [
-                "gitlab.com/g/p 1 0 0 4",
+                "gitlab.com/g/p 1 0 2 4",
                 "codeberg.org/o/c 1 1 2 0",
                 "api.github.com/o/a 0 0 2 0",
                 "api.github.com/o/b 0 0 1 0",

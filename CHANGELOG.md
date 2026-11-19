@@ -136,6 +136,32 @@ issues too.
 
 Resolves #190
 
+### sandogasa-report counts GitLab issues and work outside the group
+
+sandogasa-report's GitLab section counted only merge requests and
+commits, and only in the domain's `group`. So a domain's work elsewhere
+on the instance was left out, such as the CentOS Stream merge request
+a Proposed Update starts from, and so were issues and work items, such
+as a SIG's tracking work items and CentOS infra tickets. A `--notes`
+note about any of them had no item to attach to.
+
+The section now lists issues and work items opened, closed and
+commented on, and takes `extra_groups`, more group or project prefixes
+the domain counts besides `group`, or alone. A `*` in a segment of
+either matches within that segment. A note's `/-/issues/N` and
+`/-/work_items/N` URLs match the same item, and `--by repo`'s Issues
+column counts GitLab's issues too. sandogasa-gitlab's `user_events`
+leaves out an event on a group (an epic) rather than failing on its
+missing project.
+
+Resolves #191
+
+### sandogasa-report counts the GitLab merge requests a user merged
+
+No GitLab section ever counted a merge request the user merged: "MRs
+merged" never appeared. GitLab names that event `accepted`, and the
+report looked for `merged`, the name of the API's filter for it.
+
 ### sandogasa-report reads every page of a user's Bodhi updates
 
 The Bodhi section stopped after a user's first 500 updates without

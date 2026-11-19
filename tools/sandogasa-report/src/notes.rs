@@ -421,6 +421,15 @@ pub fn url_key(url: &str) -> String {
             return format!("github.com/{owner}/{repo}/{kind}/{n}").to_lowercase();
         }
     }
+    // GitLab gives a project's issue two pages: `/-/issues/N` and, as
+    // a work item, `/-/work_items/N`. A group's work item (an epic) has
+    // no issue page.
+    let path = match path.split_once("/-/work_items/") {
+        Some((project, n)) if !project.starts_with("groups/") => {
+            format!("{project}/-/issues/{n}")
+        }
+        _ => path.to_string(),
+    };
     let mut key = if path.is_empty() {
         host.clone()
     } else {
@@ -846,6 +855,15 @@ mod tests {
         assert_eq!(
             url_key("https://api.github.com/repos/o/r/issues/3"),
             "github.com/o/r/issues/3"
+        );
+        // GitLab's two pages for an issue; a group's work item keeps its.
+        assert_eq!(
+            url_key("https://gitlab.com/CentOS/infra/tracker/-/work_items/2018"),
+            url_key("https://gitlab.com/centos/infra/tracker/-/issues/2018/")
+        );
+        assert_eq!(
+            url_key("https://gitlab.com/groups/CentOS/-/work_items/12"),
+            "gitlab.com/groups/centos/-/work_items/12"
         );
         let bug = "bugzilla.redhat.com/show_bug.cgi?id=2575659";
         for url in [

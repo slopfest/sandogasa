@@ -18,13 +18,15 @@ packaging activity across multiple systems:
 - **Koji CBS**: new packages and version updates in CentOS SIG
   release tags, with date-range comparison
 - **GitLab**: MRs opened / merged / approved / commented on,
-  both pushed and authored commit counts per project, tags
-  pushed, and GitLab Releases authored. The gap between
-  pushed/authored commits flags mirror activity. Optionally
-  scoped by group prefix (`CentOS/Hyperscale`,
-  `CentOS/Hyperscale/rpms`, etc.). The opened list flags each
-  MR's fate the way the Forgejo one does: `(merged)`, `(closed)`,
-  or `(applied)`, rebased commits included
+  issues and work items opened / closed / commented on, both
+  pushed and authored commit counts per project, tags pushed, and
+  GitLab Releases authored. The gap between pushed/authored commits
+  flags mirror activity. Optionally scoped by group prefix
+  (`CentOS/Hyperscale`, `CentOS/Hyperscale/rpms`, etc.), with
+  `extra_groups` for the domain's work elsewhere on the instance.
+  The opened list flags each MR's fate the way the Forgejo one
+  does: `(merged)`, `(closed)`, or `(applied)`, rebased commits
+  included
 - **GitHub**: PRs opened / merged / reviewed / commented on, issues
   opened / commented on, authored commit counts per repo, annotated
   tags cut, and GitHub Releases published. Commits and reviews come
@@ -189,11 +191,12 @@ $ sandogasa-report report -c config.toml -d hyperscale --period 2026Q3 --by repo
 A repository is keyed by host and path together, so the same
 `owner/name` on two forges stays two rows. Columns no repository used
 are dropped rather than printed as a line of zeroes. Issues counts the
-issues opened or commented on (GitHub) and opened or closed
-(Forgejo/Gitea), each once. Commits are the
-ones pushed, which is what the per-forge sections already report — a
-push can carry work the pusher did not write, so pushed and authored
-counts are not added together.
+issues opened or commented on (GitHub), opened, closed or commented on
+(GitLab), and opened or closed (Forgejo/Gitea), each once. A project two
+domains cover (one's `group`, another's `extra_groups`) is counted in
+each. Commits are the ones pushed, which is what the per-forge sections
+already report — a push can carry work the pusher did not write, so
+pushed and authored counts are not added together.
 
 To have it on every run, pin it as a flag default (see
 [System-wide configuration](#system-wide-configuration)):
@@ -250,19 +253,20 @@ directory, else
 dir = "~/Nextcloud/projects/notes/sandogasa-report"
 ```
 
-`report --notes` adds the notes dated in the report's period. Each
-note goes under the first item in the report that links its URL, or,
-for a commit, under its repository's line in that forge's commit
-counts, since reports count commits rather than list them; items show
-only with `--detailed --detailed`. URLs match when they point at the
-same item: the scheme, the host's case, a trailing slash, a fragment
-and tracking parameters (`utm_*`) do not count, nor the path's case on
-GitHub and GitLab; a Bugzilla bug matches in any form (`rhbz#N`, `/N`,
-`show_bug.cgi?id=N` with other parameters), and a GitHub API URL
-matches the web page. Notes no item took close the
-report in a "Notes" section, those without a URL under "Other notes".
-With `--json`, the notes come as a `notes` array beside `report`, each
-with the `key` its URL is matched by.
+`report --notes` adds the notes dated in the report's period. Each note
+goes under the first item in the report that links its URL, or, for a
+commit, under its repository's line in that forge's commit counts, since
+reports count commits rather than list them; items show only with
+`--detailed --detailed`. URLs match when they point at the same item:
+the scheme, the host's case, a trailing slash, a fragment and tracking
+parameters (`utm_*`) do not count, nor the path's case on GitHub and
+GitLab; a Bugzilla bug matches in any form (`rhbz#N`, `/N`,
+`show_bug.cgi?id=N` with other parameters), a GitHub API URL matches the
+web page, and a GitLab work item (`/-/work_items/N`) its issue page
+(`/-/issues/N`). Notes no item took close the report in a "Notes"
+section, those without a URL under "Other notes". With `--json`, the
+notes come as a `notes` array beside `report`, each with the `key` its
+URL is matched by.
 
 A report is made to be shared unless `--private` is given: a note then
 shows only under an item the printed report shows (so it is no more
@@ -340,6 +344,11 @@ koji_tags = [
 [domains.hyperscale.gitlab]
 instance = "https://gitlab.com"
 group = "CentOS/Hyperscale"
+# More prefixes this domain counts, for its work outside the group
+# (a CentOS Stream merge request, a project in another group); `*`
+# matches within a path segment (`CentOS/*/rpms/perf`). Without
+# `group`, these alone are the domain's scope:
+# extra_groups = ["redhat/centos-stream/rpms/perf"]
 # user = "michel-slm"  # optional, if GitLab username ≠ FAS login
 
 [domains.debian.gitlab]

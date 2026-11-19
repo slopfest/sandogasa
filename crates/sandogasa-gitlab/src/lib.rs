@@ -1733,7 +1733,13 @@ pub fn user_events(
     if let Some(a) = action {
         extra.push(("action", a));
     }
-    get_all_pages(&http, &endpoint, &extra, &[])
+    // An event on a group (an epic, a group-level work item) has no
+    // project; it is left out rather than failing the page.
+    let raw: Vec<serde_json::Value> = get_all_pages(&http, &endpoint, &extra, &[])?;
+    raw.into_iter()
+        .filter(|e| e.get("project_id").is_some_and(|p| !p.is_null()))
+        .map(|e| serde_json::from_value(e).map_err(Into::into))
+        .collect()
 }
 
 /// Minimal project identity: what you need to filter events by
@@ -2961,7 +2967,10 @@ mod tests {
             .with_body(
                 r#"[{"id": 1, "project_id": 10, "action_name": "opened",
                     "target_type": "MergeRequest", "target_iid": 123,
-                    "target_title": "Fix X", "created_at": "2026-02-15T10:00:00Z"}]"#,
+                    "target_title": "Fix X", "created_at": "2026-02-15T10:00:00Z"},
+                    {"id": 2, "project_id": null, "action_name": "opened",
+                    "target_type": "WorkItem", "target_iid": 4,
+                    "target_title": "A group's epic", "created_at": "2026-02-15T11:00:00Z"}]"#,
             )
             .create();
         let events = user_events(
@@ -2973,6 +2982,7 @@ mod tests {
             chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
         )
         .unwrap();
+        // The group's event has no project: left out, not a failure.
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].target_iid, Some(123));
         assert_eq!(events[0].action_name, "opened");

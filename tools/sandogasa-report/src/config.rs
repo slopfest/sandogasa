@@ -308,8 +308,8 @@ fn default_bugzilla_products() -> Vec<String> {
 
 /// Per-domain GitLab settings. If `group` is set, activity events
 /// are filtered to projects whose `path_with_namespace` starts
-/// with that prefix. Omit `group` to include all user activity on
-/// the instance. Per-user GitLab username overrides live on the
+/// with that prefix, or with one of `extra_groups`. Omit `group` to
+/// include all user activity on the instance. Per-user GitLab username overrides live on the
 /// user profile (`[users.<key>.gitlab]`), not here.
 #[derive(Debug, Default, Deserialize)]
 pub struct GitlabConfig {
@@ -321,6 +321,15 @@ pub struct GitlabConfig {
     /// `CentOS/Hyperscale/rpms`). Matches on path_with_namespace.
     #[serde(default)]
     pub group: Option<String>,
+
+    /// More group or project prefixes the domain counts besides
+    /// `group`, for its work elsewhere on the instance (e.g.
+    /// `redhat/centos-stream/rpms` for Proposed Updates, which start
+    /// as CentOS Stream merge requests). `*` in a path segment matches
+    /// any run of characters in it. Without `group`, these alone are
+    /// the domain's scope.
+    #[serde(default)]
+    pub extra_groups: Vec<String>,
 }
 
 /// Per-domain GitHub settings. Parallels `GitlabConfig`:

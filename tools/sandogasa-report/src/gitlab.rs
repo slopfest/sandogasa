@@ -40,6 +40,9 @@ pub struct GitlabReport {
     /// Group-prefix filter that shaped this report, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// The further prefixes it counts, beside `group`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra_groups: Vec<String>,
 
     /// MRs the user opened.
     pub opened_mrs: Vec<MrRef>,
@@ -49,6 +52,12 @@ pub struct GitlabReport {
     pub approved_mrs: Vec<MrRef>,
     /// MRs the user commented on (deduplicated per MR).
     pub commented_mrs: Vec<MrRef>,
+    /// Issues and work items the user opened.
+    pub opened_issues: Vec<IssueRef>,
+    /// Issues and work items the user closed.
+    pub closed_issues: Vec<IssueRef>,
+    /// Issues and work items the user commented on, each once.
+    pub commented_issues: Vec<IssueRef>,
 
     /// Per-project count of commits pushed by the user. Derived
     /// from push events, so it includes commits the user didn't
@@ -113,6 +122,20 @@ impl MrRef {
             ""
         }
     }
+}
+
+/// Pointer to an issue or work item for the report's summary lists.
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueRef {
+    /// Project path.
+    pub project: String,
+    /// Issue internal ID (project-scoped).
+    pub iid: u64,
+    /// Issue title.
+    pub title: String,
+    /// Whether GitLab names it a work item (`/-/work_items/N`) rather
+    /// than an issue (`/-/issues/N`).
+    pub work_item: bool,
 }
 
 /// A tag the user pushed.
@@ -187,9 +210,11 @@ pub fn gitlab_report(
         instance: base.to_string(),
         user: user.to_string(),
         group: cfg.group.clone(),
+        extra_groups: cfg.extra_groups.clone(),
         ..Default::default()
     };
     let mut commented_seen: BTreeSet<(u64, u64)> = BTreeSet::new();
+    let mut issues_seen = IssuesSeen::default();
     let mut tags_seen: BTreeSet<(String, String)> = BTreeSet::new();
     // Track which projects had any tag-push event from this user
     // — singleton pushes give us the name inline, but batched
@@ -210,14 +235,21 @@ pub fn gitlab_report(
         let Some(path) = paths.get(&ev.project_id) else {
             continue;
         };
-        if !path_in_group(path, cfg.group.as_deref()) {
+        if !in_scope(path, cfg) {
             continue;
         }
         project_ids_in_group.insert(ev.project_id);
         if is_tag_push_event(ev) {
             tagged_project_ids.insert(ev.project_id);
         }
-        dispatch_event(ev, path, &mut report, &mut commented_seen, &mut tags_seen);
+        dispatch_event(
+            ev,
+            path,
+            &mut report,
+            &mut commented_seen,
+            &mut issues_seen,
+            &mut tags_seen,
+        );
     }
 
     // The events say an MR was opened, not what became of it: look each
@@ -382,6 +414,13 @@ pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
     );
     stat(&mut stats, "MRs approved", report.approved_mrs.len());
     stat(&mut stats, "MRs commented on", report.commented_mrs.len());
+    stat(&mut stats, "Issues opened", report.opened_issues.len());
+    stat(&mut stats, "Issues closed", report.closed_issues.len());
+    stat(
+        &mut stats,
+        "Issues commented on",
+        report.commented_issues.len(),
+    );
     stat_across(
         &mut stats,
         "Commits pushed",
@@ -439,6 +478,20 @@ pub fn format_markdown(report: &GitlabReport, detail: u8) -> String {
     mrs(&mut out, "Merged", &report.merged_mrs);
     mrs(&mut out, "Approved", &report.approved_mrs);
     mrs(&mut out, "Commented on", &report.commented_mrs);
+    let issues = |out: &mut String, heading: &str, issues: &[IssueRef]| {
+        if issues.is_empty() {
+            return;
+        }
+        out.push_str(&format!("#### {heading}\n\n"));
+        if deep {
+            write_issue_list(out, issues, &report.instance);
+        } else {
+            forge::write_counts_by(out, issues, |i| i.project.as_str());
+        }
+    };
+    issues(&mut out, "Issues opened", &report.opened_issues);
+    issues(&mut out, "Issues closed", &report.closed_issues);
+    issues(&mut out, "Issues commented on", &report.commented_issues);
     if !report.commits_pushed.is_empty() {
         out.push_str("#### Commits by project\n\n");
         for (project, pushed) in &report.commits_pushed {
@@ -540,13 +593,68 @@ fn is_tag_push_event(ev: &Event) -> bool {
     pd.ref_type.as_deref() == Some("tag")
 }
 
+/// Whether `path` is in the domain `cfg` describes: under its
+/// `group` or one of its `extra_groups`; anywhere when neither is set.
+fn in_scope(path: &str, cfg: &GitlabConfig) -> bool {
+    if cfg.group.is_none() && cfg.extra_groups.is_empty() {
+        return true;
+    }
+    cfg.group
+        .iter()
+        .chain(&cfg.extra_groups)
+        .any(|g| path_in_group(path, Some(g)))
+}
+
+/// Whether `path` is `group` or under it, segment by segment; `*` in a
+/// segment of `group` matches any run of characters within one segment
+/// of `path` (`CentOS/*/rpms/rsync`, `redhat/centos-stream/rpms/*-tools`).
 fn path_in_group(path: &str, group: Option<&str>) -> bool {
-    match group {
-        None => true,
-        Some(prefix) => {
-            let prefix = prefix.trim_end_matches('/');
-            path == prefix || path.starts_with(&format!("{prefix}/"))
+    let Some(group) = group else {
+        return true;
+    };
+    let mut have = path.split('/');
+    group
+        .trim_end_matches('/')
+        .split('/')
+        .all(|want| have.next().is_some_and(|seg| glob_match(want, seg)))
+}
+
+/// Whether `text` matches `pattern`, where `*` stands for any run of
+/// characters (case-sensitive, as GitLab paths are).
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or("");
+    let Some(mut rest) = text.strip_prefix(first) else {
+        return false;
+    };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
         }
+    }
+    rest.ends_with(last) && rest.len() >= last.len()
+}
+
+/// The issues already listed, per list, by `(project_id, iid)`.
+#[derive(Default)]
+struct IssuesSeen {
+    opened: BTreeSet<(u64, u64)>,
+    closed: BTreeSet<(u64, u64)>,
+    commented: BTreeSet<(u64, u64)>,
+}
+
+/// Whether an event's target or a note's noteable type is an issue,
+/// and if so whether GitLab calls it a work item.
+fn issue_kind(kind: Option<&str>) -> Option<bool> {
+    match kind {
+        Some("Issue") => Some(false),
+        Some("WorkItem") => Some(true),
+        _ => None,
     }
 }
 
@@ -555,15 +663,44 @@ fn dispatch_event(
     path: &str,
     report: &mut GitlabReport,
     commented: &mut BTreeSet<(u64, u64)>,
+    issues: &mut IssuesSeen,
     tags: &mut BTreeSet<(String, String)>,
 ) {
     let is_mr = ev.target_type.as_deref() == Some("MergeRequest");
+    let issue = |iid: u64, work_item: bool| IssueRef {
+        project: path.to_string(),
+        iid,
+        title: ev.target_title.clone().unwrap_or_default(),
+        work_item,
+    };
+    if let (Some(work_item), Some(iid)) = (issue_kind(ev.target_type.as_deref()), ev.target_iid) {
+        let key = (ev.project_id, iid);
+        match ev.action_name.as_str() {
+            "opened" if issues.opened.insert(key) => {
+                report.opened_issues.push(issue(iid, work_item));
+            }
+            "closed" if issues.closed.insert(key) => {
+                report.closed_issues.push(issue(iid, work_item));
+            }
+            _ => {}
+        }
+        return;
+    }
+    // GitLab names a merge `accepted`; `merged` is the filter's name
+    // for it.
     match (ev.action_name.as_str(), is_mr) {
         ("opened", true) => push_mr(&mut report.opened_mrs, path, ev),
-        ("merged", true) => push_mr(&mut report.merged_mrs, path, ev),
+        ("accepted" | "merged", true) => push_mr(&mut report.merged_mrs, path, ev),
         ("approved", true) => push_mr(&mut report.approved_mrs, path, ev),
         ("commented on", _) => {
             if let Some(note) = &ev.note
+                && let Some(work_item) = issue_kind(note.noteable_type.as_deref())
+                && let Some(iid) = note.noteable_iid
+            {
+                if issues.commented.insert((ev.project_id, iid)) {
+                    report.commented_issues.push(issue(iid, work_item));
+                }
+            } else if let Some(note) = &ev.note
                 && note.noteable_type.as_deref() == Some("MergeRequest")
                 && let Some(iid) = note.noteable_iid
                 && commented.insert((ev.project_id, iid))
@@ -709,6 +846,22 @@ fn landed(commits: &[sandogasa_gitlab::RepoCommit]) -> Vec<forge::Landed> {
         .collect()
 }
 
+fn write_issue_list(out: &mut String, issues: &[IssueRef], instance: &str) {
+    let base = instance.trim_end_matches('/');
+    for issue in issues {
+        let kind = if issue.work_item {
+            "work_items"
+        } else {
+            "issues"
+        };
+        out.push_str(&format!(
+            "- [{}#{}]({base}/{}/-/{kind}/{}) {}\n",
+            issue.project, issue.iid, issue.project, issue.iid, issue.title,
+        ));
+    }
+    out.push('\n');
+}
+
 fn write_mr_list(out: &mut String, mrs: &[MrRef], instance: &str) {
     let base = instance.trim_end_matches('/');
     for mr in mrs {
@@ -820,6 +973,7 @@ mod tests {
             "a/b",
             &mut report,
             &mut seen,
+            &mut IssuesSeen::default(),
             &mut std::collections::BTreeSet::new(),
         );
         assert_eq!(report.opened_mrs.len(), 1);
@@ -841,6 +995,7 @@ mod tests {
             "a/b",
             &mut report,
             &mut seen,
+            &mut IssuesSeen::default(),
             &mut std::collections::BTreeSet::new(),
         );
         dispatch_event(
@@ -848,6 +1003,7 @@ mod tests {
             "a/b",
             &mut report,
             &mut seen,
+            &mut IssuesSeen::default(),
             &mut std::collections::BTreeSet::new(),
         );
         assert_eq!(report.commented_mrs.len(), 1);
@@ -869,6 +1025,7 @@ mod tests {
             "a/b",
             &mut report,
             &mut seen,
+            &mut IssuesSeen::default(),
             &mut std::collections::BTreeSet::new(),
         );
         dispatch_event(
@@ -876,6 +1033,7 @@ mod tests {
             "a/b",
             &mut report,
             &mut seen,
+            &mut IssuesSeen::default(),
             &mut std::collections::BTreeSet::new(),
         );
         assert_eq!(report.commits_pushed.get("a/b"), Some(&6));
@@ -1058,7 +1216,8 @@ mod tests {
         let mr = |iid: u64, title: &str| json!({"target_type": "MergeRequest", "target_iid": iid, "target_title": title});
         let events = json!([
             ev(1, 10, "opened", mr(5, "Fix the build")),
-            ev(2, 10, "merged", mr(6, "Bump")),
+            // GitLab names a merge `accepted`.
+            ev(2, 10, "accepted", mr(6, "Bump")),
             ev(3, 10, "approved", mr(7, "Docs")),
             ev(
                 4,
@@ -1095,6 +1254,33 @@ mod tests {
                 "pushed new",
                 json!({"push_data":
                 {"commit_count": 0, "ref_type": "tag", "ref": null}})
+            ),
+            // Issues and work items: opened, closed, commented on twice.
+            ev(
+                11,
+                10,
+                "opened",
+                json!({"target_type": "Issue", "target_iid": 3, "target_title": "It breaks"})
+            ),
+            ev(
+                12,
+                10,
+                "closed",
+                json!({"target_type": "WorkItem", "target_iid": 4, "target_title": "Tracking"})
+            ),
+            ev(
+                13,
+                10,
+                "commented on",
+                json!({"target_type": "Note", "target_title": "It breaks",
+                "note": {"noteable_type": "Issue", "noteable_iid": 3}})
+            ),
+            ev(
+                14,
+                10,
+                "commented on",
+                json!({"target_type": "Note", "target_title": "It breaks",
+                "note": {"noteable_type": "Issue", "noteable_iid": 3}})
             ),
             // Outside the group, and outside the window.
             ev(9, 20, "opened", mr(1, "Elsewhere")),
@@ -1182,6 +1368,7 @@ mod tests {
         let cfg = GitlabConfig {
             instance: server.uri(),
             group: Some("grp".to_string()),
+            extra_groups: vec![],
         };
         let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
         let since = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
@@ -1214,8 +1401,99 @@ mod tests {
             releases,
             [("grp/app", "v1.0", "https://x/grp/app/-/releases/v1.0")]
         );
+        let issues = |v: &[IssueRef]| -> Vec<String> {
+            v.iter()
+                .map(|i| format!("{}#{} {}", i.project, i.iid, i.title))
+                .collect()
+        };
+        assert_eq!(issues(&r.opened_issues), ["grp/app#3 It breaks"]);
+        assert_eq!(issues(&r.closed_issues), ["grp/app#4 Tracking"]);
+        assert_eq!(issues(&r.commented_issues), ["grp/app#3 It breaks"]);
         let text = format_markdown(&r, 2);
         assert!(text.contains("grp/app"), "{text}");
+        assert!(text.contains("- **MRs merged:** 1"), "{text}");
+        assert!(text.contains("- **Issues opened:** 1"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "#### Issues closed\n\n- [grp/app#4]({}/grp/app/-/work_items/4) Tracking\n",
+                server.uri()
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "#### Issues commented on\n\n- [grp/app#3]({}/grp/app/-/issues/3) It breaks\n",
+                server.uri()
+            )),
+            "{text}"
+        );
+        assert!(
+            format_markdown(&r, 1).contains("#### Issues opened\n\n- `grp/app`: 1\n"),
+            "{}",
+            format_markdown(&r, 1)
+        );
+        // Not in the group: no MR from other/x.
+        assert!(!text.contains("Elsewhere"), "{text}");
+    }
+
+    #[test]
+    fn extra_groups_count_work_outside_the_group() {
+        let (_rt, server) = mock_gitlab();
+        let cfg = GitlabConfig {
+            instance: server.uri(),
+            group: Some("grp".to_string()),
+            extra_groups: vec!["other/x".to_string()],
+        };
+        let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
+        let since = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+        let until = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
+        let r = gitlab_report(&cfg, "me", since, until, &tokens, false).unwrap();
+        let opened: Vec<(&str, u64)> = r
+            .opened_mrs
+            .iter()
+            .map(|m| (m.project.as_str(), m.iid))
+            .collect();
+        assert_eq!(opened, [("grp/app", 5), ("other/x", 1)]);
+        assert_eq!(r.extra_groups, ["other/x"]);
+        assert!(!in_scope("any/thing", &cfg));
+        assert!(in_scope("other/x", &cfg));
+        assert!(in_scope("other/x/sub", &cfg));
+        assert!(!in_scope("other/xy", &cfg));
+        // Without a group, extra_groups alone is the scope; with
+        // neither, everything counts.
+        let only = GitlabConfig {
+            instance: server.uri(),
+            group: None,
+            extra_groups: vec!["redhat/centos-stream/rpms".to_string()],
+        };
+        assert!(in_scope("redhat/centos-stream/rpms/rsync", &only));
+        assert!(!in_scope("CentOS/Hyperscale/rpms/perf", &only));
+        let all = GitlabConfig {
+            instance: server.uri(),
+            group: None,
+            extra_groups: vec![],
+        };
+        assert!(in_scope("any/thing", &all));
+    }
+
+    #[test]
+    fn a_group_may_carry_wildcards_within_a_segment() {
+        let matches = |path: &str, group: &str| path_in_group(path, Some(group));
+        assert!(matches(
+            "CentOS/Hyperscale/rpms/rsync",
+            "CentOS/*/rpms/rsync"
+        ));
+        assert!(matches(
+            "CentOS/proposed_updates/rpms/rsync",
+            "CentOS/*/rpms/rsync"
+        ));
+        assert!(!matches("CentOS/a/b/rpms/rsync", "CentOS/*/rpms/rsync"));
+        assert!(matches("r/s/rpms/perf-tools", "r/s/rpms/*-tools"));
+        assert!(!matches("r/s/rpms/perf-tool", "r/s/rpms/*-tools"));
+        assert!(matches("r/s/rpms/abc", "r/s/rpms/a*b*c"));
+        assert!(!matches("r/s/rpms/acb", "r/s/rpms/a*b*c"));
+        assert!(matches("a/anything/below", "a/*"));
+        assert!(!matches("a", "a/*"));
     }
 
     #[test]
@@ -1224,6 +1502,7 @@ mod tests {
         let cfg = GitlabConfig {
             instance: server.uri(),
             group: None,
+            extra_groups: vec![],
         };
         let tokens = BTreeMap::from([(instance_host(&server.uri()), "t".to_string())]);
         let day = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
