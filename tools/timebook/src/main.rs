@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use sandogasa_fedocal::{Client, MeetingQuery};
 
 mod book;
+mod cancel;
 mod edit;
 mod stale;
 
@@ -41,6 +42,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Cancel occurrences of one of your own meetings
+    ///
+    /// Takes the occurrences on the days given off Fedora Calendar, past
+    /// or coming: a meeting that was not held, or will not be. Logs in
+    /// with your Kerberos ticket (fkinit), lists the occurrences and
+    /// cancels them once you confirm, checking each is gone. fedocal
+    /// cancels one occurrence of a series by ending it the day before and
+    /// starting it again, as a new entry, after it.
+    Cancel {
+        /// The meeting: the id or page of any of its entries
+        entry: String,
+
+        /// The days to cancel (YYYY-MM-DD, the meeting's own date)
+        #[arg(required = true)]
+        dates: Vec<NaiveDate>,
+
+        /// Log in and list the occurrences, but cancel nothing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Cancel without asking
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Check whether a room is free for a planned meeting or series
     Check {
         /// The room: meeting, meeting-1, or any name of it
@@ -432,6 +457,36 @@ async fn rooms(client: &Client, from: NaiveDate, days: i64, json: bool) -> Resul
     Ok(())
 }
 
+/// `cancel`: cancel occurrences of one of your own meetings.
+async fn cancel_occurrences(client: &Client, args: &cancel::CancelArgs) -> Result<(), String> {
+    use std::io::IsTerminal;
+    if args.json && !args.yes && !args.dry_run {
+        return Err(
+            "--json prints only the outcome, so it cancels without asking: \
+                    add --yes, or --dry-run"
+                .into(),
+        );
+    }
+    let at_terminal = std::io::stdin().is_terminal();
+    let confirm = |question: &str, default_yes: bool| -> Result<bool, String> {
+        if !at_terminal {
+            return Err(format!(
+                "{question} needs a terminal to answer; pass --yes to cancel without asking"
+            ));
+        }
+        sandogasa_cli::confirm(question, default_yes).map_err(|e| e.to_string())
+    };
+    let base = sandogasa_fedocal::DEFAULT_BASE_URL;
+    let outcome = cancel::run(client, args, confirm, move || {
+        sandogasa_fedocal::session::Session::kerberos(base)
+    })
+    .await?;
+    if args.json {
+        println!("{}", to_json(&outcome)?);
+    }
+    Ok(())
+}
+
 /// `edit`: change one of your own entries.
 async fn edit_entry(args: &edit::EditArgs) -> Result<(), String> {
     use std::io::IsTerminal;
@@ -489,6 +544,21 @@ async fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let client = Client::new();
     let result = match &cli.command {
+        Command::Cancel {
+            entry,
+            dates,
+            dry_run,
+            yes,
+        } => {
+            let args = cancel::CancelArgs {
+                entry: entry.clone(),
+                dates: dates.clone(),
+                dry_run: *dry_run,
+                yes: *yes,
+                json: cli.json,
+            };
+            cancel_occurrences(&client, &args).await
+        }
         Command::Check { room, series } => check(&client, room, series, cli.json).await,
         Command::Edit {
             entry,

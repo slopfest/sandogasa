@@ -32,8 +32,12 @@ meeting whose meetbot search failed is never taken as stale. `timebook edit` cha
 entries (title, location, note, a series' last day) through its edit
 form, logging in with your Kerberos ticket, previewing each change and
 reading it back; for a recurring entry the whole series changes from
-its next occurrence (`--one`: that occurrence alone). Asking owners to
-drop stale entries comes next (#142).
+its next occurrence (`--one`: that occurrence alone). `timebook cancel
+ENTRY DATE...` takes occurrences of one of your own meetings off the
+calendar, past or coming, finding each by the meeting's calendar and
+title (fedocal starts a series anew, as a new entry, after each
+cancelled occurrence) and checking it is gone. Asking owners to drop
+stale entries comes next (#142).
 
 sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and
 the `room` module. Its `Client::meetings` converts the answer to a

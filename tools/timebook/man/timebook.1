@@ -20,6 +20,30 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS timebook cancel
+\fBtimebook cancel\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIENTRY\fR> <\fIDATES\fR>
+.PP
+Cancel occurrences of one of your own meetings
+.PP
+Takes the occurrences on the days given off Fedora Calendar, past or coming: a meeting that was not held, or will not be. Logs in with your Kerberos ticket (fkinit), lists the occurrences and cancels them once you confirm, checking each is gone. fedocal cancels one occurrence of a series by ending it the day before and starting it again, as a new entry, after it.
+.TP
+\fB\-\-dry\-run\fR
+Log in and list the occurrences, but cancel nothing
+.TP
+\fB\-\-json\fR
+Print JSON instead of text
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Cancel without asking
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIENTRY\fR>
+The meeting: the id or page of any of its entries
+.TP
+<\fIDATES\fR>
+The days to cancel (YYYY\-MM\-DD, the meeting\*(Aqs own date)
 .SS timebook check
 \fBtimebook check\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-suggest\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIROOM\fR> <\fIAT\fR>
 .PP

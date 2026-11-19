@@ -39,6 +39,12 @@ and adding entries as a logged-in user.
   `Changes::whole_series` saves the series from its next occurrence on
   ("Save all"), fedocal keeping the earlier ones as a separate entry;
   otherwise that occurrence alone is changed ("Save").
+- `Session::cancel(id, date)` (and `can_cancel`) takes one occurrence of
+  an entry off the calendar through fedocal's delete form, `date` being
+  the occurrence's own day (`Meeting::local_date`); fedocal ends the
+  series before it and starts it again, as a new entry, after it. Its
+  answer is the same whether or not anything was deleted, so the caller
+  reads the calendar back.
 
 ## Usage
 

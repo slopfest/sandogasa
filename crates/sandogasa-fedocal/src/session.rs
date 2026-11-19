@@ -336,6 +336,64 @@ impl Session {
         Err(Error::Http(format!("POST {url}: HTTP {status}")))
     }
 
+    /// Whether the user may delete entry `meeting_id`: its delete form
+    /// opens. Nothing is submitted.
+    pub async fn can_cancel(&self, meeting_id: u64) -> Result<(), Error> {
+        self.delete_token(meeting_id, None).await.map(|_| ())
+    }
+
+    /// Cancel the occurrence of entry `meeting_id` on `date` (the
+    /// meeting's own date, in its time zone), or the entry itself when it
+    /// does not repeat, through fedocal's delete form. For a recurring
+    /// entry fedocal ends the series the day before and starts it again,
+    /// as a new entry, after that occurrence. fedocal answers with the
+    /// same redirect whether or not anything was deleted, so the caller
+    /// reads the calendar back.
+    pub async fn cancel(&self, meeting_id: u64, date: NaiveDate) -> Result<(), Error> {
+        let url = format!("{}/meeting/delete/{meeting_id}/", self.base_url);
+        let token = self.delete_token(meeting_id, Some(date)).await?;
+        let fields = [
+            ("csrf_token", token),
+            ("confirm_delete", "y".to_string()),
+            ("from_date", date.to_string()),
+        ];
+        let resp = self
+            .http
+            .post(&url)
+            .header(reqwest::header::COOKIE, self.cookie_header())
+            .form(&fields)
+            .send()
+            .await
+            .map_err(|e| Error::Http(format!("POST {url}: {e}")))?;
+        self.keep_cookies(&resp);
+        let status = resp.status();
+        if status.is_redirection() {
+            // fedocal redirects when it refuses too (not a manager, a
+            // calendar that is not enabled), with the reason flashed on
+            // the page it leads to.
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|l| l.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            let page = self
+                .page(&self.absolute(&location))
+                .await
+                .unwrap_or_default();
+            let reasons = page_messages(&page);
+            if reasons.is_empty() {
+                return Ok(());
+            }
+            return Err(Error::Refused(reasons));
+        }
+        let body = resp.text().await.unwrap_or_default();
+        if status.is_success() {
+            return Err(Error::Refused(page_messages(&body)));
+        }
+        Err(Error::Http(format!("POST {url}: HTTP {status}")))
+    }
+
     /// Entry `meeting_id` as its edit form shows it (for a recurring
     /// entry, from its next occurrence), with the save buttons offered.
     pub async fn entry(&self, meeting_id: u64) -> Result<EntryForm, Error> {
@@ -426,6 +484,30 @@ impl Session {
                     Error::Refused(reasons)
                 }
             })
+    }
+
+    /// The CSRF token of entry `meeting_id`'s delete form (at `date`); when
+    /// the form does not open, fedocal's reasons.
+    async fn delete_token(
+        &self,
+        meeting_id: u64,
+        date: Option<NaiveDate>,
+    ) -> Result<String, Error> {
+        let mut url = format!("{}/meeting/delete/{meeting_id}/", self.base_url);
+        if let Some(date) = date {
+            url.push_str(&format!("?from_date={date}"));
+        }
+        let page = self.page(&url).await?;
+        csrf_token(&page).ok_or_else(|| {
+            let reasons = page_messages(&page);
+            if reasons.is_empty() {
+                Error::Http(format!(
+                    "no delete form on {url}; is the session still valid?"
+                ))
+            } else {
+                Error::Refused(reasons)
+            }
+        })
     }
 
     /// The CSRF token of `calendar`'s add form; when the form does not
@@ -1446,5 +1528,109 @@ mod tests {
             .unwrap();
         assert!(!EntryForm::default().recurring());
         assert!(submit_values("<form></form>").is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_occurrence_is_cancelled_through_the_delete_form() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/delete/9/"))
+            .and(wiremock::matchers::query_param("from_date", "2026-11-04"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/delete/9/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/meeting/delete/9/"))
+            .and(body_string_contains("csrf_token=t1"))
+            .and(body_string_contains("confirm_delete=y"))
+            .and(body_string_contains("from_date=2026-11-04"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/cal/2026/11/4/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let s = session(&server);
+        s.can_cancel(9).await.unwrap();
+        s.cancel(9, day("2026-11-04")).await.unwrap();
+        // Refused after the form: fedocal redirects with the reason.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/delete/9/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/meeting/9/"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/9/"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(
+                    r#"<li class="errors">you are not allowed to delete it.</li>"#,
+                ),
+            )
+            .mount(&server)
+            .await;
+        let err = session(&server)
+            .cancel(9, day("2026-11-04"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .ends_with("you are not allowed to delete it."),
+            "{err}"
+        );
+        // Not allowed: the form is not there, and the reason is said.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"<li class="errors">You are not one of the manager of this meeting</li>"#,
+            ))
+            .mount(&server)
+            .await;
+        let err = session(&server)
+            .cancel(9, day("2026-11-04"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not one of the manager"), "{err}");
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html></html>"))
+            .mount(&server)
+            .await;
+        let err = session(&server).can_cancel(9).await.unwrap_err();
+        assert!(err.to_string().contains("no delete form"), "{err}");
+        // A refusal on submitting, or a server error.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"<li class="errors">Not a valid date value</li>"#),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let s = session(&server);
+        let err = s.cancel(9, day("2026-11-04")).await.unwrap_err();
+        assert!(err.to_string().ends_with("Not a valid date value"), "{err}");
+        let err = s.cancel(9, day("2026-11-04")).await.unwrap_err();
+        assert!(
+            err.to_string().ends_with("HTTP 500 Internal Server Error"),
+            "{err}"
+        );
     }
 }

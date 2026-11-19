@@ -134,6 +134,14 @@ impl Meeting {
         utc(self.meeting_date_end, &self.meeting_time_stop)
     }
 
+    /// The day it starts on in its own time zone, as fedocal keeps it (the
+    /// API's dates are in UTC): what fedocal's forms take to name an
+    /// occurrence.
+    pub fn local_date(&self) -> Option<NaiveDate> {
+        let tz: chrono_tz::Tz = self.meeting_timezone.parse().ok()?;
+        Some(self.starts_at()?.with_timezone(&tz).date_naive())
+    }
+
     /// The shared room its location names, if any.
     pub fn room(&self) -> Option<room::Room> {
         room::Room::from_location(&self.meeting_location)
@@ -427,6 +435,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(utc[0].meeting_time_start, "18:00:00");
+    }
+
+    #[test]
+    fn an_occurrence_has_its_date_in_its_own_time_zone() {
+        // 04:00 UTC on the 2nd is 23:00 in New York on the 1st.
+        let mut e = entry(1, "me", "2027-01-02", "2027-01-02", "04:00:00");
+        e["meeting_timezone"] = serde_json::json!("America/New_York");
+        let m: Meeting = serde_json::from_value(e).unwrap();
+        assert_eq!(m.local_date(), Some(day("2027-01-01")));
+        let mut e = entry(2, "me", "2027-01-02", "2027-01-02", "04:00:00");
+        e["meeting_timezone"] = serde_json::json!("Nowhere/Land");
+        let m: Meeting = serde_json::from_value(e).unwrap();
+        assert_eq!(m.local_date(), None);
     }
 
     #[test]

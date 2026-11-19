@@ -19,6 +19,30 @@ cargo install timebook
 
 ## Usage
 
+### cancel
+
+Takes occurrences of one of your own meetings off the calendar, past
+or coming: a meeting that was not held, or will not be, so the
+calendar says what happened and the room shows as free. The meeting is
+given by the id or page of any of its entries, the days as the
+meeting's own dates.
+
+```
+$ timebook cancel 11067 2026-10-21 2026-11-04
+To cancel in centos-sig-hyperscale, "CentOS Hyperscale SIG":
+  Wed 2026-10-21 15:00 UTC (entry 11067)
+  Wed 2026-11-04 16:00 UTC (entry 11067)
+Cancel these 2 occurrence(s)? [y/N]:
+```
+
+fedocal cancels one occurrence of a series by ending the series the day
+before and starting it again, as a new entry, after it; `cancel` finds
+each occurrence by the meeting's calendar and title, whichever entry
+holds it, and checks after each that it is gone. It logs in with your
+Kerberos ticket (`fkinit`); `--dry-run` lists the occurrences and checks
+you may cancel them, `--yes` cancels without asking, and `--json` (with
+either) prints the outcome.
+
 ### check
 
 Whether a room is free for a planned meeting or series, and if not,
