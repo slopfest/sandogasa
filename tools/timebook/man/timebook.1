@@ -21,7 +21,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 Print version
 .SH COMMANDS
 .SS timebook check
-\fBtimebook check\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIROOM\fR> <\fIAT\fR>
+\fBtimebook check\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-suggest\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIROOM\fR> <\fIAT\fR>
 .PP
 Check whether a room is free for a planned meeting or series
 .TP
@@ -37,8 +37,11 @@ Days between meetings (1 to 366)
 \fB\-\-minutes\fR \fI<MINUTES>\fR [default: 60]
 How long each meeting is, in minutes (1 to 1440)
 .TP
+\fB\-\-suggest\fR
+Check whether the meetings in a taken room still take place
+.TP
 \fB\-\-tz\fR \fI<TZ>\fR [default: UTC]
-The time zone of \-\-at, e.g. Europe/Dublin
+The time zone of AT, e.g. Europe/Dublin
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
@@ -49,9 +52,11 @@ The room: meeting, meeting\-1, or any name of it
 <\fIAT\fR>
 When the first one starts: YYYY\-MM\-DD HH:MM, in \-\-tz
 .SS timebook find
-\fBtimebook find\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIAT\fR>
+\fBtimebook find\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-suggest\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIAT\fR>
 .PP
 Find the rooms free for a planned meeting or series
+.PP
+When no room is free for every meeting, or with \-\-suggest, the meetings in the taken rooms are looked up in meetbot: a room whose meetings have had no minutes in the last 12 weeks is shown as likely free, with the evidence.
 .TP
 \fB\-\-count\fR \fI<COUNT>\fR [default: 1]
 How many meetings in the series (1 to 520)
@@ -65,11 +70,14 @@ Days between meetings (1 to 366)
 \fB\-\-minutes\fR \fI<MINUTES>\fR [default: 60]
 How long each meeting is, in minutes (1 to 1440)
 .TP
+\fB\-\-suggest\fR
+Check whether the meetings in a taken room still take place
+.TP
 \fB\-\-tz\fR \fI<TZ>\fR [default: UTC]
-The time zone of \-\-at, e.g. Europe/Dublin
+The time zone of AT, e.g. Europe/Dublin
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIAT\fR>
 When the first one starts: YYYY\-MM\-DD HH:MM, in \-\-tz

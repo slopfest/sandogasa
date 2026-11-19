@@ -39,6 +39,10 @@ pub struct RoomCheck {
     pub room: String,
     /// Per slot, the bookings it clashes with (none: the room is free).
     pub slots: Vec<SlotCheck>,
+    /// Why the room is likely free though taken: the meetings it clashes
+    /// with have had no minutes lately (filled in by `find`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub likely_free: Vec<String>,
 }
 
 /// One slot of a planned series, and what it clashes with.
@@ -118,6 +122,7 @@ pub fn check(room: &str, slots: &[Slot], bookings: &[Booking]) -> RoomCheck {
                     .collect(),
             })
             .collect(),
+        likely_free: Vec::new(),
     }
 }
 

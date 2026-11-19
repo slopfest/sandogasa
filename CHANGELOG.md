@@ -7,29 +7,35 @@
 Fedora's shared meeting rooms are booked in Fedora Calendar, but a
 meeting's location is free text, so nothing said which room a slot
 holds, and there was no way to see whether a room was free for a
-planned meeting, let alone for a whole series of them.
+planned meeting, let alone for a whole series of them, or whether the
+meetings booked in it still took place.
 
 timebook reads every name a room goes by
 (`meeting-1@chat.fedoraproject.org`, a matrix.to link, the IRC channel
 it replaced) as the room, and compares times in UTC. `timebook check
-ROOM AT` says, for each meeting of a
-planned series (`--every`, `--count`, `--minutes`, `--tz`), whether the
-room is free or what it clashes with; `timebook find AT` does the same
-for every room, the free ones first; `timebook rooms` lists what each
-room holds in a period. `timebook stale` checks whether the recurring
-meetings of the last weeks still take place, from meetbot's minutes
-(searched by topic, matched by time and room), with the owners' last
-activity on Discourse for those without minutes; it points out minutes
-held in another room than the one booked, and series that stopped at
-fedocal's old default end of 2025-12-31 but still have minutes. Acting
-on stale entries comes next (#142).
+ROOM AT` says, for each meeting of a planned series (`--every`,
+`--count`, `--minutes`, `--tz`), whether the room is free or what it
+clashes with; `timebook find AT` does the same for every room, the
+free ones first; `timebook rooms` lists what each room holds in a
+period.
+
+`timebook stale` checks whether the recurring meetings of the last
+weeks still take place, from meetbot's minutes (searched by topic,
+matched by time and room), with the owners' last activity on Discourse
+for those without minutes; it points out minutes held in another room
+than the one booked, and series that stopped at fedocal's old default
+end of 2025-12-31 but still have minutes. When no room is free for
+every meeting (or with `--suggest`, which `check` takes too), `find`
+uses the same check to list as likely free a room whose meetings have
+had no minutes for any occurrence in 12 weeks, with the evidence; a
+meeting whose meetbot search failed is never taken as stale. Acting on stale entries comes next (#142).
 
 sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and
 the `room` module. Its `Client::meetings` converts the answer to a
 calendar-and-location query, which fedocal leaves in each entry's own
 time zone, to UTC like every other answer.
 
-Refs #141
+Resolves #141
 
 ### hattrack shows who is away, and files your own absence
 

@@ -50,6 +50,11 @@ enum Command {
     },
 
     /// Find the rooms free for a planned meeting or series
+    ///
+    /// When no room is free for every meeting, or with --suggest, the
+    /// meetings in the taken rooms are looked up in meetbot: a room whose
+    /// meetings have had no minutes in the last 12 weeks is shown as
+    /// likely free, with the evidence.
     Find {
         #[command(flatten)]
         series: SeriesArgs,
@@ -104,7 +109,11 @@ struct SeriesArgs {
     #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(i64).range(1..=1440))]
     minutes: i64,
 
-    /// The time zone of --at, e.g. Europe/Dublin
+    /// Check whether the meetings in a taken room still take place
+    #[arg(long)]
+    suggest: bool,
+
+    /// The time zone of AT, e.g. Europe/Dublin
     #[arg(long, default_value = "UTC")]
     tz: String,
 }
@@ -155,6 +164,12 @@ fn describe_check(result: &RoomCheck, tz: Tz) -> String {
     } else {
         format!("{} is taken in {taken} of {n}.\n", result.room)
     });
+    if !result.likely_free.is_empty() {
+        out.push_str("It is likely free all the same:\n");
+        for why in &result.likely_free {
+            out.push_str(&format!("  {why}\n"));
+        }
+    }
     out
 }
 
@@ -186,6 +201,12 @@ fn describe_find(results: &[RoomCheck], slots: &[Slot], tz: Tz) -> String {
             r.room,
             names.join(", ")
         ));
+        if !r.likely_free.is_empty() {
+            out.push_str("             likely free all the same:\n");
+            for why in &r.likely_free {
+                out.push_str(&format!("               {why}\n"));
+            }
+        }
     }
     out
 }
@@ -273,7 +294,10 @@ async fn check(client: &Client, room: &str, args: &SeriesArgs, json: bool) -> Re
     let room = book::room_named(room)?;
     let (slots, tz) = planned(args)?;
     let bookings = fetch_around(client, &slots).await?;
-    let result = book::check(&room, &slots, &bookings);
+    let mut result = book::check(&room, &slots, &bookings);
+    if args.suggest && result.taken() > 0 {
+        suggest_rooms(client, std::slice::from_mut(&mut result)).await;
+    }
     if json {
         println!("{}", to_json(&result)?);
         return Ok(());
@@ -290,13 +314,56 @@ async fn find(client: &Client, args: &SeriesArgs, json: bool) -> Result<(), Stri
         .iter()
         .map(|room| book::check(room, &slots, &bookings))
         .collect();
-    results.sort_by_key(|r| r.taken());
+    // With no room free for every meeting, the meetings in them are
+    // looked up in meetbot: a room whose meetings have no minutes lately
+    // is likely free after all.
+    if args.suggest || !results.iter().any(|r| r.taken() == 0) {
+        suggest_rooms(client, &mut results).await;
+    }
+    results.sort_by_key(|r| (r.taken() > 0, r.likely_free.is_empty(), r.taken()));
     if json {
         println!("{}", to_json(&results)?);
         return Ok(());
     }
     print!("{}", describe_find(&results, &slots, tz));
     Ok(())
+}
+
+/// Fill in the rooms in `results` that are likely free: those whose
+/// clashing series have had no minutes in the last 12 weeks. A failure
+/// here is a warning: the rooms stay as found.
+async fn suggest_rooms(client: &Client, results: &mut [RoomCheck]) {
+    const WEEKS: i64 = 12;
+    let clashes: Vec<book::Booking> = results
+        .iter()
+        .flat_map(|r| r.slots.iter().flat_map(|s| s.clashes.iter().cloned()))
+        .collect();
+    if clashes.is_empty() {
+        return;
+    }
+    eprintln!("Checking whether the meetings in the taken rooms still take place...");
+    let recent = match stale::recent_series(client, Utc::now(), WEEKS).await {
+        Ok(recent) => recent,
+        Err(e) => {
+            eprintln!("warning: cannot read the meetings' past occurrences ({e}); no suggestions");
+            return;
+        }
+    };
+    let wanted: Vec<stale::Series> = recent
+        .series
+        .into_iter()
+        .filter(|s| {
+            clashes
+                .iter()
+                .any(|b| b.meeting_id == s.meeting_id || stale::same_entry(s, b))
+        })
+        .collect();
+    let judged = stale::judge_all(wanted, &stale::Sources::default(), false).await;
+    for r in results.iter_mut() {
+        if let Some(why) = stale::likely_free(r, &judged, &recent.seen) {
+            r.likely_free = why;
+        }
+    }
 }
 
 /// `rooms`: each room's bookings in `days` from `from`, by series.
@@ -387,6 +454,7 @@ mod tests {
             count,
             every: 14,
             minutes: 60,
+            suggest: false,
             tz: tz.into(),
         }
     }
@@ -454,7 +522,15 @@ mod tests {
         );
         let free = book::check("meeting-2", &slots, &bookings);
         assert!(describe_check(&free, chrono_tz::UTC).ends_with("meeting-2 is free for all 2.\n"));
-        let found = describe_find(&[free, one], &slots, tz);
+        let mut likely = one.clone();
+        likely.likely_free = vec!["M1 (cal): no minutes in the last 12 weeks".into()];
+        let found = describe_find(&[free, likely], &slots, tz);
+        assert!(
+            found.contains(
+                "             likely free all the same:\n               M1 (cal): no minutes in the last 12 weeks\n"
+            ),
+            "{found}"
+        );
         assert!(found.contains("  meeting-2  free for all 2\n"), "{found}");
         assert!(
             found.contains("  meeting-1  taken in 2 of 2: M1 (cal)\n"),

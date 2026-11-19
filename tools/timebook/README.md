@@ -52,6 +52,30 @@ $ timebook find "2026-12-02 16:00" --tz Europe/Dublin --every 14 --count 6
   meeting    taken in 3 of 6: CentOS Hyperscale SIG (centos-sig-hyperscale)
 ```
 
+When no room is free for every meeting, or with `--suggest` (which
+`check` takes too, for its room), the meetings in the taken rooms are
+looked up in meetbot as `stale` does, and a room whose meetings have
+had no minutes for any of their occurrences in the last 12 weeks is
+listed as likely free, with the evidence. An entry with no occurrence
+in that time is judged through the earlier entries of the same
+calendar and title, since teams recreate entries; one that held even
+one meeting there is not judged, and neither is a meeting whose
+meetbot search failed:
+
+```
+$ timebook find "2026-11-24 10:00" --minutes 780 --count 4 --suggest
+4 meeting(s) from Tue 2026-11-24 10:00 UTC:
+  meeting-2  free for all 4
+  meeting-3  free for all 4
+  meeting-1  taken in 3 of 4: ELN SIG (SIGs)
+             likely free all the same:
+               ELN SIG (SIGs): no minutes for any of 11 occurrence(s) since 2026-09-01, judged by its earlier entry 11388, 11456 (searched meetbot for: sigs, eln-sig, fedora-eln-sig)
+  meeting    taken in 4 of 4: FESCo Meeting (fesco), Fedora Docs Team Meeting (docs)
+```
+
+A room taken by a meeting that stopped happening is only likely free:
+its owners may still mean to hold it, which `stale` helps find out.
+
 ### rooms
 
 What each room holds in a period (`--from`, default today, and
@@ -77,8 +101,9 @@ Whether the recurring meetings of the last weeks (`--weeks`, default
 looked for under its calendar's name and its title as a topic (`fesco`,
 `fedora-eln-sig`); an occurrence counts as held when minutes start
 within an hour of it, preferably in the room it is booked in. Series
-are grouped as held, rarely held, without minutes, and video calls
-(which meetbot does not log); minutes found in another room than the
+are grouped as held, rarely held, without minutes, unchecked (a
+meetbot search failed, so nothing can be said), and video calls (which
+meetbot does not log); minutes found in another room than the
 one booked are pointed out, and for a series without minutes the
 owners' last activity on Discourse is shown. The topics searched are
 listed, so a series filed under another topic can be checked by hand.

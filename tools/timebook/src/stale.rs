@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
 use sandogasa_fedocal::{Client, Meeting, MeetingQuery};
+
+use crate::book::RoomCheck;
 use serde::Serialize;
 
 /// How far from an occurrence's start minutes may begin and still count
@@ -54,6 +56,8 @@ pub enum Verdict {
     NotHeld,
     /// Minutes for fewer than half.
     RarelyHeld,
+    /// None found, but a meetbot search for it failed: cannot tell.
+    Unchecked,
     /// A video call, which meetbot does not log.
     VideoCall,
     /// Minutes for half or more.
@@ -87,6 +91,9 @@ pub struct SeriesReport {
     pub elsewhere: Vec<String>,
     /// The topics meetbot was searched for.
     pub searched: Vec<String>,
+    /// The topics whose search failed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
     /// Per owner, what Discourse says of them.
     pub owners_seen: BTreeMap<String, OnDiscourse>,
 }
@@ -110,6 +117,9 @@ pub struct Dropped {
     #[serde(flatten)]
     pub series: Series,
     pub searched: Vec<String>,
+    /// The topics whose search failed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
     /// The newest minutes since the old default end, at its time: when
     /// recent, a sign it is still held and its entry needs a new end.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -121,6 +131,14 @@ pub struct Dropped {
 pub struct MinutesRef {
     pub date: NaiveDate,
     pub url: String,
+}
+
+/// The recurring series of a period, and every entry that had an
+/// occurrence in it, recurring or not.
+#[derive(Debug, Clone, Default)]
+pub struct Recent {
+    pub series: Vec<Series>,
+    pub seen: BTreeSet<u64>,
 }
 
 /// Where `stale` looks besides Fedora Calendar: meetbot for minutes and
@@ -369,6 +387,105 @@ pub fn replaced(old: &Series, current: &[Series]) -> bool {
     })
 }
 
+/// The recurring series of the `weeks` before `now`, with only the
+/// occurrences that started two hours or more before it: meetbot cannot
+/// have later ones' minutes yet.
+pub async fn recent_series(
+    client: &Client,
+    now: DateTime<Utc>,
+    weeks: i64,
+) -> Result<Recent, String> {
+    let today = now.date_naive();
+    let meetings = read(client, today - Duration::weeks(weeks), today).await?;
+    let cutoff = now - Duration::hours(2);
+    let seen = meetings
+        .iter()
+        .filter(|m| m.starts_at().is_some_and(|t| t <= cutoff))
+        .map(|m| m.meeting_id)
+        .collect();
+    Ok(Recent {
+        series: up_to(series(&meetings), cutoff),
+        seen,
+    })
+}
+
+/// `list` judged against meetbot's minutes, without its owners'
+/// activity.
+pub async fn judge_all(list: Vec<Series>, sources: &Sources, refresh: bool) -> Vec<SeriesReport> {
+    let found = search_for(list.iter(), sources, refresh).await;
+    list.into_iter().map(|s| judged(s, &found)).collect()
+}
+
+/// Whether `s` is an entry for the same meeting as booking `b`: the same
+/// calendar and title.
+pub fn same_entry(s: &Series, b: &crate::book::Booking) -> bool {
+    s.calendar == b.calendar && slug(&s.name) == slug(&b.name)
+}
+
+/// Whether a room taken in `check` is likely free after all: every
+/// series it clashes with is judged in `judged` to have had no minutes.
+/// An entry with no occurrence at all in the period (`seen` holds those
+/// with any) is judged by the earlier entries of the same calendar and
+/// title, as teams recreate entries; one with too few to judge is not
+/// judged at all. The evidence, one line per series, or `None`.
+pub fn likely_free(
+    check: &RoomCheck,
+    judged: &[SeriesReport],
+    seen: &BTreeSet<u64>,
+) -> Option<Vec<String>> {
+    let clashes: BTreeMap<u64, &crate::book::Booking> = check
+        .slots
+        .iter()
+        .flat_map(|s| s.clashes.iter().map(|b| (b.meeting_id, b)))
+        .collect();
+    if clashes.is_empty() {
+        return None;
+    }
+    clashes
+        .values()
+        .map(|b| {
+            let own: Vec<&SeriesReport> = judged
+                .iter()
+                .filter(|r| r.series.meeting_id == b.meeting_id)
+                .collect();
+            let (these, earlier) = if !own.is_empty() {
+                (own, false)
+            } else if seen.contains(&b.meeting_id) {
+                return None;
+            } else {
+                let earlier: Vec<&SeriesReport> =
+                    judged.iter().filter(|r| same_entry(&r.series, b)).collect();
+                (earlier, true)
+            };
+            if these.is_empty() || these.iter().any(|r| r.verdict != Verdict::NotHeld) {
+                return None;
+            }
+            let count: usize = these.iter().map(|r| r.series.occurrences.len()).sum();
+            let since = these
+                .iter()
+                .filter_map(|r| r.series.occurrences.first())
+                .min()?
+                .format("%Y-%m-%d");
+            let by = if earlier {
+                let ids: Vec<String> = these
+                    .iter()
+                    .map(|r| r.series.meeting_id.to_string())
+                    .collect();
+                format!(", judged by its earlier entry {}", ids.join(", "))
+            } else {
+                String::new()
+            };
+            Some(format!(
+                "{} ({}): no minutes for any of {count} occurrence(s) since {since}{by} \
+                 (searched meetbot for: {})",
+                b.name,
+                b.calendar,
+                these[0].searched.join(", ")
+            ))
+        })
+        .collect()
+}
+
 /// Everything `timebook stale` reports: the recurring series of the
 /// `weeks` up to `now`, judged against meetbot, and the series that
 /// stopped at fedocal's old default end. Occurrences that started less
@@ -381,61 +498,20 @@ pub async fn report(
     weeks: i64,
     refresh: bool,
 ) -> Result<(Vec<SeriesReport>, Vec<Dropped>), String> {
-    let today = now.date_naive();
-    let from = today - Duration::weeks(weeks);
-    let read = |from: NaiveDate, to: NaiveDate| async move {
-        eprintln!("Reading Fedora Calendar from {from} to {to}...");
-        client
-            .meetings(&MeetingQuery::default().between(from, to))
-            .await
-            .map_err(|e| e.to_string())
-    };
-    let recurring = up_to(series(&read(from, today).await?), now - Duration::hours(2));
+    let recurring = recent_series(client, now, weeks).await?.series;
     let end = NaiveDate::parse_from_str(OLD_DEFAULT_END, "%Y-%m-%d").expect("a date");
     // A day either side: an evening meeting in the west of 2025-12-31
     // is on 2026-01-01 in UTC.
-    let before = series(&read(end - Duration::days(28), end + Duration::days(1)).await?);
-    let after = read(end + Duration::days(1), end + Duration::days(28)).await?;
+    let before = series(&read(client, end - Duration::days(28), end + Duration::days(1)).await?);
+    let after = read(client, end + Duration::days(1), end + Duration::days(28)).await?;
     let dropped: Vec<Series> = dropped_at(&before, &after, end)
         .into_iter()
         .filter(|s| !recurring.iter().any(|r| r.meeting_id == s.meeting_id))
         .filter(|s| !replaced(s, &recurring))
         .collect();
 
-    let terms: BTreeSet<String> = recurring
-        .iter()
-        .chain(&dropped)
-        .flat_map(topic_terms)
-        .collect();
-    eprintln!("Searching meetbot for {} topic(s)...", terms.len());
-    let found = search_meetbot(terms, sources, refresh).await;
-    let minutes_for = |s: &Series| -> (Vec<String>, Vec<Minutes>) {
-        let searched = topic_terms(s);
-        let mut all: Vec<Minutes> = searched
-            .iter()
-            .flat_map(|t| found.get(t).cloned().unwrap_or_default())
-            .collect();
-        all.sort_by(|a, b| a.url.cmp(&b.url));
-        all.dedup_by(|a, b| a.url == b.url);
-        (searched, all)
-    };
-
-    let mut reports: Vec<SeriesReport> = recurring
-        .into_iter()
-        .map(|s| {
-            let (searched, minutes) = minutes_for(&s);
-            let j = judge(&s, &minutes);
-            SeriesReport {
-                series: s,
-                verdict: j.verdict,
-                held: j.held,
-                last_minutes: j.last_minutes,
-                elsewhere: j.elsewhere,
-                searched,
-                owners_seen: BTreeMap::new(),
-            }
-        })
-        .collect();
+    let found = search_for(recurring.iter().chain(&dropped), sources, refresh).await;
+    let mut reports: Vec<SeriesReport> = recurring.into_iter().map(|s| judged(s, &found)).collect();
     // Only the owners of series that look stale are looked up.
     let owners: BTreeSet<String> = reports
         .iter()
@@ -472,11 +548,12 @@ pub async fn report(
     let dropped = dropped
         .into_iter()
         .map(|s| {
-            let (searched, minutes) = minutes_for(&s);
+            let (searched, failed, minutes) = minutes_for(&found, &s);
             Dropped {
                 minutes_since: newest_since(&s, &minutes, end),
                 series: s,
                 searched,
+                failed,
             }
         })
         .collect();
@@ -494,6 +571,10 @@ pub fn describe(
     let groups = [
         (Verdict::NotHeld, "No minutes found"),
         (Verdict::RarelyHeld, "Rarely held"),
+        (
+            Verdict::Unchecked,
+            "Could not be checked: a meetbot search failed",
+        ),
         (
             Verdict::VideoCall,
             "Video calls, which meetbot does not log",
@@ -528,6 +609,10 @@ pub fn describe(
                     r.searched.join(", ")
                 )),
                 Verdict::VideoCall => {}
+                Verdict::Unchecked => out.push_str(&format!(
+                    "    meetbot search failed for: {}\n",
+                    r.failed.join(", ")
+                )),
             }
             if !r.owners_seen.is_empty() {
                 let owners: Vec<String> = r
@@ -560,6 +645,10 @@ pub fn describe(
                     "    last minutes on {} ({}), none in the period\n",
                     m.date, m.url
                 ),
+                None if !d.failed.is_empty() => format!(
+                    "    cannot tell: meetbot search failed for: {}\n",
+                    d.failed.join(", ")
+                ),
                 None => format!(
                     "    no minutes since (searched meetbot for: {})\n",
                     d.searched.join(", ")
@@ -577,6 +666,71 @@ impl Default for Sources {
             discourse: "https://discussion.fedoraproject.org".into(),
             cache: true,
         }
+    }
+}
+
+/// meetbot's minutes per topic searched; `None` for a search that failed.
+type Found = BTreeMap<String, Option<Vec<Minutes>>>;
+
+/// The calendar's entries from `from` to `to`, saying so.
+async fn read(client: &Client, from: NaiveDate, to: NaiveDate) -> Result<Vec<Meeting>, String> {
+    eprintln!("Reading Fedora Calendar from {from} to {to}...");
+    client
+        .meetings(&MeetingQuery::default().between(from, to))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// meetbot's minutes under every topic `list` is looked for under, each
+/// topic searched once.
+async fn search_for<'a>(
+    list: impl Iterator<Item = &'a Series>,
+    sources: &Sources,
+    refresh: bool,
+) -> Found {
+    let terms: BTreeSet<String> = list.flat_map(topic_terms).collect();
+    eprintln!("Searching meetbot for {} topic(s)...", terms.len());
+    search_meetbot(terms, sources, refresh).await
+}
+
+/// The topics `s` is looked for under, those whose search failed (or
+/// was never answered), and the minutes `found` has under the others,
+/// each once.
+fn minutes_for(found: &Found, s: &Series) -> (Vec<String>, Vec<String>, Vec<Minutes>) {
+    let searched = topic_terms(s);
+    let failed: Vec<String> = searched
+        .iter()
+        .filter(|t| !matches!(found.get(*t), Some(Some(_))))
+        .cloned()
+        .collect();
+    let mut all: Vec<Minutes> = searched
+        .iter()
+        .filter_map(|t| found.get(t).cloned().flatten())
+        .flatten()
+        .collect();
+    all.sort_by(|a, b| a.url.cmp(&b.url));
+    all.dedup_by(|a, b| a.url == b.url);
+    (searched, failed, all)
+}
+
+/// `s` judged against the minutes in `found`, without owners.
+fn judged(s: Series, found: &Found) -> SeriesReport {
+    let (searched, failed, minutes) = minutes_for(found, &s);
+    let j = judge(&s, &minutes);
+    // Few or no minutes with a search missing says nothing.
+    let verdict = match j.verdict {
+        Verdict::NotHeld | Verdict::RarelyHeld if !failed.is_empty() => Verdict::Unchecked,
+        v => v,
+    };
+    SeriesReport {
+        series: s,
+        verdict,
+        held: j.held,
+        last_minutes: j.last_minutes,
+        elsewhere: j.elsewhere,
+        searched,
+        failed,
+        owners_seen: BTreeMap::new(),
     }
 }
 
@@ -646,11 +800,7 @@ fn headline(s: &Series) -> String {
 
 /// The minutes meetbot has under each of `terms`, four searches at a
 /// time; a failed search is a warning, and finds nothing.
-async fn search_meetbot(
-    terms: BTreeSet<String>,
-    sources: &Sources,
-    refresh: bool,
-) -> BTreeMap<String, Vec<Minutes>> {
+async fn search_meetbot(terms: BTreeSet<String>, sources: &Sources, refresh: bool) -> Found {
     let terms: Vec<String> = terms.into_iter().collect();
     let mut out = BTreeMap::new();
     for chunk in terms.chunks(4) {
@@ -672,6 +822,8 @@ async fn search_meetbot(
             let (term, found) = match done {
                 Ok(done) => done,
                 Err(e) => {
+                    // The task's term is lost with it; the series that
+                    // needed it then miss it, and count as unchecked.
                     eprintln!("warning: a meetbot search stopped: {e}");
                     continue;
                 }
@@ -687,9 +839,12 @@ async fn search_meetbot(
                             url: m.summary_url,
                         })
                         .collect();
-                    out.insert(term, minutes);
+                    out.insert(term, Some(minutes));
                 }
-                Err(e) => eprintln!("warning: cannot search meetbot for {term}: {e}"),
+                Err(e) => {
+                    eprintln!("warning: cannot search meetbot for {term}: {e}");
+                    out.insert(term, None);
+                }
             }
         }
     }
@@ -1031,6 +1186,7 @@ mod tests {
             last_minutes: Some("https://meetbot/x".into()),
             elsewhere: vec![],
             searched: vec!["sigs".into(), "some-sig".into()],
+            failed: vec![],
             owners_seen: owners_seen
                 .iter()
                 .map(|(o, s)| (o.to_string(), s.clone()))
@@ -1059,6 +1215,7 @@ mod tests {
             Dropped {
                 series: not.series.clone(),
                 searched: vec!["some-sig".into()],
+                failed: vec![],
                 minutes_since: Some(MinutesRef {
                     date: day("2026-11-04"),
                     url: "https://meetbot/y".into(),
@@ -1067,6 +1224,7 @@ mod tests {
             Dropped {
                 series: not.series.clone(),
                 searched: vec!["some-sig".into()],
+                failed: vec![],
                 minutes_since: Some(MinutesRef {
                     date: day("2026-06-11"),
                     url: "https://meetbot/z".into(),
@@ -1075,6 +1233,7 @@ mod tests {
             Dropped {
                 series: not.series.clone(),
                 searched: vec!["some-sig".into()],
+                failed: vec![],
                 minutes_since: None,
             },
         ];
@@ -1174,7 +1333,7 @@ mod tests {
         // Any other topic: nothing, or an error (a warning only).
         Mock::given(method("GET"))
             .and(path("/fragedpt/"))
-            .and(query_param("srchtext", "cal"))
+            .and(query_param("srchtext", "fedora-held"))
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
@@ -1230,6 +1389,17 @@ mod tests {
                 .ends_with("/2026-11-17T16:00:00.html")
         );
         assert!(Sources::default().cache);
+        // The same judgment for a chosen few, as `find` asks for it.
+        let few: Vec<Series> = recent_series(&client, now, 4)
+            .await
+            .unwrap()
+            .series
+            .into_iter()
+            .filter(|s| s.name == "Quiet")
+            .collect();
+        let judged = judge_all(few, &sources, false).await;
+        assert_eq!(judged.len(), 1);
+        assert_eq!(judged[0].verdict, Verdict::NotHeld);
     }
     #[test]
     fn without_a_room_the_topic_must_be_the_series() {
@@ -1330,5 +1500,120 @@ mod tests {
         ]);
         let after = [meeting(1, "2026-01-01", "23:00:00", "a", "West", "")];
         assert_eq!(dropped_at(&before, &after, end).len(), 1);
+    }
+    #[test]
+    fn a_room_is_likely_free_when_its_meetings_have_no_minutes() {
+        let booking = |id: u64| crate::book::Booking {
+            room: "meeting-1".into(),
+            start: NaiveDateTime::parse_from_str("2026-11-24 16:00", "%Y-%m-%d %H:%M")
+                .unwrap()
+                .and_utc(),
+            end: NaiveDateTime::parse_from_str("2026-11-24 17:00", "%Y-%m-%d %H:%M")
+                .unwrap()
+                .and_utc(),
+            meeting_id: id,
+            name: format!("M{id}"),
+            calendar: "SIGs".into(),
+        };
+        let check = |ids: &[u64]| RoomCheck {
+            room: "meeting-1".into(),
+            slots: vec![crate::book::SlotCheck {
+                slot: crate::book::Slot {
+                    start: booking(0).start,
+                    end: booking(0).end,
+                },
+                clashes: ids.iter().map(|id| booking(*id)).collect(),
+            }],
+            likely_free: vec![],
+        };
+        let judged_as = |id: u64, verdict: Verdict| {
+            let mut r = report(verdict, 0, &[]);
+            r.series.meeting_id = id;
+            r.series.name = format!("M{id}");
+            r
+        };
+        let judged = [judged_as(1, Verdict::NotHeld), judged_as(2, Verdict::Held)];
+        let seen: BTreeSet<u64> = [1, 2, 8].into();
+        assert_eq!(
+            likely_free(&check(&[1]), &judged, &seen).unwrap(),
+            [
+                "M1 (SIGs): no minutes for any of 2 occurrence(s) since 2026-11-04 \
+              (searched meetbot for: sigs, some-sig)"
+            ]
+        );
+        // A new entry, with no occurrence in the period, is judged by the
+        // earlier ones of the same title, and says so.
+        let mut renewed = check(&[7]);
+        renewed.slots[0].clashes[0].name = "M1".into();
+        let why = likely_free(&renewed, &judged, &seen).unwrap();
+        assert!(why[0].contains("judged by its earlier entry 1"), "{why:?}");
+        // One that held a meeting there, too few to judge: not judged.
+        let mut started = check(&[8]);
+        started.slots[0].clashes[0].name = "M1".into();
+        assert_eq!(likely_free(&started, &judged, &seen), None);
+        // One meeting still held, or one not judged: not likely free.
+        assert_eq!(likely_free(&check(&[1, 2]), &judged, &seen), None);
+        assert_eq!(likely_free(&check(&[3]), &judged, &seen), None);
+        assert_eq!(likely_free(&check(&[]), &judged, &seen), None);
+    }
+    #[test]
+    fn a_failed_search_leaves_a_series_unchecked() {
+        let s = series(&[
+            meeting(
+                1,
+                "2026-11-04",
+                "16:00:00",
+                "c",
+                "Some SIG",
+                "meeting@fedoraproject.org",
+            ),
+            meeting(
+                1,
+                "2026-11-11",
+                "16:00:00",
+                "c",
+                "Some SIG",
+                "meeting@fedoraproject.org",
+            ),
+        ])
+        .remove(0);
+        let mut found: Found = BTreeMap::new();
+        found.insert("some-sig".into(), Some(vec![]));
+        found.insert("fedora-some-sig".into(), None);
+        let r = judged(s.clone(), &found);
+        assert_eq!(r.verdict, Verdict::Unchecked);
+        // "c" is too short to search; the unanswered one counts as failed.
+        assert_eq!(r.failed, ["fedora-some-sig"]);
+        // Minutes found all the same: the verdict stands.
+        found.insert(
+            "some-sig".into(),
+            Some(vec![minutes(
+                "meeting_matrix_fedoraproject-org",
+                "2026-11-04 16:00",
+            )]),
+        );
+        assert_eq!(judged(s, &found).verdict, Verdict::Held);
+        let mut unchecked = report(Verdict::Unchecked, 0, &[]);
+        unchecked.failed = vec!["some-sig".into()];
+        let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let dropped = [Dropped {
+            series: unchecked.series.clone(),
+            searched: vec!["some-sig".into()],
+            failed: vec!["some-sig".into()],
+            minutes_since: None,
+        }];
+        let text = describe(&[unchecked], &dropped, day("2026-08-27"), day("2026-11-19"));
+        assert!(
+            text.contains("Could not be checked: a meetbot search failed (1):\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("    meetbot search failed for: some-sig\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("    cannot tell: meetbot search failed for: some-sig\n"),
+            "{text}"
+        );
     }
 }
