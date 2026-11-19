@@ -73,6 +73,19 @@ koji_tags = [
 [domains.proposed-updates.gitlab]
 instance = "https://gitlab.com"
 group = "CentOS/proposed_updates"
+# Proposed Updates start as CentOS Stream merge requests.
+extra_groups = ["redhat/centos-stream/rpms"]
+
+# --- CentOS-wide ---
+
+# Work for CentOS as a whole rather than one SIG: requests and bug
+# reports in the infrastructure tracker, and the packaging tools both
+# SIGs use (centpkg and friends).
+[domains.centos-wide]
+[domains.centos-wide.gitlab]
+instance = "https://gitlab.com"
+group = "CentOS/infra"
+extra_groups = ["CentOS/common"]
 
 # --- Debian ---
 
