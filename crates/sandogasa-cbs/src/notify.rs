@@ -680,6 +680,17 @@ pub fn cbs_latest(tags: &[String], package: &str) -> Result<Vec<Option<String>>,
     crate::packages::latest_in_tags(tags, package)
 }
 
+/// `text` (an error from fedrq or the hub, a command line) on one
+/// line, for a code span in a comment: newlines and runs of space
+/// become one space, and a backtick a quote, so it cannot end the span
+/// or start a paragraph.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('`', "'")
+}
+
 /// Which of `issues`, each tracking the branch, to tell of `nvrs`. A
 /// Proposed Update has one per branch. Hyperscale may have several
 /// `rfe::new-version` issues open, one per version hs-relmon saw: the
@@ -906,6 +917,14 @@ fn close_as_done(client: &Client, notice: &Notice) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_for_a_code_span_is_one_line_without_backticks() {
+        assert_eq!(
+            one_line("fedrq failed:\n  `dnf` said  no\n"),
+            "fedrq failed: 'dnf' said no"
+        );
+    }
 
     /// A checkout that has nothing: no commit to compare, and the given
     /// release branches.

@@ -24,7 +24,6 @@
 //! (see [`release_package_collection`]).
 
 pub mod builds;
-pub mod check;
 pub mod login;
 pub mod lookaside;
 pub mod notify;

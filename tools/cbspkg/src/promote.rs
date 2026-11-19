@@ -416,7 +416,7 @@ fn add_checks(
     by: &str,
     in_full: bool,
 ) {
-    use sandogasa_cbs::check::one_line;
+    use sandogasa_cbs::notify::one_line;
     let shown = |c: &crate::depcheck::BuildCheck| {
         if in_full {
             return c.markdown();
@@ -481,7 +481,7 @@ fn checked_by(args: &[String]) -> String {
     format!(
         "<sub>Checked by cbspkg {}: `{}`</sub>",
         env!("CARGO_PKG_VERSION"),
-        sandogasa_cbs::check::one_line(&command.join(" "))
+        sandogasa_cbs::notify::one_line(&command.join(" "))
     )
 }
 
@@ -659,7 +659,7 @@ fn check_moves(
                     looked_in.push_str(&format!(
                         " (FTBFS shown for every package: the SIG's own could not be \
                          listed, {})",
-                        sandogasa_cbs::check::one_line(e)
+                        sandogasa_cbs::notify::one_line(e)
                     ));
                 }
                 let check = BuildCheck {

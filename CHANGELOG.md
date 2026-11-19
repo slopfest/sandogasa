@@ -2,40 +2,6 @@
 
 ## Unreleased
 
-### cbspkg promote checks builds the way ebranch check-update does
-
-`cbspkg promote` checked only who in stock CentOS Stream and EPEL
-required a capability a build dropped. It missed the SIG's own packages
-in `-release` that needed it, never checked whether the build's own
-Requires still resolve, and printed its findings in a layout of its own,
-unlike ebranch `check-update`'s report for the same kind of change.
-
-promote now runs sandogasa-depcheck, the check `check-update` runs, on
-each build it moves, against the package's newest build in the
-collection's `-release`. It looks in what the collection's users have,
-as one repository: stock CentOS Stream (AlmaLinux for a collection built
-for RHEL), EPEL and the collection's published `-release`. It reports
-packages that would no longer install (FTI), the SIG's own packages
-that would no longer build (FTBFS; stock packages are left out, as many
-do not build from Stream's public repositories at all), and Requires of
-the build that nothing provides. The plan and the tracking-issue comment
-show the shared report, in color at a terminal. Provides are compared
-across every architecture the build has, as before; the dependency
-check reads each binary package for the machine's architecture where
-the build has one, since fedrq answers for that architecture, and an
-x86_64 RPM's glibc symbol versions were otherwise reported as missing
-on aarch64. A
-collection whose `-release` is not on the mirror yet is checked without
-it, and the report says so.
-
-Underneath: sandogasa-kojihub gains `rpms_dep_strings`, each RPM's
-dependencies as RPM writes them (`libfoo >= 1.2`); sandogasa-cbs gains
-`builds::HubBuilds`, builds read from the hub as a `RepoQuery`, and
-`Collection::published_repo` and `stock_branch`; sandogasa-depcheck's
-`Analysis` derives `Clone`. cbspkg's tests no longer reach the CBS hub
-named in the machine's koji configuration (`CBSPKG_CBS_HUB` points them
-at a local port).
-
 ### sandogasa-report reads every page of a user's Bodhi updates
 
 The Bodhi section stopped after a user's first 500 updates without
@@ -178,36 +144,49 @@ needs `--private` to keep them. The other forges' sections are not
 filtered yet. sandogasa-github's `Event` gains `public`, and `Client`
 gains `repository_public` (Refs #167).
 
-### cbspkg promote checks what a build drops before it moves
+### cbspkg promote checks what a build changes before it moves
 
 `cbspkg promote` tagged a build into `-testing` or `-release` without
 looking at what it changed for other packages. A SIG build that drops a
 shared library, or another capability that packages in stock CentOS
-Stream or EPEL require, would break them for everyone using the SIG's
-repo. A build is now checked before it moves. Its Provides, read from
-the CBS hub before it can be installed, are compared with those of the
-package's newest build in the collection's `-release`, which is what
-everyone using the SIG's repos has, whether the build goes to `-testing`
-or `-release`. Each capability it drops is looked up in stock CentOS
-Stream and EPEL with fedrq. One that another source package still
-provides is not lost. For the rest, the packages whose binaries require
-them at run time are listed. The plan before `Promote?` shows:
-- what is dropped, red for a soname;
-- what is still provided elsewhere;
-- for each dropped capability, the packages that would break, in
-  bold red;
-- the version changes.
+Stream, EPEL or the SIG's own repos require, would break them for
+everyone using the SIG's repo.
 
-When something would break, or a repo could not be looked in for
-something dropped, Enter answers no; when the check could not run at
-all, the plan says so. The whole check also goes into the build's
-comment on its tracking issue, one per collection the build moves
-into, ending with the cbspkg version and the command (without the
-checkout's path, as the issue is public), or why the build could not
-be checked. This is step 1 of #157. The SIG's own repos,
-sets of builds promoted together and `hs-relmon review` come next.
-sandogasa-cbs gains `check`; sandogasa-depfilter gains
-`compare_provides` and `provide_name`, moved from ebranch (Refs #157).
+A build is now checked before it moves, by sandogasa-depcheck, the
+check ebranch `check-update` runs, and reported the same way. Its
+Provides and Requires, read from the CBS hub before it can be
+installed, are compared with those of the package's newest build in
+the collection's `-release`, which is what everyone using the SIG's
+repos has, whether the build goes to `-testing` or `-release`. What the
+collection's users have is looked in through fedrq, as one repository:
+stock CentOS Stream (AlmaLinux for a collection built for RHEL), EPEL
+and the collection's published `-release`. The check reports packages
+that would no longer install (FTI), the SIG's own packages that would
+no longer build (FTBFS; stock packages are left out, as many do not
+build from Stream's public repositories at all), and Requires of the
+build that nothing provides. Provides are compared across every
+architecture the build has; the dependency check reads each binary
+package for the machine's architecture where the build has one, since
+fedrq answers for that architecture (#182 covers the others). A
+collection whose `-release` is not on the mirror yet is checked without
+it, and the report says so.
+
+The plan before `Promote?` shows the report, in color at a terminal.
+When something would break, a Requires does not resolve, or the check
+could not run, Enter answers no. The whole check also goes into the
+build's comment on its tracking issue, one per collection the build
+moves into, every version change listed in a collapsed list, ending
+with the cbspkg version and the command (without the checkout's path,
+as the issue is public), or why the build could not be checked. Sets of
+builds promoted together and `hs-relmon review` come next (#157).
+
+Underneath: sandogasa-cbs gains `builds::HubBuilds`, builds read from
+the hub as a `RepoQuery`, and `Collection::published_repo` and
+`stock_branch`; sandogasa-kojihub gains `rpms_dep_strings`, each RPM's
+dependencies as RPM writes them (`libfoo >= 1.2`); sandogasa-depfilter
+gains `compare_provides` and `provide_name`, moved from ebranch.
+cbspkg's tests no longer reach the CBS hub named in the machine's koji
+configuration (`CBSPKG_CBS_HUB` points them at a local port).
 
 ### cbspkg colors the plan it asks you to confirm
 

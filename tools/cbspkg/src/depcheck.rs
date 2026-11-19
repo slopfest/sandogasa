@@ -187,7 +187,7 @@ impl BuildCheck {
             Err(why) => {
                 out.push_str(&format!(
                     "Not checked for breakage: `{}`.\n",
-                    sandogasa_cbs::check::one_line(why)
+                    sandogasa_cbs::notify::one_line(why)
                 ));
                 return out;
             }

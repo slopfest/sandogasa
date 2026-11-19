@@ -131,6 +131,8 @@ Updates' issues are the ones cpu-sig-tracker files per merge request;
 Hyperscale's are the `rfe::new-version` issues hs-relmon files per
 package. What the comments need from the package's git checkout comes
 through `notify::Checkout`, which the calling tool implements.
+`notify::one_line` puts an error or a command on one line, without
+backticks, for a code span in a comment.
 
 ## Builds
 
@@ -144,24 +146,6 @@ listed in `errors`. `view` makes a `RepoQuery` of some of the builds,
 so a check can look in them as in a repository. A collection's
 `published_repo` is the mirror URL its `-release` is published at, and
 `stock_branch` the fedrq branch of the distribution its users run.
-
-## Checks
-
-`check` compares a candidate build's Provides with those of the build
-it replaces, before the candidate can be installed. `provides_of`
-reads each build's binary RPMs and their Provides from the hub, two
-`multiCall`s for all builds together. `compare` lists what the build
-drops or moves to another version. `look_up` then asks stock CentOS
-Stream and EPEL (`user_repos`) which source packages still provide a
-dropped capability, and whose binary packages require the rest, per
-capability (`Check::required`), from each user's Requires. It
-asks each place once per distinct set of dropped capabilities, the
-places concurrently, through a `Lookup` the caller implements (fedrq
-in cbspkg, #157). A version change is listed but not looked up.
-`Check::markdown` gives the whole check in Markdown for a
-tracking-issue comment, the version changes in a collapsed
-`<details>`, which `Notice::add_paragraph` puts before the comment's
-marker.
 
 ## Reviews
 
