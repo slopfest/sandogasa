@@ -208,14 +208,14 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
             return Err("promoting in CBS is confirmed at a terminal; run it in one".into());
         }
     }
-    // Then what the builds going to -testing drop, which takes the hub
-    // and fedrq some seconds.
+    // Then what the builds change for other packages, which takes the
+    // hub and fedrq some seconds.
     let (found, unchecked, skipped) = check_moves(
         &ui,
         package,
         &moves,
-        sandogasa_kojihub::config::hub_url("cbs").as_deref(),
-        &FedrqLookup::new(),
+        crate::config::cbs_hub().as_deref(),
+        &crate::depcheck::FedrqPlaces::new(),
     );
     if args.dry_run {
         // What the check found, before the steps it would lead to, as a
@@ -289,10 +289,10 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
                 color
             )
         );
-        // Something elsewhere requiring what a build drops, or a dropped
-        // capability whose users could not be looked up, makes "no" the
-        // answer an Enter gives.
-        let breaks = found.iter().any(|c| c.breaks() || c.uncertain());
+        // A package that would break, a Requires of a build that does not
+        // resolve, or a check that could not run makes "no" the answer an
+        // Enter gives.
+        let breaks = found.iter().any(|c| c.breaks());
         if !sandogasa_cli::confirm("Promote?", !breaks)? {
             eprintln!("Nothing changed.");
             return Ok(());
@@ -399,60 +399,6 @@ fn release_next(
     Some((what, command, by_hand))
 }
 
-/// The repos a check looks in, through fedrq: absent, every question is
-/// an error saying so, and the check reports them as not looked in.
-struct FedrqLookup {
-    installed: bool,
-}
-
-impl FedrqLookup {
-    fn new() -> Self {
-        let installed =
-            sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])
-                .is_ok();
-        Self { installed }
-    }
-
-    fn fedrq(&self, branch: &str) -> Result<sandogasa_fedrq::Fedrq, String> {
-        if !self.installed {
-            return Err("fedrq is not installed (sudo dnf install fedrq)".into());
-        }
-        Ok(sandogasa_fedrq::Fedrq::for_branch(branch.to_string()))
-    }
-}
-
-impl sandogasa_cbs::check::Lookup for FedrqLookup {
-    fn providers(
-        &self,
-        branch: &str,
-        capabilities: &[String],
-    ) -> Result<Vec<(String, Vec<String>)>, String> {
-        Ok(self
-            .fedrq(branch)?
-            .providers_info(capabilities)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|p| (p.source_name.unwrap_or(p.name), p.provides))
-            .collect())
-    }
-
-    fn users(
-        &self,
-        branch: &str,
-        capabilities: &[String],
-    ) -> Result<Vec<(String, Vec<String>)>, String> {
-        Ok(self
-            .fedrq(branch)?
-            .whatrequires_notsrc_info(capabilities)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            // A package without a source can be told from nothing: left
-            // out, as fedrq's "(none)" was.
-            .filter_map(|p| Some((p.source_name?, p.requires)))
-            .collect())
-    }
-}
-
 /// Each build's checks, in full, as part of its tracking-issue comment,
 /// with `by` (the tool, its version and the command) at the end, as
 /// ebranch signs the check it posts to Bodhi; a build moving into
@@ -464,14 +410,14 @@ impl sandogasa_cbs::check::Lookup for FedrqLookup {
 /// what it was against.
 fn add_checks(
     notices: &mut [sandogasa_cbs::notify::Notice],
-    found: &[sandogasa_cbs::check::Check],
+    found: &[crate::depcheck::BuildCheck],
     skipped: &[(String, String)],
     unchecked: Option<&str>,
     by: &str,
     in_full: bool,
 ) {
     use sandogasa_cbs::check::one_line;
-    let shown = |c: &sandogasa_cbs::check::Check| {
+    let shown = |c: &crate::depcheck::BuildCheck| {
         if in_full {
             return c.markdown();
         }
@@ -505,6 +451,7 @@ fn add_checks(
             continue;
         }
         parts.push(by.to_string());
+        let parts: Vec<&str> = parts.iter().map(|p| p.trim_end()).collect();
         notice.add_paragraph(&parts.join("\n\n"));
     }
 }
@@ -555,34 +502,39 @@ fn shell_quote(arg: &str) -> String {
 /// What [`check_moves`] found: the checks; why nothing could be
 /// checked, when so; and each build left unchecked, with why.
 type Checked = (
-    Vec<sandogasa_cbs::check::Check>,
+    Vec<crate::depcheck::BuildCheck>,
     Option<String>,
     Vec<(String, String)>,
 );
 
 /// The checks of the builds that `moves` take to `-testing` or
-/// `-release` (#157), each against the newest build of `package` in its
-/// collection's `-release`, which is what everyone using the SIG's
-/// repos has; read from the CBS hub at `hub_url`
-/// (every collection's `-release`, and then every build's Provides, in
-/// one `multiCall` each), with the users of what a build drops looked
-/// up through `lookup` in stock CentOS Stream and EPEL. Also, when
+/// `-release` (#157), through sandogasa-depcheck: each build's Provides
+/// against those of the newest build of `package` in its collection's
+/// `-release`, which is what everyone using the SIG's repos has; then
+/// what it changes for the packages its collection's users have
+/// (`places`), and whether its own Requires resolve there. The builds
+/// come from the CBS hub at `hub_url`: every collection's `-release` in
+/// one `multiCall`, then all the builds' binaries, Provides and
+/// Requires in three. The moves are checked side by side. Also, when
 /// nothing could be checked, why: no hub configured, or one that cannot
-/// be read. A collection whose tag cannot be read is not checked,
-/// rather than compared with an older build.
+/// be read. A collection whose tag cannot be read, or a build the hub
+/// cannot give, is left unchecked, with why.
 fn check_moves(
     ui: &Ui,
     package: &str,
     moves: &[(&Collection, String, Stage)],
     hub_url: Option<&str>,
-    lookup: &dyn sandogasa_cbs::check::Lookup,
+    places: &dyn crate::depcheck::Places,
 ) -> Checked {
-    use sandogasa_cbs::check::{compare, look_up, provides_of, user_repos};
-    let to_testing: Vec<&(&Collection, String, Stage)> = moves
+    use crate::depcheck::{BuildCheck, own_ftbfs_only};
+    use sandogasa_cbs::builds::HubBuilds;
+    use sandogasa_depcheck::analysis::{analyze, compare_provides};
+    use std::collections::{BTreeMap, BTreeSet};
+    let to_check: Vec<&(&Collection, String, Stage)> = moves
         .iter()
         .filter(|(_, _, to)| matches!(to, Stage::Testing | Stage::Release))
         .collect();
-    if to_testing.is_empty() {
+    if to_check.is_empty() {
         return (Vec::new(), None, Vec::new());
     }
     let Some(hub_url) = hub_url else {
@@ -595,13 +547,13 @@ fn check_moves(
     // One line says what is going on: the step heading when steps are
     // narrated, a plain status line otherwise.
     if !(ui.explain || ui.dry_run) {
-        eprintln!("Checking what the builds of {package} drop that other packages require…");
+        eprintln!("Checking what the builds of {package} change for other packages…");
     }
     ui.step(&format!(
-        "Check what the builds of {package} drop that other packages require"
+        "Check what the builds of {package} change for other packages"
     ));
     let hub = sandogasa_kojihub::HubClient::new(hub_url);
-    let tags: Vec<String> = to_testing
+    let tags: Vec<String> = to_check
         .iter()
         .map(|(c, _, _)| c.tag(Stage::Release))
         .collect();
@@ -621,69 +573,134 @@ fn check_moves(
     // tag, when it could not be read.
     let against: Vec<Result<Option<String>, String>> = latest
         .iter()
-        .zip(&to_testing)
+        .zip(&to_check)
         .map(|(latest, (c, _, _))| match latest {
             Err(e) => Err(format!("{}: {e}", c.tag(Stage::Release))),
             Ok(b) => Ok(b.as_ref().map(|b| b.nvr.clone())),
         })
         .collect();
-    let mut nvrs: Vec<String> = to_testing.iter().map(|(_, nvr, _)| nvr.clone()).collect();
+    let mut nvrs: Vec<String> = to_check.iter().map(|(_, nvr, _)| nvr.clone()).collect();
     nvrs.extend(against.iter().filter_map(|a| a.clone().ok().flatten()));
-    let provides = match provides_of(&hub, &nvrs) {
-        Ok(p) => p,
+    nvrs.sort();
+    nvrs.dedup();
+    let builds = match HubBuilds::fetch(&hub, &nvrs) {
+        Ok(b) => b,
         Err(e) => {
             return (
                 Vec::new(),
-                Some(format!("cannot read the builds' Provides from CBS ({e})")),
+                Some(format!("cannot read the builds from CBS ({e})")),
                 Vec::new(),
             );
         }
     };
-    let by_nvr: std::collections::BTreeMap<
-        &str,
-        &Result<std::collections::BTreeSet<String>, String>,
-    > = nvrs
-        .iter()
-        .map(String::as_str)
-        .zip(provides.iter())
-        .collect();
-    let mut found = Vec::new();
-    let mut repos = Vec::new();
     let mut skipped: Vec<(String, String)> = Vec::new();
     let mut skip = |nvr: &str, why: String| {
         eprintln!("warning: {why}; {nvr} not checked");
         skipped.push((nvr.to_string(), why));
     };
-    for ((collection, nvr, _), against) in to_testing.iter().zip(&against) {
-        let new = match by_nvr.get(nvr.as_str()) {
-            Some(Ok(p)) => p,
-            Some(Err(e)) => {
-                skip(nvr, format!("cannot read {nvr}'s Provides ({e})"));
-                continue;
-            }
-            None => continue,
-        };
-        let old = match against {
+    // What each check compares, before the slow part.
+    let mut work = Vec::new();
+    for ((collection, nvr, _), against) in to_check.iter().zip(&against) {
+        if let Some(e) = builds.errors.get(nvr) {
+            skip(nvr, format!("cannot read {nvr} from CBS ({e})"));
+            continue;
+        }
+        let against = match against {
             Err(e) => {
                 skip(nvr, format!("cannot read {e}"));
                 continue;
             }
-            Ok(None) => None,
             // Already released (a re-promotion finishing its untag from
             // -testing): nothing to compare it with but itself.
             Ok(Some(a)) if a == nvr => continue,
-            Ok(Some(a)) => match by_nvr.get(a.as_str()) {
-                Some(Ok(p)) => Some((a.as_str(), p)),
-                _ => {
-                    skip(nvr, format!("cannot read {a}'s Provides"));
+            Ok(Some(a)) => {
+                if let Some(e) = builds.errors.get(a) {
+                    skip(nvr, format!("cannot read {a} from CBS ({e})"));
                     continue;
                 }
-            },
+                Some(a.clone())
+            }
+            Ok(None) => None,
         };
-        found.push(compare(nvr, old, new));
-        repos.push(user_repos(collection.major));
+        let old = against
+            .as_deref()
+            .map(|a| builds.provides(a))
+            .unwrap_or_default();
+        let changed = compare_provides(&old, &builds.provides(nvr));
+        work.push((*collection, nvr.clone(), against, changed));
     }
-    look_up(&mut found, &repos, &[package], lookup);
+    // The SIG's own source packages, the only ones FTBFS counts for:
+    // once per collection, side by side, before the slow part.
+    let mut collections: Vec<&Collection> = work.iter().map(|(c, ..)| *c).collect();
+    collections.sort_by_key(|c| c.tag(Stage::Release));
+    collections.dedup_by_key(|c| c.tag(Stage::Release));
+    let own: BTreeMap<String, Result<BTreeSet<String>, String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = collections
+            .iter()
+            .map(|c| (c.tag(Stage::Release), scope.spawn(|| places.own_sources(c))))
+            .collect();
+        handles
+            .into_iter()
+            .map(|(tag, h)| {
+                let own = h
+                    .join()
+                    .unwrap_or_else(|_| Err("the lookup panicked".into()));
+                (tag, own)
+            })
+            .collect()
+    });
+    let found: Vec<BuildCheck> = std::thread::scope(|scope| {
+        let handles: Vec<_> = work
+            .into_iter()
+            .map(|(collection, nvr, against, changed)| {
+                let mut looked_in = places.describe(collection);
+                let own = &own[&collection.tag(Stage::Release)];
+                if let Err(e) = own {
+                    looked_in.push_str(&format!(
+                        " (FTBFS shown for every package: the SIG's own could not be \
+                         listed, {})",
+                        sandogasa_cbs::check::one_line(e)
+                    ));
+                }
+                let check = BuildCheck {
+                    nvr,
+                    package: package.to_string(),
+                    against,
+                    looked_in,
+                    changed,
+                    result: Err("the check failed unexpectedly (it panicked)".into()),
+                };
+                let builds = &builds;
+                let job = check.clone();
+                let handle = scope.spawn(move || {
+                    let mut check = job;
+                    check.result = places.stable(collection).and_then(|stable| {
+                        let new = builds.view(&[check.nvr.as_str()]);
+                        let mut analysis = analyze(
+                            &[package.to_string()],
+                            &builds.binaries(&check.nvr),
+                            &check.changed,
+                            stable.as_ref(),
+                            &new,
+                            false,
+                        )?;
+                        if let Ok(own) = own {
+                            own_ftbfs_only(&mut analysis, own);
+                        }
+                        Ok(analysis)
+                    });
+                    check
+                });
+                (check, handle)
+            })
+            .collect();
+        // A check that panicked stays in the list, failed, so it counts
+        // against promoting rather than vanishing.
+        handles
+            .into_iter()
+            .map(|(failed, h)| h.join().unwrap_or(failed))
+            .collect()
+    });
     (found, None, skipped)
 }
 
@@ -927,12 +944,15 @@ mod tests {
             tool: "cbspkg",
         };
         let mut notices = vec![notice("w-2-1.el9"), notice("w-2-1.el10")];
-        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
-        let checked = sandogasa_cbs::check::compare(
-            "w-2-1.el9",
-            Some(("w-1-1.el9", &set(&["w = 1-1"]))),
-            &set(&["w = 2-1"]),
-        );
+        let build_check = |nvr: &str, against: Option<&str>| crate::depcheck::BuildCheck {
+            nvr: nvr.into(),
+            package: "w".into(),
+            against: against.map(String::from),
+            looked_in: "CentOS Stream 9, EPEL 9 and w-release".into(),
+            changed: vec![],
+            result: Ok(Default::default()),
+        };
+        let checked = build_check("w-2-1.el9", Some("w-1-1.el9"));
         add_checks(
             &mut notices,
             std::slice::from_ref(&checked),
@@ -946,7 +966,7 @@ mod tests {
             format!(
                 "`w-2-1.el9` is released.\n\n{}\n\nBY\n\n\
                  <!-- sandogasa: w-2-1.el9 reached release -->",
-                checked.markdown()
+                checked.markdown().trim_end()
             )
         );
         // A build without a check keeps its comment as it was.
@@ -988,8 +1008,8 @@ mod tests {
         );
         assert!(notices[0].note.contains(&format!(
             "{}\n\n{}\n\nBY",
-            checked.markdown(),
-            rhel.markdown()
+            checked.markdown().trim_end(),
+            rhel.markdown().trim_end()
         )));
         assert!(
             notices[1].note.contains(
@@ -1011,7 +1031,7 @@ mod tests {
                      change listed; `--dry-run` shows the comment in full)\n\nBY\n\n"
         ));
         let mut notices = vec![notice("w-2-1.el9")];
-        let first = sandogasa_cbs::check::compare("w-2-1.el9", None, &set(&["w = 2-1"]));
+        let first = build_check("w-2-1.el9", None);
         add_checks(&mut notices, &[first], &[], None, "BY", false);
         assert!(
             notices[0]
@@ -1045,6 +1065,51 @@ mod tests {
         );
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
         assert_eq!(shell_quote(""), "''");
+    }
+
+    /// Places for the checks: `main`'s users have what the builds in
+    /// `builds` hold, the other repositories' nothing; no source package
+    /// is the SIG's own, or `own_fails` says why they cannot be listed.
+    /// Looking in `panics_in`'s repository panics.
+    struct Repos {
+        builds: sandogasa_cbs::builds::HubBuilds,
+        own_fails: Option<&'static str>,
+        panics_in: Option<&'static str>,
+    }
+
+    impl Repos {
+        fn new(builds: sandogasa_cbs::builds::HubBuilds) -> Self {
+            Self {
+                builds,
+                own_fails: None,
+                panics_in: None,
+            }
+        }
+    }
+
+    impl crate::depcheck::Places for Repos {
+        fn stable(
+            &self,
+            c: &Collection,
+        ) -> Result<Box<dyn sandogasa_depcheck::RepoQuery + Send + Sync>, String> {
+            if self.panics_in == Some(c.repository.as_str()) {
+                panic!("fedrq exploded");
+            }
+            Ok(Box::new(if c.repository == "main" {
+                self.builds.view(&["r-0-1.hs.el10", "user-1-1.el10"])
+            } else {
+                self.builds.view(&[])
+            }))
+        }
+        fn own_sources(
+            &self,
+            _: &Collection,
+        ) -> Result<std::collections::BTreeSet<String>, String> {
+            match self.own_fails {
+                Some(why) => Err(why.into()),
+                None => Ok(Default::default()),
+            }
+        }
     }
 
     #[test]
@@ -1102,19 +1167,17 @@ mod tests {
                 none.clone(),
                 build("r-0-1.hs.el10"),
             ]))
-            .expect(1)
+            .expect(2)
             .create();
         server
             .mock("POST", "/")
             .match_body(mockito::Matcher::Regex("listBuildRPMs".into()))
+            // The builds moved and those compared with, read once each
+            // in NVR order.
             .with_body(answer(&[
                 value(&format!(
                     "<value><array><data>{}</data></array></value>",
-                    rpm("r", "2-1.hs.el10")
-                )),
-                value(&format!(
-                    "<value><array><data>{}</data></array></value>",
-                    rpm("r", "2-1.hs+fb.el10")
+                    rpm("r", "0-1.hs.el10")
                 )),
                 value(&format!(
                     "<value><array><data>{}</data></array></value>",
@@ -1122,50 +1185,41 @@ mod tests {
                 )),
                 value(&format!(
                     "<value><array><data>{}</data></array></value>",
-                    rpm("r", "0-1.hs.el10")
+                    rpm("r", "2-1.hs+fb.el10")
                 )),
                 value(&format!(
                     "<value><array><data>{}</data></array></value>",
-                    rpm("r", "0-1.hs.el10")
+                    rpm("r", "2-1.hs.el10")
                 )),
             ]))
-            .expect(1)
+            .expect(2)
             .create();
         server
             .mock("POST", "/")
             .match_body(mockito::Matcher::Regex("getRPMDeps".into()))
+            // Asked for Provides, then for Requires, in each of the two
+            // runs; these answers carry Provides only, so none of the
+            // builds requires anything.
             .with_body(answer(&[
+                provide("libr.so.1()(64bit)"),
+                provide("libr.so.1()(64bit)"),
                 provide("r"),
                 provide("r"),
-                provide("libr.so.1()(64bit)"),
-                provide("libr.so.1()(64bit)"),
-                provide("libr.so.1()(64bit)"),
             ]))
-            .expect(1)
+            .expect(4)
             .create();
-        struct Repos;
-        impl sandogasa_cbs::check::Lookup for Repos {
-            fn providers(
-                &self,
-                _: &str,
-                caps: &[String],
-            ) -> Result<Vec<(String, Vec<String>)>, String> {
-                assert_eq!(caps, ["libr.so.1()(64bit)"]);
-                Ok(vec![])
-            }
-            fn users(
-                &self,
-                branch: &str,
-                caps: &[String],
-            ) -> Result<Vec<(String, Vec<String>)>, String> {
-                assert_eq!(caps, ["libr.so.1()(64bit)"]);
-                Ok(if branch == "c10s" {
-                    vec![("user".into(), vec!["libr.so.1()(64bit)".into()])]
-                } else {
-                    vec![]
-                })
-            }
-        }
+        // What main's users have: r-0-1 in -release, and a stock
+        // package needing the library it provides. facebook's have
+        // nothing.
+        let repos = Repos::new(sandogasa_cbs::builds::HubBuilds::from_parts(
+            &["r-0-1.hs.el10".to_string(), "user-1-1.el10".to_string()],
+            vec![
+                Ok(vec!["r-0-1.hs.el10.x86_64".to_string()]),
+                Ok(vec!["user-1-1.el10.x86_64".to_string()]),
+            ],
+            &[Ok(vec!["libr.so.1()(64bit)".to_string()]), Ok(vec![])],
+            &[Ok(vec![]), Ok(vec!["libr.so.1()(64bit)".to_string()])],
+        ));
         let ui = Ui {
             explain: false,
             dry_run: true,
@@ -1176,37 +1230,66 @@ mod tests {
             (fb, "r-2-1.hs+fb.el10".to_string(), Stage::Testing),
             (main, "r-1-1.hs.el10".to_string(), Stage::Release),
         ];
-        let (found, unchecked, _) = check_moves(&ui, "r", &moves, Some(&server.url()), &Repos);
+        let (found, unchecked, _) = check_moves(&ui, "r", &moves, Some(&server.url()), &repos);
         assert_eq!(unchecked, None);
         assert_eq!(found.len(), 3);
+        let dropped = |c: &crate::depcheck::BuildCheck| -> Vec<String> {
+            c.changed
+                .iter()
+                .filter(|c| c.new.is_none())
+                .map(|c| c.old.clone())
+                .collect()
+        };
         // Going to -testing, against -release too.
         assert_eq!(found[0].against.as_deref(), Some("r-0-1.hs.el10"));
-        assert_eq!(found[0].dropped(), ["libr.so.1()(64bit)"]);
-        assert!(found[0].breaks());
+        assert_eq!(dropped(&found[0]), ["libr.so.1()(64bit)"]);
+        assert!(found[0].breaks(), "{:?}", found[0].result);
         assert_eq!(found[1].against, None);
+        assert!(!found[1].breaks(), "{:?}", found[1].result);
         assert_eq!(found[2].nvr, "r-1-1.hs.el10");
         assert_eq!(found[2].against.as_deref(), Some("r-0-1.hs.el10"));
-        assert!(found[2].dropped().is_empty());
+        assert!(dropped(&found[2]).is_empty());
+        assert!(!found[2].breaks(), "{:?}", found[2].result);
         let shown = crate::plan::checks(&found, None, false);
+        assert!(shown.contains("would break (1)"), "{shown}");
+        assert!(shown.contains("user"), "{shown}");
         assert!(
-            shown.contains("libr.so.1()(64bit) is required in CentOS Stream 10 by user"),
+            shown.contains("nothing in `-release` to compare it with"),
             "{shown}"
         );
+        // A check that panics is kept, failed; when the SIG's own
+        // packages cannot be listed, FTBFS is kept for every package and
+        // the report says so.
+        let troubled = Repos {
+            own_fails: Some("mirror down"),
+            panics_in: Some("facebook"),
+            ..repos
+        };
+        let (found, _, _) = check_moves(&ui, "r", &moves, Some(&server.url()), &troubled);
+        assert_eq!(found.len(), 3);
+        assert!(found[0].result.is_ok() && found[0].breaks());
         assert!(
-            shown.contains("nothing in -release to compare it with"),
-            "{shown}"
+            found[0].looked_in.ends_with(
+                "(FTBFS shown for every package: the SIG's own could not be listed, mirror down)"
+            ),
+            "{}",
+            found[0].looked_in
         );
+        assert_eq!(found[1].nvr, "r-2-1.hs+fb.el10");
+        assert!(found[1].breaks());
+        assert!(found[1].result.as_ref().unwrap_err().contains("panicked"));
+        let repos = troubled;
         // No hub configured, or one that cannot be read: nothing
         // checked, and the plan says why.
-        let (found, why, _) = check_moves(&ui, "r", &moves, None, &Repos);
+        let (found, why, _) = check_moves(&ui, "r", &moves, None, &repos);
         assert!(found.is_empty());
         assert!(why.as_deref().unwrap().contains("no CBS hub"));
-        let (found, why, _) = check_moves(&ui, "r", &moves, Some("http://127.0.0.1:1"), &Repos);
+        let (found, why, _) = check_moves(&ui, "r", &moves, Some("http://127.0.0.1:1"), &repos);
         assert!(found.is_empty() && why.is_some());
         assert!(crate::plan::checks(&found, why.as_deref(), false).starts_with("Not checked"));
         // Nothing to move: nothing asked.
         let (found, why, _) =
-            check_moves(&ui, "r", &moves[..0], Some("http://127.0.0.1:1"), &Repos);
+            check_moves(&ui, "r", &moves[..0], Some("http://127.0.0.1:1"), &repos);
         assert!(found.is_empty() && why.is_none());
     }
 
@@ -1237,19 +1320,7 @@ mod tests {
                  </data></array></value></data></array></value></param></params></methodResponse>",
             )
             .create();
-        struct Nothing;
-        impl sandogasa_cbs::check::Lookup for Nothing {
-            fn providers(
-                &self,
-                _: &str,
-                _: &[String],
-            ) -> Result<Vec<(String, Vec<String>)>, String> {
-                Ok(vec![])
-            }
-            fn users(&self, _: &str, _: &[String]) -> Result<Vec<(String, Vec<String>)>, String> {
-                Ok(vec![])
-            }
-        }
+        let nothing = Repos::new(sandogasa_cbs::builds::HubBuilds::default());
         let ui = Ui {
             explain: false,
             dry_run: true,
@@ -1257,7 +1328,7 @@ mod tests {
         };
         let moves = [(&collections[0], "r-2-1.hs.el10".to_string(), Stage::Testing)];
         // Not checked, rather than taken as the first build released.
-        let (found, why, _) = check_moves(&ui, "r", &moves, Some(&server.url()), &Nothing);
+        let (found, why, _) = check_moves(&ui, "r", &moves, Some(&server.url()), &nothing);
         assert!(found.is_empty(), "{found:?}");
         assert_eq!(why, None);
     }

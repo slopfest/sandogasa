@@ -134,6 +134,7 @@ dependencies = [
  "sandogasa-cbs",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-depcheck",
  "sandogasa-fedrq",
  "sandogasa-gitlab",
  "sandogasa-kojihub",
@@ -2024,6 +2025,7 @@ version = "0.28.2"
 dependencies = [
  "mockito",
  "sandogasa-cli",
+ "sandogasa-depcheck",
  "sandogasa-depfilter",
  "sandogasa-gitlab",
  "sandogasa-kojihub",

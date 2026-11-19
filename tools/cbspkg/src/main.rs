@@ -9,6 +9,7 @@ mod build;
 mod checkout;
 mod config;
 mod configure;
+mod depcheck;
 mod local;
 mod new_sources;
 mod next;

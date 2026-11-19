@@ -124,6 +124,7 @@ impl Fixture {
             ("GIT_CONFIG_NOSYSTEM", "1"),
             ("CBSPKG_LOOKASIDE_BASE", "http://127.0.0.1:9"),
             ("CBSPKG_GITLAB_BASE", "http://127.0.0.1:9"),
+            ("CBSPKG_CBS_HUB", "http://127.0.0.1:9"),
         ])
         .unset(&["GITLAB_TOKEN"]);
         // Every CBS tool is a fake that answers only what a test lets

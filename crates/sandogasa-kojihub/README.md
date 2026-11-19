@@ -36,6 +36,9 @@ credentials and no `koji` CLI required (contrast with
   - `rpms_deps(nvras, dep_type)` — each RPM's requires, provides,
     obsoletes or conflicts (`RpmDeps`, name and version), through one
     `multiCall` of `getRPMDeps`.
+  - `rpms_dep_strings(nvras, dep_type)` — the same, as RPM writes each
+    dependency, comparison included (`libfoo >= 1.2`), for a
+    dependency solver.
   - `latest_builds(tag, packages)` — each package's newest build in a
     tag (NVR and completion time), following inheritance, through one
     `multiCall` of `getLatestBuilds`.

@@ -299,6 +299,34 @@ impl HubClient {
             .collect())
     }
 
+    /// Like [`Self::rpms_deps`], each dependency as RPM writes it, its
+    /// comparison included (`foo >= 1.2`, `foo = 1.2-3`, `foo`, a rich
+    /// dependency whole): what a check needs to evaluate a Requires
+    /// against Provides. One `multiCall` for all RPMs; one result per
+    /// RPM, in order, and an RPM the hub does not know is a fault in its
+    /// own slot.
+    pub fn rpms_dep_strings(
+        &self,
+        nvras: &[String],
+        dep_type: i64,
+    ) -> Result<Vec<Result<Vec<String>, Error>>, Error> {
+        let calls: Vec<(&str, Vec<Value>)> = nvras
+            .iter()
+            .map(|nvra| {
+                (
+                    "getRPMDeps",
+                    vec![Value::String(nvra.clone()), Value::Int(dep_type)],
+                )
+            })
+            .collect();
+        Ok(self
+            .client
+            .multicall(&calls)?
+            .into_iter()
+            .map(|r| r.map(|v| rpm_dep_strings(&v, dep_type)))
+            .collect())
+    }
+
     /// The newest build of each of `packages` in `tag`, following
     /// inheritance as `koji list-tagged --latest --inherit` does, asked
     /// in one `multiCall` of `getLatestBuilds`. One result per package,
@@ -825,6 +853,47 @@ fn rpm_deps(answer: &Value, dep_type: i64) -> RpmDeps {
         .collect()
 }
 
+/// The comparison RPM's sense `flags` stand for: `RPMSENSE_LESS` (2),
+/// `RPMSENSE_GREATER` (4) and `RPMSENSE_EQUAL` (8) combined; `None`
+/// for none of them.
+fn sense_operator(flags: i64) -> Option<&'static str> {
+    match (flags & 2 != 0, flags & 4 != 0, flags & 8 != 0) {
+        (true, false, true) => Some("<="),
+        (false, true, true) => Some(">="),
+        (false, false, true) => Some("="),
+        (true, false, false) => Some("<"),
+        (false, true, false) => Some(">"),
+        _ => None,
+    }
+}
+
+/// A `getRPMDeps` answer as dependency strings of `dep_type`, each
+/// with its comparison: `name op version`, or the name alone when
+/// unversioned (a rich dependency comes as one name).
+fn rpm_dep_strings(answer: &Value, dep_type: i64) -> Vec<String> {
+    answer
+        .as_array()
+        .unwrap_or_default()
+        .iter()
+        .filter(|d| d.get("type").and_then(Value::as_int) == Some(dep_type))
+        .filter_map(|d| {
+            let name = d.get("name").and_then(Value::as_str)?;
+            let version = d
+                .get("version")
+                .and_then(Value::as_str)
+                .filter(|v| !v.is_empty());
+            let op = d
+                .get("flags")
+                .and_then(Value::as_int)
+                .and_then(sense_operator);
+            Some(match (version, op) {
+                (Some(v), Some(op)) => format!("{name} {op} {v}"),
+                _ => name.to_string(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1130,6 +1199,61 @@ mod tests {
         );
         assert!(matches!(got[1], Err(Error::Fault { code: 1000, .. })));
         assert!(hub.rpms_deps(&[], 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rpms_dep_strings_keep_each_comparison() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let dep = |name: &str, version: &str, flags: i64| {
+            format!(
+                "<value><struct>\
+                 <member><name>name</name><value><string>{name}</string></value></member>\
+                 <member><name>version</name><value><string>{version}</string></value></member>\
+                 <member><name>type</name><value><int>0</int></value></member>\
+                 <member><name>flags</name><value><int>{flags}</int></value></member>\
+                 </struct></value>"
+            )
+        };
+        let server = block_on(MockServer::start());
+        let body = response(&format!(
+            "<value><array><data><value><array><data>{}{}{}{}{}{}{}</data></array></value></data></array></value>",
+            dep("glibc", "2.39", 12),
+            dep("libfoo", "2.0", 10),
+            dep("foo", "1.2-3", 8),
+            dep("bar", "3", 2),
+            dep("baz", "1", 4),
+            dep("libc.so.6()(64bit)", "", 0),
+            dep("(python3-a or python3-b)", "", 0),
+        ));
+        block_on(
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_string_contains("getRPMDeps"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+                .expect(1)
+                .mount(&server),
+        );
+        let hub = HubClient::new(&server.uri());
+        let got = hub
+            .rpms_dep_strings(&["foo-1-1.x86_64".to_string()], 0)
+            .unwrap();
+        assert_eq!(
+            got[0].as_ref().unwrap(),
+            &[
+                "glibc >= 2.39",
+                "libfoo <= 2.0",
+                "foo = 1.2-3",
+                "bar < 3",
+                "baz > 1",
+                "libc.so.6()(64bit)",
+                "(python3-a or python3-b)"
+            ]
+        );
+        assert!(hub.rpms_dep_strings(&[], 0).unwrap().is_empty());
+        assert_eq!(sense_operator(0), None);
+        assert_eq!(sense_operator(2 | 4), None);
     }
 
     #[test]

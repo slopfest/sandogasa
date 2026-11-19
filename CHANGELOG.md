@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### cbspkg promote checks builds the way ebranch check-update does
+
+`cbspkg promote` checked only who in stock CentOS Stream and EPEL
+required a capability a build dropped. It missed the SIG's own packages
+in `-release` that needed it, never checked whether the build's own
+Requires still resolve, and printed its findings in a layout of its own,
+unlike ebranch `check-update`'s report for the same kind of change.
+
+promote now runs sandogasa-depcheck, the check `check-update` runs, on
+each build it moves, against the package's newest build in the
+collection's `-release`. It looks in what the collection's users have,
+as one repository: stock CentOS Stream (AlmaLinux for a collection built
+for RHEL), EPEL and the collection's published `-release`. It reports
+packages that would no longer install (FTI), the SIG's own packages
+that would no longer build (FTBFS; stock packages are left out, as many
+do not build from Stream's public repositories at all), and Requires of
+the build that nothing provides. The plan and the tracking-issue comment
+show the shared report, in color at a terminal. Provides are compared
+across every architecture the build has, as before; the dependency
+check reads each binary package for the machine's architecture where
+the build has one, since fedrq answers for that architecture, and an
+x86_64 RPM's glibc symbol versions were otherwise reported as missing
+on aarch64. A
+collection whose `-release` is not on the mirror yet is checked without
+it, and the report says so.
+
+Underneath: sandogasa-kojihub gains `rpms_dep_strings`, each RPM's
+dependencies as RPM writes them (`libfoo >= 1.2`); sandogasa-cbs gains
+`builds::HubBuilds`, builds read from the hub as a `RepoQuery`, and
+`Collection::published_repo` and `stock_branch`; sandogasa-depcheck's
+`Analysis` derives `Clone`. cbspkg's tests no longer reach the CBS hub
+named in the machine's koji configuration (`CBSPKG_CBS_HUB` points them
+at a local port).
+
 ### sandogasa-report reads every page of a user's Bodhi updates
 
 The Bodhi section stopped after a user's first 500 updates without

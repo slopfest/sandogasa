@@ -23,6 +23,7 @@
 //! repo but into Extras' common collection, `extras<major>s-extras-common`
 //! (see [`release_package_collection`]).
 
+pub mod builds;
 pub mod check;
 pub mod login;
 pub mod lookaside;
@@ -198,6 +199,31 @@ impl Collection {
     /// The tag for `stage`: `hyperscale9s-packages-main-testing`.
     pub fn tag(&self, stage: Stage) -> String {
         format!("{}-{}", self.prefix(), stage.as_str())
+    }
+
+    /// Where the collection's `-release` is published, as a repository
+    /// URL with fedrq's `$basearch`:
+    /// `https://mirror.stream.centos.org/SIGs/9-stream/hyperscale/$basearch/packages-main/`.
+    pub fn published_repo(&self) -> String {
+        format!(
+            "https://mirror.stream.centos.org/SIGs/{}{}/{}/$basearch/{}-{}/",
+            self.major,
+            if self.stream { "-stream" } else { "" },
+            self.sig,
+            self.area(),
+            self.repository
+        )
+    }
+
+    /// The fedrq branch of the stock distribution the collection's users
+    /// run: CentOS Stream (`c9s`) for a Stream collection, and for one
+    /// built for RHEL, AlmaLinux (`al9`), fedrq's stand-in for it.
+    pub fn stock_branch(&self) -> String {
+        if self.stream {
+            format!("c{}s", self.major)
+        } else {
+            format!("al{}", self.major)
+        }
     }
 
     /// The build target: `hyperscale9s-packages-main-el9s`.
@@ -562,6 +588,27 @@ fn stream_branch(branch: &str) -> Option<(u32, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_collection_is_published_where_its_users_install_from() {
+        let main10 = Collection::new("hyperscale", 10, true, "main");
+        assert_eq!(
+            main10.published_repo(),
+            "https://mirror.stream.centos.org/SIGs/10-stream/hyperscale/$basearch/packages-main/"
+        );
+        assert_eq!(main10.stock_branch(), "c10s");
+        let fb9 = Collection::new("hyperscale", 9, false, "facebook");
+        assert_eq!(
+            fb9.published_repo(),
+            "https://mirror.stream.centos.org/SIGs/9/hyperscale/$basearch/packages-facebook/"
+        );
+        assert_eq!(fb9.stock_branch(), "al9");
+        let pu = Collection::new("proposed_updates", 10, true, "main");
+        assert!(
+            pu.published_repo()
+                .contains("/SIGs/10-stream/proposed_updates/")
+        );
+    }
 
     #[test]
     fn both_sigs_fast_forward() {

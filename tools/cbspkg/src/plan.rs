@@ -8,12 +8,12 @@
 //! The plan goes to standard error with its question, colored on a
 //! terminal only.
 
+use crate::depcheck::BuildCheck;
 use sandogasa_cbs::Stage;
-use sandogasa_cbs::check::{Check, is_soname};
 use sandogasa_cbs::notify::{Notice, describe_styled};
 use sandogasa_cbs::tags::TagChange;
 use sandogasa_cli::explain::command_line;
-use sandogasa_cli::style::{BOLD, GREEN, RED, YELLOW, paint};
+use sandogasa_cli::style::{BOLD, GREEN, YELLOW, paint};
 
 /// The style of a command to run: bold green.
 pub fn command_style() -> String {
@@ -59,13 +59,12 @@ pub fn build(
     out
 }
 
-/// What `found` says, per build: what it drops, red for a soname and
-/// yellow otherwise, with the packages elsewhere requiring it in bold
-/// red, and what could not be checked in yellow. The rest (nothing
-/// dropped, what another package still provides, the version changes)
-/// is the result too, so it keeps the normal text color. `unchecked` is why
-/// nothing could be checked at all, when that is so.
-pub fn checks(found: &[Check], unchecked: Option<&str>, color: bool) -> String {
+/// What `found` says, per build, as the shared report shows it on a
+/// terminal ([`sandogasa_depcheck::render::to_terminal`]): what the
+/// build was compared with and where, what it drops and what that
+/// breaks, and its version changes. `unchecked` is why nothing could be
+/// checked at all, when that is so.
+pub fn checks(found: &[BuildCheck], unchecked: Option<&str>, color: bool) -> String {
     let mut out = String::new();
     if let Some(why) = unchecked {
         out.push_str(&format!(
@@ -73,64 +72,15 @@ pub fn checks(found: &[Check], unchecked: Option<&str>, color: bool) -> String {
             paint(&format!("Not checked for breakage: {why}"), YELLOW, color)
         ));
     }
-    for c in found {
-        let Some(against) = &c.against else {
-            out.push_str(&format!(
-                "{}: nothing in -release to compare it with\n",
-                c.nvr
-            ));
-            continue;
-        };
-        out.push_str(&heading(&format!("{} against {against}:", c.nvr), color));
-        let dropped = c.dropped();
-        if dropped.is_empty() {
-            out.push_str("  drops no Provides\n");
+    // A blank line between checks; the plan spaces what follows.
+    for (i, c) in found.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
         }
-        for d in &dropped {
-            let style = if is_soname(d) { RED } else { YELLOW };
-            out.push_str(&format!(
-                "  {}\n",
-                paint(&format!("drops {d}"), style, color)
-            ));
-        }
-        for (place, cap, by) in &c.still_provided {
-            out.push_str(&format!(
-                "  {cap} is still provided in {place} by {}\n",
-                by.join(", ")
-            ));
-        }
-        for (place, cap, users) in c.required() {
-            let what = if cap.is_empty() {
-                "something it drops".to_string()
-            } else {
-                cap.to_string()
-            };
-            out.push_str(&format!(
-                "  {}\n",
-                paint(
-                    &format!("{what} is required in {place} by {}", users.join(", ")),
-                    &format!("{BOLD}{RED}"),
-                    color
-                )
-            ));
-        }
-        if !dropped.is_empty() && !c.breaks() && c.unchecked.is_empty() {
-            out.push_str("  nothing in CentOS Stream or EPEL requires what it drops\n");
-        }
-        let changed = c.changed();
-        if let Some((old, new)) = changed.first() {
-            let more = match changed.len() {
-                1 => String::new(),
-                n => format!(" and {} more", n - 1),
-            };
-            out.push_str(&format!("  changes {old} to {new}{more}\n"));
-        }
-        for u in &c.unchecked {
-            out.push_str(&format!(
-                "  {}\n",
-                paint(&format!("not looked in: {u}"), YELLOW, color)
-            ));
-        }
+        out.push_str(&sandogasa_depcheck::render::to_terminal(
+            &c.markdown(),
+            color,
+        ));
     }
     out
 }
@@ -141,7 +91,7 @@ pub fn checks(found: &[Check], unchecked: Option<&str>, color: bool) -> String {
 /// untag, asked separately.
 pub fn promote(
     steps: &[(String, Stage, Vec<TagChange>)],
-    found: &[Check],
+    found: &[BuildCheck],
     unchecked: Option<&str>,
     notices: &[Notice],
     replaced: &[TagChange],
@@ -238,77 +188,52 @@ mod tests {
     }
 
     #[test]
-    fn a_check_shows_what_breaks_what_does_not_and_what_was_not_looked_at() {
-        use sandogasa_cbs::check::compare;
-        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
-        let old = set(&[
-            "libr.so.1()(64bit)",
-            "r-tools = 1-1",
-            "r = 1-1",
-            "r-data = 1-1",
-        ]);
-        let new = set(&["r = 2-1", "r-data = 2-1"]);
-        let mut c = compare("r-2-1", Some(("r-1-1", &old)), &new);
-        c.still_provided = vec![(
-            "CentOS Stream 10".into(),
-            "r-tools".into(),
-            vec!["other".into()],
-        )];
-        c.users = vec![(
-            "CentOS Stream 10".into(),
-            vec![("libr.so.1()(64bit)".into(), vec!["user".into()])],
-        )];
-        c.unchecked = vec!["EPEL 10: no such release".into()];
-        let shown = checks(std::slice::from_ref(&c), None, false);
-        assert_eq!(
-            shown,
-            "r-2-1 against r-1-1:\n  \
-             drops libr.so.1()(64bit)\n  \
-             drops r-tools = 1-1\n  \
-             r-tools is still provided in CentOS Stream 10 by other\n  \
-             libr.so.1()(64bit) is required in CentOS Stream 10 by user\n  \
-             changes r = 1-1 to r = 2-1 and 1 more\n  \
-             not looked in: EPEL 10: no such release\n"
-        );
+    fn a_check_shows_as_the_shared_report_in_color() {
+        use crate::depcheck::BuildCheck;
+        use sandogasa_cli::style::RED;
+        use sandogasa_depcheck::analysis::Analysis;
+        use sandogasa_depcheck::report::{BreakKind, BrokenRequires, ChangedProvide, RevDepResult};
+        let c = BuildCheck {
+            nvr: "r-2-1".into(),
+            package: "r".into(),
+            against: Some("r-1-1".into()),
+            looked_in: "CentOS Stream 10, EPEL 10 and r-release".into(),
+            changed: vec![ChangedProvide {
+                old: "libr.so.1()(64bit)".into(),
+                new: None,
+            }],
+            result: Ok(Analysis {
+                installability_issues: vec![],
+                reverse_deps: std::collections::BTreeMap::from([(
+                    "user".to_string(),
+                    RevDepResult {
+                        status: "broken".into(),
+                        issues: vec![BrokenRequires {
+                            dep: "libr.so.1()(64bit)".into(),
+                            changed_provide: "libr.so.1()(64bit)".into(),
+                            kind: BreakKind::Fti,
+                        }],
+                        arrival: None,
+                    },
+                )]),
+            }),
+        };
+        // Without color, the Markdown a comment carries.
+        let plain = checks(std::slice::from_ref(&c), None, false);
+        assert_eq!(plain, c.markdown());
+        // Two checks: one blank line between them.
+        let two = checks(&[c.clone(), c.clone()], None, false);
+        assert_eq!(two, format!("{}\n{}", c.markdown(), c.markdown()));
         let colored = checks(std::slice::from_ref(&c), None, true);
         assert!(
-            colored.contains(&format!("{RED}drops libr.so.1")),
+            colored.contains(&format!("{RED}- libr.so.1()(64bit)")),
             "{colored}"
         );
+        assert!(colored.contains(&format!("{BOLD}{RED}- user")), "{colored}");
+        // Nothing could be checked: said first.
         assert!(
-            colored.contains(&format!("{YELLOW}drops r-tools")),
-            "{colored}"
-        );
-        assert!(
-            colored.contains(&format!("{BOLD}{RED}libr.so.1()(64bit) is required in")),
-            "{colored}"
-        );
-        assert!(
-            colored.contains(&format!("{YELLOW}not looked in")),
-            "{colored}"
-        );
-        // Results that are not findings keep the normal text color.
-        assert!(
-            colored.contains("\n  r-tools is still provided in CentOS Stream 10 by other\n"),
-            "{colored}"
-        );
-        assert!(
-            colored.contains("\n  changes r = 1-1 to r = 2-1 and 1 more\n"),
-            "{colored}"
-        );
-        // Dropped, looked up everywhere, used nowhere.
-        c.users = vec![("CentOS Stream 10".into(), vec![])];
-        c.unchecked.clear();
-        assert!(checks(&[c], None, false).contains("nothing in CentOS Stream or EPEL requires"));
-        // Nothing dropped, one version change.
-        let only = compare(
-            "r-2-1",
-            Some(("r-1-1", &set(&["r = 1-1"]))),
-            &set(&["r = 2-1"]),
-        );
-        assert_eq!(
-            checks(&[only], None, false),
-            "r-2-1 against r-1-1:\n  drops no Provides\n  changes r = 1-1 to r = 2-1\n"
+            checks(&[], Some("no CBS hub"), false)
+                .starts_with("Not checked for breakage: no CBS hub")
         );
     }
 }

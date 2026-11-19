@@ -132,6 +132,19 @@ Hyperscale's are the `rfe::new-version` issues hs-relmon files per
 package. What the comments need from the package's git checkout comes
 through `notify::Checkout`, which the calling tool implements.
 
+## Builds
+
+`builds::HubBuilds::fetch` reads builds from the hub for the dependency
+check (sandogasa-depcheck): each build's binary RPMs, then their
+Provides and Requires as RPM writes them (`name >= version`), in three
+`multiCall`s for all builds together. Per binary name it keeps the RPM
+for the machine's architecture, else the `noarch` one, else the first,
+and leaves out debug packages; a build the hub cannot answer for is
+listed in `errors`. `view` makes a `RepoQuery` of some of the builds,
+so a check can look in them as in a repository. A collection's
+`published_repo` is the mirror URL its `-release` is published at, and
+`stock_branch` the fedrq branch of the distribution its users run.
+
 ## Checks
 
 `check` compares a candidate build's Provides with those of the build

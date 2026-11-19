@@ -307,7 +307,7 @@ pub fn check_update_installability(
 
 /// What [`analyze`] finds: the update's own Requires that do not
 /// resolve, and each reverse dependency with what of it breaks.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Analysis {
     pub installability_issues: Vec<UnsatisfiedDep>,
     pub reverse_deps: BTreeMap<String, RevDepResult>,

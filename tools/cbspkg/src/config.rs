@@ -89,6 +89,15 @@ pub fn gitlab_base() -> String {
     std::env::var("CBSPKG_GITLAB_BASE").unwrap_or_else(|_| "https://gitlab.com".to_string())
 }
 
+/// The CBS hub: the `cbs` koji profile's `server`, or
+/// `CBSPKG_CBS_HUB` (for testing against a local server); `None` when
+/// neither is set.
+pub fn cbs_hub() -> Option<String> {
+    std::env::var("CBSPKG_CBS_HUB")
+        .ok()
+        .or_else(|| sandogasa_kojihub::config::hub_url("cbs"))
+}
+
 sandogasa_config::keyring_fn!();
 
 /// The GitLab token's keyring entry, for the GitLab instance in use:

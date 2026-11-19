@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 # explain: tag changes run through sandogasa_cli::explain::Ui (tags.rs)
 sandogasa-cli = { workspace = true, features = ["explain"] }
+sandogasa-depcheck = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-kojihub = { workspace = true }

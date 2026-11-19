@@ -239,27 +239,35 @@ or the package's newest in `-candidate` for each collection the branch
 (checked out, or `--branch`) builds into; `--to` names the stage when it
 is not the next one, such as `--to release` straight from `-candidate`.
 
-A build is checked before it moves. Its Provides, read from CBS, are
-compared with those of the package's newest build in the collection's
-`-release`, which is what everyone using the SIG's repos has, whether
-the build goes to `-testing` or `-release`. For each
-capability it drops, fedrq looks in stock CentOS Stream and EPEL (`-b
-c10s`, `-b epel10`). A capability another source package there still
-provides is not lost. For the rest, it lists the packages whose binary
-packages require them at run time. The plan before `Promote?` shows
-the result:
-- what the build drops, red for a shared library's soname and yellow
-  for anything else;
-- what another package still provides;
-- for each dropped capability, the packages that require it, in bold
-  red;
-- the version changes.
+A build is checked before it moves, by the check ebranch's
+`check-update` runs, and reported the same way. Its Provides and
+Requires, read from CBS, are compared with those of the package's
+newest build in the collection's `-release`, which is what everyone
+using the SIG's repos has, whether the build goes to `-testing` or
+`-release`. What the collection's users have is looked in through
+fedrq, as one repository: stock CentOS Stream (AlmaLinux for a
+collection built for RHEL), EPEL, and the collection's published
+`-release` (`-b c10s -e @epel -e @baseurl:<mirror URL>`). The check
+finds the packages there that would no longer install (FTI) because
+the build drops something they require, the SIG's own packages that
+would no longer build (FTBFS) for the same reason, and the build's own
+Requires that nothing provides. FTBFS is left out for stock packages:
+many of them do not build from CentOS Stream's public repositories
+anyway. Provides are compared across every architecture the build has;
+for the dependency check, each binary package is read for the
+machine's architecture where the build has one, else as `noarch` or
+the first one built. A
+collection whose `-release` is not on the mirror yet, before its first
+release, is checked without it, and the report says so.
 
-When something requires what the build drops, or a repo could not be
-looked in for something it drops, Enter answers no to `Promote?`.
-`--dry-run` shows the check as well. Without koji's `cbs` profile, or
-with a hub that cannot be read, the plan says the builds were not
-checked; without fedrq, it says where it could not look.
+The plan before `Promote?` shows the report in color: what the build
+removes, what would break and why, and a collapsed list of the
+Provides that only change version. When something would break, a
+Requires does not resolve, or the check could not run, Enter answers no
+to `Promote?`. `--dry-run` shows the check as well. Without koji's
+`cbs` profile, or with a hub that cannot be read, the plan says the
+builds were not checked; without fedrq, it says the check could not
+run.
 
 The whole check also goes into the build's comment on its tracking
 issue, every version change listed in a collapsed list, ending with the
