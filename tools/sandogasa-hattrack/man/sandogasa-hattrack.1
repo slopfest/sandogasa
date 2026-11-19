@@ -64,11 +64,11 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 Print version
 .SH COMMANDS
 .SS sandogasa-hattrack away
-\fBsandogasa\-hattrack away\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-\-note\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-title\fR] [\fB\-\-working\-hours\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-refresh\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFIRST\fR> <\fILAST\fR>
+\fBsandogasa\-hattrack away\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-\-note\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-title\fR] [\fB\-\-update\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-refresh\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFIRST\fR> <\fILAST\fR>
 .PP
 File your own absence in Fedora Calendar\*(Aqs vacation calendar
 .PP
-Logs in with your Kerberos ticket (renewing it or running kinit for the principal in ~/.fedora.upn when needed), shows the entry, and files it once you confirm. An absence filed already is not filed again.
+Logs in with your Kerberos ticket (renewing it or running kinit for the principal in ~/.fedora.upn when needed), shows the entry, and files it once you confirm. An absence filed already is not filed again; \-\-update changes it instead.
 .TP
 \fB\-\-dry\-run\fR
 Log in and check the entry, but file nothing
@@ -112,14 +112,17 @@ never: Disable colored output entirely
 \fB\-\-title\fR \fI<TITLE>\fR
 The entry\*(Aqs title (default: your FAS username)
 .TP
+\fB\-\-update\fR
+Change the filed absence that overlaps these days to them, and to the title and note given, instead of filing another
+.TP
 \fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
 Working\-hours range `START\-END` (24h local). Outside is dimmed
 .TP
-\fB\-y\fR, \fB\-\-yes\fR
-File without asking
-.TP
 \fB\-\-no\-holidays\fR
 Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+File without asking
 .TP
 \fB\-\-refresh\-holidays\fR
 Force\-refetch holiday data from Nager.Date even when a cached copy is present

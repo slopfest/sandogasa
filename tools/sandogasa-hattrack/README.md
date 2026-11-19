@@ -29,12 +29,14 @@ Last seen: salimma
                  expires: 2026-04-01 00:00 UTC (in 1 week)
   Mailing lists  2026-03-13T09:58:20+00:00 (1 week ago)
                  Retiring python-sphinx-hoverxref
-  Calendar       away 2026-03-23 to 2026-04-01
+  Calendar       away 2026-03-23 to 2026-04-01 (back Thu 2026-04-02)
 ```
 
 `Calendar` is Fedora Calendar's vacation calendar: the current or next
 absence filed for the coming 90 days, and any later ones. The row is
-left out when none is filed.
+left out when none is filed. Days are counted as the last full day
+away, with the day back; Fedora Calendar's own pages show the day back
+as the end (`End: Mon, January 04, 2027 - 00:00 UTC`).
 
 ### Subcommands
 
@@ -207,7 +209,7 @@ repeat lookups never touch the network.
 
 ```
 $ sandogasa-hattrack away 2026-12-21 2027-01-03 --note "Back on the 4th"
-To file in https://calendar.fedoraproject.org/vacation/:
+New entry in https://calendar.fedoraproject.org/vacation/:
   title:     salimma
   days:      2026-12-21 to 2027-01-03 (full days, 14 day(s))
   note:      Back on the 4th
@@ -225,13 +227,29 @@ instead of a password: get one with `fkinit -u <FAS username>`, or let
 `away` renew an expired one or run `kinit` for you, once it knows the
 days need filing. The login takes about ten seconds. An absence already filed for the same days is not
 filed again; one that overlaps only in part is listed, and filing
-another needs a "yes". After filing, the entry is read back from the
+another needs a "yes".
+
+`--update` changes the filed absence instead, to the `--title` and
+`--note` given, showing each change before and after; everything else
+in the entry is kept. The days given find the absence: they must cover
+at least half of it, or it at least half of them. When they differ
+from the filed days, `away` asks whether to change the days to them,
+defaulting to keeping the filed ones; with `--yes` the days given are
+taken, and said.
+
+```
+$ sandogasa-hattrack away 2026-12-01 2026-12-05 --update --note "Back on the 4th"
+Change its days from 2026-11-24 to 2027-01-03 (back Mon 2027-01-04) to 2026-12-01 to 2026-12-05 (back Sun 2026-12-06)? [y/N]:
+Changes to https://calendar.fedoraproject.org/meeting/11459/:
+  note:      (none) -> "Back on the 4th"
+```
+ After filing, the entry is read back from the
 calendar. `--dry-run` logs in and checks that you may add to the
 vacation calendar, but files nothing; `--yes` files without asking,
 which is also how to run it without a terminal, given a valid ticket.
 With `--json` (and `--yes` or `--dry-run`) it prints the outcome
-(`already_filed`, `declined`, `dry_run` or `filed`, with the entry's
-page), its messages going to standard error. It needs `curl` and
+(`already_filed`, `declined`, `dry_run`, `filed`, `unchanged` or
+`updated`, with the entry's page), its messages going to standard error. It needs `curl` and
 `klist` (krb5-workstation).
 
 ### Narrowing the `last-seen` service set

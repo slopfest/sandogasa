@@ -15,6 +15,8 @@
 //! authenticate to a host other than the one first asked. fedocal's
 //! session lasts an hour, so a session is for one run.
 
+use std::sync::{Arc, Mutex};
+
 use chrono::NaiveDate;
 
 use crate::Error;
@@ -32,15 +34,28 @@ pub struct NewEntry {
     pub location: String,
 }
 
+/// What to change in an existing entry; what is left `None` stays as
+/// it is.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Changes {
+    pub name: Option<String>,
+    /// The first and last day it takes.
+    pub days: Option<(NaiveDate, NaiveDate)>,
+    pub information: Option<String>,
+}
+
 /// A logged-in session on a Fedora Calendar instance.
 #[derive(Debug, Clone)]
 pub struct Session {
     http: reqwest::Client,
     base_url: String,
-    /// The `Cookie` header: every cookie the login left for the host
-    /// (fedocal's session, named by its deployment, and the load
-    /// balancer's).
-    cookie: String,
+    /// The cookies for the host, as `(name, value)`: those the login
+    /// left (fedocal's session, named by its deployment, and the load
+    /// balancer's), updated from every answer as a browser does. Opening
+    /// a form stores its CSRF secret in a new session cookie, which the
+    /// form's submission must carry.
+    cookies: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl NewEntry {
@@ -82,6 +97,51 @@ impl NewEntry {
             ("information", self.information.clone()),
             ("meeting_location", self.location.clone()),
         ]
+    }
+}
+
+impl Changes {
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn days(mut self, first: NaiveDate, last: NaiveDate) -> Self {
+        self.days = Some((first, last));
+        self
+    }
+
+    pub fn information(mut self, information: impl Into<String>) -> Self {
+        self.information = Some(information.into());
+        self
+    }
+
+    /// Whether it changes nothing.
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none() && self.days.is_none() && self.information.is_none()
+    }
+
+    /// `fields` (an edit form's, as a browser would send them) with these
+    /// changes made. Saving an edit stores the end date as given, so the
+    /// day after the last is sent, which is how fedocal stores a full-day
+    /// entry's end, as the form itself shows it.
+    fn apply(&self, fields: &mut [(String, String)]) {
+        let mut set = |name: &str, value: String| {
+            if let Some(field) = fields.iter_mut().find(|(n, _)| n == name) {
+                field.1 = value;
+            }
+        };
+        if let Some(name) = &self.name {
+            set("meeting_name", name.clone());
+        }
+        if let Some((first, last)) = self.days {
+            set("meeting_date", first.to_string());
+            let end = last.succ_opt().unwrap_or(last);
+            set("meeting_date_end", end.to_string());
+        }
+        if let Some(information) = &self.information {
+            set("information", information.clone());
+        }
     }
 }
 
@@ -141,9 +201,7 @@ impl Session {
         // A login the ticket did not get through ends on
         // id.fedoraproject.org's password form instead.
         let cookies = host_cookies(&jar_text, host);
-        let cookie =
-            Some(cookies.join("; ")).filter(|c| !c.is_empty() && host_of(&ended_at) == host);
-        let Some(cookie) = cookie else {
+        if cookies.is_empty() || host_of(&ended_at) != host {
             return Err(Error::Login(format!(
                 "the login ended at {} without a session; is the Kerberos ticket \
                  (`klist`) for your FAS account?",
@@ -153,11 +211,11 @@ impl Session {
                     ended_at.trim()
                 }
             )));
-        };
+        }
         Ok(Session {
             http: no_redirect_client(),
             base_url: base_url.to_string(),
-            cookie,
+            cookies: Arc::new(Mutex::new(cookies)),
         })
     }
 
@@ -183,6 +241,7 @@ impl Session {
             .send()
             .await
             .map_err(|e| Error::Http(format!("POST {url}: {e}")))?;
+        self.keep_cookies(&resp);
         let status = resp.status();
         if status.is_redirection() {
             let location = resp
@@ -215,6 +274,77 @@ impl Session {
         Err(Error::Http(format!("POST {url}: HTTP {status}")))
     }
 
+    /// Whether the user may edit entry `meeting_id`: its edit form opens.
+    /// Nothing is submitted; a refusal carries fedocal's reasons.
+    pub async fn can_edit(&self, meeting_id: u64) -> Result<(), Error> {
+        self.edit_form(meeting_id).await.map(|_| ())
+    }
+
+    /// Change entry `meeting_id`: read its edit form as the browser would
+    /// send it, make `changes`, and submit it, so the fields the API does
+    /// not show (co-managers, reminders) are kept. fedocal answers a
+    /// saved edit with a redirect to the entry's page; anything else is a
+    /// refusal, with fedocal's reasons.
+    pub async fn edit(&self, meeting_id: u64, changes: &Changes) -> Result<(), Error> {
+        let url = format!("{}/meeting/edit/{meeting_id}/", self.base_url);
+        let mut fields = self.edit_form(meeting_id).await?;
+        changes.apply(&mut fields);
+        let resp = self
+            .http
+            .post(&url)
+            .header(reqwest::header::COOKIE, self.cookie_header())
+            .form(&fields)
+            .send()
+            .await
+            .map_err(|e| Error::Http(format!("POST {url}: {e}")))?;
+        self.keep_cookies(&resp);
+        let status = resp.status();
+        if status.is_redirection() {
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|l| l.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            if path_of(&self.absolute(&location), &self.base_url)
+                == Some(format!("/meeting/{meeting_id}/"))
+            {
+                return Ok(());
+            }
+            let page = self
+                .page(&self.absolute(&location))
+                .await
+                .unwrap_or_default();
+            let mut reasons = page_messages(&page);
+            if reasons.is_empty() {
+                reasons.push(format!("the form led to {location}, not the entry"));
+            }
+            return Err(Error::Refused(reasons));
+        }
+        let body = resp.text().await.unwrap_or_default();
+        if status.is_success() {
+            return Err(Error::Refused(page_messages(&body)));
+        }
+        Err(Error::Http(format!("POST {url}: HTTP {status}")))
+    }
+
+    /// Entry `meeting_id`'s edit form, as a browser would send it; when it
+    /// does not open, fedocal's reasons.
+    async fn edit_form(&self, meeting_id: u64) -> Result<Vec<(String, String)>, Error> {
+        let url = format!("{}/meeting/edit/{meeting_id}/", self.base_url);
+        let page = self.page(&url).await?;
+        form_values(&page).ok_or_else(|| {
+            let reasons = page_messages(&page);
+            if reasons.is_empty() {
+                Error::Http(format!(
+                    "no edit form on {url}; is the session still valid?"
+                ))
+            } else {
+                Error::Refused(reasons)
+            }
+        })
+    }
+
     /// The CSRF token of `calendar`'s add form; when the form does not
     /// open, fedocal's reasons.
     async fn form_token(&self, calendar: &str) -> Result<String, Error> {
@@ -243,6 +373,7 @@ impl Session {
             .send()
             .await
             .map_err(|e| Error::Http(format!("GET {url}: {e}")))?;
+        self.keep_cookies(&resp);
         if resp.status().is_redirection() {
             let next = resp
                 .headers()
@@ -260,6 +391,7 @@ impl Session {
                 .send()
                 .await
                 .map_err(|e| Error::Http(format!("GET {next}: {e}")))?;
+            self.keep_cookies(&resp);
             return resp
                 .text()
                 .await
@@ -283,7 +415,33 @@ impl Session {
     }
 
     fn cookie_header(&self) -> String {
-        self.cookie.clone()
+        let cookies = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+        cookies
+            .iter()
+            .map(|(n, v)| format!("{n}={v}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    /// Take in the cookies an answer sets, replacing those of the same
+    /// name.
+    fn keep_cookies(&self, resp: &reqwest::Response) {
+        let mut cookies = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+        for header in resp.headers().get_all(reqwest::header::SET_COOKIE) {
+            let Some((name, value)) = header
+                .to_str()
+                .ok()
+                .and_then(|h| h.split(';').next())
+                .and_then(|pair| pair.split_once('='))
+            else {
+                continue;
+            };
+            let (name, value) = (name.trim().to_string(), value.trim().to_string());
+            match cookies.iter_mut().find(|(n, _)| *n == name) {
+                Some(cookie) => cookie.1 = value,
+                None => cookies.push((name, value)),
+            }
+        }
     }
 }
 
@@ -327,8 +485,8 @@ pub fn login_command(base_url: &str, jar: &str) -> Vec<String> {
 }
 
 /// The cookies for `host` in a Netscape-format cookie jar, as curl writes
-/// one, as `name=value`.
-fn host_cookies(jar: &str, host: &str) -> Vec<String> {
+/// one, as `(name, value)`.
+fn host_cookies(jar: &str, host: &str) -> Vec<(String, String)> {
     jar.lines()
         .filter_map(|line| {
             // curl marks HttpOnly cookies with this prefix.
@@ -341,7 +499,7 @@ fn host_cookies(jar: &str, host: &str) -> Vec<String> {
                 return None;
             };
             (domain.trim_start_matches('.') == host && !name.is_empty())
-                .then(|| format!("{name}={value}"))
+                .then(|| (name.to_string(), value.to_string()))
         })
         .collect()
 }
@@ -372,6 +530,176 @@ fn host_of(url: &str) -> &str {
     authority.split(':').next().unwrap_or("")
 }
 
+/// The path of `url` when it is on the instance at `base_url`.
+fn path_of(url: &str, base_url: &str) -> Option<String> {
+    if host_of(url) != host_of(base_url) {
+        return None;
+    }
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    Some(rest.find('/').map_or("/".to_string(), |at| {
+        rest[at..]
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("/")
+            .to_string()
+    }))
+}
+
+/// The fields of the page's form that carries a CSRF token, as a browser
+/// sends them: text and hidden inputs, checked boxes, the first submit
+/// button, textareas, and each select's selected option (or its first).
+fn form_values(page: &str) -> Option<Vec<(String, String)>> {
+    let token = page.find("name=\"csrf_token\"")?;
+    let start = page[..token].rfind("<form")?;
+    let end = token + page[token..].find("</form>").unwrap_or(page.len() - token);
+    let form = &page[start..end];
+    let mut out = Vec::new();
+    let mut submitted = false;
+    let mut rest = form;
+    while let Some(at) = rest.find('<') {
+        rest = &rest[at + 1..];
+        let tag_end = rest.find('>').unwrap_or(rest.len());
+        let tag = &rest[..tag_end];
+        let (kind, attrs) = tag.split_once(char::is_whitespace).unwrap_or((tag, ""));
+        let attrs = parse_attrs(attrs);
+        let get = |name: &str| {
+            attrs
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone().unwrap_or_default())
+        };
+        let Some(name) = get("name").filter(|n| !n.is_empty()) else {
+            continue;
+        };
+        match kind.to_ascii_lowercase().as_str() {
+            "input" => {
+                let kind = get("type").unwrap_or_default().to_ascii_lowercase();
+                match kind.as_str() {
+                    "button" | "reset" | "image" | "file" => {}
+                    "submit" => {
+                        if !submitted {
+                            submitted = true;
+                            out.push((name, get("value").unwrap_or_default()));
+                        }
+                    }
+                    "checkbox" | "radio" => {
+                        if get("checked").is_some() {
+                            out.push((name, get("value").unwrap_or_else(|| "on".into())));
+                        }
+                    }
+                    _ => out.push((name, get("value").unwrap_or_default())),
+                }
+            }
+            "textarea" => {
+                let body = &rest[tag_end.min(rest.len())..];
+                let text = body.get(1..).unwrap_or("");
+                let text = text.split("</textarea>").next().unwrap_or("");
+                // A browser drops the line break right after the tag.
+                let text = text
+                    .strip_prefix("\r\n")
+                    .or_else(|| text.strip_prefix('\n'))
+                    .unwrap_or(text);
+                out.push((name, unescape(text)));
+            }
+            "select" => {
+                let body = rest[tag_end.min(rest.len())..]
+                    .split("</select>")
+                    .next()
+                    .unwrap_or("");
+                // Each option's attributes and text; a browser sends the
+                // text when there is no value.
+                let options: Vec<(Attrs, String)> = body
+                    .split("<option")
+                    .skip(1)
+                    .map(|o| {
+                        let (attrs, text) = o.split_once('>').unwrap_or((o, ""));
+                        let text = text.split("</option>").next().unwrap_or("");
+                        (parse_attrs(attrs), unescape(text.trim()))
+                    })
+                    .collect();
+                let value_of = |(attrs, text): &(Attrs, String)| {
+                    attrs
+                        .iter()
+                        .find(|(n, _)| n == "value")
+                        .and_then(|(_, v)| v.clone())
+                        .unwrap_or_else(|| text.clone())
+                };
+                let chosen = options
+                    .iter()
+                    .find(|(attrs, _)| attrs.iter().any(|(n, _)| n == "selected"))
+                    .or(options.first())
+                    .map(value_of)
+                    .unwrap_or_default();
+                out.push((name, chosen));
+            }
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+/// A tag's attributes, by lowercase name; `None` for one without a
+/// value.
+type Attrs = Vec<(String, Option<String>)>;
+
+/// A tag's attributes: `name`, `name=value`, `name="value"`, values
+/// unescaped.
+fn parse_attrs(s: &str) -> Attrs {
+    let mut out = Vec::new();
+    // A self-closing tag's slash, not one that ends an unquoted value.
+    let s = s.trim_end();
+    let s = match s.strip_suffix('/') {
+        Some(rest) if rest.is_empty() || rest.ends_with(char::is_whitespace) => rest,
+        _ => s,
+    };
+    let mut chars = s.chars().peekable();
+    loop {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        let mut name = String::new();
+        while let Some(c) = chars.next_if(|c| !c.is_whitespace() && *c != '=') {
+            name.push(c);
+        }
+        if name.is_empty() {
+            break;
+        }
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+        let value = if chars.next_if_eq(&'=').is_some() {
+            while chars.next_if(|c| c.is_whitespace()).is_some() {}
+            let mut value = String::new();
+            match chars.next_if(|c| *c == '"' || *c == '\'') {
+                Some(quote) => {
+                    for c in chars.by_ref() {
+                        if c == quote {
+                            break;
+                        }
+                        value.push(c);
+                    }
+                }
+                None => {
+                    while let Some(c) = chars.next_if(|c| !c.is_whitespace()) {
+                        value.push(c);
+                    }
+                }
+            }
+            Some(unescape(&value))
+        } else {
+            None
+        };
+        out.push((name.to_ascii_lowercase(), value));
+    }
+    out
+}
+
+/// HTML text with the entities fedocal's pages use replaced.
+fn unescape(text: &str) -> String {
+    text.replace("&#39;", "'")
+        .replace("&#34;", "\"")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 /// The CSRF token of the first form on a page.
 fn csrf_token(page: &str) -> Option<String> {
     let at = page.find("name=\"csrf_token\"")?;
@@ -398,6 +726,16 @@ fn page_messages(page: &str) -> Vec<String> {
             push_text(&mut out, text);
         }
     }
+    // Field errors in a table row, one cell each.
+    let mut rest = page;
+    while let Some(at) = rest.find("<tr class=\"errors\">") {
+        rest = &rest[at..];
+        let row = rest.split("</tr>").next().unwrap_or("");
+        for cell in row.split("<td>").skip(1) {
+            push_text(&mut out, cell.split("</td>").next().unwrap_or(""));
+        }
+        rest = &rest[row.len()..];
+    }
     let mut rest = page;
     while let Some(at) = rest.find("<ul class=\"errors\">") {
         rest = &rest[at..];
@@ -422,12 +760,7 @@ fn push_text(out: &mut Vec<String>, html: &str) {
             _ => {}
         }
     }
-    let text = text
-        .replace("&#39;", "'")
-        .replace("&quot;", "\"")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&");
+    let text = unescape(&text);
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if !text.is_empty() && !out.contains(&text) {
         out.push(text);
@@ -571,6 +904,42 @@ mod tests {
     const FORM: &str = r#"<input name="csrf_token" type="hidden" value="t1">"#;
 
     #[tokio::test]
+    async fn a_submission_carries_the_session_the_form_set() {
+        let server = MockServer::start().await;
+        // Opening the form starts a new session holding the CSRF secret.
+        Mock::given(method("GET"))
+            .and(path("/vacation/add/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("set-cookie", "session=with-csrf; Secure; HttpOnly; Path=/")
+                    .set_body_string(FORM),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/vacation/add/"))
+            .and(header("cookie", "session=with-csrf"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "/vacation/2026/12/21/"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let entry = NewEntry::full_days("vacation", "PTO", day("2026-12-21"), day("2027-01-04"));
+        session(&server).add(&entry).await.unwrap();
+        // A form shown again without any message: what that usually means.
+        assert!(
+            Error::Refused(vec![])
+                .to_string()
+                .contains("rejected CSRF token or an expired session")
+        );
+        assert_eq!(
+            page_messages(r#"<tr class="errors"><td>Not a valid date value.</td></tr>"#),
+            ["Not a valid date value."]
+        );
+    }
+
+    #[tokio::test]
     async fn an_entry_is_added_with_the_forms_token() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -642,6 +1011,148 @@ mod tests {
             err.to_string(),
             "Fedora Calendar refused the entry: You must be logged in"
         );
+    }
+
+    /// An edit page shaped like fedocal's.
+    const EDIT: &str = "<html><form action=\"/search/\"><input name=\"keyword\"></form>\
+        <form action=\"\" method=\"post\">\
+        <select id=\"calendar_name\" name=\"calendar_name\"><option value=\"other\">other</option>\
+        <option selected value=\"vacation\">vacation</option></select>\
+        <input id=\"meeting_name\" name=\"meeting_name\" type=\"text\" value=\"me &amp; co\">\
+        <input name=\"meeting_date\" type=\"date\" value=\"2026-11-24\">\
+        <input name=\"meeting_date_end\" type=\"date\" value=\"2027-01-04\">\
+        <input checked id=\"full_day\" name=\"full_day\" type=\"checkbox\" value=\"y\">\
+        <input name=\"unchecked\" type=\"checkbox\" value=\"y\">\
+        <select name=\"frequency\"><option value=\"\"></option><option value=\"7\">7 days</option></select>\
+        <input name=\"comanager\" type=\"text\" value=\"me\">\
+        <textarea id=\"information\" name=\"information\">\r\n</textarea>\
+        <input type=\"button\" value=\"Preview\">\
+        <input id=\"csrf_token\" name=\"csrf_token\" type=\"hidden\" value=\"t2\">\
+        <input name=\"action\" type=\"submit\" value=\"Save\">\
+        <input name=\"action\" type=\"button\" value=\"Cancel\"></form></html>";
+
+    #[test]
+    fn an_edit_form_reads_as_a_browser_sends_it() {
+        let fields = form_values(EDIT).unwrap();
+        let shown: Vec<String> = fields.iter().map(|(n, v)| format!("{n}={v}")).collect();
+        assert_eq!(
+            shown,
+            [
+                "calendar_name=vacation",
+                "meeting_name=me & co",
+                "meeting_date=2026-11-24",
+                "meeting_date_end=2027-01-04",
+                "full_day=y",
+                "frequency=",
+                "comanager=me",
+                "information=",
+                "csrf_token=t2",
+                "action=Save"
+            ]
+        );
+        assert!(form_values("<form></form>").is_none());
+        // New days are sent as the day after the last; the rest is kept.
+        let mut fields = fields;
+        let changes = Changes::default()
+            .days(day("2026-11-24"), day("2027-01-01"))
+            .information("Back on the 4th");
+        assert!(!changes.is_empty() && Changes::default().is_empty());
+        changes.apply(&mut fields);
+        let get = |k: &str| fields.iter().find(|(n, _)| n == k).unwrap().1.clone();
+        assert_eq!(get("meeting_date_end"), "2027-01-02");
+        assert_eq!(get("information"), "Back on the 4th");
+        assert_eq!(get("meeting_name"), "me & co");
+        Changes::default().name("PTO").apply(&mut fields);
+        let get = |k: &str| fields.iter().find(|(n, _)| n == k).unwrap().1.clone();
+        assert_eq!(get("meeting_name"), "PTO");
+        assert_eq!(
+            parse_attrs("href=/meeting/"),
+            [("href".to_string(), Some("/meeting/".to_string()))]
+        );
+        let texted = "<form method=\"post\"><select name=\"tz\"><option>UTC</option>\
+            <option selected>Europe/Dublin</option></select>\
+            <input name=\"csrf_token\" type=\"hidden\" value=\"t\"></form>";
+        assert_eq!(
+            form_values(texted).unwrap()[0],
+            ("tz".to_string(), "Europe/Dublin".to_string())
+        );
+        assert_eq!(
+            parse_attrs("a=1 b='two' c d = \"x y\" /"),
+            [
+                ("a".to_string(), Some("1".to_string())),
+                ("b".to_string(), Some("two".to_string())),
+                ("c".to_string(), None),
+                ("d".to_string(), Some("x y".to_string()))
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_entry_is_edited_keeping_what_is_not_changed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/11/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(EDIT))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/meeting/edit/11/"))
+            .and(body_string_contains("information=Back+on+the+4th"))
+            .and(body_string_contains("comanager=me"))
+            .and(body_string_contains("meeting_date_end=2027-01-04"))
+            .and(body_string_contains("csrf_token=t2"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/meeting/11/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let s = session(&server);
+        s.can_edit(11).await.unwrap();
+        s.edit(11, &Changes::default().information("Back on the 4th"))
+            .await
+            .unwrap();
+        // Led anywhere but the entry: a refusal, with the page's reasons.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/11/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(EDIT))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"<li class="errors">You are not allowed to edit this meeting</li>"#,
+            ))
+            .mount(&server)
+            .await;
+        let err = session(&server)
+            .edit(11, &Changes::default().name("x"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .ends_with("You are not allowed to edit this meeting"),
+            "{err}"
+        );
+        // No form at all: the reasons, or an expired session.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html></html>"))
+            .mount(&server)
+            .await;
+        let err = session(&server)
+            .edit(11, &Changes::default())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no edit form"), "{err}");
+        assert_eq!(
+            path_of("http://h:1/meeting/11/?x", "http://h:1"),
+            Some("/meeting/11/".to_string())
+        );
+        assert_eq!(path_of("http://other/meeting/11/", "http://h:1"), None);
     }
 
     #[tokio::test]

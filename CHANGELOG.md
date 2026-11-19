@@ -16,12 +16,20 @@ FIRST LAST` files your own: it shows the entry, logs in to Fedora
 Calendar with your Kerberos ticket (renewing it, or running `kinit` for
 the principal in `~/.fedora.upn`), files it once you confirm, and reads
 it back. An absence filed already for the same days is not filed
-again. `--dry-run` logs in and checks, filing nothing.
+again; `--update` changes the filed absence instead (its title or
+note, and its days when asked), keeping the rest of the entry: the days
+given find it when they overlap most of it, and changing them to those
+days is a question defaulting to no. Absences are shown by their last
+full day and the day back ("to 2027-01-03 (back Mon 2027-01-04)"), as
+Fedora Calendar's pages show the day back as the end.
+`--dry-run` logs in and checks, filing nothing.
 
 New crate sandogasa-fedocal: Fedora Calendar's read API, and adding
 entries. fedocal has no API for writing, so its `Session` logs in as a
 browser would, through id.fedoraproject.org with a Kerberos ticket
-(`curl --negotiate --location-trusted`), and submits the add form.
+(`curl --negotiate --location-trusted`), and submits the add form, or
+an entry's edit form as the browser would send it, with only the asked
+fields changed.
 
 Resolves #163
 

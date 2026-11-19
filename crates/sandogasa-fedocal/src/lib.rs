@@ -42,6 +42,7 @@ pub const VACATION: &str = "vacation";
 pub struct Meeting {
     pub meeting_id: u64,
     pub calendar_name: String,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub meeting_name: String,
     /// The first day.
     pub meeting_date: NaiveDate,
@@ -51,14 +52,17 @@ pub struct Meeting {
     /// `HH:MM:SS` in `meeting_timezone`.
     pub meeting_time_start: String,
     pub meeting_time_stop: String,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub meeting_timezone: String,
     /// The FAS usernames that manage the entry: for a vacation entry,
     /// whose absence it is.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub meeting_manager: Vec<String>,
-    #[serde(default)]
+    /// Empty when there is none; fedocal gives `null` for an entry saved
+    /// through its edit form without one.
+    #[serde(default, deserialize_with = "null_as_default")]
     pub meeting_information: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub meeting_location: String,
 }
 
@@ -162,9 +166,11 @@ impl std::fmt::Display for Error {
         match self {
             Error::Http(e) => write!(f, "Fedora Calendar: {e}"),
             Error::Login(e) => write!(f, "cannot log in to Fedora Calendar: {e}"),
-            Error::Refused(reasons) if reasons.is_empty() => {
-                write!(f, "Fedora Calendar refused the entry, without saying why")
-            }
+            Error::Refused(reasons) if reasons.is_empty() => write!(
+                f,
+                "Fedora Calendar showed the form again without a reason, as it does \
+                 for a rejected CSRF token or an expired session"
+            ),
             Error::Refused(reasons) => {
                 write!(
                     f,
@@ -245,6 +251,15 @@ impl Client {
     }
 }
 
+/// A field that may be `null` as its default (empty).
+fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 /// An async client with sandogasa's user agent and timeout.
 fn user_agent_client() -> reqwest::Client {
     sandogasa_cli::http::builder(concat!(
@@ -274,6 +289,19 @@ mod tests {
             "meeting_timezone": "UTC", "meeting_manager": [who],
             "meeting_information": "", "meeting_location": ""
         })
+    }
+
+    #[test]
+    fn null_fields_read_as_empty() {
+        // An entry saved through fedocal's edit form without a location.
+        let mut e = entry(1, "me", "2026-11-24", "2027-01-04", "00:00:00");
+        e["meeting_location"] = serde_json::Value::Null;
+        e["meeting_information"] = serde_json::Value::Null;
+        e["meeting_manager"] = serde_json::Value::Null;
+        let m: Meeting = serde_json::from_value(e).unwrap();
+        assert_eq!(m.meeting_location, "");
+        assert_eq!(m.meeting_information, "");
+        assert!(m.meeting_manager.is_empty());
     }
 
     #[test]
@@ -344,10 +372,6 @@ mod tests {
 
     #[test]
     fn errors_say_what_failed() {
-        assert_eq!(
-            Error::Refused(vec![]).to_string(),
-            "Fedora Calendar refused the entry, without saying why"
-        );
         assert_eq!(
             Error::Refused(vec!["a".into(), "b".into()]).to_string(),
             "Fedora Calendar refused the entry: a; b"

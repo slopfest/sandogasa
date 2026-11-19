@@ -21,6 +21,11 @@ and adding entries as a logged-in user.
 - `Session::can_add(calendar)` checks that the user may add to a
   calendar, and `Session::add(entry)` fills in and submits the add form,
   CSRF token included. A refusal carries fedocal's own messages.
+- `Session::can_edit(id)` and `Session::edit(id, changes)` do the same
+  for an existing entry. fedocal replaces every field on saving, so
+  `edit` reads the edit form as a browser would send it and changes
+  only the title, days or information asked for, keeping co-managers,
+  reminders and the rest.
 
 ## Usage
 

@@ -4,7 +4,7 @@
 //! shown by `last-seen` and `group`, and `away`, which files one's own.
 
 use chrono::{Duration, NaiveDate};
-use sandogasa_fedocal::session::{NewEntry, Session};
+use sandogasa_fedocal::session::{Changes, NewEntry, Session};
 use sandogasa_fedocal::{Client, Meeting, VACATION};
 
 use crate::ServiceLastSeen;
@@ -25,12 +25,16 @@ pub struct AwayArgs {
     pub yes: bool,
     /// Print the outcome as JSON, the messages going to stderr.
     pub json: bool,
+    /// Change the filed absence overlapping the days instead of filing
+    /// one.
+    pub update: bool,
 }
 
 /// What `away` did, for `--json`.
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct AwayOutcome {
-    /// `already_filed`, `declined`, `dry_run` or `filed`.
+    /// `already_filed`, `declined`, `dry_run`, `filed`, `unchanged` or
+    /// `updated`.
     pub outcome: &'static str,
     pub first: NaiveDate,
     pub last: NaiveDate,
@@ -108,12 +112,118 @@ pub async fn away(
         .absences(user, args.first, args.last)
         .await
         .map_err(|e| e.to_string())?;
+    if args.update {
+        let target = match filed.as_slice() {
+            [m] => m,
+            [] => {
+                return Err(
+                    "no filed absence overlaps these days, so there is nothing to \
+                            update; run without --update to file one"
+                        .to_string(),
+                );
+            }
+            more => {
+                let list: Vec<String> = more
+                    .iter()
+                    .map(|m| format!("  {} ({})", describe_span(m), entry_url(client, m)))
+                    .collect();
+                return Err(format!(
+                    "{} filed absences overlap these days; give days that overlap only the \
+                     one to change:\n{}",
+                    more.len(),
+                    list.join("\n")
+                ));
+            }
+        };
+        let url = entry_url(client, target);
+        // Other days than the filed ones may only point at the absence:
+        // they must overlap it well, and changing its days is asked
+        // separately, defaulting to keeping them. Under --yes the days
+        // given are taken, and said.
+        let mut with_days = false;
+        if (target.meeting_date, target.last_day()) != (args.first, args.last) {
+            let overlap = overlap_days(target, args.first, args.last);
+            let filed_days = days_in(target.meeting_date, target.last_day());
+            let given_days = days_in(args.first, args.last);
+            if overlap * 2 < filed_days && overlap * 2 < given_days {
+                return Err(format!(
+                    "the days given overlap {} on only {overlap} day(s); give days that \
+                     cover most of it to change it",
+                    describe_span(target)
+                ));
+            }
+            let question = format!(
+                "Change its days from {} to {}?",
+                span(target.meeting_date, target.last_day()),
+                span(args.first, args.last)
+            );
+            with_days = if args.dry_run {
+                say(format!("Would ask: {question}"));
+                false
+            } else if args.yes {
+                say(format!("{question} Yes, as given (--yes)."));
+                true
+            } else {
+                confirm(&question, false)?
+            };
+        }
+        let changes = changes_to(target, args, with_days);
+        if changes.is_empty() {
+            say(format!(
+                "Already as asked: {} ({url}).",
+                describe_span(target)
+            ));
+            return Ok(outcome("unchanged", Some(url)));
+        }
+        say(format!(
+            "Changes to {url}:\n{}",
+            describe_changes(target, &changes)
+        ));
+        eprintln!("Logging in to Fedora Calendar with your Kerberos ticket...");
+        let session = tokio::task::spawn_blocking(login)
+            .await
+            .map_err(|e| format!("the login stopped: {e}"))?
+            .map_err(|e| e.to_string())?;
+        session
+            .can_edit(target.meeting_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        if args.dry_run {
+            say("Dry run: you may edit the entry; nothing changed.".to_string());
+            return Ok(outcome("dry_run", Some(url)));
+        }
+        if !args.yes && !confirm("Change this entry?", true)? {
+            say("Nothing changed.".to_string());
+            return Ok(outcome("declined", Some(url)));
+        }
+        session
+            .edit(target.meeting_id, &changes)
+            .await
+            .map_err(|e| e.to_string())?;
+        // Read back, so "changed" means the calendar shows it.
+        let now = client
+            .absences(user, args.first, args.last)
+            .await
+            .map_err(|e| format!("changed, but cannot read it back: {e}"))?;
+        return match now.iter().find(|m| m.meeting_id == target.meeting_id) {
+            Some(m) if changes_to(m, args, with_days).is_empty() => {
+                say(format!("Changed: {url}"));
+                Ok(outcome("updated", Some(url)))
+            }
+            _ => Err(format!(
+                "Fedora Calendar accepted the change but does not show it yet; check {url}"
+            )),
+        };
+    }
     if let Some(m) = filed
         .iter()
         .find(|m| m.meeting_date <= args.first && m.last_day() >= args.last)
     {
         let url = entry_url(client, m);
         say(format!("Already filed: {} ({url}).", describe_span(m)));
+        if !changes_to(m, args, true).is_empty() {
+            say("Pass --update to change it to the days, title and note given.".to_string());
+        }
         return Ok(outcome("already_filed", Some(url)));
     }
     if !filed.is_empty() {
@@ -175,10 +285,64 @@ pub async fn away(
     }
 }
 
+/// What `--update` changes in `m`: the title and note when given and
+/// different, and `with_days`, the days when they differ.
+fn changes_to(m: &Meeting, args: &AwayArgs, with_days: bool) -> Changes {
+    let mut changes = Changes::default();
+    if with_days && (m.meeting_date, m.last_day()) != (args.first, args.last) {
+        changes = changes.days(args.first, args.last);
+    }
+    if let Some(title) = args.title.as_ref().filter(|t| **t != m.meeting_name) {
+        changes = changes.name(title.clone());
+    }
+    if let Some(note) = args
+        .note
+        .as_ref()
+        .filter(|n| n.trim() != m.meeting_information.trim())
+    {
+        changes = changes.information(note.clone());
+    }
+    changes
+}
+
+/// Each change, before and after.
+fn describe_changes(m: &Meeting, changes: &Changes) -> String {
+    let shown = |s: &str| {
+        if s.trim().is_empty() {
+            "(none)".to_string()
+        } else {
+            format!("\"{}\"", s.trim())
+        }
+    };
+    let mut out = String::new();
+    if let Some((first, last)) = changes.days {
+        out.push_str(&format!(
+            "  days:      {} -> {}\n",
+            span(m.meeting_date, m.last_day()),
+            span(first, last)
+        ));
+    }
+    if let Some(name) = &changes.name {
+        out.push_str(&format!(
+            "  title:     {} -> {}\n",
+            shown(&m.meeting_name),
+            shown(name)
+        ));
+    }
+    if let Some(note) = &changes.information {
+        out.push_str(&format!(
+            "  note:      {} -> {}\n",
+            shown(&m.meeting_information),
+            shown(note)
+        ));
+    }
+    out
+}
+
 /// The entry as it will be filed, every field shown.
 fn preview(client: &Client, entry: &NewEntry) -> String {
     let mut out = format!(
-        "To file in {}/{}/:\n  title:     {}\n  days:      {} to {} \
+        "New entry in {}/{}/:\n  title:     {}\n  days:      {} to {} \
          (full days, {} day(s))\n",
         client.base_url(),
         entry.calendar,
@@ -194,13 +358,13 @@ fn preview(client: &Client, entry: &NewEntry) -> String {
 }
 
 /// One absence for `last-seen`: current ("away until") or coming
-/// ("away from ... to ..."), with its title when it says more than the
-/// user's name.
+/// ("away ... to ..."), with the day back, and its title when it says
+/// more than the user's name.
 fn describe(m: &Meeting, user: &str, today: NaiveDate) -> String {
     let when = if m.meeting_date <= today {
-        format!("away until {}", m.last_day())
+        format!("away until {}, back {}", m.last_day(), back(m.last_day()))
     } else {
-        format!("away {} to {}", m.meeting_date, m.last_day())
+        format!("away {}", span(m.meeting_date, m.last_day()))
     };
     if m.meeting_name.is_empty() || m.meeting_name == user {
         when
@@ -212,11 +376,37 @@ fn describe(m: &Meeting, user: &str, today: NaiveDate) -> String {
 /// An absence's days, with its title.
 fn describe_span(m: &Meeting) -> String {
     format!(
-        "{} to {}, \"{}\"",
-        m.meeting_date,
-        m.last_day(),
+        "{}, \"{}\"",
+        span(m.meeting_date, m.last_day()),
         m.meeting_name
     )
+}
+
+/// `first` to `last` as days away, with the day back: "2026-11-24 to
+/// 2027-01-03 (back Mon 2027-01-04)". fedocal's pages show the day back
+/// as the end.
+fn span(first: NaiveDate, last: NaiveDate) -> String {
+    format!("{first} to {last} (back {})", back(last))
+}
+
+/// The day after `last`, with its weekday: "Mon 2027-01-04".
+fn back(last: NaiveDate) -> String {
+    last.succ_opt()
+        .unwrap_or(last)
+        .format("%a %Y-%m-%d")
+        .to_string()
+}
+
+/// The days from `first` to `last`, both counted.
+fn days_in(first: NaiveDate, last: NaiveDate) -> i64 {
+    (last - first).num_days() + 1
+}
+
+/// The days `m` shares with `first..=last`.
+fn overlap_days(m: &Meeting, first: NaiveDate, last: NaiveDate) -> i64 {
+    let from = m.meeting_date.max(first);
+    let to = m.last_day().min(last);
+    if to < from { 0 } else { days_in(from, to) }
 }
 
 /// The web page of an entry.
@@ -266,11 +456,14 @@ mod tests {
         let client = Client::with_base_url(&server.uri());
         let row = check_calendar(&client, "me", day("2026-12-01")).await;
         assert_eq!(row.service, "Calendar");
-        assert_eq!(row.status.as_deref(), Some("away until 2027-01-03"));
+        assert_eq!(
+            row.status.as_deref(),
+            Some("away until 2027-01-03, back Mon 2027-01-04")
+        );
         assert_eq!(row.status_expires, None);
         assert_eq!(
             row.detail.as_deref(),
-            Some("then away 2027-01-30 to 2027-02-01 (FOSDEM)")
+            Some("then away 2027-01-30 to 2027-02-01 (back Tue 2027-02-02) (FOSDEM)")
         );
         assert!(!is_empty(&row));
         // Nothing filed: an empty row, left out.
@@ -297,6 +490,7 @@ mod tests {
             dry_run: false,
             yes: false,
             json: false,
+            update: false,
         }
     }
 
@@ -479,6 +673,335 @@ mod tests {
             away(&client, "me", &a, asked, login).await.unwrap().outcome,
             "dry_run"
         );
+    }
+
+    /// A login that leaves a session on `uri`, as if the ticket worked.
+    fn fake_login(uri: String) -> impl FnOnce() -> Result<Session, sandogasa_fedocal::Error> {
+        move || {
+            let host = uri
+                .trim_start_matches("http://")
+                .split(':')
+                .next()
+                .unwrap()
+                .to_string();
+            let jar = format!("{host}\tFALSE\t/\tFALSE\t0\tfedocal\ts\n");
+            Session::login_with(&uri, move |argv| {
+                let at = argv.iter().position(|a| a == "--cookie-jar").unwrap() + 1;
+                std::fs::write(&argv[at], jar).unwrap();
+                Ok(format!(
+                    "{}/",
+                    argv.last().unwrap().trim_end_matches("login/")
+                ))
+            })
+        }
+    }
+
+    const EDIT_FORM: &str = r#"<form action="" method="post">
+        <input name="meeting_name" type="text" value="me">
+        <input name="meeting_date" type="date" value="2026-11-24">
+        <input name="meeting_date_end" type="date" value="2027-01-04">
+        <input checked name="full_day" type="checkbox" value="y">
+        <input name="comanager" type="text" value="me">
+        <textarea name="information">
+</textarea>
+        <input name="csrf_token" type="hidden" value="t">
+        <input name="action" type="submit" value="Save"></form>"#;
+
+    fn update_args(first: &str, last: &str, note: Option<&str>) -> AwayArgs {
+        let mut a = args(first, last);
+        a.note = note.map(String::from);
+        a.update = true;
+        a
+    }
+
+    #[tokio::test]
+    async fn an_absence_is_updated_and_read_back() {
+        let server = MockServer::start().await;
+        let with_note = |note: &str| {
+            let mut e = entry(7, "me", "me", "2026-11-24", "2027-01-04");
+            e["meeting_information"] = serde_json::json!(note);
+            serde_json::json!({"arguments": {}, "meetings": [e]})
+        };
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(with_note("")))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(with_note("Back on the 4th\r\n")),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/7/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(EDIT_FORM))
+            .mount(&server)
+            .await;
+        // Only the note changes; the days are kept as the form had them.
+        Mock::given(method("POST"))
+            .and(path("/meeting/edit/7/"))
+            .and(wiremock::matchers::body_string_contains(
+                "information=Back+on+the+4th",
+            ))
+            .and(wiremock::matchers::body_string_contains(
+                "meeting_date_end=2027-01-04",
+            ))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/meeting/7/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::with_base_url(&server.uri());
+        let yes = |q: &str, default: bool| {
+            assert_eq!(q, "Change this entry?");
+            assert!(default);
+            Ok(true)
+        };
+        let a = update_args("2026-11-24", "2027-01-03", Some("Back on the 4th"));
+        let done = away(&client, "me", &a, yes, fake_login(server.uri()))
+            .await
+            .unwrap();
+        assert_eq!(done.outcome, "updated");
+        assert!(done.url.unwrap().ends_with("/meeting/7/"));
+        let m: Meeting =
+            serde_json::from_value(entry(7, "me", "me", "2026-11-24", "2027-01-04")).unwrap();
+        assert_eq!(
+            describe_changes(
+                &m,
+                &changes_to(
+                    &m,
+                    &update_args("2026-11-24", "2027-01-01", Some("x")),
+                    true
+                )
+            ),
+            "  days:      2026-11-24 to 2027-01-03 (back Mon 2027-01-04) -> 2026-11-24 to \
+             2027-01-01 (back Sat 2027-01-02)\n  note:      (none) -> \"x\"\n"
+        );
+        let mut titled = update_args("2026-11-24", "2027-01-03", None);
+        titled.title = Some("PTO".into());
+        assert_eq!(
+            describe_changes(&m, &changes_to(&m, &titled, true)),
+            "  title:     \"me\" -> \"PTO\"\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn other_days_find_the_absence_and_changing_them_is_asked() {
+        // Days inside the absence point at it; declining the date change
+        // keeps the filed days, and the note still changes.
+        let server = MockServer::start().await;
+        let with_note = |note: &str| {
+            let mut e = entry(7, "me", "me", "2026-11-24", "2027-01-04");
+            e["meeting_information"] = serde_json::json!(note);
+            serde_json::json!({"arguments": {}, "meetings": [e]})
+        };
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(with_note("")))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(with_note("n")))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/7/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(EDIT_FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/meeting/edit/7/"))
+            .and(wiremock::matchers::body_string_contains(
+                "meeting_date_end=2027-01-04",
+            ))
+            .and(wiremock::matchers::body_string_contains("information=n"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/meeting/7/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::with_base_url(&server.uri());
+        let asked = std::sync::Mutex::new(Vec::new());
+        let answer = |q: &str, default: bool| {
+            asked.lock().unwrap().push((q.to_string(), default));
+            Ok(q == "Change this entry?")
+        };
+        let a = update_args("2026-12-01", "2026-12-05", Some("n"));
+        let done = away(&client, "me", &a, answer, fake_login(server.uri()))
+            .await
+            .unwrap();
+        assert_eq!(done.outcome, "updated");
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [
+                (
+                    "Change its days from 2026-11-24 to 2027-01-03 (back Mon 2027-01-04) to \
+                     2026-12-01 to 2026-12-05 (back Sun 2026-12-06)?"
+                        .to_string(),
+                    false
+                ),
+                ("Change this entry?".to_string(), true)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn days_given_under_yes_change_the_absence() {
+        let server = MockServer::start().await;
+        let filed = |end: &str| serde_json::json!({"arguments": {}, "meetings": [entry(7, "me", "me", "2026-11-24", end)]});
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(filed("2027-01-04")))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(filed("2027-01-02")))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/7/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(EDIT_FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::body_string_contains(
+                "meeting_date_end=2027-01-02",
+            ))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/meeting/7/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::with_base_url(&server.uri());
+        let mut a = update_args("2026-11-24", "2027-01-01", None);
+        a.yes = true;
+        let asked = |_: &str, _: bool| -> Result<bool, String> { panic!("no question expected") };
+        let done = away(&client, "me", &a, asked, fake_login(server.uri()))
+            .await
+            .unwrap();
+        assert_eq!(done.outcome, "updated");
+    }
+
+    #[tokio::test]
+    async fn days_that_barely_touch_the_absence_are_refused() {
+        let one = calendar(serde_json::json!([entry(
+            3,
+            "me",
+            "me",
+            "2026-12-01",
+            "2026-12-11"
+        )]))
+        .await;
+        let client = Client::with_base_url(&one.uri());
+        let asked = |_: &str, _: bool| -> Result<bool, String> { panic!("no question expected") };
+        let err = away(
+            &client,
+            "me",
+            &update_args("2026-12-09", "2026-12-31", None),
+            asked,
+            no_login,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("on only 2 day(s)"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_update_needs_exactly_one_entry_to_change() {
+        let asked = |_: &str, _: bool| -> Result<bool, String> { panic!("no question expected") };
+        let none = calendar(serde_json::json!([])).await;
+        let client = Client::with_base_url(&none.uri());
+        let err = away(
+            &client,
+            "me",
+            &update_args("2026-12-01", "2026-12-02", None),
+            asked,
+            no_login,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("nothing to update"), "{err}");
+        let two = calendar(serde_json::json!([
+            entry(1, "me", "me", "2026-12-01", "2026-12-05"),
+            entry(2, "me", "me", "2026-12-10", "2026-12-12")
+        ]))
+        .await;
+        let client = Client::with_base_url(&two.uri());
+        let err = away(
+            &client,
+            "me",
+            &update_args("2026-12-01", "2026-12-20", None),
+            asked,
+            no_login,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.starts_with("2 filed absences overlap"), "{err}");
+        // As asked already: nothing to do, no login.
+        let one = calendar(serde_json::json!([entry(
+            3,
+            "me",
+            "me",
+            "2026-12-01",
+            "2026-12-06"
+        )]))
+        .await;
+        let client = Client::with_base_url(&one.uri());
+        let done = away(
+            &client,
+            "me",
+            &update_args("2026-12-01", "2026-12-05", None),
+            asked,
+            no_login,
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.outcome, "unchanged");
+        // Covered already, with a note given but no --update: the hint.
+        let mut a = args("2026-12-02", "2026-12-04");
+        a.note = Some("new".into());
+        assert_eq!(
+            away(&client, "me", &a, asked, no_login)
+                .await
+                .unwrap()
+                .outcome,
+            "already_filed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_update_checks_the_edit_form_only() {
+        let server = calendar(serde_json::json!([entry(
+            7,
+            "me",
+            "me",
+            "2026-11-24",
+            "2027-01-04"
+        )]))
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/7/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(EDIT_FORM))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(302))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = Client::with_base_url(&server.uri());
+        let mut a = update_args("2026-11-24", "2027-01-03", Some("note"));
+        a.dry_run = true;
+        let asked = |_: &str, _: bool| -> Result<bool, String> { panic!("no question expected") };
+        let done = away(&client, "me", &a, asked, fake_login(server.uri()))
+            .await
+            .unwrap();
+        assert_eq!(done.outcome, "dry_run");
     }
 
     #[tokio::test]

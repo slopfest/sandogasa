@@ -120,7 +120,7 @@ enum Command {
     /// Logs in with your Kerberos ticket (renewing it or running kinit
     /// for the principal in ~/.fedora.upn when needed), shows the entry,
     /// and files it once you confirm. An absence filed already is not
-    /// filed again.
+    /// filed again; --update changes it instead.
     Away {
         /// First day away (YYYY-MM-DD)
         first: chrono::NaiveDate,
@@ -139,6 +139,11 @@ enum Command {
         /// The entry's title (default: your FAS username)
         #[arg(long)]
         title: Option<String>,
+
+        /// Change the filed absence that overlaps these days to them, and
+        /// to the title and note given, instead of filing another
+        #[arg(long)]
+        update: bool,
 
         /// File without asking
         #[arg(short, long)]
@@ -468,6 +473,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             dry_run,
             note,
             title,
+            update,
             yes,
         } => {
             let args = calendar::AwayArgs {
@@ -478,6 +484,7 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 dry_run,
                 yes,
                 json,
+                update,
             };
             cmd_away(&args).await
         }
