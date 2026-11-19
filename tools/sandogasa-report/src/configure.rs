@@ -159,6 +159,20 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         &notes_dir,
     );
     changed |= notes_dir_changed;
+    // The profile is saved before the tokens are asked for, so a token
+    // that cannot be stored does not lose the answers above.
+    let mut saved_profile = false;
+    if changed {
+        let dir_cleared: Vec<(&str, String)> = if notes_dir_changed && notes_dir.is_empty() {
+            vec![("notes", "dir".to_string())]
+        } else {
+            Vec::new()
+        };
+        write_overlay(&overlay_cf, &overlay, &dir_cleared)?;
+        eprintln!("\nSaved the profile to {}", overlay_path.display());
+        saved_profile = true;
+        changed = false;
+    }
 
     // Token section: one prompt per unique instance, per forge.
     // Existing tokens are validated first so re-runs don't force
@@ -188,11 +202,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     ];
     let mut stored = false;
     let mut out_of_file: Vec<(&str, String)> = Vec::new();
-    // Saving lays the overlay over the file and never removes a key, so
-    // a cleared directory is taken out of the file by name.
-    if notes_dir_changed && notes_dir.is_empty() {
-        out_of_file.push(("notes", "dir".to_string()));
-    }
+
     for (instances, heading, kind) in forges {
         if !instances.is_empty() {
             eprintln!("\n{heading}");
@@ -223,7 +233,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     }
 
     if !changed {
-        if !stored {
+        if !stored && !saved_profile {
             eprintln!("\nNo changes.");
         }
         return Ok(());
@@ -286,15 +296,69 @@ fn prompt_profile(
         profile_key,
         existing,
         bugzilla_instances,
-        "Bugzilla emails on other instances",
+        ("Bugzilla", "email"),
         "bugzilla_emails",
         |p, host| p.bugzilla_emails.get(host),
         forge::instance_host,
         read,
     )?;
 
-    // Git author emails for Sourcehut commit attribution — only relevant
-    // when a domain enables Sourcehut.
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        gitlab_instances,
+        ("GitLab", "username"),
+        "gitlab",
+        |u, host| u.gitlab.get(host),
+        crate::gitlab::instance_host,
+        read,
+    )? {
+        changed = true;
+    }
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        github_instances,
+        ("GitHub", "username"),
+        "github",
+        |u, host| u.github.get(host),
+        crate::github::instance_host,
+        read,
+    )? {
+        changed = true;
+    }
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        forgejo_instances,
+        ("Forgejo", "username"),
+        "forgejo",
+        |u, host| u.forgejo.get(host),
+        crate::forgejo::instance_host,
+        read,
+    )? {
+        changed = true;
+    }
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        sourcehut_instances,
+        ("Sourcehut", "username"),
+        "sourcehut",
+        |u, host| u.sourcehut.get(host),
+        crate::sourcehut::instance_host,
+        read,
+    )? {
+        changed = true;
+    }
+
+    // Git author emails for Sourcehut commit attribution, asked after
+    // the Sourcehut usernames they qualify; only when a domain enables
+    // Sourcehut.
     if !sourcehut_instances.is_empty() {
         let existing_emails = existing.map(|p| p.git_emails.clone()).unwrap_or_default();
         let emails_default = existing_emails.join(", ");
@@ -318,75 +382,21 @@ fn prompt_profile(
             changed = true;
         }
     }
-
-    if prompt_per_instance_usernames(
-        overlay,
-        profile_key,
-        existing,
-        gitlab_instances,
-        "GitLab",
-        "gitlab",
-        |u, host| u.gitlab.get(host),
-        crate::gitlab::instance_host,
-        read,
-    )? {
-        changed = true;
-    }
-    if prompt_per_instance_usernames(
-        overlay,
-        profile_key,
-        existing,
-        github_instances,
-        "GitHub",
-        "github",
-        |u, host| u.github.get(host),
-        crate::github::instance_host,
-        read,
-    )? {
-        changed = true;
-    }
-    if prompt_per_instance_usernames(
-        overlay,
-        profile_key,
-        existing,
-        forgejo_instances,
-        "Forgejo",
-        "forgejo",
-        |u, host| u.forgejo.get(host),
-        crate::forgejo::instance_host,
-        read,
-    )? {
-        changed = true;
-    }
-    if prompt_per_instance_usernames(
-        overlay,
-        profile_key,
-        existing,
-        sourcehut_instances,
-        "Sourcehut",
-        "sourcehut",
-        |u, host| u.sourcehut.get(host),
-        crate::sourcehut::instance_host,
-        read,
-    )? {
-        changed = true;
-    }
     Ok(changed)
 }
 
-/// Prompt for per-instance usernames on a single forge, writing
-/// each non-empty answer into the overlay under
-/// `[users.<profile>.<forge_key>]`. Factored out because the
-/// gitlab and github passes are identical except for the
-/// label, the overlay key, the profile-lookup function, and
-/// the host-derivation function.
+/// Prompt for what a profile is on each instance of one service (a
+/// forge's username, another Bugzilla's email): "GitLab username on
+/// gitlab.com", "Bugzilla email on bugzilla.opensuse.org". Writes each
+/// non-empty answer into the overlay under
+/// `[users.<profile>.<forge_key>]`; an email is checked as one.
 #[allow(clippy::too_many_arguments)]
 fn prompt_per_instance_usernames(
     overlay: &mut toml::Value,
     profile_key: &str,
     existing: Option<&config::User>,
     instances: &BTreeSet<String>,
-    forge_label: &str,
+    (service, what): (&str, &str),
     forge_key: &str,
     lookup: impl for<'a> Fn(&'a config::User, &str) -> Option<&'a String>,
     host_of: impl Fn(&str) -> String,
@@ -399,12 +409,21 @@ fn prompt_per_instance_usernames(
             .and_then(|p| lookup(p, &host))
             .cloned()
             .unwrap_or_default();
-        let u = ask_with(
-            &Setting::new(forge_label, &format!("username on {host}")).optional(),
-            &current,
-            true,
-            read,
-        )?;
+        // An email is checked as one; a username is taken as given.
+        // GitHub's instance is its API host; people know it by its web
+        // host, which the overlay does not key on.
+        let shown = match host.strip_prefix("api.") {
+            Some(web) if service == "GitHub" => web,
+            _ => host.as_str(),
+        };
+        let label = format!("{what} on {shown}");
+        let setting = Setting::new(service, &label).optional();
+        let setting = if what == "email" {
+            setting.validated(&sandogasa_config::validate_email)
+        } else {
+            setting
+        };
+        let u = ask_with(&setting, &current, true, read)?;
         changed |= overlay_update(
             overlay,
             &["users", profile_key, forge_key, &host],
@@ -499,28 +518,35 @@ fn prompt_token(
         .trim_end_matches(':')
         .trim_end_matches("(enter to skip)")
         .trim_end();
-    let token = ask_with(
-        &Setting::new(instance, "token (empty to skip)")
-            .sensitive()
-            .optional()
-            .hint(hint),
-        "",
-        false,
-        read,
-    )?;
-    // Checked here, not by `validated_key_blocking`: neither an empty
-    // answer nor the off marker is sent to the forge as a token.
-    if !sandogasa_config::secret::is_set(&token) {
-        return Ok(TokenChoice::Skipped);
-    }
-    eprint!("  Validating... ");
-    match validate(instance, &token) {
-        Ok(true) => {
-            eprintln!("valid.");
-            Ok(TokenChoice::Saved(token))
+    // A token the forge rejects is asked for again, not the end of the
+    // run: the answers before it would be lost with it.
+    let setting = Setting::new(instance, "token (empty to skip)")
+        .sensitive()
+        .optional()
+        .hint(hint);
+    loop {
+        let token = ask_with(&setting, "", false, read)?;
+        // Checked here, not by `validated_key_blocking`: neither an empty
+        // answer nor the off marker is sent to the forge as a token.
+        if !sandogasa_config::secret::is_set(&token) {
+            return Ok(TokenChoice::Skipped);
         }
-        Ok(false) => Err(format!("token rejected by {instance}").into()),
-        Err(e) => Err(format!("validation failed for {instance}: {e}").into()),
+        eprint!("  Validating... ");
+        match validate(instance, &token) {
+            Ok(true) => {
+                eprintln!("valid.");
+                return Ok(TokenChoice::Saved(token));
+            }
+            Ok(false) => {
+                eprintln!("rejected by {instance}; enter another, or nothing to skip.");
+            }
+            // As for a saved token: a check that could not run says
+            // nothing about the token, so it is kept.
+            Err(e) => {
+                eprintln!("check failed ({e}); keeping it.");
+                return Ok(TokenChoice::Saved(token));
+            }
+        }
     }
 }
 
@@ -1420,6 +1446,11 @@ mod tests {
             Some("~/Nextcloud/notes")
         );
         assert_eq!(asked.borrow().len(), 5, "{:?}", asked.borrow());
+        // One service and one thing asked per instance.
+        assert_eq!(
+            asked.borrow()[3],
+            "Enter Bugzilla email on bugzilla.opensuse.org: "
+        );
 
         // The same answers again, empty ones keeping what is saved.
         let before = std::fs::read_to_string(cf.path()).unwrap();
@@ -1450,14 +1481,15 @@ mod tests {
             |items: &[&str]| -> BTreeSet<String> { items.iter().map(|s| s.to_string()).collect() };
         let mut overlay = toml::Value::Table(Default::default());
         let asked = std::cell::RefCell::new(Vec::new());
+        // Sourcehut's commit emails come after its username.
         let answers = [
             "me-fas",
             "",
-            "me@example.com, *",
             "me-gl",
             "me-gh",
             "me-fj",
             "me-sh",
+            "me@example.com, *",
         ];
         let changed = prompt_profile(
             &mut overlay,
@@ -1472,6 +1504,15 @@ mod tests {
         )
         .unwrap();
         assert!(changed);
+        // GitHub by its web host, keyed by its API host as before.
+        assert!(
+            asked
+                .borrow()
+                .iter()
+                .any(|p| p == "Enter GitHub username on github.com: "),
+            "{:?}",
+            asked.borrow()
+        );
         let get = |path: &[&str]| overlay_get_str(&overlay, path);
         assert_eq!(get(&["users", "me", "fas"]).as_deref(), Some("me-fas"));
         assert_eq!(get(&["users", "me", "bugzilla_email"]), None);
@@ -1499,32 +1540,37 @@ mod tests {
 
     /// A new token is checked with the forge before it is kept: a valid
     /// one is kept, an empty answer or "-" skips the instance, and one
-    /// the forge refuses, or that cannot be checked, is an error. A
-    /// saved token the forge accepts is kept without a question.
+    /// the forge refuses is asked for again, and one that cannot be
+    /// checked is kept. A saved token the forge accepts is kept without
+    /// a question.
     #[test]
     fn a_new_token_is_validated_before_it_is_kept() {
         let asked = std::cell::RefCell::new(Vec::new());
-        let ask = |answer: &'static str, validate: ValidateFn| {
-            let answers = [answer];
+        let ask = |answers: &[&str], validate: ValidateFn| {
             let asked = std::cell::RefCell::new(Vec::new());
             prompt_token(
                 "gitlab.example",
                 None,
                 "  Paste a token (enter to skip): ",
                 validate,
-                &mut scripted(&answers, &asked),
+                &mut scripted(answers, &asked),
             )
         };
         let ok: ValidateFn = |_, _| Ok(true);
         let refused: ValidateFn = |_, _| Ok(false);
         let unreachable: ValidateFn = |_, _| Err("no route".into());
-        assert!(matches!(ask("glpat", ok).unwrap(), TokenChoice::Saved(t) if t == "glpat"));
-        assert!(matches!(ask("", ok).unwrap(), TokenChoice::Skipped));
-        assert!(matches!(ask("-", ok).unwrap(), TokenChoice::Skipped));
-        let err = ask("glpat", refused).err().unwrap().to_string();
-        assert!(err.contains("rejected by gitlab.example"), "{err}");
-        let err = ask("glpat", unreachable).err().unwrap().to_string();
-        assert!(err.contains("validation failed"), "{err}");
+        assert!(matches!(ask(&["glpat"], ok).unwrap(), TokenChoice::Saved(t) if t == "glpat"));
+        assert!(matches!(ask(&[""], ok).unwrap(), TokenChoice::Skipped));
+        assert!(matches!(ask(&["-"], ok).unwrap(), TokenChoice::Skipped));
+        // A refused token is asked for again, and the next answer stands.
+        assert!(matches!(
+            ask(&["bad", ""], refused).unwrap(),
+            TokenChoice::Skipped
+        ));
+        // A check that cannot run keeps the token, as for a saved one.
+        assert!(
+            matches!(ask(&["glpat"], unreachable).unwrap(), TokenChoice::Saved(t) if t == "glpat")
+        );
         let kept = prompt_token(
             "gitlab.example",
             Some("glpat-saved"),
