@@ -170,7 +170,7 @@ pub async fn away(
         let changes = changes_to(target, args, with_days);
         if changes.is_empty() {
             say(format!(
-                "Already as asked: {} ({url}).",
+                "Nothing to change: {} ({url}).",
                 describe_span(target)
             ));
             return Ok(outcome("unchanged", Some(url)));
