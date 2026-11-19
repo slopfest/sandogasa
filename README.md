@@ -63,6 +63,7 @@ library crates:
 - **sandogasa-closure** — dependency-closure walking over fedrq, with a persisted graph and an offline oracle
 - **sandogasa-config** — shared config file management and interactive prompting
 - **sandogasa-copr** — COPR API client for read-only project monitoring
+- **sandogasa-depcheck** — check what an RPM update does to the packages that depend on it
 - **sandogasa-depfilter** — RPM dependency filtering for cross-branch analysis
 - **sandogasa-discourse** — Discourse forum API client
 - **sandogasa-distgit** — Fedora dist-git client, ACL management, and RPM spec file parser

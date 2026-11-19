@@ -46,7 +46,7 @@ pub struct PackageHistory {
 }
 
 /// A unix time as the day it falls on, in UTC.
-pub(crate) fn day_of(ts: f64) -> Option<String> {
+pub fn day_of(ts: f64) -> Option<String> {
     chrono::DateTime::from_timestamp(ts as i64, 0).map(|t| t.format("%Y-%m-%d").to_string())
 }
 

@@ -23,6 +23,7 @@ sandogasa-closure = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-copr = { workspace = true }
 sandogasa-cve = { workspace = true }
+sandogasa-depcheck = { workspace = true }
 sandogasa-depfilter = { workspace = true }
 sandogasa-distgit = { workspace = true }
 sandogasa-forgejo = { workspace = true }

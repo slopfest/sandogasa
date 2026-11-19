@@ -7,16 +7,23 @@
 //! then finds reverse dependencies in the stable repo that would break.
 
 use sandogasa_depfilter::provide_name;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 
 use rayon::prelude::*;
 use sandogasa_cli::progress::Progress;
 
-pub use crate::arrival::{Arrival, ArrivalNote, PackageHistory};
-use crate::arrival::{arrival, day_of};
+pub(crate) use sandogasa_depcheck::RepoQuery;
+use sandogasa_depcheck::analysis::{
+    Analysis, analyze, compute_changed_provides_via_koji, compute_changed_provides_via_subpkgs,
+};
+pub use sandogasa_depcheck::arrival::{Arrival, ArrivalNote, PackageHistory};
+use sandogasa_depcheck::arrival::{arrival, day_of};
+use sandogasa_depcheck::repo::filter_none;
+pub use sandogasa_depcheck::report::{
+    BreakKind, ChangedProvide, PackageChange, RevDepResult, UnsatisfiedDep,
+};
 use sandogasa_review::Resolution;
 use serde::{Deserialize, Serialize};
 
@@ -135,82 +142,6 @@ pub struct CheckUpdateOptions {
     pub interactive: bool,
 }
 
-/// A Provide that changed between old and new versions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChangedProvide {
-    /// The old Provide string (e.g. "tor = 0.4.9.5-1.el9").
-    pub old: String,
-    /// The new Provide string, if the name still exists.
-    pub new: Option<String>,
-}
-
-impl ChangedProvide {
-    /// Whether this is a version update (name still provided)
-    /// vs a true removal.
-    pub fn is_updated(&self) -> bool {
-        self.new.is_some()
-    }
-}
-
-/// A source package's version change in the update — its stable V-R
-/// (`None` when the package is newly introduced) and the V-R the update
-/// ships. Drives the grouped-by-version-transition summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PackageChange {
-    pub package: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub old: Option<String>,
-    pub new: String,
-}
-
-/// How a reverse dependency breaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BreakKind {
-    /// A binary subpackage's install-time Requires stops resolving —
-    /// the package fails to install (FTI) once the update ships.
-    Fti,
-    /// The source package's BuildRequires stops resolving — the
-    /// package fails to build from source (FTBFS) on its next
-    /// rebuild.
-    Ftbfs,
-}
-
-impl BreakKind {
-    /// The label shown in reports.
-    pub fn label(self) -> &'static str {
-        match self {
-            BreakKind::Fti => "FTI",
-            BreakKind::Ftbfs => "FTBFS",
-        }
-    }
-}
-
-/// A single broken Requires entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokenRequires {
-    /// The Requires string that would break.
-    pub dep: String,
-    /// The changed Provide(s) behind the break.
-    pub changed_provide: String,
-    /// Install-time (FTI) or build-time (FTBFS) breakage.
-    pub kind: BreakKind,
-}
-
-/// An unsatisfied Requires in an updated package's subpackages.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UnsatisfiedDep {
-    /// The source package.
-    pub package: String,
-    /// The unsatisfied Requires string.
-    pub dep: String,
-    /// For a boolean/rich dep, the specific capabilities that didn't
-    /// resolve (so the reader can see *which* part is the problem).
-    /// Empty for a plain dep (where `dep` is itself the capability).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unresolved: Vec<String>,
-}
-
 /// A side tag repo whose metadata still serves a stale V-R for
 /// a build that koji says is tagged at a newer NVR.
 ///
@@ -251,21 +182,6 @@ pub struct InOtherUpdate {
     pub alias: String,
     /// The other update's status.
     pub status: String,
-}
-
-/// Result of checking a single reverse dependency.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RevDepResult {
-    /// "ok" or "broken".
-    pub status: String,
-    /// Broken Requires, if any.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub issues: Vec<BrokenRequires>,
-    /// For a broken one, when it reached the target relative to the
-    /// side tag (#83); `None` without a side tag, or when Koji could
-    /// not say.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub arrival: Option<ArrivalNote>,
 }
 
 /// Full result of the check-update command.
@@ -488,142 +404,6 @@ pub(crate) struct Services<'a> {
     pub update_repo: &'a dyn UpdateRepoBuilder,
 }
 
-/// One repository view a check reads: a branch, a repo class, or both.
-///
-/// Only what this step converts: whether the branch and repo class
-/// resolve at all, which source packages are there, and what binaries
-/// they built. The Provides comparison and the reverse-dependency walk
-/// still ask fedrq directly, and the views they need come with them.
-pub(crate) trait RepoQuery: Sync {
-    /// The repositories the view resolves to, which is also how a
-    /// check proves the branch and repo class exist.
-    fn repolist(&self) -> Result<Vec<String>, String>;
-
-    /// The NVRs of the given source packages present in the view.
-    fn src_nvrs(&self, packages: &[String]) -> Result<Vec<String>, String>;
-
-    /// The binary package names a source package built here.
-    fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, String>;
-
-    /// `(name, version, release)` for each binary package of a source.
-    fn subpkgs_nvrs(&self, srpm: &str) -> Result<Vec<(String, String, String)>, String>;
-
-    /// `(source, version-release)` for each named binary package.
-    fn pkgs_source_vr(&self, names: &[&str]) -> Result<Vec<(String, String)>, String>;
-
-    /// Everything the subpackages of a source declare.
-    fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, String>;
-
-    /// Everything one binary package declares.
-    fn pkg_provides(&self, name: &str) -> Result<Vec<String>, String>;
-
-    /// What the package providing a capability declares, which is how
-    /// a changed Provide is traced back to what replaced it.
-    fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, String>;
-
-    /// What one binary package requires.
-    fn pkg_requires(&self, name: &str) -> Result<Vec<String>, String>;
-
-    /// What the subpackages of a source require.
-    fn subpkgs_requires(&self, srpm: &str) -> Result<Vec<String>, String>;
-
-    /// What a source package requires: its BuildRequires.
-    fn src_requires(&self, srpm: &str) -> Result<Vec<String>, String>;
-
-    /// The source packages requiring any of these capabilities.
-    fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, String>;
-
-    /// The source packages providing a capability, constraint included.
-    ///
-    /// The constraint is passed through rather than stripped, so the
-    /// repository decides whether a version satisfies it. Repeating
-    /// RPM's comparison here would be a second implementation to keep
-    /// right.
-    fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String>;
-
-    // Batched forms of the queries above, for the phases that ask
-    // about hundreds of packages or thousands of capabilities. Each
-    // answers what the one-at-a-time query would, an error counting as
-    // an empty answer as there; the defaults ask one at a time, and
-    // fedrq's view answers a whole batch in one invocation.
-
-    /// Each named binary package's Requires.
-    fn pkgs_requires(&self, names: &[String]) -> Vec<(String, Vec<String>)> {
-        names
-            .iter()
-            .map(|n| {
-                (
-                    n.clone(),
-                    filter_none(self.pkg_requires(n).unwrap_or_default()),
-                )
-            })
-            .collect()
-    }
-
-    /// Everything the named binary packages provide.
-    fn pkgs_provides(&self, names: &[String]) -> Vec<String> {
-        names
-            .iter()
-            .flat_map(|n| filter_none(self.pkg_provides(n).unwrap_or_default()))
-            .collect()
-    }
-
-    /// Everything the subpackages of these sources provide.
-    fn subpkgs_provides_all(&self, srpms: &[String]) -> Vec<String> {
-        srpms
-            .iter()
-            .flat_map(|s| filter_none(self.subpkgs_provides(s).unwrap_or_default()))
-            .collect()
-    }
-
-    /// Which of `caps` (bare capability names, or file paths) some
-    /// package in the view provides.
-    fn resolvable(&self, caps: &[String]) -> BTreeSet<String> {
-        caps.iter()
-            .filter(|c| !filter_none(self.provides_of_provider(c).unwrap_or_default()).is_empty())
-            .cloned()
-            .collect()
-    }
-
-    /// For each source: its subpackages' Requires, and its own
-    /// BuildRequires.
-    fn sources_requires(&self, srpms: &[String]) -> Vec<(String, Vec<String>, Vec<String>)> {
-        srpms
-            .iter()
-            .map(|s| {
-                (
-                    s.clone(),
-                    filter_none(self.subpkgs_requires(s).unwrap_or_default()),
-                    filter_none(self.src_requires(s).unwrap_or_default()),
-                )
-            })
-            .collect()
-    }
-}
-
-/// How many names one batched fedrq query carries: enough that a large
-/// update takes a handful of invocations, few enough that the command
-/// line stays far below the kernel's limit.
-const QUERY_CHUNK: usize = 250;
-
-/// Run `per_chunk` over `items` a chunk at a time, in parallel, with a
-/// counter that ticks once per chunk.
-fn chunked<T: Send>(
-    items: &[String],
-    label: &str,
-    verbose: bool,
-    per_chunk: impl Fn(&[String]) -> Vec<T> + Sync + Send,
-) -> Vec<T> {
-    let progress = Progress::stderr(label, items.len().div_ceil(QUERY_CHUNK), verbose);
-    items
-        .par_chunks(QUERY_CHUNK)
-        .flat_map_iter(|chunk| {
-            progress.tick(&chunk[0]);
-            per_chunk(chunk)
-        })
-        .collect()
-}
-
 /// Where a check gets its repository views.
 pub(crate) trait Repos: Sync {
     fn view(&self, branch: Option<&str>, repo: Option<&str>) -> Box<dyn RepoQuery + Send + Sync>;
@@ -639,196 +419,6 @@ impl Repos for FedrqRepos {
             repo: repo.map(str::to_string),
         })
     }
-}
-
-impl RepoQuery for sandogasa_fedrq::Fedrq {
-    fn repolist(&self) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::repolist(self).map_err(|e| e.to_string())
-    }
-
-    fn src_nvrs(&self, packages: &[String]) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::src_nvrs(self, packages).map_err(|e| e.to_string())
-    }
-
-    fn subpkgs_names(&self, srpm: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::subpkgs_names(self, srpm).map_err(|e| e.to_string())
-    }
-
-    fn subpkgs_nvrs(&self, srpm: &str) -> Result<Vec<(String, String, String)>, String> {
-        sandogasa_fedrq::Fedrq::subpkgs_nvrs(self, srpm).map_err(|e| e.to_string())
-    }
-
-    fn pkgs_source_vr(&self, names: &[&str]) -> Result<Vec<(String, String)>, String> {
-        sandogasa_fedrq::Fedrq::pkgs_source_vr(self, names).map_err(|e| e.to_string())
-    }
-
-    fn subpkgs_provides(&self, srpm: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::subpkgs_provides(self, srpm).map_err(|e| e.to_string())
-    }
-
-    fn pkg_provides(&self, name: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::pkg_provides(self, name).map_err(|e| e.to_string())
-    }
-
-    fn provides_of_provider(&self, capability: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::provides_of_provider(self, capability).map_err(|e| e.to_string())
-    }
-
-    fn pkg_requires(&self, name: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::pkg_requires(self, name).map_err(|e| e.to_string())
-    }
-
-    fn subpkgs_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::subpkgs_requires(self, srpm).map_err(|e| e.to_string())
-    }
-
-    fn src_requires(&self, srpm: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::src_requires(self, srpm).map_err(|e| e.to_string())
-    }
-
-    fn whatrequires(&self, packages: &[String]) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::whatrequires(self, packages).map_err(|e| e.to_string())
-    }
-
-    fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String> {
-        sandogasa_fedrq::Fedrq::resolve_to_source(self, dep).map_err(|e| e.to_string())
-    }
-
-    // A batch that fails is asked again one at a time, so one bad
-    // operand costs that batch's speed, not its answers.
-
-    fn pkgs_requires(&self, names: &[String]) -> Vec<(String, Vec<String>)> {
-        match self.pkgs_requires_info(names) {
-            Ok(infos) => {
-                let mut by_name: BTreeMap<String, Vec<String>> =
-                    names.iter().map(|n| (n.clone(), Vec::new())).collect();
-                for i in infos {
-                    by_name.entry(i.name).or_default().extend(i.requires);
-                }
-                by_name.into_iter().collect()
-            }
-            Err(_) => names
-                .iter()
-                .map(|n| {
-                    (
-                        n.clone(),
-                        filter_none(self.pkg_requires(n).unwrap_or_default()),
-                    )
-                })
-                .collect(),
-        }
-    }
-
-    fn pkgs_provides(&self, names: &[String]) -> Vec<String> {
-        match self.pkgs_provides_info(names) {
-            Ok(infos) => infos.into_iter().flat_map(|i| i.provides).collect(),
-            Err(_) => names
-                .iter()
-                .flat_map(|n| filter_none(self.pkg_provides(n).unwrap_or_default()))
-                .collect(),
-        }
-    }
-
-    fn subpkgs_provides_all(&self, srpms: &[String]) -> Vec<String> {
-        match self.subpkgs_provides_info(srpms) {
-            Ok(infos) => infos.into_iter().flat_map(|i| i.provides).collect(),
-            Err(_) => srpms
-                .iter()
-                .flat_map(|s| filter_none(self.subpkgs_provides(s).unwrap_or_default()))
-                .collect(),
-        }
-    }
-
-    fn resolvable(&self, caps: &[String]) -> BTreeSet<String> {
-        let one_at_a_time = |caps: &[String]| -> BTreeSet<String> {
-            caps.iter()
-                .filter(|c| {
-                    !filter_none(self.provides_of_provider(c).unwrap_or_default()).is_empty()
-                })
-                .cloned()
-                .collect()
-        };
-        let (paths, names): (Vec<String>, Vec<String>) =
-            caps.iter().cloned().partition(|c| c.starts_with('/'));
-        let mut out = match self.providers_vr_info(&names) {
-            Ok(providers) => resolved_by(&names, &providers),
-            Err(_) => one_at_a_time(&names),
-        };
-        out.extend(match self.file_providers_info(&paths) {
-            Ok(providers) => paths_shipped(&paths, &providers),
-            Err(_) => one_at_a_time(&paths),
-        });
-        // What the batch could not match back is asked again on its
-        // own, so fedrq's own resolution has the last word: the
-        // matching above is a fast path, and a way of providing a
-        // capability it does not know must not read as a missing one.
-        // Few are left over, as most capabilities resolve.
-        let left: Vec<String> = caps.iter().filter(|c| !out.contains(*c)).cloned().collect();
-        out.extend(one_at_a_time(&left));
-        out
-    }
-
-    fn sources_requires(&self, srpms: &[String]) -> Vec<(String, Vec<String>, Vec<String>)> {
-        let (Ok(binaries), Ok(sources)) = (self.subpkgs_info(srpms), self.srcs_info(srpms)) else {
-            return srpms
-                .iter()
-                .map(|s| {
-                    (
-                        s.clone(),
-                        filter_none(self.subpkgs_requires(s).unwrap_or_default()),
-                        filter_none(self.src_requires(s).unwrap_or_default()),
-                    )
-                })
-                .collect();
-        };
-        let mut by_source: BTreeMap<&str, (Vec<String>, Vec<String>)> = srpms
-            .iter()
-            .map(|s| (s.as_str(), Default::default()))
-            .collect();
-        for b in &binaries {
-            if let Some(entry) = b.source_name.as_deref().and_then(|s| by_source.get_mut(s)) {
-                entry.0.extend(b.requires.iter().cloned());
-            }
-        }
-        for s in &sources {
-            if let Some(entry) = by_source.get_mut(s.name.as_str()) {
-                entry.1.extend(s.requires.iter().cloned());
-            }
-        }
-        by_source
-            .into_iter()
-            .map(|(s, (bin, src))| (s.to_string(), bin, src))
-            .collect()
-    }
-}
-
-/// Which of `caps` (bare capability names) one of `providers` provides,
-/// by name: the providers a batched `-P` query returned for all of
-/// them together, so each has to be matched back to its capability.
-fn resolved_by(caps: &[String], providers: &[sandogasa_fedrq::PkgInfo]) -> BTreeSet<String> {
-    caps.iter()
-        .filter(|c| providers.iter().any(|p| p.satisfies(c)))
-        .cloned()
-        .collect()
-}
-
-/// Which of `paths` one of `providers` declares, or ships under any
-/// path the merges give it (`/sbin/nologin` is shipped as
-/// `/usr/bin/nologin`).
-fn paths_shipped(paths: &[String], providers: &[sandogasa_fedrq::PkgInfo]) -> BTreeSet<String> {
-    let met: BTreeSet<&str> = providers
-        .iter()
-        .flat_map(|p| p.files.iter().chain(&p.provides).map(String::as_str))
-        .collect();
-    paths
-        .iter()
-        .filter(|p| {
-            sandogasa_fedrq::merged_paths(p)
-                .iter()
-                .any(|m| met.contains(m.as_str()))
-        })
-        .cloned()
-        .collect()
 }
 
 /// Building a local repository of an update's builds, which downloads
@@ -2699,261 +2289,6 @@ fn package_summary(report: &CheckUpdateReport, detailed: bool) -> String {
 
 // ---- Private helpers ----
 
-/// Filter out fedrq's "(none)" placeholder from results.
-fn filter_none(items: Vec<String>) -> Vec<String> {
-    items
-        .into_iter()
-        .filter(|s| !s.is_empty() && s != "(none)")
-        .collect()
-}
-
-/// Strip "grouping" parens from a token's ends while keeping parens
-/// that belong to a capability name. A trailing `)` is dropped only
-/// when the token has more `)` than `(` (so it closes an outer rich-dep
-/// group), and likewise a leading `(`; thus `sound-theme-freedesktop)`
-/// → `sound-theme-freedesktop`, but `crate(foo)` and
-/// `libc.so.6(GLIBC_2.34)(64bit)` are left intact.
-fn strip_grouping_parens(token: &str) -> &str {
-    let mut s = token;
-    loop {
-        let opens = s.matches('(').count();
-        let closes = s.matches(')').count();
-        if closes > opens && s.ends_with(')') {
-            s = &s[..s.len() - 1];
-        } else if opens > closes && s.starts_with('(') {
-            s = &s[1..];
-        } else {
-            break;
-        }
-    }
-    s
-}
-
-/// The bare capability name of a leaf term: its first whitespace token
-/// (dropping any version constraint like `foo >= 1.0`) with grouping
-/// parens stripped.
-fn leaf_cap(term: &str) -> &str {
-    strip_grouping_parens(term.split_whitespace().next().unwrap_or(""))
-}
-
-/// Byte range of the boolean operator `op` (a standalone whitespace-
-/// delimited token) at paren depth 0 in `expr`, if any.
-fn find_top_op(expr: &str, op: &str) -> Option<(usize, usize)> {
-    let bytes = expr.as_bytes();
-    let mut depth = 0i32;
-    for (idx, &c) in bytes.iter().enumerate() {
-        match c {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            b' ' if depth == 0 => {
-                let ws = idx + 1;
-                let we = expr[ws..].find(' ').map(|p| ws + p).unwrap_or(expr.len());
-                if &expr[ws..we] == op {
-                    return Some((ws, we));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// Split `expr` on the first top-level `op` token into `(before, after)`.
-fn split_top<'a>(expr: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
-    find_top_op(expr, op).map(|(s, e)| (expr[..s].trim(), expr[e..].trim()))
-}
-
-/// Split `expr` on every top-level `op` token (≥2 parts means the
-/// operator is present at the top level).
-fn split_all_top<'a>(expr: &'a str, op: &str) -> Vec<&'a str> {
-    let mut parts = Vec::new();
-    let mut rest = expr;
-    while let Some((before, after)) = split_top(rest, op) {
-        parts.push(before);
-        rest = after;
-    }
-    parts.push(rest.trim());
-    parts
-}
-
-/// Whether an RPM dependency is satisfiable, given `resolves(cap)` for
-/// a bare capability name. Evaluates boolean/rich deps with their real
-/// semantics (a depsolver-free approximation): `A if B` requires A only
-/// when B resolves; `A unless B` requires A only when B does *not*;
-/// `or` needs any term; `and`/`with` need all; `without` ignores the
-/// excluded term. A plain term is satisfiable when its capability
-/// resolves.
-fn dep_satisfiable(dep: &str, resolves: &impl Fn(&str) -> bool) -> bool {
-    let dep = dep.trim();
-    match dep.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-        // Boolean/rich dep (fully parenthesized): evaluate the inside.
-        Some(inner) => eval_boolean(inner.trim(), resolves),
-        // Leaf terms reach the resolver whole — version constraint
-        // included — so version-aware resolvers can judge them;
-        // name-level resolvers strip the constraint themselves
-        // (see `leaf_cap`).
-        None => dep.is_empty() || resolves(dep),
-    }
-}
-
-fn eval_boolean(expr: &str, resolves: &impl Fn(&str) -> bool) -> bool {
-    // `A if B [else C]` — conditional.
-    if let Some((cons, rest)) = split_top(expr, "if") {
-        if let Some((cond, alt)) = split_top(rest, "else") {
-            return if eval_boolean(cond, resolves) {
-                eval_boolean(cons, resolves)
-            } else {
-                eval_boolean(alt, resolves)
-            };
-        }
-        // No `else`: the requirement applies only when the condition holds.
-        return !eval_boolean(rest, resolves) || eval_boolean(cons, resolves);
-    }
-    // `A unless B` — inverse conditional.
-    if let Some((cons, cond)) = split_top(expr, "unless") {
-        return eval_boolean(cond, resolves) || eval_boolean(cons, resolves);
-    }
-    // `A or B …` — any term.
-    let ors = split_all_top(expr, "or");
-    if ors.len() > 1 {
-        return ors.iter().any(|t| eval_boolean(t, resolves));
-    }
-    // `A and B …` / `A with B …` — all terms.
-    for op in ["and", "with"] {
-        let terms = split_all_top(expr, op);
-        if terms.len() > 1 {
-            return terms.iter().all(|t| eval_boolean(t, resolves));
-        }
-    }
-    // `A without B` — only A matters.
-    if let Some((a, _b)) = split_top(expr, "without") {
-        return eval_boolean(a, resolves);
-    }
-    // Nested group or a plain leaf (passed to the resolver whole,
-    // version constraint included).
-    let expr = expr.trim();
-    match expr.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-        Some(inner) => eval_boolean(inner.trim(), resolves),
-        None => expr.is_empty() || resolves(expr),
-    }
-}
-
-/// Extract the bare capability names referenced by a dependency string
-/// (for reporting which parts of a flagged dep didn't resolve). Strips
-/// version constraints, boolean operators, and grouping parens — while
-/// keeping parens that are part of a name (`crate(foo)`,
-/// `libc.so.6(GLIBC_2.34)(64bit)`).
-fn extract_capability_names(dep: &str) -> Vec<String> {
-    let dep = dep.trim();
-    let dep = match dep.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-        Some(inner) => inner,
-        None => dep,
-    };
-    dep.split_whitespace()
-        .filter(|token| {
-            !matches!(
-                *token,
-                ">=" | "<=" | ">" | "<" | "=" | "with" | "or" | "and" | "if" | "unless" | "else"
-            ) && !token.starts_with(|c: char| c.is_ascii_digit())
-                && !token.ends_with('~')
-        })
-        .map(|s| strip_grouping_parens(s).to_string())
-        .filter(|s| !s.is_empty())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-/// The version part of a Provide string, if any
-/// (`crate(ctor/default) = 1.0.8` → `1.0.8`).
-fn provide_version(provide: &str) -> Option<&str> {
-    for op in [" = ", " >= ", " <= ", " < ", " > "] {
-        if let Some((_, version)) = provide.split_once(op) {
-            return Some(version.trim());
-        }
-    }
-    None
-}
-
-/// Whether a reverse dependency's requirement still resolves after
-/// the update. Leaf capabilities the update doesn't touch resolve by
-/// definition (they resolved in stable, and the update doesn't change
-/// them); capabilities the update (re)provides must be satisfied by a
-/// NEW provide, with version constraints evaluated under RPM
-/// semantics (an unversioned provide satisfies any constraint). When
-/// some other, non-updated package also provides a touched
-/// capability, this can over-report — the safe direction.
-fn requirement_survives_update(
-    dep: &str,
-    changed_names: &BTreeSet<String>,
-    new_by_name: &BTreeMap<String, Vec<String>>,
-) -> bool {
-    dep_satisfiable(dep, &|term: &str| {
-        let Some((cap, constraint)) = crate::resolve::parse_versioned_dep(term) else {
-            // Unparseable leaf (shouldn't happen once rich-dep parens
-            // are peeled): assume unaffected.
-            return true;
-        };
-        let touched = changed_names.contains(cap) || new_by_name.contains_key(cap);
-        if !touched {
-            return true;
-        }
-        let Some(provides) = new_by_name.get(cap) else {
-            // The capability was removed by the update.
-            return false;
-        };
-        match constraint {
-            None => true,
-            Some((op, ver)) => provides.iter().any(|p| match provide_version(p) {
-                None => true,
-                Some(available) => crate::resolve::constraint_satisfied(available, op, ver),
-            }),
-        }
-    })
-}
-
-/// Whether something outside the update still satisfies `dep`.
-///
-/// [`requirement_survives_update`] can only see what the update
-/// provides, so a capability that several packages provide at
-/// different versions looks broken the moment the one being updated
-/// moves past the required version. Rust compat packages are built to
-/// do exactly that: on f44 `crate(webpki-roots)` is provided by
-/// `rust-webpki-roots` at 1.0.9, `rust-webpki-roots0.25` at 0.25.4 and
-/// `rust-webpki-roots0.26` at 0.26.11, and updating the first was
-/// reported as breaking a requirement on the third.
-///
-/// So before calling a requirement broken, ask the repository which
-/// sources provide it — constraint included, so RPM does the version
-/// comparison — and discount the ones this update is replacing. A
-/// query that fails answers "no": inventing a survival would hide a
-/// real breakage, which is the one error this check must not make.
-fn satisfied_outside_update(
-    dep: &str,
-    repo: &(dyn RepoQuery + Send + Sync),
-    updated: &BTreeSet<&str>,
-) -> bool {
-    dep_satisfiable(dep, &|term: &str| {
-        repo.resolve_to_source(term).is_ok_and(|sources| {
-            sources
-                .iter()
-                .any(|src| src != "(none)" && !updated.contains(src.as_str()))
-        })
-    })
-}
-
-/// Compare old and new provides, classifying each as updated or removed
-/// ([`sandogasa_depfilter::compare_provides`]).
-fn compare_provides(old: &BTreeSet<String>, new: &BTreeSet<String>) -> Vec<ChangedProvide> {
-    sandogasa_depfilter::compare_provides(old, new)
-        .into_iter()
-        .map(|c| ChangedProvide {
-            old: c.old,
-            new: c.new,
-        })
-        .collect()
-}
-
 /// Check whether `@testing` actually carries the expected new
 /// content for at least one of the input NVRs.
 ///
@@ -3548,221 +2883,6 @@ fn koji_binaries(koji: &dyn KojiQuery, nvrs: &[String], verbose: bool) -> Vec<St
     names
 }
 
-/// Compute changed provides using `subpkgs_provides` on both repos.
-///
-/// Works for @testing and any repo where source RPM queries work.
-///
-/// Provides are unioned across all updated packages on *both*
-/// sides before comparing (matching the koji path): an update can
-/// move a capability between its packages — e.g. a version bump
-/// paired with a new compat package that keeps shipping the old
-/// version's provides. A per-package comparison would falsely
-/// report such provides as removed.
-fn compute_changed_provides_via_subpkgs(
-    updated_packages: &[String],
-    stable_fedrq: &(dyn RepoQuery + Send + Sync),
-    new_fedrq: &(dyn RepoQuery + Send + Sync),
-    verbose: bool,
-) -> Vec<ChangedProvide> {
-    let old_provides: BTreeSet<String> = chunked(
-        updated_packages,
-        "reading current provides",
-        verbose,
-        |chunk| stable_fedrq.subpkgs_provides_all(chunk),
-    )
-    .into_iter()
-    .collect();
-
-    let new_provides: BTreeSet<String> =
-        chunked(updated_packages, "reading new provides", verbose, |chunk| {
-            new_fedrq.subpkgs_provides_all(chunk)
-        })
-        .into_iter()
-        .collect();
-
-    compare_provides(&old_provides, &new_provides)
-}
-
-/// Compute changed provides for side tags using `koji buildinfo`
-/// + `fedrq pkg_provides`.
-///
-/// Side tags don't index source RPMs, so we get binary RPM names
-/// from koji and query their provides individually.
-fn compute_changed_provides_via_koji(
-    binary_names: &[String],
-    updated_packages: &[String],
-    stable_fedrq: &(dyn RepoQuery + Send + Sync),
-    side_tag_fedrq: &(dyn RepoQuery + Send + Sync),
-    verbose: bool,
-) -> Vec<ChangedProvide> {
-    // Get old provides from stable repo (source-based query works here).
-    let old_provides: BTreeSet<String> = chunked(
-        updated_packages,
-        "reading current provides",
-        verbose,
-        |chunk| stable_fedrq.subpkgs_provides_all(chunk),
-    )
-    .into_iter()
-    .collect();
-
-    // New provides: the binary RPMs koji lists for the builds
-    // (`binary_names`), each one's provides read from the new repo.
-    let new_provides: BTreeSet<String> =
-        chunked(binary_names, "reading new provides", verbose, |chunk| {
-            side_tag_fedrq.pkgs_provides(chunk)
-        })
-        .into_iter()
-        .collect();
-
-    compare_provides(&old_provides, &new_provides)
-}
-
-/// Check that the updated packages' subpackage Requires are
-/// satisfiable on the stable repo. Returns deps that can't be
-/// resolved (indicating the update would be uninstallable).
-///
-/// Queries provides and requires per binary RPM name (not per
-/// source package) so this works on Koji repos that lack source
-/// RPMs.
-fn check_update_installability(
-    updated_packages: &[String],
-    binary_names: &[String],
-    new_provides_full: &[String],
-    new_fedrq: &(dyn RepoQuery + Send + Sync),
-    stable_fedrq: &(dyn RepoQuery + Send + Sync),
-    verbose: bool,
-) -> Vec<UnsatisfiedDep> {
-    if verbose {
-        eprintln!(
-            "[check-update] checking installability of {} binary packages",
-            binary_names.len()
-        );
-    }
-
-    // The update's own provides satisfy each other's deps; this check
-    // resolves at the capability-name level.
-    let new_provides: BTreeSet<String> = new_provides_full
-        .iter()
-        .map(|p| provide_name(p).to_string())
-        .collect();
-
-    // Map binary RPM names back to source packages for reporting.
-    let bin_to_src: BTreeMap<&str, &str> = binary_names
-        .iter()
-        .map(|bin| {
-            let src = updated_packages
-                .iter()
-                .find(|src| bin.starts_with(src.as_str()) && bin[src.len()..].starts_with('-'))
-                .map(|s| s.as_str())
-                .unwrap_or(bin.as_str());
-            (bin.as_str(), src)
-        })
-        .collect();
-
-    if verbose {
-        eprintln!(
-            "[check-update] {} new provides collected, checking requires",
-            new_provides.len()
-        );
-    }
-
-    // Memoize stable-repo capability resolution: a single capability
-    // like `libstdc++.so.6` or `libQt6Core.so.6` is required by many of
-    // the update's binaries, and each lookup shells out to fedrq. Cache
-    // the satisfied/unsatisfied verdict per capability so we resolve it
-    // once per run instead of once per requiring package.
-    let cap_satisfied: Mutex<HashMap<String, bool>> = Mutex::new(HashMap::new());
-    let resolves_in_stable = |cap: &str| -> bool {
-        if let Some(&hit) = cap_satisfied.lock().unwrap().get(cap) {
-            return hit;
-        }
-        let resolved = stable_fedrq.provides_of_provider(cap).unwrap_or_default();
-        let satisfied = resolved.iter().any(|s| !s.is_empty() && s != "(none)");
-        cap_satisfied
-            .lock()
-            .unwrap()
-            .insert(cap.to_string(), satisfied);
-        satisfied
-    };
-
-    // A capability resolves if another package in the update provides
-    // it, or it's available in the stable repo (memoized). Leaf terms
-    // arrive with their version constraint; this check resolves at
-    // the name level, so strip it first.
-    let resolves = |term: &str| {
-        let cap = leaf_cap(term);
-        new_provides.contains(cap) || resolves_in_stable(cap)
-    };
-
-    let requires: Vec<(String, Vec<String>)> =
-        chunked(binary_names, "reading requires", verbose, |chunk| {
-            new_fedrq.pkgs_requires(chunk)
-        });
-
-    // Ask about every capability the requirements name at once, rather
-    // than one fedrq invocation each: a large update requires a few
-    // thousand. Anything the evaluation reaches that is not in this
-    // set is still asked on its own, below.
-    let wanted: Vec<String> = requires
-        .iter()
-        .flat_map(|(_, reqs)| reqs.iter())
-        .filter(|dep| !sandogasa_depfilter::is_rpm_internal_dep(dep.trim()))
-        .flat_map(|dep| extract_capability_names(dep))
-        .filter(|cap| !cap.is_empty() && !new_provides.contains(cap.as_str()))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let found: BTreeSet<String> = chunked(&wanted, "resolving requires", verbose, |chunk| {
-        stable_fedrq.resolvable(chunk).into_iter().collect()
-    })
-    .into_iter()
-    .collect();
-    {
-        let mut memo = cap_satisfied.lock().unwrap();
-        for cap in wanted {
-            let hit = found.contains(&cap);
-            memo.insert(cap, hit);
-        }
-    }
-
-    requires
-        .into_par_iter()
-        .flat_map_iter(|(name, requires)| {
-            let src = bin_to_src.get(name.as_str()).copied().unwrap_or(&name);
-            requires
-                .into_iter()
-                .filter_map(|dep| {
-                    let dep = dep.trim();
-                    if dep.is_empty() || sandogasa_depfilter::is_rpm_internal_dep(dep) {
-                        return None;
-                    }
-                    // Evaluate boolean/rich deps with real semantics
-                    // (`A if B` only requires A when B resolves, etc.).
-                    if dep_satisfiable(dep, &resolves) {
-                        return None;
-                    }
-                    // For a boolean dep, name the capabilities that
-                    // actually failed so the reader sees which part is
-                    // the problem; for a plain dep the dep is the cap.
-                    let unresolved = if dep.starts_with('(') {
-                        extract_capability_names(dep)
-                            .into_iter()
-                            .filter(|c| !resolves(c))
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
-                    Some(UnsatisfiedDep {
-                        package: src.to_string(),
-                        dep: dep.to_string(),
-                        unresolved,
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
 /// Given changed provides, find affected reverse deps and check
 /// their Requires.
 #[allow(clippy::too_many_arguments)]
@@ -3789,165 +2909,17 @@ fn run_provides_analysis(
         );
     }
 
-    // Collect the update's provides once (full strings, versions
-    // included): the installability check resolves names against
-    // them, and the reverse-dep check evaluates version constraints.
-    if opts.verbose {
-        eprintln!("[check-update] collecting provides from updated packages");
-    }
-    let new_provides_full: Vec<String> =
-        chunked(binary_names, "collecting provides", opts.verbose, |chunk| {
-            new_fedrq.pkgs_provides(chunk)
-        });
-    let mut new_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for provide in &new_provides_full {
-        new_by_name
-            .entry(provide_name(provide).to_string())
-            .or_default()
-            .push(provide.clone());
-    }
-
-    let installability_issues = check_update_installability(
+    let Analysis {
+        installability_issues,
+        reverse_deps,
+    } = analyze(
         updated_packages,
         binary_names,
-        &new_provides_full,
-        new_fedrq,
+        &changed_provides,
         stable_fedrq,
+        new_fedrq,
         opts.verbose,
-    );
-
-    if changed_provides.is_empty() {
-        return Ok(CheckUpdateReport {
-            input: input.to_string(),
-            branch: branch.to_string(),
-            dist_branch: opts.testing_branch.clone(),
-            repo: opts.repo.clone(),
-            autokarma,
-            updated_packages: updated_packages.to_vec(),
-            changes: changes.to_vec(),
-            full_analysis: true,
-            changed_provides: vec![],
-            installability_issues,
-            stale_side_tag,
-            not_newest: vec![],
-            in_other_update: vec![],
-            side_tag_opened: None,
-            skip_reason: None,
-            reverse_deps: BTreeMap::new(),
-        });
-    }
-
-    // Use old provide strings for whatrequires lookup.
-    let old_provide_strings: Vec<String> = changed_provides.iter().map(|c| c.old.clone()).collect();
-
-    if opts.verbose {
-        eprintln!("[check-update] finding reverse dependencies");
-    }
-
-    let rev_dep_sources = filter_none(
-        stable_fedrq
-            .whatrequires(&old_provide_strings)
-            .map_err(|e| format!("whatrequires failed: {e}"))?,
-    );
-
-    let updated_set: BTreeSet<&str> = updated_packages.iter().map(|s| s.as_str()).collect();
-    let rev_deps: Vec<String> = rev_dep_sources
-        .into_iter()
-        .filter(|pkg| !updated_set.contains(pkg.as_str()))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-
-    if opts.verbose {
-        eprintln!(
-            "[check-update] {} reverse dependencies to check: {}",
-            rev_deps.len(),
-            rev_deps.join(", "),
-        );
-    }
-
-    let changed_names: BTreeSet<String> = changed_provides
-        .iter()
-        .map(|c| provide_name(&c.old).to_string())
-        .collect();
-
-    // Install-time Requires of the binaries (FTI when broken) *and*
-    // the source package's BuildRequires (FTBFS when broken): a version
-    // bump can FTBFS a reverse dep without touching its installed
-    // binaries — e.g. a versioned BuildRequires like
-    // `(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)`
-    // when ctor moves to 1.x. Read for all of them in batches.
-    let rev_requires = chunked(
-        &rev_deps,
-        "reading reverse dependencies",
-        opts.verbose,
-        |chunk| stable_fedrq.sources_requires(chunk),
-    );
-
-    let progress = Progress::stderr(
-        "checking reverse dependencies",
-        rev_requires.len(),
-        opts.verbose,
-    );
-    let results: Vec<(String, RevDepResult)> = rev_requires
-        .into_par_iter()
-        .map(|(pkg, binary_requires, build_requires)| {
-            progress.tick(&pkg);
-            let mut deps: Vec<(BreakKind, String)> = binary_requires
-                .into_iter()
-                .map(|dep| (BreakKind::Fti, dep))
-                .collect();
-            deps.extend(
-                build_requires
-                    .into_iter()
-                    .map(|dep| (BreakKind::Ftbfs, dep)),
-            );
-
-            let mut seen: BTreeSet<(BreakKind, String)> = BTreeSet::new();
-            let issues: Vec<BrokenRequires> = deps
-                .into_iter()
-                .filter_map(|(kind, dep)| {
-                    let dep = dep.trim().to_string();
-                    if dep.is_empty() || sandogasa_depfilter::is_rpm_internal_dep(&dep) {
-                        return None;
-                    }
-                    if !seen.insert((kind, dep.clone())) {
-                        return None;
-                    }
-                    if requirement_survives_update(&dep, &changed_names, &new_by_name) {
-                        return None;
-                    }
-                    // The update does not satisfy it; something else
-                    // in the repository may, and usually does when the
-                    // capability has a compat package behind it.
-                    if satisfied_outside_update(&dep, stable_fedrq, &updated_set) {
-                        return None;
-                    }
-                    let changed: Vec<String> = extract_capability_names(&dep)
-                        .into_iter()
-                        .filter(|c| changed_names.contains(c) || new_by_name.contains_key(c))
-                        .collect();
-                    Some(BrokenRequires {
-                        dep,
-                        changed_provide: changed.join(", "),
-                        kind,
-                    })
-                })
-                .collect();
-
-            let status = if issues.is_empty() { "ok" } else { "broken" };
-            (
-                pkg,
-                RevDepResult {
-                    status: status.to_string(),
-                    issues,
-                    arrival: None,
-                },
-            )
-        })
-        .collect();
-
-    let reverse_deps: BTreeMap<String, RevDepResult> = results.into_iter().collect();
+    )?;
 
     Ok(CheckUpdateReport {
         input: input.to_string(),
@@ -4146,71 +3118,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A package as a batched fedrq query returns it.
-    fn pkg(v: serde_json::Value) -> sandogasa_fedrq::PkgInfo {
-        serde_json::from_value(v).unwrap()
-    }
-
-    #[test]
-    fn a_batched_answer_is_matched_back_to_each_capability() {
-        // One `-P` query for three capabilities returns the providers
-        // of all of them together; each capability resolves only when
-        // one of them provides it.
-        let providers = [
-            pkg(serde_json::json!({"name": "libical",
-                "provides": ["libical.so.3()(64bit)", "libical = 3.0.20-11.fc46"]})),
-            pkg(serde_json::json!({"name": "xapian-core-libs",
-                "provides": ["libxapian.so.30()(64bit)"]})),
-        ];
-        let caps: Vec<String> = [
-            "libical.so.3()(64bit)",
-            "libxapian.so.30()(64bit)",
-            "nonexistent-cap",
-            "libical",
-        ]
-        .map(String::from)
-        .to_vec();
-        assert_eq!(
-            resolved_by(&caps, &providers)
-                .into_iter()
-                .collect::<Vec<_>>(),
-            [
-                "libical",
-                "libical.so.3()(64bit)",
-                "libxapian.so.30()(64bit)"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_file_require_is_found_under_its_merged_usr_path() {
-        // As f46 answers: util-linux ships /usr/bin/nologin and
-        // declares /sbin/nologin, postfix ships /usr/bin/sendmail and
-        // declares /usr/sbin/sendmail.
-        let providers = [
-            pkg(serde_json::json!({"name": "bash", "files": ["/usr/bin/bash", "/usr/bin/sh"]})),
-            pkg(serde_json::json!({"name": "util-linux", "files": ["/usr/bin/nologin"]})),
-            pkg(
-                serde_json::json!({"name": "postfix", "files": ["/usr/bin/sendmail"],
-                "provides": ["/usr/sbin/sendmail"]}),
-            ),
-        ];
-        let paths: Vec<String> = [
-            "/bin/sh",
-            "/sbin/nologin",
-            "/usr/sbin/sendmail",
-            "/usr/bin/missing",
-        ]
-        .map(String::from)
-        .to_vec();
-        assert_eq!(
-            paths_shipped(&paths, &providers)
-                .into_iter()
-                .collect::<Vec<_>>(),
-            ["/bin/sh", "/sbin/nologin", "/usr/sbin/sendmail"]
-        );
-    }
+    use sandogasa_depcheck::report::BrokenRequires;
+    use std::sync::Mutex;
 
     #[test]
     fn one_bodhi_answer_is_matched_back_to_each_build() {
@@ -4256,14 +3165,6 @@ mod tests {
             rpm_names(&nvras),
             ["libical-glib", "python3-asahi_firmware"]
         );
-    }
-
-    #[test]
-    fn chunks_cover_every_item_once() {
-        let items: Vec<String> = (0..QUERY_CHUNK * 2 + 7).map(|i| i.to_string()).collect();
-        let mut seen = chunked(&items, "test", true, |chunk| chunk.to_vec());
-        seen.sort_by_key(|s| s.parse::<usize>().unwrap());
-        assert_eq!(seen, items);
     }
 
     #[test]
@@ -4709,202 +3610,6 @@ mod tests {
     // --- dep_satisfiable (rich/boolean deps) ---
 
     #[test]
-    fn dep_satisfiable_if_condition_present_checks_consequent() {
-        // The plasma-settings case: pulseaudio IS available, so the
-        // consequent (both modules) is required — and both are present.
-        let dep = "((pulseaudio-module-gsettings and sound-theme-freedesktop) if pulseaudio)";
-        let all = |_: &str| true;
-        assert!(dep_satisfiable(dep, &all));
-        // pulseaudio present, but a consequent capability missing → broken.
-        let missing_module = |c: &str| c != "sound-theme-freedesktop";
-        assert!(!dep_satisfiable(dep, &missing_module));
-        // pulseaudio absent → the requirement doesn't apply → satisfied,
-        // even though the modules aren't available.
-        let only_modules_absent = |c: &str| c == "irrelevant";
-        assert!(dep_satisfiable(dep, &only_modules_absent));
-    }
-
-    #[test]
-    fn dep_satisfiable_or_needs_any() {
-        let dep = "(foo or bar)";
-        assert!(dep_satisfiable(dep, &|c: &str| c == "bar")); // one is enough
-        assert!(!dep_satisfiable(dep, &|_: &str| false)); // neither
-    }
-
-    #[test]
-    fn dep_satisfiable_and_needs_all() {
-        let dep = "(foo and bar)";
-        assert!(dep_satisfiable(dep, &|_: &str| true));
-        assert!(!dep_satisfiable(dep, &|c: &str| c == "foo")); // bar missing
-    }
-
-    #[test]
-    fn dep_satisfiable_unless_waives_when_condition_present() {
-        let dep = "(foo unless bar)";
-        // bar present → foo not required → satisfied even if foo absent.
-        assert!(dep_satisfiable(dep, &|c: &str| c == "bar"));
-        // bar absent → foo required.
-        assert!(!dep_satisfiable(dep, &|_: &str| false));
-        assert!(dep_satisfiable(dep, &|c: &str| c == "foo"));
-    }
-
-    /// A repository where one capability has several providers at
-    /// different versions, as f44 has for `crate(webpki-roots)`.
-    struct CompatRepo;
-
-    impl RepoQuery for CompatRepo {
-        fn repolist(&self) -> Result<Vec<String>, String> {
-            Ok(vec!["fixture".to_string()])
-        }
-        fn src_nvrs(&self, _: &[String]) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn subpkgs_names(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn subpkgs_nvrs(&self, _: &str) -> Result<Vec<(String, String, String)>, String> {
-            Ok(vec![])
-        }
-        fn pkgs_source_vr(&self, _: &[&str]) -> Result<Vec<(String, String)>, String> {
-            Ok(vec![])
-        }
-        fn subpkgs_provides(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn pkg_provides(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn provides_of_provider(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn pkg_requires(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn subpkgs_requires(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn src_requires(&self, _: &str) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        fn whatrequires(&self, _: &[String]) -> Result<Vec<String>, String> {
-            Ok(vec![])
-        }
-        // What `fedrq pkgs -P -S -F source_name <dep>` answers on f44.
-        fn resolve_to_source(&self, dep: &str) -> Result<Vec<String>, String> {
-            Ok(match dep.trim() {
-                "crate(webpki-roots) = 0.26.11" => vec!["rust-webpki-roots0.26".to_string()],
-                "crate(webpki-roots) = 0.25.4" => vec!["rust-webpki-roots0.25".to_string()],
-                // The updated package itself, and nothing else.
-                "crate(webpki-roots) = 1.0.9" => vec!["rust-webpki-roots".to_string()],
-                _ => vec![],
-            })
-        }
-    }
-
-    #[test]
-    fn a_requirement_met_by_a_compat_package_is_not_a_break() {
-        // FEDORA-2026-8eeffa4c43: rust-webpki-roots goes 1.0.9 -> 1.0.10,
-        // and rust-webpki-roots0.26 requires crate(webpki-roots) = 0.26.11
-        // which it provides itself. The capability's *name* changed, so
-        // the in-update check alone calls it broken.
-        let updated: BTreeSet<&str> = ["rust-webpki-roots"].into();
-        assert!(
-            satisfied_outside_update("crate(webpki-roots) = 0.26.11", &CompatRepo, &updated),
-            "the compat package still provides it"
-        );
-    }
-
-    #[test]
-    fn a_requirement_met_only_by_the_updated_package_is_still_a_break() {
-        // The guard must not excuse everything: when the one source
-        // providing a capability is the one being updated past it,
-        // there is nothing else to fall back on.
-        let updated: BTreeSet<&str> = ["rust-webpki-roots"].into();
-        assert!(
-            !satisfied_outside_update("crate(webpki-roots) = 1.0.9", &CompatRepo, &updated),
-            "only the updated package provides this"
-        );
-        // And a capability nothing provides is not rescued either.
-        assert!(!satisfied_outside_update(
-            "crate(webpki-roots) = 9.9.9",
-            &CompatRepo,
-            &updated
-        ));
-    }
-
-    #[test]
-    fn requirement_survives_update_version_aware() {
-        // The bear regression: its SRPM BuildRequires pins ctor to
-        // 0.6.x with a rich constraint; the update moves ctor to 1.x.
-        let bear_br = "(crate(ctor/default) >= 0.6.0 with crate(ctor/default) < 0.7.0~)";
-        let changed: BTreeSet<String> = ["crate(ctor/default)".to_string()].into();
-        let mut new_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        new_by_name.insert(
-            "crate(ctor/default)".to_string(),
-            vec!["crate(ctor/default) = 1.0.8".to_string()],
-        );
-        assert!(!requirement_survives_update(
-            bear_br,
-            &changed,
-            &new_by_name
-        ));
-
-        // A compatible bump (0.6.5) still satisfies the pin.
-        new_by_name.insert(
-            "crate(ctor/default)".to_string(),
-            vec!["crate(ctor/default) = 0.6.5".to_string()],
-        );
-        assert!(requirement_survives_update(bear_br, &changed, &new_by_name));
-
-        // A plain versioned require against the new version.
-        assert!(requirement_survives_update(
-            "crate(ctor/default) >= 0.6.0",
-            &changed,
-            &new_by_name
-        ));
-        assert!(!requirement_survives_update(
-            "crate(ctor/default) >= 2.0.0",
-            &changed,
-            &new_by_name
-        ));
-
-        // A removed provide breaks even an unversioned require...
-        let removed: BTreeSet<String> = ["libfoo.so.1()(64bit)".to_string()].into();
-        assert!(!requirement_survives_update(
-            "libfoo.so.1()(64bit)",
-            &removed,
-            &BTreeMap::new()
-        ));
-        // ...while capabilities the update never touches survive.
-        assert!(requirement_survives_update(
-            "libc.so.6(GLIBC_2.34)(64bit)",
-            &changed,
-            &new_by_name
-        ));
-        // An unversioned new provide satisfies any constraint.
-        let mut unversioned: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        unversioned.insert("foo".to_string(), vec!["foo".to_string()]);
-        assert!(requirement_survives_update(
-            "foo >= 99",
-            &changed,
-            &unversioned
-        ));
-    }
-
-    #[test]
-    fn provide_version_extraction() {
-        assert_eq!(
-            provide_version("crate(ctor/default) = 1.0.8"),
-            Some("1.0.8")
-        );
-        assert_eq!(
-            provide_version("tor = 0.4.9.5-1.el9"),
-            Some("0.4.9.5-1.el9")
-        );
-        assert_eq!(provide_version("libthing.so.1()(64bit)"), None);
-    }
-
-    #[test]
     fn render_report_splits_fti_and_ftbfs() {
         let mut result = broken("crate(ctor/default)");
         result.issues[0].kind = BreakKind::Ftbfs;
@@ -5025,123 +3730,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dep_satisfiable_plain_dep_checks_capability() {
-        // The resolver receives the whole leaf term, version
-        // constraint included; name-level resolvers strip it with
-        // leaf_cap (as check_update_installability does).
-        assert!(dep_satisfiable("bash >= 5.0", &|t: &str| leaf_cap(t) == "bash"));
-        assert!(!dep_satisfiable("missing-cap", &|_: &str| false));
-        // A plain lib cap with parens in the name resolves as one cap.
-        assert!(dep_satisfiable(
-            "libc.so.6(GLIBC_2.34)(64bit)",
-            &|c: &str| c == "libc.so.6(GLIBC_2.34)(64bit)"
-        ));
-    }
-
     // --- extract_capability_names ---
 
-    #[test]
-    fn extract_capability_names_strips_inner_group_close_paren() {
-        // Regression: the close paren of an inner rich-dep group must
-        // not stick to the capability name (the plasma-settings bug —
-        // `sound-theme-freedesktop)` never resolved).
-        let caps = extract_capability_names(
-            "((pulseaudio-module-gsettings and sound-theme-freedesktop) if pulseaudio)",
-        );
-        assert!(caps.contains(&"pulseaudio-module-gsettings".to_string()));
-        assert!(caps.contains(&"sound-theme-freedesktop".to_string()));
-        assert!(caps.contains(&"pulseaudio".to_string()));
-        assert!(!caps.iter().any(|c| c.ends_with(')') && !c.contains('(')));
-    }
-
-    #[test]
-    fn extract_capability_names_keeps_paren_in_lib_caps() {
-        // The trailing ')' on these caps is part of the name —
-        // dropping it produces a corrupted cap that fedrq can't
-        // resolve, surfacing as a false-positive installability
-        // issue for every system library.
-        assert_eq!(
-            extract_capability_names("libc.so.6(GLIBC_2.34)(64bit)"),
-            vec!["libc.so.6(GLIBC_2.34)(64bit)".to_string()]
-        );
-        assert_eq!(
-            extract_capability_names("ld-linux-aarch64.so.1()(64bit)"),
-            vec!["ld-linux-aarch64.so.1()(64bit)".to_string()]
-        );
-        assert_eq!(
-            extract_capability_names("rtld(GNU_HASH)"),
-            vec!["rtld(GNU_HASH)".to_string()]
-        );
-        assert_eq!(
-            extract_capability_names("nginx(abi)"),
-            vec!["nginx(abi)".to_string()]
-        );
-    }
-
-    #[test]
-    fn extract_capability_names_strips_outer_rich_dep_parens() {
-        // A true rich/boolean dep wrapped in `(...)` should have
-        // those wrapping parens stripped, but the inner cap
-        // names with their own parens stay intact.
-        let caps = extract_capability_names("(crate(foo) >= 1.0 with crate(foo) < 2.0~)");
-        assert!(caps.contains(&"crate(foo)".to_string()));
-        assert!(!caps.iter().any(|c| c.contains(">=") || c.contains("<")));
-    }
-
-    #[test]
-    fn extract_capability_names_drops_version_operators() {
-        let caps = extract_capability_names("nginx(abi) = 2:1.30.0-1.fc44");
-        assert_eq!(caps, vec!["nginx(abi)".to_string()]);
-    }
-
     // --- compare_provides ---
-
-    #[test]
-    fn compare_provides_updated() {
-        let old: BTreeSet<String> = ["tor = 0.4.9.5-1.el9".to_string()].into();
-        let new: BTreeSet<String> = ["tor = 0.4.9.6-1.el9".to_string()].into();
-        let changed = compare_provides(&old, &new);
-        assert_eq!(changed.len(), 1);
-        assert!(changed[0].is_updated());
-        assert_eq!(changed[0].new.as_deref(), Some("tor = 0.4.9.6-1.el9"));
-    }
-
-    #[test]
-    fn compare_provides_removed() {
-        let old: BTreeSet<String> = ["libfoo.so.1()(64bit)".to_string()].into();
-        let new: BTreeSet<String> = BTreeSet::new();
-        let changed = compare_provides(&old, &new);
-        assert_eq!(changed.len(), 1);
-        assert!(!changed[0].is_updated());
-        assert!(changed[0].new.is_none());
-    }
-
-    #[test]
-    fn compare_provides_unchanged() {
-        let old: BTreeSet<String> = ["bash".to_string()].into();
-        let new: BTreeSet<String> = ["bash".to_string()].into();
-        let changed = compare_provides(&old, &new);
-        assert!(changed.is_empty());
-    }
-
-    #[test]
-    fn compare_provides_credits_compat_package_in_same_update() {
-        // const-oid 0.9 -> 0.10 drops crate(const-oid/std), but the
-        // same update introduces the compat package rust-const-oid0.9
-        // which still ships it. The callers union provides across
-        // all packages in the update on both sides, so the provide
-        // must come out unchanged — not "removed" (the bug behind
-        // the wrong FEDORA-EPEL-2026-b89b964abe report).
-        let old: BTreeSet<String> = ["crate(const-oid/std) = 0.9.6".to_string()].into();
-        let new: BTreeSet<String> = [
-            "crate(const-oid) = 0.10.2".to_string(),
-            // From the compat package, same version string as old.
-            "crate(const-oid/std) = 0.9.6".to_string(),
-        ]
-        .into();
-        assert!(compare_provides(&old, &new).is_empty());
-    }
 
     // --- testing_has_update_nvrs ---
 
@@ -5987,6 +4578,76 @@ mod tests {
             skip_reason: None,
             reverse_deps: BTreeMap::from([("kpat".to_string(), result)]),
         }
+    }
+
+    /// Compare `actual` with the golden file `name` under
+    /// `tests/golden/`, or write it there with `UPDATE_GOLDEN=1`. These
+    /// pin what check-update prints and posts byte for byte, so moving
+    /// its engine and renderer elsewhere is shown to change nothing.
+    fn golden(name: &str, actual: &str) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden")
+            .join(name);
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, actual).unwrap();
+            return;
+        }
+        let expected = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{}: {e}; run with UPDATE_GOLDEN=1", path.display()));
+        assert_eq!(actual, expected, "{} differs", path.display());
+    }
+
+    #[test]
+    fn the_report_stays_as_it_was_rendered() {
+        let report = full_report();
+        golden("full-report.md", &render_report(&report, false));
+        golden("full-report-detailed.md", &render_report(&report, true));
+        golden(
+            "full-report.json",
+            &serde_json::to_string_pretty(&report).unwrap(),
+        );
+        golden(
+            "full-report-comment.md",
+            &crate::karma::compose_comment(
+                &render_report(&report, false),
+                Some("Looks good."),
+                "ebranch check-update epel10.4-build-side-152994",
+            ),
+        );
+        let skips = [
+            (
+                "skip-testing-lag.md",
+                SkipReason::TestingLag {
+                    expected: vec!["iptstate-2.3.0-1.fc43".to_string()],
+                },
+            ),
+            (
+                "skip-epel10-testing.md",
+                SkipReason::Epel10TestingUnsupported,
+            ),
+            (
+                "skip-no-source.md",
+                SkipReason::NoSource {
+                    bodhi_status: Some("pending".to_string()),
+                },
+            ),
+        ];
+        for (name, skip) in skips {
+            golden(name, &render_report(&skip_report("f43", skip), false));
+        }
+        let mut grouped = full_report();
+        grouped.changes = vec![
+            change("a", Some("6.7.0-1.fc43"), "6.7.1-1.fc43"),
+            change("b", Some("6.7.0-1.fc43"), "6.7.1-1.fc43"),
+            change("newpkg", None, "1.0-1.fc43"),
+        ];
+        grouped.not_newest = vec![NotNewest {
+            nvr: "libfoo-2.0-1.el10".to_string(),
+            target_nvr: "libfoo-2.1-1.el10".to_string(),
+            tag: "epel10.4-testing-candidate".to_string(),
+        }];
+        golden("grouped-not-newest.md", &render_report(&grouped, true));
     }
 
     #[test]

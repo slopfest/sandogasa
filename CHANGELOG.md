@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### New crate: sandogasa-depcheck
+
+ebranch `check-update`'s dependency check, which finds the Provides an
+update changes, the Requires of its own packages that no longer
+resolve, and the reverse dependencies it would leave failing to install
+(FTI) or to build (FTBFS), lived inside ebranch, so cbspkg's check of
+CBS builds before promotion had to be written again, more thinly. The
+check now lives in the sandogasa-depcheck crate, with its rich
+dependency evaluator and the report types, behind a `RepoQuery` trait
+for the repositories it reads. ebranch uses it unchanged: golden tests
+pin `check-update`'s report, its JSON and its Bodhi comment byte for
+byte (Refs #157).
+
 ### cbspkg tells a tracking issue about builds older than it asks for (breaking)
 
 Promoting a perf build on 2026-11-18 posted nothing on its tracking

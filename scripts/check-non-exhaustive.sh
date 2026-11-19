@@ -14,7 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-EXEMPT='sandogasa-closure sandogasa-inventory'
+EXEMPT='sandogasa-closure sandogasa-depcheck sandogasa-inventory'
 
 status=0
 for crate in crates/*/; do

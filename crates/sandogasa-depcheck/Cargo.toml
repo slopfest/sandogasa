@@ -1,0 +1,21 @@
+[package]
+name = "sandogasa-depcheck"
+description = "Check what an RPM update does to the packages that depend on it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+rayon = { workspace = true }
+sandogasa-cli = { workspace = true }
+sandogasa-depfilter = { workspace = true }
+sandogasa-fedrq = { workspace = true }
+sandogasa-rpmvercmp = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

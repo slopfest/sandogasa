@@ -440,25 +440,7 @@ pub fn base_branch_for(
     None
 }
 
-/// Split a plain dep string into its capability and optional version
-/// constraint (`"python3-setuptools >= 77"` → `("python3-setuptools",
-/// Some((">=", "77")))`). Returns `None` for rich (boolean) deps and
-/// anything else that isn't the `name [op version]` shape — those keep
-/// the pre-guard behavior.
-pub(crate) fn parse_versioned_dep(dep: &str) -> Option<(&str, Option<(&str, &str)>)> {
-    let dep = dep.trim();
-    if dep.starts_with('(') {
-        return None;
-    }
-    let parts: Vec<&str> = dep.split_whitespace().collect();
-    match parts.as_slice() {
-        [cap] => Some((cap, None)),
-        [cap, op, ver] if matches!(*op, "<" | ">" | "<=" | ">=" | "=") => {
-            Some((cap, Some((op, ver))))
-        }
-        _ => None,
-    }
-}
+pub(crate) use sandogasa_depcheck::rich::parse_versioned_dep;
 
 /// RPM constraint evaluation, re-exported so this module's callers
 /// and tests keep the shorter name.

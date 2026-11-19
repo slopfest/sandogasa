@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use sandogasa_fedrq::PkgInfo;
 use serde::Serialize;
 
-use crate::arrival::{Arrival, ArrivalNote, arrival, day_of};
 use crate::check_update::{BodhiApi, BodhiQuery, KojiCli, KojiQuery};
+use sandogasa_depcheck::arrival::{Arrival, ArrivalNote, arrival, day_of};
 
 /// What to plan and how to print it.
 pub struct Options {
@@ -3818,22 +3818,22 @@ mod tests {
             &self,
             target: &str,
             packages: &[String],
-        ) -> Vec<crate::arrival::PackageHistory> {
+        ) -> Vec<sandogasa_depcheck::arrival::PackageHistory> {
             assert_eq!(target, "f46-updates-candidate");
             packages
                 .iter()
                 .map(|p| match p.as_str() {
                     // First listed 2026-11-05.
-                    "osmo" => crate::arrival::PackageHistory {
+                    "osmo" => sandogasa_depcheck::arrival::PackageHistory {
                         first_listed: Some(1_793_896_312.3),
                         latest: None,
                     },
                     // Listed for years, rebuilt 2026-11-06.
-                    "kdepimlibs" => crate::arrival::PackageHistory {
+                    "kdepimlibs" => sandogasa_depcheck::arrival::PackageHistory {
                         first_listed: Some(1_185_276_321.6),
                         latest: Some(("kdepimlibs-4.14.10-50.fc46".into(), Some(1_793_959_200.5))),
                     },
-                    _ => crate::arrival::PackageHistory {
+                    _ => sandogasa_depcheck::arrival::PackageHistory {
                         first_listed: Some(1_185_276_321.6),
                         latest: Some(("x-1-1.fc46".into(), Some(1_786_000_000.0))),
                     },

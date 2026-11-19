@@ -1,0 +1,57 @@
+{
+  "input": "epel10.4-build-side-152994",
+  "branch": "c10s",
+  "dist_branch": "epel10.4",
+  "repo": "@epel",
+  "updated_packages": [
+    "libfoo",
+    "widget"
+  ],
+  "changes": [
+    {
+      "package": "libfoo",
+      "old": "1.2-3.el10",
+      "new": "2.0-1.el10"
+    },
+    {
+      "package": "widget",
+      "new": "1.0-1.el10"
+    }
+  ],
+  "full_analysis": true,
+  "changed_provides": [
+    {
+      "old": "libfoo.so.1",
+      "new": "libfoo.so.2"
+    },
+    {
+      "old": "libfoo-legacy.so.0",
+      "new": null
+    }
+  ],
+  "installability_issues": [
+    {
+      "package": "plasma-settings",
+      "dep": "libfoo.so.1"
+    }
+  ],
+  "stale_side_tag": [
+    {
+      "package": "widget",
+      "expected_nvr": "widget-1.0-1.el10",
+      "actual_vr": "0.9-1.el10"
+    }
+  ],
+  "reverse_deps": {
+    "kpat": {
+      "status": "broken",
+      "issues": [
+        {
+          "dep": "needs",
+          "changed_provide": "libfoo.so.1",
+          "kind": "fti"
+        }
+      ]
+    }
+  }
+}

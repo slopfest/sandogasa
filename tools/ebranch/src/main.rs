@@ -5,7 +5,6 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use sandogasa_bodhi::models::UpdateSource;
 
-mod arrival;
 mod branch_request;
 mod bundled;
 mod check_crate;

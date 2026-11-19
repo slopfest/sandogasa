@@ -487,6 +487,7 @@ dependencies = [
  "sandogasa-config",
  "sandogasa-copr",
  "sandogasa-cve",
+ "sandogasa-depcheck",
  "sandogasa-depfilter",
  "sandogasa-distgit",
  "sandogasa-fedrq",
@@ -2101,6 +2102,20 @@ dependencies = [
  "tokio",
  "version-compare",
  "wiremock",
+]
+
+[[package]]
+name = "sandogasa-depcheck"
+version = "0.28.2"
+dependencies = [
+ "chrono",
+ "rayon",
+ "sandogasa-cli",
+ "sandogasa-depfilter",
+ "sandogasa-fedrq",
+ "sandogasa-rpmvercmp",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
