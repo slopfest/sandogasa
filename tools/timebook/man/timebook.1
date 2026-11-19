@@ -21,7 +21,7 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 Print version
 .SH COMMANDS
 .SS timebook cancel
-\fBtimebook cancel\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIENTRY\fR> <\fIDATES\fR>
+\fBtimebook cancel\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-\-meeting\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICALENDAR|ENTRY\fR> <\fIDATES\fR>
 .PP
 Cancel occurrences of one of your own meetings
 .PP
@@ -33,14 +33,17 @@ Log in and list the occurrences, but cancel nothing
 \fB\-\-json\fR
 Print JSON instead of text
 .TP
+\fB\-\-meeting\fR \fI<TITLE>\fR
+Part of the title of the meeting meant, in a calendar with several
+.TP
 \fB\-y\fR, \fB\-\-yes\fR
 Cancel without asking
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIENTRY\fR>
-The meeting: the id or page of any of its entries
+<\fICALENDAR|ENTRY\fR>
+The meeting\*(Aqs calendar, or the id or page of one of its entries
 .TP
 <\fIDATES\fR>
 The days to cancel (YYYY\-MM\-DD, the meeting\*(Aqs own date)
@@ -76,7 +79,7 @@ The room: meeting, meeting\-1, or any name of it
 <\fIAT\fR>
 When the first one starts: YYYY\-MM\-DD HH:MM, in \-\-tz
 .SS timebook edit
-\fBtimebook edit\fR [\fB\-\-json\fR] [\fB\-\-location\fR] [\fB\-\-note\fR] [\fB\-\-title\fR] [\fB\-\-until\fR] [\fB\-\-one\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIENTRY\fR>
+\fBtimebook edit\fR [\fB\-\-json\fR] [\fB\-\-location\fR] [\fB\-\-note\fR] [\fB\-\-title\fR] [\fB\-\-until\fR] [\fB\-\-meeting\fR] [\fB\-\-one\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICALENDAR|ENTRY\fR>
 .PP
 Change one of your own calendar entries
 .PP
@@ -88,8 +91,8 @@ Print JSON instead of text
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
-<\fIENTRY\fR>
-The entry: its id, or its page (.../meeting/<id>/)
+<\fICALENDAR|ENTRY\fR>
+The entry: its id or page (.../meeting/<id>/), or its meeting\*(Aqs calendar, for the entry of its next occurrence
 .SH CHANGES
 .TP
 \fB\-\-location\fR \fI<LOCATION>\fR
@@ -104,6 +107,9 @@ Its title
 \fB\-\-until\fR \fI<UNTIL>\fR
 The last day a series repeats on (YYYY\-MM\-DD)
 .SH SELECTION
+.TP
+\fB\-\-meeting\fR \fI<TITLE>\fR
+Part of the title of the meeting meant, in a calendar with several
 .TP
 \fB\-\-one\fR
 Change only the next occurrence of a series

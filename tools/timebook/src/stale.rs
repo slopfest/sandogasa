@@ -15,6 +15,7 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, U
 use sandogasa_fedocal::{Client, Meeting, MeetingQuery};
 
 use crate::book::RoomCheck;
+use crate::pick::shell_word;
 use serde::Serialize;
 
 /// How far from an occurrence's start minutes may begin and still count
@@ -630,10 +631,9 @@ pub fn describe(
                     if !r.missed.is_empty() {
                         let days: Vec<String> = r.missed.iter().map(|d| d.to_string()).collect();
                         out.push_str(&format!(
-                            "    no minutes on {}; if not held, the owners can take them off with\n      timebook cancel {} {}\n",
+                            "    no minutes on {}; if not held, the owners can take them off with\n      {}\n",
                             days.join(", "),
-                            r.series.meeting_id,
-                            days.join(" ")
+                            cancel_command(&r.series, &days)
                         ));
                     }
                     if !r.elsewhere.is_empty() {
@@ -817,6 +817,18 @@ fn up_to(series: Vec<Series>, cutoff: DateTime<Utc>) -> Vec<Series> {
 fn local_day(s: &Series, at: DateTime<Utc>) -> Option<NaiveDate> {
     let tz: chrono_tz::Tz = s.timezone.parse().ok()?;
     Some(at.with_timezone(&tz).date_naive())
+}
+
+/// The `timebook cancel` command for `days` of `s`, by its calendar
+/// and title: the calendar may hold other meetings on those days, one-off
+/// ones included.
+fn cancel_command(s: &Series, days: &[String]) -> String {
+    format!(
+        "timebook cancel {} --meeting {} {}",
+        shell_word(&s.calendar),
+        shell_word(s.name.trim()),
+        days.join(" ")
+    )
 }
 
 /// How far apart two instants are in the week, in minutes, whatever the
@@ -1274,6 +1286,16 @@ mod tests {
     }
 
     #[test]
+    fn the_cancel_command_names_the_calendar_and_the_title() {
+        let days = ["2026-11-11".to_string(), "2026-11-18".to_string()];
+        let r = report(Verdict::Held, 1, &[]);
+        assert_eq!(
+            cancel_command(&r.series, &days),
+            "timebook cancel SIGs --meeting 'Some SIG' 2026-11-11 2026-11-18"
+        );
+    }
+
+    #[test]
     fn the_report_reads_as_text_by_verdict() {
         let mut held = report(Verdict::Held, 2, &[]);
         held.elsewhere = vec!["meeting-1".into()];
@@ -1332,7 +1354,7 @@ mod tests {
             "    searched meetbot for: sigs, some-sig\n    owners: a (seen 2026-11-01), b (not on Discourse), c (Discourse lookup failed)\n",
             "\nVideo calls, which meetbot does not log (1):\n  Some SIG (SIGs [shared calendar]): Wed 16:00 UTC, no location,",
             "\nHeld (1):\n",
-            "    held 2 of 2, last https://meetbot/x\n    no minutes on 2026-11-11, 2026-11-18; if not held, the owners can take them off with\n      timebook cancel 1 2026-11-11 2026-11-18\n    minutes are in meeting-1, not the room booked\n",
+            "    held 2 of 2, last https://meetbot/x\n    no minutes on 2026-11-11, 2026-11-18; if not held, the owners can take them off with\n      timebook cancel SIGs --meeting 'Some SIG' 2026-11-11 2026-11-18\n    minutes are in meeting-1, not the room booked\n",
             "Stopped at 2025-12-31, fedocal's old default end for a series without one (3):\n",
             "    last minutes on 2026-06-11 (https://meetbot/z), none in the period\n",
             "    still held: minutes on 2026-11-04 (https://meetbot/y); its entry needs a new end\n",

@@ -19,28 +19,31 @@ clashes with; `timebook find AT` does the same for every room, the
 free ones first; `timebook rooms` lists what each room holds in a
 period.
 
-`timebook stale` checks whether the recurring meetings of the last
-weeks still take place, from meetbot's minutes (searched by topic,
-matched by time and room), with the owners' last activity on Discourse
-for those without minutes; it points out minutes held in another room
-than the one booked, and series that stopped at fedocal's old default
-end of 2025-12-31 but still have minutes. When no room is free for
-every meeting (or with `--suggest`, which `check` takes too), `find`
-uses the same check to list as likely free a room whose meetings have
-had no minutes for any occurrence in 12 weeks, with the evidence; a
-meeting whose meetbot search failed is never taken as stale. `timebook edit` changes one of your own
-entries (title, location, note, a series' last day) through its edit
-form, logging in with your Kerberos ticket, previewing each change and
-reading it back; for a recurring entry the whole series changes from
-its next occurrence (`--one`: that occurrence alone). `timebook cancel
-ENTRY DATE...` takes occurrences of one of your own meetings off the
-calendar, past or coming, finding each by the meeting's calendar and
-title (fedocal starts a series anew, as a new entry, after each
-cancelled occurrence) and checking it is gone. `stale` lists the days
-a series held otherwise has no minutes for, with the `timebook cancel`
-command for its owners, so cancelled meetings stop counting as missed
-and holding their room. Asking owners to drop
-stale entries comes next (#142).
+`timebook stale` checks whether the recurring meetings of the last weeks
+still take place, from meetbot's minutes (searched by topic, matched by
+time and room), with the owners' last activity on Discourse for those
+without minutes; it points out minutes held in another room than the one
+booked, and series that stopped at fedocal's old default end of
+2025-12-31 but still have minutes. When no room is free for every
+meeting (or with `--suggest`, which `check` takes too), `find` uses the
+same check to list as likely free a room whose meetings have had no
+minutes for any occurrence in 12 weeks, with the evidence; a meeting
+whose meetbot search failed is never taken as stale. `timebook edit`
+changes one of your own entries (title, location, note, a series' last
+day) through its edit form, logging in with your Kerberos ticket,
+previewing each change and reading it back; for a recurring entry the
+whole series changes from its next occurrence (`--one`: that occurrence
+alone). `timebook cancel CALENDAR|ENTRY DATE...` takes occurrences of
+one of your own meetings off the calendar, past or coming, finding each
+by the meeting's calendar and title (fedocal starts a series anew, as a
+new entry, after each cancelled occurrence) and checking it is gone.
+`stale` lists the days a series held otherwise has no minutes for, with
+the `timebook cancel` command for its owners, so cancelled meetings stop
+counting as missed and holding their room. `cancel` and `edit` take a
+meeting by its calendar (`timebook cancel fesco 2026-10-27`), with
+`--meeting` and part of its title when the calendar holds several, as
+well as by an entry's id or page. Asking owners to drop stale entries
+comes next (#142).
 
 sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and
 the `room` module. Its `Client::meetings` converts the answer to a

@@ -11,6 +11,7 @@ use sandogasa_fedocal::{Client, MeetingQuery};
 mod book;
 mod cancel;
 mod edit;
+mod pick;
 mod stale;
 
 use book::{Booking, RoomCheck, Slot};
@@ -51,8 +52,9 @@ enum Command {
     /// cancels one occurrence of a series by ending it the day before and
     /// starting it again, as a new entry, after it.
     Cancel {
-        /// The meeting: the id or page of any of its entries
-        entry: String,
+        /// The meeting's calendar, or the id or page of one of its entries
+        #[arg(value_name = "CALENDAR|ENTRY")]
+        target: String,
 
         /// The days to cancel (YYYY-MM-DD, the meeting's own date)
         #[arg(required = true)]
@@ -61,6 +63,10 @@ enum Command {
         /// Log in and list the occurrences, but cancel nothing
         #[arg(long)]
         dry_run: bool,
+
+        /// Part of the title of the meeting meant, in a calendar with several
+        #[arg(long, value_name = "TITLE")]
+        meeting: Option<String>,
 
         /// Cancel without asking
         #[arg(short, long)]
@@ -84,8 +90,10 @@ enum Command {
     /// earlier ones as a separate entry; --one changes that occurrence
     /// alone.
     Edit {
-        /// The entry: its id, or its page (.../meeting/<id>/)
-        entry: String,
+        /// The entry: its id or page (.../meeting/<id>/), or its meeting's
+        /// calendar, for the entry of its next occurrence
+        #[arg(value_name = "CALENDAR|ENTRY")]
+        target: String,
 
         /// Where it takes place, e.g. a room or a public video link
         #[arg(long, help_heading = "Changes")]
@@ -102,6 +110,10 @@ enum Command {
         /// The last day a series repeats on (YYYY-MM-DD)
         #[arg(long, help_heading = "Changes")]
         until: Option<NaiveDate>,
+
+        /// Part of the title of the meeting meant, in a calendar with several
+        #[arg(long, value_name = "TITLE", help_heading = "Selection")]
+        meeting: Option<String>,
 
         /// Change only the next occurrence of a series
         #[arg(long, help_heading = "Selection")]
@@ -492,7 +504,7 @@ async fn cancel_occurrences(client: &Client, args: &cancel::CancelArgs) -> Resul
 }
 
 /// `edit`: change one of your own entries.
-async fn edit_entry(args: &edit::EditArgs) -> Result<(), String> {
+async fn edit_entry(client: &Client, args: &edit::EditArgs) -> Result<(), String> {
     use std::io::IsTerminal;
     if args.json && !args.yes && !args.dry_run {
         return Err(
@@ -511,7 +523,7 @@ async fn edit_entry(args: &edit::EditArgs) -> Result<(), String> {
         sandogasa_cli::confirm(question, default_yes).map_err(|e| e.to_string())
     };
     let base = sandogasa_fedocal::DEFAULT_BASE_URL;
-    let outcome = edit::run(base, args, confirm, move || {
+    let outcome = edit::run(client, args, confirm, move || {
         sandogasa_fedocal::session::Session::kerberos(base)
     })
     .await?;
@@ -549,13 +561,15 @@ async fn main() -> ExitCode {
     let client = Client::new();
     let result = match &cli.command {
         Command::Cancel {
-            entry,
+            target,
             dates,
             dry_run,
+            meeting,
             yes,
         } => {
             let args = cancel::CancelArgs {
-                entry: entry.clone(),
+                target: target.clone(),
+                meeting: meeting.clone(),
                 dates: dates.clone(),
                 dry_run: *dry_run,
                 yes: *yes,
@@ -565,17 +579,19 @@ async fn main() -> ExitCode {
         }
         Command::Check { room, series } => check(&client, room, series, cli.json).await,
         Command::Edit {
-            entry,
+            target,
             location,
             note,
             title,
             until,
+            meeting,
             one,
             dry_run,
             yes,
         } => {
             let args = edit::EditArgs {
-                entry: entry.clone(),
+                target: target.clone(),
+                meeting: meeting.clone(),
                 title: title.clone(),
                 location: location.clone(),
                 note: note.clone(),
@@ -585,7 +601,7 @@ async fn main() -> ExitCode {
                 yes: *yes,
                 json: cli.json,
             };
-            edit_entry(&args).await
+            edit_entry(&client, &args).await
         }
         Command::Find { series } => find(&client, series, cli.json).await,
         Command::Stale { refresh, weeks } => stale(&client, *weeks, *refresh, cli.json).await,

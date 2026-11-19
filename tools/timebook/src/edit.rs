@@ -10,14 +10,25 @@
 //! separate entry, while `--one` changes that occurrence alone ("Save"),
 //! the series going on without it.
 
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate, Utc};
 use sandogasa_fedocal::session::{Changes, EntryForm, Session};
+use sandogasa_fedocal::{Client, MeetingQuery};
 use serde::Serialize;
+
+use crate::pick::Named;
+
+/// How far ahead a meeting named by its calendar is looked for: a
+/// quarter, which holds the next occurrence of a monthly meeting.
+const COMING_DAYS: i64 = 92;
 
 /// What `edit` was asked to change.
 pub struct EditArgs {
-    /// The entry: its id or its page's URL.
-    pub entry: String,
+    /// The entry: its id or its page's URL, or its meeting's calendar,
+    /// for the entry of the meeting's next occurrence.
+    pub target: String,
+    /// In a calendar with several meetings, part of the title of the one
+    /// meant.
+    pub meeting: Option<String>,
     pub title: Option<String>,
     pub location: Option<String>,
     pub note: Option<String>,
@@ -173,7 +184,7 @@ pub fn describe(form: &EntryForm, changes: &Changes, url: &str) -> String {
 /// confirm, save, and read it back. `confirm` asks at the terminal;
 /// `login` logs in (blocking).
 pub async fn run(
-    base_url: &str,
+    client: &Client,
     args: &EditArgs,
     confirm: impl Fn(&str, bool) -> Result<bool, String>,
     login: impl FnOnce() -> Result<Session, sandogasa_fedocal::Error> + Send + 'static,
@@ -185,12 +196,6 @@ pub async fn run(
             println!("{line}");
         }
     };
-    let id = entry_id(&args.entry)?;
-    let url = format!("{}/meeting/{id}/", base_url.trim_end_matches('/'));
-    let outcome = |outcome| EditOutcome {
-        outcome,
-        url: url.clone(),
-    };
     if args.title.is_none()
         && args.location.is_none()
         && args.note.is_none()
@@ -198,6 +203,41 @@ pub async fn run(
     {
         return Err("nothing to change: give --title, --location, --note or --until".into());
     }
+    let id = match crate::pick::named(&args.target)? {
+        Named::Entry(_) if args.meeting.is_some() => {
+            return Err(
+                "--meeting picks a meeting in a calendar; an entry names one already".into(),
+            );
+        }
+        Named::Entry(id) => id,
+        Named::Calendar(calendar) => {
+            let now = Utc::now();
+            let today = now.date_naive();
+            let meetings = client
+                .meetings(
+                    &MeetingQuery::default()
+                        .calendar(calendar.clone())
+                        .between(today, today + Duration::days(COMING_DAYS)),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            let when = format!("in the next {COMING_DAYS} days");
+            crate::pick::next_entry(&meetings, &calendar, args.meeting.as_deref(), now, &when)
+                .map_err(|e| {
+                    // Not found: perhaps a meeting of the past.
+                    if e.starts_with("no ") || e.starts_with("calendar ") {
+                        format!("{e} (an entry's id or page names a past one)")
+                    } else {
+                        e
+                    }
+                })?
+        }
+    };
+    let url = format!("{}/meeting/{id}/", client.base_url());
+    let outcome = |outcome| EditOutcome {
+        outcome,
+        url: url.clone(),
+    };
     eprintln!("Logging in to Fedora Calendar with your Kerberos ticket...");
     let session = tokio::task::spawn_blocking(login)
         .await
@@ -244,7 +284,8 @@ mod tests {
 
     fn args(entry: &str) -> EditArgs {
         EditArgs {
-            entry: entry.into(),
+            target: entry.into(),
+            meeting: None,
             title: None,
             location: None,
             note: None,
@@ -424,17 +465,79 @@ mod tests {
             assert!(default);
             Ok(true)
         };
-        let done = run(&server.uri(), &a, yes, fake_login(server.uri()))
-            .await
-            .unwrap();
+        let done = run(
+            &Client::with_base_url(&server.uri()),
+            &a,
+            yes,
+            fake_login(server.uri()),
+        )
+        .await
+        .unwrap();
         assert_eq!(done.outcome, "changed");
         assert_eq!(done.url, format!("{}/meeting/7/", server.uri()));
         // Now as asked: nothing to change, nothing asked.
         let asked = |_: &str, _: bool| -> Result<bool, String> { panic!("no question expected") };
-        let done = run(&server.uri(), &a, asked, fake_login(server.uri()))
+        let done = run(
+            &Client::with_base_url(&server.uri()),
+            &a,
+            asked,
+            fake_login(server.uri()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.outcome, "unchanged");
+    }
+
+    #[tokio::test]
+    async fn an_entry_is_found_by_its_calendar() {
+        let server = MockServer::start().await;
+        let coming = |id: u64, date: &str| {
+            serde_json::json!({
+                "meeting_id": id, "calendar_name": "hs", "meeting_name": "Hyperscale SIG",
+                "meeting_date": date, "meeting_date_end": date,
+                "meeting_time_start": "16:00:00", "meeting_time_stop": "17:00:00",
+                "meeting_timezone": "UTC"
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/api/meetings/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "arguments": {},
+                "meetings": [coming(7, "2099-01-14"), coming(7, "2099-01-07")]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/7/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(page("")))
+            .mount(&server)
+            .await;
+        let client = Client::with_base_url(&server.uri());
+        let asked = |_: &str, _: bool| -> Result<bool, String> { panic!("no question expected") };
+        let mut a = args("hs");
+        a.note = Some("Video on request".into());
+        a.dry_run = true;
+        let done = run(&client, &a, asked, fake_login(server.uri()))
             .await
             .unwrap();
-        assert_eq!(done.outcome, "unchanged");
+        assert_eq!(done.url, format!("{}/meeting/7/", server.uri()));
+        a.meeting = Some("eln".into());
+        let err = run(&client, &a, asked, fake_login(server.uri()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.starts_with("no meeting in `hs` in the next 92 days is titled like \"eln\"")
+                && err.ends_with("(an entry's id or page names a past one)"),
+            "{err}"
+        );
+        a.target = "7".into();
+        let err = run(&client, &a, asked, fake_login(server.uri()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.starts_with("--meeting picks a meeting in a calendar"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -455,27 +558,47 @@ mod tests {
         a.dry_run = true;
         a.json = true;
         let asked = |_: &str, _: bool| -> Result<bool, String> { panic!("no question expected") };
-        let done = run(&server.uri(), &a, asked, fake_login(server.uri()))
-            .await
-            .unwrap();
+        let done = run(
+            &Client::with_base_url(&server.uri()),
+            &a,
+            asked,
+            fake_login(server.uri()),
+        )
+        .await
+        .unwrap();
         assert_eq!(done.outcome, "dry_run");
         a.dry_run = false;
         let no = |_: &str, _: bool| Ok(false);
-        let done = run(&server.uri(), &a, no, fake_login(server.uri()))
-            .await
-            .unwrap();
+        let done = run(
+            &Client::with_base_url(&server.uri()),
+            &a,
+            no,
+            fake_login(server.uri()),
+        )
+        .await
+        .unwrap();
         assert_eq!(done.outcome, "declined");
         // Nothing asked for, or no entry named.
-        let err = run(&server.uri(), &args("7"), no, fake_login(server.uri()))
-            .await
-            .unwrap_err();
+        let err = run(
+            &Client::with_base_url(&server.uri()),
+            &args("7"),
+            no,
+            fake_login(server.uri()),
+        )
+        .await
+        .unwrap_err();
         assert!(err.starts_with("nothing to change"), "{err}");
         let mut bad = args("x");
         bad.note = Some("n".into());
         assert!(
-            run(&server.uri(), &bad, no, fake_login(server.uri()))
-                .await
-                .is_err()
+            run(
+                &Client::with_base_url(&server.uri()),
+                &bad,
+                no,
+                fake_login(server.uri())
+            )
+            .await
+            .is_err()
         );
     }
 }

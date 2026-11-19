@@ -15,12 +15,18 @@ use std::collections::BTreeSet;
 use chrono::{Duration, NaiveDate, NaiveTime};
 use sandogasa_fedocal::session::Session;
 use sandogasa_fedocal::{Client, Meeting, MeetingQuery};
+
+use crate::pick::Named;
 use serde::Serialize;
 
 /// What `cancel` was asked to do.
 pub struct CancelArgs {
-    /// The meeting: the id or page of any of its entries.
-    pub entry: String,
+    /// The meeting: its calendar, or the id or page of any of its
+    /// entries.
+    pub target: String,
+    /// In a calendar with several meetings, part of the title of the one
+    /// meant.
+    pub meeting: Option<String>,
     /// The days of the occurrences to cancel, in the meeting's own time
     /// zone.
     pub dates: Vec<NaiveDate>,
@@ -77,7 +83,7 @@ pub fn occurrence_on<'a>(
         more => {
             let ids: Vec<String> = more.iter().map(|m| m.meeting_id.to_string()).collect();
             Err(format!(
-                "more than one \"{}\" on {date} (entries {}); cancel it through its page",
+                "more than one \"{}\" on {date} (entries {}); name the one meant by its id",
                 which.name,
                 ids.join(", ")
             ))
@@ -111,40 +117,73 @@ pub async fn run(
             println!("{line}");
         }
     };
-    let id = crate::edit::entry_id(&args.entry)?;
+    let named = crate::pick::named(&args.target)?;
+    if args.meeting.is_some() && matches!(named, Named::Entry(_)) {
+        return Err("--meeting picks a meeting in a calendar; an entry names one already".into());
+    }
     let mut dates = args.dates.clone();
     dates.sort();
     dates.dedup();
     let (Some(first), Some(last)) = (dates.first().copied(), dates.last().copied()) else {
         return Err("give the days of the occurrences to cancel".into());
     };
-    eprintln!("Logging in to Fedora Calendar with your Kerberos ticket...");
-    let session = tokio::task::spawn_blocking(login)
-        .await
-        .map_err(|e| format!("the login stopped: {e}"))?
-        .map_err(|e| e.to_string())?;
-    // The meeting, by its calendar, title and time: the API does not look
-    // an entry up by its id.
-    let form = session.entry(id).await.map_err(|e| e.to_string())?;
-    let which = Which {
-        calendar: form.get("calendar_name").unwrap_or("").to_string(),
-        name: form.get("meeting_name").unwrap_or("").to_string(),
-        at: form
-            .get("meeting_time_start")
-            .and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok()),
-    };
     // A day either side: dates are the meeting's own, the API's UTC.
-    let read = || async {
+    let read = |calendar: String| async move {
         client
             .meetings(
                 &MeetingQuery::default()
-                    .calendar(which.calendar.clone())
+                    .calendar(calendar)
                     .between(first - Duration::days(1), last + Duration::days(1)),
             )
             .await
             .map_err(|e| e.to_string())
     };
-    let meetings = read().await?;
+    // A calendar is read before logging in, so a meeting it does not
+    // name clearly costs no login.
+    // The meeting and its occurrences, or the entry to read them from.
+    let picked: Result<(Which, Vec<Meeting>), u64> = match &named {
+        Named::Calendar(calendar) => {
+            let meetings = read(calendar.clone()).await?;
+            let on_dates: Vec<Meeting> = meetings
+                .iter()
+                .filter(|m| m.local_date().is_some_and(|d| dates.contains(&d)))
+                .cloned()
+                .collect();
+            let when = format!("on {}", list_dates(&dates));
+            let name = crate::pick::title(&on_dates, calendar, args.meeting.as_deref(), &when)?;
+            Ok((
+                Which {
+                    calendar: calendar.clone(),
+                    name,
+                    at: None,
+                },
+                meetings,
+            ))
+        }
+        Named::Entry(id) => Err(*id),
+    };
+    eprintln!("Logging in to Fedora Calendar with your Kerberos ticket...");
+    let session = tokio::task::spawn_blocking(login)
+        .await
+        .map_err(|e| format!("the login stopped: {e}"))?
+        .map_err(|e| e.to_string())?;
+    let (which, meetings) = match picked {
+        Ok(picked) => picked,
+        Err(id) => {
+            // The meeting, by its calendar, title and time: the API does
+            // not look an entry up by its id.
+            let form = session.entry(id).await.map_err(|e| e.to_string())?;
+            let which = Which {
+                calendar: form.get("calendar_name").unwrap_or("").to_string(),
+                name: form.get("meeting_name").unwrap_or("").to_string(),
+                at: form
+                    .get("meeting_time_start")
+                    .and_then(|t| NaiveTime::parse_from_str(t, "%H:%M").ok()),
+            };
+            let meetings = read(which.calendar.clone()).await?;
+            (which, meetings)
+        }
+    };
     let mut found: Vec<&Meeting> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
     for date in &dates {
@@ -213,7 +252,7 @@ pub async fn run(
                 &cancelled,
             )
         })?;
-        current = read().await.map_err(|e| {
+        current = read(which.calendar.clone()).await.map_err(|e| {
             failed(
                 format!("cancelled {date}, but cannot read the calendar back: {e}"),
                 &cancelled,
@@ -412,7 +451,8 @@ mod tests {
 
     fn args(dates: &[&str]) -> CancelArgs {
         CancelArgs {
-            entry: "11".into(),
+            target: "11".into(),
+            meeting: None,
             dates: dates.iter().map(|d| day(d)).collect(),
             dry_run: false,
             yes: false,
@@ -447,6 +487,40 @@ mod tests {
             .map(|o| o["meeting_date"].as_str().unwrap().to_string())
             .collect();
         assert_eq!(left, ["2026-11-11"]);
+    }
+
+    #[tokio::test]
+    async fn a_meeting_is_named_by_its_calendar() {
+        let (server, calendar) = fedocal(true).await;
+        let client = Client::with_base_url(&server.uri());
+        let yes = |_: &str, _: bool| Ok(true);
+        let mut a = args(&["2026-11-11"]);
+        a.target = "hs".into();
+        a.meeting = Some("hyperscale".into());
+        let done = run(&client, &a, yes, fake_login(server.uri()))
+            .await
+            .unwrap();
+        assert_eq!(done.cancelled, [day("2026-11-11")]);
+        assert_eq!(calendar.0.lock().unwrap().len(), 2);
+        // A title the calendar does not have: found out before logging
+        // in, which would panic here.
+        a.meeting = Some("eln".into());
+        a.dates = vec![day("2026-11-04")];
+        let no_login = || -> Result<Session, sandogasa_fedocal::Error> { panic!("no login") };
+        let err = run(&client, &a, yes, no_login).await.unwrap_err();
+        assert!(
+            err.starts_with("no meeting in `hs` on 2026-11-04 is titled like \"eln\""),
+            "{err}"
+        );
+        // An entry names its meeting already.
+        a.target = "11".into();
+        let err = run(&client, &a, yes, fake_login(server.uri()))
+            .await
+            .unwrap_err();
+        assert!(
+            err.starts_with("--meeting picks a meeting in a calendar"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

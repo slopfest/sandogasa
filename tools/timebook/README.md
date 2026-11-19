@@ -21,14 +21,15 @@ cargo install timebook
 
 ### cancel
 
-Takes occurrences of one of your own meetings off the calendar, past
-or coming: a meeting that was not held, or will not be, so the
-calendar says what happened and the room shows as free. The meeting is
-given by the id or page of any of its entries, the days as the
-meeting's own dates.
+Takes occurrences of one of your own meetings off the calendar, past or
+coming: a meeting that was not held, or will not be, so the calendar
+says what happened and the room shows as free. The meeting is given by
+its calendar, with `--meeting` and part of its title when the calendar
+holds other meetings on those days, or by the id or page of any of its
+entries; the days are the meeting's own dates.
 
 ```
-$ timebook cancel 11067 2026-10-21 2026-11-04
+$ timebook cancel centos-sig-hyperscale --meeting "CentOS Hyperscale SIG" 2026-10-21 2026-11-04
 To cancel in centos-sig-hyperscale, "CentOS Hyperscale SIG":
   Wed 2026-10-21 15:00 UTC (entry 11067)
   Wed 2026-11-04 16:00 UTC (entry 11067)
@@ -67,10 +68,13 @@ length (default 60, up to 1440), `--every` the days between them
 Changes one of your own entries: its title (`--title`), location
 (`--location`), description (`--note`) or, for a recurring entry, the
 last day it repeats on (`--until`). The entry is given by its id or its
-page. Fedora Calendar has no API for changing entries, so `edit` logs
-in to it as a browser would, with your Kerberos ticket (`fkinit`),
-reads the entry, shows each change before and after, saves once you
-confirm, and reads it back; everything else in the entry is kept.
+page, or by its meeting's calendar (with `--meeting` and part of its
+title when the calendar holds several), for the entry of the meeting's
+next occurrence in the coming 92 days. Fedora Calendar has no API for
+changing entries, so `edit` logs in to it as a browser would, with your
+Kerberos ticket (`fkinit`), reads the entry, shows each change before
+and after, saves once you confirm, and reads it back; everything else in
+the entry is kept.
 
 ```
 $ timebook edit https://calendar.fedoraproject.org/meeting/11171/ --location "https://meet.example/hangout"
@@ -177,7 +181,7 @@ Held (14):
   FESCo Meeting (fesco): Tue 18:00 UTC, in meeting, 12 occurrence(s)
     held 11 of 12, last https://meetbot.fedoraproject.org/...
     no minutes on 2026-10-27; if not held, the owners can take them off with
-      timebook cancel 11273 2026-10-27
+      timebook cancel fesco --meeting 'FESCo Meeting' 2026-10-27
 ...
 Stopped at 2025-12-31, fedocal's old default end for a series without one (19):
   Fedora Infra Ops Daily Standup (infrastructure): Wed 19:00 UTC, fedora-admin@irc.libera.chat, 5 occurrence(s)
