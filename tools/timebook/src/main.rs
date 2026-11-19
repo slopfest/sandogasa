@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use sandogasa_fedocal::{Client, MeetingQuery};
 
 mod book;
+mod stale;
 
 use book::{Booking, RoomCheck, Slot};
 
@@ -63,6 +64,25 @@ enum Command {
         /// First day (YYYY-MM-DD; default today)
         #[arg(long)]
         from: Option<NaiveDate>,
+    },
+
+    /// Check whether recurring meetings still take place
+    ///
+    /// Each recurring entry of the last weeks is looked for in meetbot's
+    /// minutes (by its calendar's name and its title as a topic), an
+    /// occurrence counting as held when minutes in its room start within
+    /// an hour of it. For a series without any, its owners' last activity
+    /// on Discourse is shown. Series that stopped at 2025-12-31, fedocal's
+    /// old default end for a series without one, are listed with any
+    /// minutes since: those may still be held.
+    Stale {
+        /// Ask meetbot again instead of using answers from the last day
+        #[arg(long)]
+        refresh: bool,
+
+        /// Weeks back to look (1 to 52)
+        #[arg(long, default_value_t = 12, value_parser = clap::value_parser!(i64).range(1..=52))]
+        weeks: i64,
     },
 }
 
@@ -303,6 +323,27 @@ async fn rooms(client: &Client, from: NaiveDate, days: i64, json: bool) -> Resul
     Ok(())
 }
 
+/// `stale`: recurring meetings against meetbot's minutes.
+async fn stale(client: &Client, weeks: i64, refresh: bool, json: bool) -> Result<(), String> {
+    let now = Utc::now();
+    let today = now.date_naive();
+    let (reports, dropped) =
+        stale::report(client, &stale::Sources::default(), now, weeks, refresh).await?;
+    if json {
+        let out = serde_json::json!({
+            "series": reports,
+            "stopped_at_old_default_end": dropped,
+        });
+        println!("{}", to_json(&out)?);
+        return Ok(());
+    }
+    print!(
+        "{}",
+        stale::describe(&reports, &dropped, today - Duration::weeks(weeks), today)
+    );
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     sandogasa_cli::init();
@@ -311,6 +352,7 @@ async fn main() -> ExitCode {
     let result = match &cli.command {
         Command::Check { room, series } => check(&client, room, series, cli.json).await,
         Command::Find { series } => find(&client, series, cli.json).await,
+        Command::Stale { refresh, weeks } => stale(&client, *weeks, *refresh, cli.json).await,
         Command::Rooms { days, from } => {
             let from = from.unwrap_or_else(|| Utc::now().date_naive());
             rooms(&client, from, *days, cli.json).await

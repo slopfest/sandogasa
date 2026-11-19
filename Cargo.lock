@@ -2841,10 +2841,13 @@ dependencies = [
  "clap",
  "sandogasa-build",
  "sandogasa-cli",
+ "sandogasa-discourse",
  "sandogasa-fedocal",
+ "sandogasa-meetbot",
  "serde",
  "serde_json",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]

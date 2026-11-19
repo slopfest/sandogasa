@@ -16,8 +16,13 @@ ROOM AT` says, for each meeting of a
 planned series (`--every`, `--count`, `--minutes`, `--tz`), whether the
 room is free or what it clashes with; `timebook find AT` does the same
 for every room, the free ones first; `timebook rooms` lists what each
-room holds in a period. Checking whether booked meetings still happen,
-and acting on stale ones, come next (#141, #142).
+room holds in a period. `timebook stale` checks whether the recurring
+meetings of the last weeks still take place, from meetbot's minutes
+(searched by topic, matched by time and room), with the owners' last
+activity on Discourse for those without minutes; it points out minutes
+held in another room than the one booked, and series that stopped at
+fedocal's old default end of 2025-12-31 but still have minutes. Acting
+on stale entries comes next (#142).
 
 sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and
 the `room` module. Its `Client::meetings` converts the answer to a

@@ -70,6 +70,42 @@ meeting
   ...
 ```
 
+### stale
+
+Whether the recurring meetings of the last weeks (`--weeks`, default
+12) still take place. meetbot keeps minutes by topic, so each series is
+looked for under its calendar's name and its title as a topic (`fesco`,
+`fedora-eln-sig`); an occurrence counts as held when minutes start
+within an hour of it, preferably in the room it is booked in. Series
+are grouped as held, rarely held, without minutes, and video calls
+(which meetbot does not log); minutes found in another room than the
+one booked are pointed out, and for a series without minutes the
+owners' last activity on Discourse is shown. The topics searched are
+listed, so a series filed under another topic can be checked by hand.
+
+```
+$ timebook stale
+No minutes found (14):
+  Fedora Packaging Committee (packaging): Thu 17:00 UTC, no location, 6 occurrence(s)
+    searched meetbot for: packaging, fedora-packaging-committee
+    owners: james (seen 2026-09-23), pingou (seen 2019-06-08), ...
+...
+Held (14):
+  Fedora Infrastructure (infrastructure): Thu 16:00 UTC, in meeting-3, 13 occurrence(s)
+    held 13 of 13, last https://meetbot.fedoraproject.org/...
+    minutes are in meeting, not the room booked
+...
+Stopped at 2025-12-31, fedocal's old default end for a series without one (19):
+  Fedora Infra Ops Daily Standup (infrastructure): Wed 19:00 UTC, fedora-admin@irc.libera.chat, 5 occurrence(s)
+    still held: minutes on 2026-11-18 (https://meetbot.fedoraproject.org/...); its entry needs a new end
+```
+
+The last group is series that ended at 2025-12-31, fedocal's default
+end for a series created without one until May 2026, and were not
+replaced by a new entry: those with minutes since, at their usual time,
+are still held but no longer on the calendar. meetbot's answers are
+kept for a day; `--refresh` asks again.
+
 `--json` prints any of them as JSON.
 
 ## License
