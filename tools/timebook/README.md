@@ -38,6 +38,32 @@ time across a daylight-saving change. `--minutes` sets each meeting's
 length (default 60, up to 1440), `--every` the days between them
 (default 7, up to 366) and `--count` how many (default 1, up to 520).
 
+### edit
+
+Changes one of your own entries: its title (`--title`), location
+(`--location`), description (`--note`) or, for a recurring entry, the
+last day it repeats on (`--until`). The entry is given by its id or its
+page. Fedora Calendar has no API for changing entries, so `edit` logs
+in to it as a browser would, with your Kerberos ticket (`fkinit`),
+reads the entry, shows each change before and after, saves once you
+confirm, and reads it back; everything else in the entry is kept.
+
+```
+$ timebook edit https://calendar.fedoraproject.org/meeting/11171/ --location "https://meet.example/hangout"
+Changes to https://calendar.fedoraproject.org/meeting/11171/:
+  covers:    the series from its next occurrence, 2026-12-02, on; fedocal keeps the earlier ones as a separate entry
+  location:  (none) -> "https://meet.example/hangout"
+Save these changes? [Y/n]:
+```
+
+For a recurring entry the whole series changes from its next
+occurrence on, as the calendar's "Save all" does, and the occurrences
+before it stay as they were, as a separate entry; `--one` changes the
+next occurrence alone, the series going on without it. A video
+meeting's public link as its location lets `stale` tell it is a video
+call. `--dry-run` logs in and shows the changes; `--yes` saves without
+asking, and `--json` (with either) prints the outcome.
+
 ### find
 
 The same planned meeting or series against every room, the free ones

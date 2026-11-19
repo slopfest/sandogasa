@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand};
 use sandogasa_fedocal::{Client, MeetingQuery};
 
 mod book;
+mod edit;
 mod stale;
 
 use book::{Booking, RoomCheck, Slot};
@@ -47,6 +48,47 @@ enum Command {
 
         #[command(flatten)]
         series: SeriesArgs,
+    },
+
+    /// Change one of your own calendar entries
+    ///
+    /// Logs in to Fedora Calendar with your Kerberos ticket (fkinit),
+    /// reads the entry, shows each change before and after, and saves it
+    /// once you confirm, reading it back. For a recurring entry the whole
+    /// series changes from its next occurrence on, fedocal keeping the
+    /// earlier ones as a separate entry; --one changes that occurrence
+    /// alone.
+    Edit {
+        /// The entry: its id, or its page (.../meeting/<id>/)
+        entry: String,
+
+        /// Where it takes place, e.g. a room or a public video link
+        #[arg(long, help_heading = "Changes")]
+        location: Option<String>,
+
+        /// Its description
+        #[arg(long, help_heading = "Changes")]
+        note: Option<String>,
+
+        /// Its title
+        #[arg(long, help_heading = "Changes")]
+        title: Option<String>,
+
+        /// The last day a series repeats on (YYYY-MM-DD)
+        #[arg(long, help_heading = "Changes")]
+        until: Option<NaiveDate>,
+
+        /// Change only the next occurrence of a series
+        #[arg(long, help_heading = "Selection")]
+        one: bool,
+
+        /// Log in and show the changes, but save nothing
+        #[arg(long, help_heading = "Writing")]
+        dry_run: bool,
+
+        /// Save without asking
+        #[arg(short, long, help_heading = "Writing")]
+        yes: bool,
     },
 
     /// Find the rooms free for a planned meeting or series
@@ -390,6 +432,36 @@ async fn rooms(client: &Client, from: NaiveDate, days: i64, json: bool) -> Resul
     Ok(())
 }
 
+/// `edit`: change one of your own entries.
+async fn edit_entry(args: &edit::EditArgs) -> Result<(), String> {
+    use std::io::IsTerminal;
+    if args.json && !args.yes && !args.dry_run {
+        return Err(
+            "--json prints only the outcome, so it saves without asking: \
+                    add --yes, or --dry-run"
+                .into(),
+        );
+    }
+    let at_terminal = std::io::stdin().is_terminal();
+    let confirm = |question: &str, default_yes: bool| -> Result<bool, String> {
+        if !at_terminal {
+            return Err(format!(
+                "{question} needs a terminal to answer; pass --yes to save without asking"
+            ));
+        }
+        sandogasa_cli::confirm(question, default_yes).map_err(|e| e.to_string())
+    };
+    let base = sandogasa_fedocal::DEFAULT_BASE_URL;
+    let outcome = edit::run(base, args, confirm, move || {
+        sandogasa_fedocal::session::Session::kerberos(base)
+    })
+    .await?;
+    if args.json {
+        println!("{}", to_json(&outcome)?);
+    }
+    Ok(())
+}
+
 /// `stale`: recurring meetings against meetbot's minutes.
 async fn stale(client: &Client, weeks: i64, refresh: bool, json: bool) -> Result<(), String> {
     let now = Utc::now();
@@ -418,6 +490,29 @@ async fn main() -> ExitCode {
     let client = Client::new();
     let result = match &cli.command {
         Command::Check { room, series } => check(&client, room, series, cli.json).await,
+        Command::Edit {
+            entry,
+            location,
+            note,
+            title,
+            until,
+            one,
+            dry_run,
+            yes,
+        } => {
+            let args = edit::EditArgs {
+                entry: entry.clone(),
+                title: title.clone(),
+                location: location.clone(),
+                note: note.clone(),
+                until: *until,
+                one: *one,
+                dry_run: *dry_run,
+                yes: *yes,
+                json: cli.json,
+            };
+            edit_entry(&args).await
+        }
         Command::Find { series } => find(&client, series, cli.json).await,
         Command::Stale { refresh, weeks } => stale(&client, *weeks, *refresh, cli.json).await,
         Command::Rooms { days, from } => {

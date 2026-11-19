@@ -31,10 +31,14 @@ and adding entries as a logged-in user.
   calendar, and `Session::add(entry)` fills in and submits the add form,
   CSRF token included. A refusal carries fedocal's own messages.
 - `Session::can_edit(id)` and `Session::edit(id, changes)` do the same
-  for an existing entry. fedocal replaces every field on saving, so
-  `edit` reads the edit form as a browser would send it and changes
-  only the title, days or information asked for, keeping co-managers,
-  reminders and the rest.
+  for an existing entry, and `Session::entry(id)` reads it as its edit
+  form shows it. fedocal replaces every field on saving, so `edit`
+  reads the edit form as a browser would send it and changes only the
+  title, days, information, location or series end asked for, keeping
+  co-managers, reminders and the rest. For a recurring entry,
+  `Changes::whole_series` saves the series from its next occurrence on
+  ("Save all"), fedocal keeping the earlier ones as a separate entry;
+  otherwise that occurrence alone is changed ("Save").
 
 ## Usage
 

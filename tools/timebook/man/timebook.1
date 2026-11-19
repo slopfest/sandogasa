@@ -51,6 +51,45 @@ The room: meeting, meeting\-1, or any name of it
 .TP
 <\fIAT\fR>
 When the first one starts: YYYY\-MM\-DD HH:MM, in \-\-tz
+.SS timebook edit
+\fBtimebook edit\fR [\fB\-\-json\fR] [\fB\-\-location\fR] [\fB\-\-note\fR] [\fB\-\-title\fR] [\fB\-\-until\fR] [\fB\-\-one\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIENTRY\fR>
+.PP
+Change one of your own calendar entries
+.PP
+Logs in to Fedora Calendar with your Kerberos ticket (fkinit), reads the entry, shows each change before and after, and saves it once you confirm, reading it back. For a recurring entry the whole series changes from its next occurrence on, fedocal keeping the earlier ones as a separate entry; \-\-one changes that occurrence alone.
+.TP
+\fB\-\-json\fR
+Print JSON instead of text
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIENTRY\fR>
+The entry: its id, or its page (.../meeting/<id>/)
+.SH CHANGES
+.TP
+\fB\-\-location\fR \fI<LOCATION>\fR
+Where it takes place, e.g. a room or a public video link
+.TP
+\fB\-\-note\fR \fI<NOTE>\fR
+Its description
+.TP
+\fB\-\-title\fR \fI<TITLE>\fR
+Its title
+.TP
+\fB\-\-until\fR \fI<UNTIL>\fR
+The last day a series repeats on (YYYY\-MM\-DD)
+.SH SELECTION
+.TP
+\fB\-\-one\fR
+Change only the next occurrence of a series
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Log in and show the changes, but save nothing
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Save without asking
 .SS timebook find
 \fBtimebook find\fR [\fB\-\-count\fR] [\fB\-\-json\fR] [\fB\-\-every\fR] [\fB\-\-minutes\fR] [\fB\-\-suggest\fR] [\fB\-\-tz\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIAT\fR>
 .PP

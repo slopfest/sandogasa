@@ -43,6 +43,25 @@ pub struct Changes {
     /// The first and last day it takes.
     pub days: Option<(NaiveDate, NaiveDate)>,
     pub information: Option<String>,
+    pub location: Option<String>,
+    /// For a recurring entry, the last day the series may repeat on.
+    pub until: Option<NaiveDate>,
+    /// For a recurring entry, change the series from the occurrence the
+    /// form shows (the next one) on, fedocal's "Save all", rather than
+    /// that occurrence alone ("Save"). fedocal keeps the earlier
+    /// occurrences as a separate entry.
+    pub whole_series: bool,
+}
+
+/// An entry's edit form, as a browser would send it, and the save
+/// buttons it offers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct EntryForm {
+    pub fields: Vec<(String, String)>,
+    /// The submit buttons' values: `Save`, and for a recurring entry
+    /// `Save all`.
+    pub submits: Vec<String>,
 }
 
 /// A logged-in session on a Fedora Calendar instance.
@@ -116,9 +135,28 @@ impl Changes {
         self
     }
 
+    pub fn location(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
+        self
+    }
+
+    pub fn until(mut self, until: NaiveDate) -> Self {
+        self.until = Some(until);
+        self
+    }
+
+    pub fn whole_series(mut self, whole: bool) -> Self {
+        self.whole_series = whole;
+        self
+    }
+
     /// Whether it changes nothing.
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.days.is_none() && self.information.is_none()
+        self.name.is_none()
+            && self.days.is_none()
+            && self.information.is_none()
+            && self.location.is_none()
+            && self.until.is_none()
     }
 
     /// `fields` (an edit form's, as a browser would send them) with these
@@ -142,6 +180,27 @@ impl Changes {
         if let Some(information) = &self.information {
             set("information", information.clone());
         }
+        if let Some(location) = &self.location {
+            set("meeting_location", location.clone());
+        }
+        if let Some(until) = self.until {
+            set("end_repeats", until.to_string());
+        }
+    }
+}
+
+impl EntryForm {
+    /// The value of field `name`.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Whether the entry repeats: its form offers "Save all".
+    pub fn recurring(&self) -> bool {
+        self.submits.iter().any(|v| v == "Save all")
     }
 }
 
@@ -166,21 +225,24 @@ impl Session {
                 "no Kerberos ticket; run `fkinit -u <FAS username>`".into(),
             ));
         }
-        Session::login_with(base_url, |argv| {
-            let out = std::process::Command::new(&argv[0])
-                .args(&argv[1..])
-                .output()
-                .map_err(|e| format!("cannot run curl: {e}"))?;
-            if out.status.success() {
-                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-            } else {
-                Err(format!(
-                    "curl failed ({}): {}",
-                    out.status,
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ))
-            }
-        })
+        let attempt = || {
+            Session::login_with(base_url, |argv| {
+                let out = std::process::Command::new(&argv[0])
+                    .args(&argv[1..])
+                    .output()
+                    .map_err(|e| format!("cannot run curl: {e}"))?;
+                if out.status.success() {
+                    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+                } else {
+                    Err(format!(
+                        "curl failed ({}): {}",
+                        out.status,
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ))
+                }
+            })
+        };
+        retried(attempt)
     }
 
     /// [`Session::kerberos`] with the curl run given: `run` takes the
@@ -203,7 +265,7 @@ impl Session {
         let cookies = host_cookies(&jar_text, host);
         if cookies.is_empty() || host_of(&ended_at) != host {
             return Err(Error::Login(format!(
-                "the login ended at {} without a session; is the Kerberos ticket \
+                "{TURNED_DOWN} {} without a session; is the Kerberos ticket \
                  (`klist`) for your FAS account?",
                 if ended_at.is_empty() {
                     "no page"
@@ -274,6 +336,12 @@ impl Session {
         Err(Error::Http(format!("POST {url}: HTTP {status}")))
     }
 
+    /// Entry `meeting_id` as its edit form shows it (for a recurring
+    /// entry, from its next occurrence), with the save buttons offered.
+    pub async fn entry(&self, meeting_id: u64) -> Result<EntryForm, Error> {
+        self.edit_form(meeting_id).await
+    }
+
     /// Whether the user may edit entry `meeting_id`: its edit form opens.
     /// Nothing is submitted; a refusal carries fedocal's reasons.
     pub async fn can_edit(&self, meeting_id: u64) -> Result<(), Error> {
@@ -287,8 +355,20 @@ impl Session {
     /// refusal, with fedocal's reasons.
     pub async fn edit(&self, meeting_id: u64, changes: &Changes) -> Result<(), Error> {
         let url = format!("{}/meeting/edit/{meeting_id}/", self.base_url);
-        let mut fields = self.edit_form(meeting_id).await?;
+        let form = self.edit_form(meeting_id).await?;
+        let recurring = form.recurring();
+        let mut fields = form.fields;
         changes.apply(&mut fields);
+        // The button pressed decides what a recurring entry's edit
+        // covers; a single entry has only "Save".
+        let action = if changes.whole_series && recurring {
+            "Save all"
+        } else {
+            "Save"
+        };
+        if let Some(field) = fields.iter_mut().find(|(n, _)| n == "action") {
+            field.1 = action.to_string();
+        }
         let resp = self
             .http
             .post(&url)
@@ -330,19 +410,22 @@ impl Session {
 
     /// Entry `meeting_id`'s edit form, as a browser would send it; when it
     /// does not open, fedocal's reasons.
-    async fn edit_form(&self, meeting_id: u64) -> Result<Vec<(String, String)>, Error> {
+    async fn edit_form(&self, meeting_id: u64) -> Result<EntryForm, Error> {
         let url = format!("{}/meeting/edit/{meeting_id}/", self.base_url);
         let page = self.page(&url).await?;
-        form_values(&page).ok_or_else(|| {
-            let reasons = page_messages(&page);
-            if reasons.is_empty() {
-                Error::Http(format!(
-                    "no edit form on {url}; is the session still valid?"
-                ))
-            } else {
-                Error::Refused(reasons)
-            }
-        })
+        let submits = submit_values(&page);
+        form_values(&page)
+            .map(|fields| EntryForm { fields, submits })
+            .ok_or_else(|| {
+                let reasons = page_messages(&page);
+                if reasons.is_empty() {
+                    Error::Http(format!(
+                        "no edit form on {url}; is the session still valid?"
+                    ))
+                } else {
+                    Error::Refused(reasons)
+                }
+            })
     }
 
     /// The CSRF token of `calendar`'s add form; when the form does not
@@ -442,6 +525,20 @@ impl Session {
                 None => cookies.push((name, value)),
             }
         }
+    }
+}
+
+/// How a login the provider turned down is reported (it ended on its
+/// page rather than the calendar's).
+const TURNED_DOWN: &str = "the login ended at";
+
+/// `attempt`, and once more when the provider turned the ticket down:
+/// id.fedoraproject.org now and then turns down a ticket it takes on the
+/// next try.
+fn retried(attempt: impl Fn() -> Result<Session, Error>) -> Result<Session, Error> {
+    match attempt() {
+        Err(Error::Login(why)) if why.starts_with(TURNED_DOWN) => attempt(),
+        done => done,
     }
 }
 
@@ -636,6 +733,36 @@ fn form_values(page: &str) -> Option<Vec<(String, String)>> {
         }
     }
     Some(out)
+}
+
+/// The values of the submit buttons of the page's form that carries a
+/// CSRF token.
+fn submit_values(page: &str) -> Vec<String> {
+    let Some(token) = page.find("name=\"csrf_token\"") else {
+        return Vec::new();
+    };
+    let Some(start) = page[..token].rfind("<form") else {
+        return Vec::new();
+    };
+    let end = token + page[token..].find("</form>").unwrap_or(page.len() - token);
+    page[start..end]
+        .split("<input")
+        .skip(1)
+        .map(|tag| parse_attrs(tag.split('>').next().unwrap_or("")))
+        .filter(|attrs| {
+            attrs.iter().any(|(n, v)| {
+                n == "type"
+                    && v.as_deref()
+                        .is_some_and(|v| v.eq_ignore_ascii_case("submit"))
+            })
+        })
+        .filter_map(|attrs| {
+            attrs
+                .into_iter()
+                .find(|(n, _)| n == "value")
+                .and_then(|(_, v)| v)
+        })
+        .collect()
 }
 
 /// A tag's attributes, by lowercase name; `None` for one without a
@@ -854,6 +981,37 @@ mod tests {
             failed.to_string(),
             "cannot log in to Fedora Calendar: curl failed"
         );
+    }
+
+    #[test]
+    fn a_turned_down_login_is_tried_once_more() {
+        let tries = std::cell::Cell::new(0);
+        let attempt = || {
+            tries.set(tries.get() + 1);
+            if tries.get() == 1 {
+                login(
+                    "https://c.example",
+                    JAR,
+                    "https://id.fedoraproject.org/login/x",
+                )
+            } else {
+                login(
+                    "https://calendar.fedoraproject.org",
+                    JAR,
+                    "https://calendar.fedoraproject.org/",
+                )
+            }
+        };
+        assert!(retried(attempt).is_ok());
+        assert_eq!(tries.get(), 2);
+        // Another failure is not retried.
+        let tries = std::cell::Cell::new(0);
+        let failing = || {
+            tries.set(tries.get() + 1);
+            Session::login_with("https://c.example", |_| Err("curl failed".into()))
+        };
+        assert!(retried(failing).is_err());
+        assert_eq!(tries.get(), 1);
     }
 
     #[test]
@@ -1221,5 +1379,72 @@ mod tests {
             err.to_string().ends_with("HTTP 500 Internal Server Error"),
             "{err}"
         );
+    }
+    /// Matches a request whose body ends with the text given.
+    struct EndsWith(&'static str);
+
+    impl wiremock::Match for EndsWith {
+        fn matches(&self, request: &wiremock::Request) -> bool {
+            request.body.ends_with(self.0.as_bytes())
+        }
+    }
+
+    /// A recurring entry's edit page: "Save" and "Save all".
+    const SERIES: &str = "<form action=\"\" method=\"post\">\
+        <input name=\"meeting_name\" type=\"text\" value=\"Hangout\">\
+        <input name=\"meeting_date\" type=\"date\" value=\"2026-12-02\">\
+        <input name=\"meeting_location\" type=\"text\" value=\"\">\
+        <select name=\"frequency\"><option value=\"\"></option><option selected value=\"28\">4 weeks</option></select>\
+        <input name=\"end_repeats\" type=\"date\" value=\"2037-12-31\">\
+        <input name=\"csrf_token\" type=\"hidden\" value=\"t3\">\
+        <input name=\"action\" type=\"submit\" value=\"Save\">\
+        <input name=\"action\" type=\"submit\" value=\"Save all\">\
+        <input name=\"action\" type=\"button\" value=\"Cancel\"></form>";
+
+    #[tokio::test]
+    async fn a_series_is_edited_whole_or_one_occurrence() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/meeting/edit/5/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(SERIES))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/meeting/edit/5/"))
+            .and(body_string_contains("action=Save+all"))
+            .and(body_string_contains(
+                "meeting_location=https%3A%2F%2Fmeet.example%2Fx",
+            ))
+            .and(body_string_contains("end_repeats=2027-06-30"))
+            .and(body_string_contains("frequency=28"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/meeting/5/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/meeting/edit/5/"))
+            .and(EndsWith("action=Save"))
+            .and(body_string_contains("meeting_name=Special"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/meeting/5/"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let s = session(&server);
+        let form = s.entry(5).await.unwrap();
+        assert!(form.recurring());
+        assert_eq!(form.submits, ["Save", "Save all"]);
+        assert_eq!(form.get("end_repeats"), Some("2037-12-31"));
+        assert_eq!(form.get("nothing"), None);
+        let whole = Changes::default()
+            .location("https://meet.example/x")
+            .until(day("2027-06-30"))
+            .whole_series(true);
+        assert!(!whole.is_empty());
+        s.edit(5, &whole).await.unwrap();
+        s.edit(5, &Changes::default().name("Special"))
+            .await
+            .unwrap();
+        assert!(!EntryForm::default().recurring());
+        assert!(submit_values("<form></form>").is_empty());
     }
 }

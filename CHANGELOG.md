@@ -28,7 +28,12 @@ end of 2025-12-31 but still have minutes. When no room is free for
 every meeting (or with `--suggest`, which `check` takes too), `find`
 uses the same check to list as likely free a room whose meetings have
 had no minutes for any occurrence in 12 weeks, with the evidence; a
-meeting whose meetbot search failed is never taken as stale. Acting on stale entries comes next (#142).
+meeting whose meetbot search failed is never taken as stale. `timebook edit` changes one of your own
+entries (title, location, note, a series' last day) through its edit
+form, logging in with your Kerberos ticket, previewing each change and
+reading it back; for a recurring entry the whole series changes from
+its next occurrence (`--one`: that occurrence alone). Asking owners to
+drop stale entries comes next (#142).
 
 sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and
 the `room` module. Its `Client::meetings` converts the answer to a
