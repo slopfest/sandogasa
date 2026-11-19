@@ -155,6 +155,14 @@ pub struct Recent {
     pub seen: BTreeSet<u64>,
 }
 
+/// Which series `stale` looks at: those of a calendar (by its exact
+/// name), or whose title holds a text (in any case); all by default.
+#[derive(Debug, Clone, Default)]
+pub struct Filter {
+    pub calendar: Option<String>,
+    pub meeting: Option<String>,
+}
+
 /// Where `stale` looks besides Fedora Calendar: meetbot for minutes and
 /// Discourse for owners' activity, production unless a test says
 /// otherwise.
@@ -513,29 +521,50 @@ pub fn likely_free(
         .collect()
 }
 
+/// Of the recurring series `all`, and those stopped at `end` (from
+/// `before` and `after`, as [`dropped_at`] takes them) and not replaced
+/// by one of `all`, the ones `filter` keeps. A replacement counts
+/// whether the filter keeps it or not.
+pub fn chosen(
+    all: Vec<Series>,
+    before: &[Series],
+    after: &[Meeting],
+    end: NaiveDate,
+    filter: &Filter,
+) -> (Vec<Series>, Vec<Series>) {
+    let dropped = dropped_at(before, after, end)
+        .into_iter()
+        .filter(|s| !all.iter().any(|r| r.meeting_id == s.meeting_id))
+        .filter(|s| !replaced(s, &all))
+        .filter(|s| filter.keeps(s))
+        .collect();
+    let recurring = all.into_iter().filter(|s| filter.keeps(s)).collect();
+    (recurring, dropped)
+}
+
 /// Everything `timebook stale` reports: the recurring series of the
-/// `weeks` up to `now`, judged against meetbot, and the series that
-/// stopped at fedocal's old default end. Occurrences that started less
+/// `weeks` up to `now` that `filter` keeps, judged against meetbot, and
+/// those that stopped at fedocal's old default end. Occurrences that started less
 /// than two hours before `now` are left out: meetbot cannot have their
 /// minutes yet.
 pub async fn report(
     client: &Client,
     sources: &Sources,
+    filter: &Filter,
     now: DateTime<Utc>,
     weeks: i64,
     refresh: bool,
 ) -> Result<(Vec<SeriesReport>, Vec<Dropped>), String> {
-    let recurring = recent_series(client, now, weeks).await?.series;
+    // Everything is read and compared, a series replaced by one in
+    // another calendar or of another title included; the filter only
+    // chooses what is searched for and reported.
+    let all = recent_series(client, now, weeks).await?.series;
     let end = NaiveDate::parse_from_str(OLD_DEFAULT_END, "%Y-%m-%d").expect("a date");
     // A day either side: an evening meeting in the west of 2025-12-31
     // is on 2026-01-01 in UTC.
     let before = series(&read(client, end - Duration::days(28), end + Duration::days(1)).await?);
     let after = read(client, end + Duration::days(1), end + Duration::days(28)).await?;
-    let dropped: Vec<Series> = dropped_at(&before, &after, end)
-        .into_iter()
-        .filter(|s| !recurring.iter().any(|r| r.meeting_id == s.meeting_id))
-        .filter(|s| !replaced(s, &recurring))
-        .collect();
+    let (recurring, dropped) = chosen(all, &before, &after, end, filter);
 
     let found = search_for(recurring.iter().chain(&dropped), sources, refresh).await;
     let settled = settled_by(now, refresh);
@@ -696,6 +725,17 @@ pub fn describe(
         }
     }
     out
+}
+
+impl Filter {
+    /// Whether `s` is one of the series asked for.
+    pub fn keeps(&self, s: &Series) -> bool {
+        self.calendar.as_ref().is_none_or(|c| s.calendar == *c)
+            && self
+                .meeting
+                .as_ref()
+                .is_none_or(|m| s.name.to_lowercase().contains(&m.trim().to_lowercase()))
+    }
 }
 
 impl Default for Sources {
@@ -1249,6 +1289,40 @@ mod tests {
         assert_eq!(newest_since(&dropped[0], &since[..1], end), None);
     }
 
+    #[test]
+    fn a_filter_keeps_series_but_still_sees_their_replacements() {
+        let end = NaiveDate::from_ymd_opt(2025, 12, 31).unwrap();
+        let before = series(&[
+            meeting(1, "2025-12-10", "16:00:00", "a", "Old title", ""),
+            meeting(1, "2025-12-24", "16:00:00", "a", "Old title", ""),
+            meeting(3, "2025-12-11", "18:00:00", "a", "Other", ""),
+            meeting(3, "2025-12-25", "18:00:00", "a", "Other", ""),
+        ]);
+        // Entry 1 goes on as entry 2, renamed, in the same slot.
+        let all = series(&[
+            meeting(2, "2026-11-04", "16:00:00", "a", "New title", ""),
+            meeting(2, "2026-11-11", "16:00:00", "a", "New title", ""),
+            meeting(4, "2026-11-05", "16:00:00", "b", "Old talk", ""),
+            meeting(4, "2026-11-12", "16:00:00", "b", "Old talk", ""),
+        ]);
+        let ids = |list: &[Series]| list.iter().map(|s| s.meeting_id).collect::<Vec<_>>();
+        let old = Filter {
+            calendar: None,
+            meeting: Some("old".into()),
+        };
+        let (recurring, dropped) = chosen(all.clone(), &before, &[], end, &old);
+        // Entry 1 is replaced though its successor is not kept.
+        assert_eq!((ids(&recurring), ids(&dropped)), (vec![4], vec![]));
+        let a = Filter {
+            calendar: Some("a".into()),
+            meeting: None,
+        };
+        let (recurring, dropped) = chosen(all.clone(), &before, &[], end, &a);
+        assert_eq!((ids(&recurring), ids(&dropped)), (vec![2], vec![3]));
+        let (recurring, dropped) = chosen(all, &before, &[], end, &Filter::default());
+        assert_eq!((ids(&recurring), ids(&dropped)), (vec![2, 4], vec![3]));
+    }
+
     fn report(verdict: Verdict, held: usize, owners_seen: &[(&str, OnDiscourse)]) -> SeriesReport {
         let s = series(&[
             meeting(
@@ -1463,9 +1537,10 @@ mod tests {
         let now = NaiveDateTime::parse_from_str("2026-11-19 12:00", "%Y-%m-%d %H:%M")
             .unwrap()
             .and_utc();
-        let (reports, dropped) = super::report(&client, &sources, now, 4, false)
-            .await
-            .unwrap();
+        let (reports, dropped) =
+            super::report(&client, &sources, &Filter::default(), now, 4, false)
+                .await
+                .unwrap();
         let shown: Vec<(String, Verdict, usize)> = reports
             .iter()
             .map(|r| (r.series.name.clone(), r.verdict, r.held))
@@ -1494,6 +1569,24 @@ mod tests {
                 .ends_with("/2026-11-17T16:00:00.html")
         );
         assert!(Sources::default().cache);
+        // Only the series asked for, and so only their searches.
+        let quiet = Filter {
+            calendar: Some("cal".into()),
+            meeting: Some("QUI".into()),
+        };
+        let (reports, dropped) = super::report(&client, &sources, &quiet, now, 4, false)
+            .await
+            .unwrap();
+        let names: Vec<&str> = reports.iter().map(|r| r.series.name.as_str()).collect();
+        assert_eq!((names, dropped.len()), (vec!["Quiet"], 0));
+        let elsewhere = Filter {
+            calendar: Some("other".into()),
+            meeting: None,
+        };
+        let (reports, dropped) = super::report(&client, &sources, &elsewhere, now, 4, false)
+            .await
+            .unwrap();
+        assert!(reports.is_empty() && dropped.is_empty());
         // The same judgment for a chosen few, as `find` asks for it.
         let few: Vec<Series> = recent_series(&client, now, 4)
             .await

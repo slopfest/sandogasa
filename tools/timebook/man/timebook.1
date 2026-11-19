@@ -167,14 +167,20 @@ First day (YYYY\-MM\-DD; default today)
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS timebook stale
-\fBtimebook stale\fR [\fB\-\-json\fR] [\fB\-\-refresh\fR] [\fB\-\-weeks\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBtimebook stale\fR [\fB\-\-calendar\fR] [\fB\-\-json\fR] [\fB\-\-meeting\fR] [\fB\-\-refresh\fR] [\fB\-\-weeks\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Check whether recurring meetings still take place
 .PP
 Each recurring entry of the last weeks is looked for in meetbot\*(Aqs minutes (by its calendar\*(Aqs name and its title as a topic), an occurrence counting as held when minutes in its room start within an hour of it. For a series without any, its owners\*(Aq last activity on Discourse is shown; for one held at least sometimes, the days without minutes are listed with the `timebook cancel` command that takes them off (the last day only with \-\-refresh, as meetbot\*(Aqs answers are kept for a day). Series that stopped at 2025\-12\-31, fedocal\*(Aqs old default end for a series without one, are listed with any minutes since: those may still be held.
 .TP
+\fB\-\-calendar\fR \fI<CALENDAR>\fR
+Only the series of this calendar (its exact name)
+.TP
 \fB\-\-json\fR
 Print JSON instead of text
+.TP
+\fB\-\-meeting\fR \fI<TITLE>\fR
+Only the series whose title holds this text (in any case)
 .TP
 \fB\-\-refresh\fR
 Ask meetbot again instead of using answers from the last day

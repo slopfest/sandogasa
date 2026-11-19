@@ -163,6 +163,14 @@ enum Command {
     /// fedocal's old default end for a series without one, are listed
     /// with any minutes since: those may still be held.
     Stale {
+        /// Only the series of this calendar (its exact name)
+        #[arg(long)]
+        calendar: Option<String>,
+
+        /// Only the series whose title holds this text (in any case)
+        #[arg(long, value_name = "TITLE")]
+        meeting: Option<String>,
+
         /// Ask meetbot again instead of using answers from the last day
         #[arg(long)]
         refresh: bool,
@@ -534,11 +542,24 @@ async fn edit_entry(client: &Client, args: &edit::EditArgs) -> Result<(), String
 }
 
 /// `stale`: recurring meetings against meetbot's minutes.
-async fn stale(client: &Client, weeks: i64, refresh: bool, json: bool) -> Result<(), String> {
+async fn stale(
+    client: &Client,
+    filter: &stale::Filter,
+    weeks: i64,
+    refresh: bool,
+    json: bool,
+) -> Result<(), String> {
     let now = Utc::now();
     let today = now.date_naive();
-    let (reports, dropped) =
-        stale::report(client, &stale::Sources::default(), now, weeks, refresh).await?;
+    let (reports, dropped) = stale::report(
+        client,
+        &stale::Sources::default(),
+        filter,
+        now,
+        weeks,
+        refresh,
+    )
+    .await?;
     if json {
         let out = serde_json::json!({
             "series": reports,
@@ -604,7 +625,18 @@ async fn main() -> ExitCode {
             edit_entry(&client, &args).await
         }
         Command::Find { series } => find(&client, series, cli.json).await,
-        Command::Stale { refresh, weeks } => stale(&client, *weeks, *refresh, cli.json).await,
+        Command::Stale {
+            calendar,
+            meeting,
+            refresh,
+            weeks,
+        } => {
+            let filter = stale::Filter {
+                calendar: calendar.clone(),
+                meeting: meeting.clone(),
+            };
+            stale(&client, &filter, *weeks, *refresh, cli.json).await
+        }
         Command::Rooms { days, from } => {
             let from = from.unwrap_or_else(|| Utc::now().date_naive());
             rooms(&client, from, *days, cli.json).await

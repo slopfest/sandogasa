@@ -164,7 +164,9 @@ searches all answered, the days without minutes are listed with the
 `timebook cancel` command that takes them off the calendar, for its
 owners to run if those meetings did not take place; occurrences of the
 last day are left out unless `--refresh` is given, since meetbot's
-answers are kept for a day. The topics searched are listed, so a series
+answers are kept for a day. `--calendar` (its exact name) and
+`--meeting` (part of a title) look at those series alone, which saves
+meetbot the other searches. The topics searched are listed, so a series
 filed under another topic can be checked by hand.
 
 ```
