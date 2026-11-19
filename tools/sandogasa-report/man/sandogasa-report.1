@@ -70,7 +70,7 @@ Only notes about this URL
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS sandogasa-report report
-\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-\-notes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-private\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
+\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-\-notes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-private\fR] [\fB\-\-unattached\-notes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
 .PP
 Generate an activity report across one or more domains
 .TP
@@ -144,6 +144,21 @@ Write output to file instead of stdout
 .TP
 \fB\-\-private\fR
 Make a report for your own use: include GitHub work in private repositories and, with \-\-notes, the notes on items the report does not show, those without a URL, and embargoed ones. Without it, the GitHub section keeps to public repositories and a note shows only under an item the report shows (with \-\-json, any item it carries). The other forges\*(Aq sections include private projects your tokens can see either way
+.TP
+\fB\-\-unattached\-notes\fR \fI<WHAT>\fR
+With \-\-notes and \-\-private, what the Markdown report does with the notes no item took (default: [notes] unattached in the config, or include). \-\-json keeps them, marked unattached
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+include: Close the report with them, grouped by where they point
+.IP \(bu 2
+exclude: Leave them out
+.IP \(bu 2
+ask: Ask at the terminal; include them without one
+.RE
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr

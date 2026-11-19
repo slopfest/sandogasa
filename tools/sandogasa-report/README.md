@@ -251,6 +251,7 @@ directory, else
 ```toml
 [notes]
 dir = "~/Nextcloud/projects/notes/sandogasa-report"
+# unattached = "ask"   # include (default), exclude or ask
 ```
 
 `report --notes` adds the notes dated in the report's period. Each note
@@ -263,19 +264,26 @@ parameters (`utm_*`) do not count, nor the path's case on GitHub and
 GitLab; a Bugzilla bug matches in any form (`rhbz#N`, `/N`,
 `show_bug.cgi?id=N` with other parameters), a GitHub API URL matches the
 web page, and a GitLab work item (`/-/work_items/N`) its issue page
-(`/-/issues/N`). Notes no item took close the report in a "Notes"
-section, those without a URL under "Other notes". With `--json`, the
-notes come as a `notes` array beside `report`, each with the `key` its
-URL is matched by.
+(`/-/issues/N`). Notes no item took close the report in a section of
+their own, "Notes on items not in this report", grouped by the host
+their URL points at, those without a URL last, so the sources a report
+does not cover show at a glance. `--unattached-notes exclude` leaves
+them out of the Markdown report and `ask` asks (including them without a
+terminal); the default is `include`, or what `[notes] unattached` in the
+config says. Below `--detailed --detailed`, some items are counted
+rather than listed, so their notes land in this section too. With
+`--json`, the notes come as a `notes` array beside `report`, each with
+the `key` its URL is matched by and whether an item took it
+(`attached`), whatever `--unattached-notes` says.
 
 A report is made to be shared unless `--private` is given: a note then
 shows only under an item the printed report shows (so it is no more
 private than that item's line; with `--json`, under any item the JSON
 carries), and never one with an `embargo:` header whose value does not
-start with `lifted`. Notes about anything else, and those without a
-URL, are left out, so a shared report has no "Notes" section, and the
-count is printed on standard error. At the default detail no items are
-listed, so a shared report needs `--detailed --detailed` to carry
+start with `lifted`. Notes about anything else, and those without a URL,
+are left out, so a shared report has no section of leftover notes, and
+the count is printed on standard error. At the default detail no items
+are listed, so a shared report needs `--detailed --detailed` to carry
 notes. `--private` carries them all, for your own use such as a
 self-review.
 

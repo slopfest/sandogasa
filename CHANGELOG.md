@@ -156,6 +156,22 @@ missing project.
 
 Resolves #191
 
+### sandogasa-report says why notes are left over, and lets the user choose
+
+With `--notes`, a note whose item the report does not list closed the
+report under "Notes", a heading that did not say why it was there: a
+note about work in a source the report does not query looked like one
+about an item missing by mistake. In a 2026H2 self-review run, most
+notes ended up there.
+
+The section is now "Notes on items not in this report", with a line on
+why a note lands there, and its notes are grouped by the host their URL
+points at (those without one under "Without a link", which replaces
+"Other notes"), so the sources a report does not cover show at a
+glance. `--unattached-notes include|exclude|ask` says what the Markdown report does with them; the default is `include`, or `[notes] unattached` in the config, and `ask` includes them without a terminal. With `--json`, every note is kept, and says whether an item took it (`attached`).
+
+Resolves #193
+
 ### sandogasa-report reads each GitLab instance once
 
 sandogasa-report's GitLab section read the user's events, and looked up

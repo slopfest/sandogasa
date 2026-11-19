@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{NaiveDate, NaiveDateTime};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// One note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -49,8 +49,9 @@ pub struct Stored {
     pub note: Note,
 }
 
-/// A note as `report --notes --json` gives it: the stored note and
-/// the key its URL is matched by.
+/// A note as `report --notes --json` gives it: the stored note, the
+/// key its URL is matched by, and whether an item in the report took
+/// it.
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportNote<'a> {
     #[serde(flatten)]
@@ -58,6 +59,23 @@ pub struct ReportNote<'a> {
     /// [`url_key`] of the note's URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    /// Whether the note is about an item the report lists (at full
+    /// detail).
+    pub attached: bool,
+}
+
+/// What `report --notes` does with the notes no item in the report
+/// took.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Unattached {
+    /// Close the report with them, grouped by where they point.
+    #[default]
+    Include,
+    /// Leave them out.
+    Exclude,
+    /// Ask at the terminal; include them without one.
+    Ask,
 }
 
 /// What `notes` lists.
@@ -680,29 +698,63 @@ pub fn shareable(notes: Vec<Stored>, listed: &str) -> (Vec<Stored>, usize) {
     (kept, left_out)
 }
 
-/// The report's closing section for `notes` no item showed: those
-/// about something else, by URL, then those with none.
-pub fn format_section(notes: &[&Stored]) -> String {
+/// The notes no item in the report took, closing it: grouped by the
+/// host their URL points at, those without one last, with a line on
+/// why a note ends up here. `detail` is the report's: below 2, some
+/// items are counted rather than listed.
+pub fn format_section(notes: &[&Stored], detail: u8) -> String {
     if notes.is_empty() {
         return String::new();
     }
-    let mut out = String::from("## Notes\n\n");
-    let (linked, other): (Vec<&Stored>, Vec<&Stored>) =
-        notes.iter().partition(|s| s.note.url.is_some());
-    for s in linked {
-        let url = s.note.url.as_deref().unwrap_or_default();
-        out.push_str(&format!("- {} <{url}>\n", s.note.date));
-        out.push_str(&quoted(&s.note, 2));
+    let mut out = String::from(
+        "## Notes on items not in this report\n\n\
+         These notes are about items the report does not list: work in a \
+         source it does not query, in a project outside its domains, or of \
+         a kind it does not show.",
+    );
+    if detail < 2 {
+        out.push_str(
+            " At this detail some items are counted rather than listed, so \
+             their notes are here too; `--detailed --detailed` lists them.",
+        );
+    }
+    out.push_str("\n\n");
+    let mut by_host: std::collections::BTreeMap<String, Vec<&Stored>> = Default::default();
+    let mut other: Vec<&Stored> = Vec::new();
+    for s in notes {
+        match s.note.url.as_deref().and_then(url_host) {
+            Some(host) => by_host.entry(host).or_default().push(s),
+            None => other.push(s),
+        }
+    }
+    for (host, notes) in by_host {
+        out.push_str(&format!("### {host}\n\n"));
+        for s in notes {
+            let url = s.note.url.as_deref().unwrap_or_default();
+            out.push_str(&format!("- {} <{url}>\n", s.note.date));
+            out.push_str(&quoted(&s.note, 2));
+        }
+        out.push('\n');
     }
     if !other.is_empty() {
-        out.push_str("\n### Other notes\n\n");
+        out.push_str("### Without a link\n\n");
         for s in other {
             out.push_str(&format!("- {}\n", s.note.date));
             out.push_str(&quoted(&s.note, 2));
         }
+        out.push('\n');
     }
-    out.push('\n');
     out
+}
+
+/// The host `url` points at, as [`url_key`] reads it (so `rhbz#N`
+/// is Bugzilla's), without a user or port.
+fn url_host(url: &str) -> Option<String> {
+    let key = url_key(url);
+    let host = key.split(['/', '?']).next()?;
+    let host = host.rsplit('@').next().unwrap_or(host);
+    let host = host.split(':').next().unwrap_or(host);
+    (!host.is_empty() && host.contains('.')).then(|| host.to_string())
 }
 
 /// Whether `answer` to a `[Y/n]` question is yes.
@@ -1019,18 +1071,37 @@ mod tests {
         );
         assert_eq!(rest, [1, 4]);
         let rest: Vec<&Stored> = rest.iter().map(|&i| &notes[i]).collect();
-        assert_eq!(
-            format_section(&rest),
-            "## Notes\n\n\
-             - 2026-11-18 <https://forge.fedoraproject.org/security/tickets/issues/23>\n  \
-             > Started a backlog report.\n  \
-             > (written by Claude Code:claude-opus-5-5)\n\
-             \n### Other notes\n\n\
-             - 2026-11-18\n  \
-             > Mentoring session.\n  \
-             > (written by Claude Code:claude-opus-5-5)\n\n"
+        let section = format_section(&rest, 2);
+        assert!(!section.contains("At this detail"), "{section}");
+        assert!(format_section(&rest, 1).contains("At this detail some items"));
+        assert!(
+            section.starts_with("## Notes on items not in this report\n\nThese notes are about"),
+            "{section}"
         );
-        assert_eq!(format_section(&[]), "");
+        assert!(
+            section.ends_with(
+                "### forge.fedoraproject.org\n\n\
+                 - 2026-11-18 <https://forge.fedoraproject.org/security/tickets/issues/23>\n  \
+                 > Started a backlog report.\n  \
+                 > (written by Claude Code:claude-opus-5-5)\n\
+                 \n### Without a link\n\n\
+                 - 2026-11-18\n  \
+                 > Mentoring session.\n  \
+                 > (written by Claude Code:claude-opus-5-5)\n\n"
+            ),
+            "{section}"
+        );
+        assert_eq!(
+            url_host("https://Bugs.Debian.org/1018193"),
+            Some("bugs.debian.org".into())
+        );
+        assert_eq!(url_host("rhbz#2575659"), Some("bugzilla.redhat.com".into()));
+        assert_eq!(
+            url_host("https://me@git.example.org:8080/x"),
+            Some("git.example.org".into())
+        );
+        assert_eq!(url_host("https://"), None);
+        assert_eq!(format_section(&[], 2), "");
     }
 
     #[test]

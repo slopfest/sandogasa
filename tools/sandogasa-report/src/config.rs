@@ -64,6 +64,11 @@ pub struct NotesConfig {
     /// go under the data directory (`~/.local/share/sandogasa-report/notes`).
     #[serde(default)]
     pub dir: Option<String>,
+    /// What `report --notes` does with the notes no item took
+    /// (`include`, `exclude` or `ask`), unless `--unattached-notes`
+    /// says; unset, `include`.
+    #[serde(default)]
+    pub unattached: Option<crate::notes::Unattached>,
 }
 
 /// A person's identity across multiple services. The profile key

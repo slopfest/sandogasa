@@ -196,6 +196,12 @@ struct ReportArgs {
     #[arg(long, help_heading = "Output")]
     private: bool,
 
+    /// With --notes and --private, what the Markdown report does with
+    /// the notes no item took (default: [notes] unattached in the
+    /// config, or include). --json keeps them, marked unattached.
+    #[arg(long, value_name = "WHAT", requires = "notes", help_heading = "Output")]
+    unattached_notes: Option<notes::Unattached>,
+
     /// Print progress to stderr.
     #[arg(short, long, help_heading = "Output")]
     verbose: bool,
@@ -314,6 +320,30 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
         print!("{}", notes::format_list(&selected));
     }
     Ok(())
+}
+
+/// Whether to close the report with the `count` notes no item took:
+/// as `--unattached-notes` says, else the config's `[notes]
+/// unattached`, else yes; `ask` asks with `confirm` at a terminal and
+/// says yes without one.
+fn include_unattached(
+    cli: &ReportArgs,
+    configured: Option<notes::Unattached>,
+    count: usize,
+    at_terminal: bool,
+    confirm: impl FnOnce(&str) -> bool,
+) -> bool {
+    match cli.unattached_notes.or(configured).unwrap_or_default() {
+        notes::Unattached::Include => true,
+        notes::Unattached::Exclude => {
+            eprintln!("Left out {count} note(s) on items not in this report.");
+            false
+        }
+        notes::Unattached::Ask if at_terminal => confirm(&format!(
+            "Add the {count} note(s) on items not in this report?"
+        )),
+        notes::Unattached::Ask => true,
+    }
 }
 
 /// The notes a report carries: all of them with --private, otherwise
@@ -732,14 +762,20 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         if cli.notes {
             // The JSON carries every item, as the report does at full
             // detail.
-            let period_notes = shared_notes(cli, period_notes, || {
-                report::format_markdown(&unified, 2, &cfg.groups)
-            });
+            // As the Markdown report would list them at full detail.
+            let mut listed = report::format_markdown(&unified, 2, &cfg.groups);
+            if by_repo {
+                listed.push_str(&by_repo::format_markdown(&by_repo::gather(&unified)));
+            }
+            let period_notes = shared_notes(cli, period_notes, || listed.clone());
+            let (_, rest) = notes::attach(&listed, &period_notes);
             let notes: Vec<notes::ReportNote> = period_notes
                 .iter()
-                .map(|stored| notes::ReportNote {
+                .enumerate()
+                .map(|(i, stored)| notes::ReportNote {
                     stored,
                     key: stored.note.url.as_deref().map(notes::url_key),
+                    attached: !rest.contains(&i),
                 })
                 .collect();
             json["notes"] = serde_json::to_value(notes).expect("JSON serialization failed");
@@ -757,7 +793,16 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             let (attached, rest) = notes::attach(&md, &period_notes);
             let rest: Vec<&notes::Stored> = rest.iter().map(|&i| &period_notes[i]).collect();
             md = attached;
-            md.push_str(&notes::format_section(&rest));
+            let at_terminal = {
+                use std::io::IsTerminal;
+                std::io::stdin().is_terminal()
+            };
+            let confirm = |q: &str| sandogasa_cli::confirm(q, true).unwrap_or(true);
+            if !rest.is_empty()
+                && include_unattached(cli, cfg.notes.unattached, rest.len(), at_terminal, confirm)
+            {
+                md.push_str(&notes::format_section(&rest, cli.detailed));
+            }
         }
         md
     };
@@ -791,6 +836,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unattached_notes_follow_the_flag_then_the_config() {
+        use clap::Parser;
+        let args = |extra: &[&str]| -> ReportArgs {
+            let mut argv = vec![
+                "sandogasa-report",
+                "report",
+                "-d",
+                "x",
+                "--period",
+                "2026H2",
+            ];
+            argv.extend_from_slice(extra);
+            match Cli::try_parse_from(argv).unwrap().command {
+                Command::Report(args) => args,
+                _ => unreachable!(),
+            }
+        };
+        let no = |_: &str| -> bool { panic!("no question expected") };
+        let plain = args(&["--notes"]);
+        // Unset everywhere: included.
+        assert!(include_unattached(&plain, None, 3, false, no));
+        assert!(!include_unattached(
+            &plain,
+            Some(notes::Unattached::Exclude),
+            3,
+            false,
+            no
+        ));
+        // The flag wins over the config.
+        let flagged = args(&["--notes", "--unattached-notes", "include"]);
+        assert!(include_unattached(
+            &flagged,
+            Some(notes::Unattached::Exclude),
+            3,
+            false,
+            no
+        ));
+        let excluded = args(&["--notes", "--unattached-notes", "exclude"]);
+        assert!(!include_unattached(&excluded, None, 3, false, no));
+        let config: config::NotesConfig = toml::from_str("unattached = \"ask\"").unwrap();
+        assert_eq!(config.unattached, Some(notes::Unattached::Ask));
+        assert!(toml::from_str::<config::NotesConfig>("unattached = \"maybe\"").is_err());
+        // ask: asked at a terminal, the answer kept; yes without one.
+        let ask = Some(notes::Unattached::Ask);
+        assert!(include_unattached(&plain, ask, 3, false, no));
+        assert!(!include_unattached(&plain, ask, 3, true, |q: &str| {
+            assert_eq!(q, "Add the 3 note(s) on items not in this report?");
+            false
+        }));
+        // Only with --notes.
+        let argv = [
+            "sandogasa-report",
+            "report",
+            "-d",
+            "x",
+            "--period",
+            "2026H2",
+            "--unattached-notes",
+            "ask",
+        ];
+        assert!(Cli::try_parse_from(argv).is_err());
+    }
+
+    #[test]
     fn resolve_date_range_requires_since_or_period() {
         let cli = ReportArgs {
             by: Vec::new(),
@@ -810,6 +919,7 @@ mod tests {
             detailed: 0,
             json: false,
             notes: false,
+            unattached_notes: None,
             output: None,
             private: false,
             verbose: false,
@@ -837,6 +947,7 @@ mod tests {
             detailed: 0,
             json: false,
             notes: false,
+            unattached_notes: None,
             output: None,
             private: false,
             verbose: false,
