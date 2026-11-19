@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### sandogasa-report names Gitea along with Forgejo
+
+sandogasa-report called every instance of the Forgejo API family
+Forgejo, src.opensuse.org included, which runs Gitea. The report's
+section, the `config` prompts, `--no-forgejo`'s help and the error
+messages now say Forgejo/Gitea; the `forgejo` config keys, the flag and
+the keyring entries keep their names. A note on a commit still attaches
+under a report written with the old heading.
+
 ### sandogasa-fedrq reads repositories as well as a branch's own (breaking)
 
 A query could name a branch and replace its repositories with a class

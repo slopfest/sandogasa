@@ -25,7 +25,7 @@ pub(crate) use crate::forge::instance_host;
 use crate::forge::{self, TokenSpec, date_in_range, stat};
 
 const TOKEN_SPEC: TokenSpec = TokenSpec {
-    service: "Forgejo",
+    service: "Forgejo/Gitea",
     label: "sandogasa: Forgejo token",
     generic_env: "FORGEJO_TOKEN",
     host_separators: &['.'],
@@ -126,7 +126,7 @@ pub fn forgejo_report(
         Err(_) if !user.is_empty() => (Client::anonymous(base), Some(user)),
         Err(e) => return Err(e),
     };
-    let client = client.map_err(|e| format!("Forgejo client setup on {base}: {e}"))?;
+    let client = client.map_err(|e| format!("Forgejo/Gitea client setup on {base}: {e}"))?;
     let whose = match by {
         Some(u) => format!("{u} (anonymously)"),
         None => "the token owner".to_string(),
@@ -141,7 +141,7 @@ pub fn forgejo_report(
         Some(u) => client.pull_requests_by(u, "all", cfg.owner.as_deref()),
         None => client.my_pull_requests("all", cfg.owner.as_deref()),
     }
-    .map_err(|e| format!("Forgejo pull search on {base}: {e}"))?;
+    .map_err(|e| format!("Forgejo/Gitea pull search on {base}: {e}"))?;
 
     let mut report = ForgejoReport {
         instance: base.to_string(),
@@ -180,7 +180,7 @@ pub fn forgejo_report(
         Some(u) => client.issues_by(u, "all", cfg.owner.as_deref()),
         None => client.my_issues("all", cfg.owner.as_deref()),
     }
-    .map_err(|e| format!("Forgejo issue search on {base}: {e}"))?;
+    .map_err(|e| format!("Forgejo/Gitea issue search on {base}: {e}"))?;
     for issue in issues {
         if issue
             .created_at
@@ -297,7 +297,7 @@ fn landed(commits: &[RepoCommit]) -> Vec<forge::Landed> {
 /// Format the Forgejo section as Markdown.
 pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     let detailed = detail >= 1;
-    let heading = "### Forgejo\n\n".to_string();
+    let heading = "### Forgejo/Gitea\n\n".to_string();
 
     let applied = report.opened_prs.iter().filter(|p| p.applied).count();
 
@@ -313,7 +313,7 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     stat(&mut stats, "Issues closed", report.closed_issues.len());
 
     if stats.is_empty() {
-        return format!("{heading}No Forgejo activity.\n\n");
+        return format!("{heading}No Forgejo/Gitea activity.\n\n");
     }
     let mut out = heading;
     out.push_str(&stats);
@@ -464,7 +464,7 @@ mod tests {
     fn find_token_errors_when_nothing_set() {
         let tokens = BTreeMap::new();
         let err = find_token("https://nonexistent.example.test", &tokens).unwrap_err();
-        assert!(err.contains("no Forgejo token"));
+        assert!(err.contains("no Forgejo/Gitea token"));
     }
 
     #[test]
@@ -491,8 +491,8 @@ mod tests {
             ..Default::default()
         };
         let md = format_markdown(&report, 0);
-        assert!(md.contains("### Forgejo\n"));
-        assert!(md.contains("No Forgejo activity"));
+        assert!(md.contains("### Forgejo/Gitea\n"));
+        assert!(md.contains("No Forgejo/Gitea activity"));
     }
 
     #[test]
@@ -512,7 +512,7 @@ mod tests {
             applied: false,
         });
         let md = format_markdown(&report, 2);
-        assert!(md.contains("### Forgejo\n"));
+        assert!(md.contains("### Forgejo/Gitea\n"));
         assert!(md.contains("**PRs merged:** 1"));
         assert!(md.contains("#### PRs merged"));
         assert!(md.contains("ptesarik/libkdumpfile#92"));

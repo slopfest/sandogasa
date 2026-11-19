@@ -79,7 +79,7 @@ Four subcommands:
   Bugzilla email, git author emails (for Sourcehut commit
   attribution), the notes directory (see [Notes](#notes)), then
   per-instance usernames and API tokens for
-  GitLab, GitHub, Forgejo, and Sourcehut. Because it covers every
+  GitLab, GitHub, Forgejo/Gitea, and Sourcehut. Because it covers every
   domain in the config, one run sets you up for **any** `report -d`
   combination drawn from that config. Existing values show as
   defaults on re-runs, so only missing credentials need typing.
@@ -267,7 +267,7 @@ searches for PRs with `is:public` and keeps only events (reviews,
 comments, releases, and the pushes its tags and commit counts come
 from) that were public when they happened and are in a repository
 that is public now; how many it left out is printed on standard
-error. `--private` includes them. The GitLab, Forgejo, Sourcehut,
+error. `--private` includes them. The GitLab, Forgejo/Gitea, Sourcehut,
 Bugzilla, Bodhi and Koji sections include whatever your tokens can see,
 with or without `--private`.
 

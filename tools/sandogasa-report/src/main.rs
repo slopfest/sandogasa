@@ -137,7 +137,7 @@ struct ReportArgs {
     #[arg(long, help_heading = "Sources")]
     no_bugzilla: bool,
 
-    /// Skip Forgejo queries.
+    /// Skip Forgejo/Gitea queries.
     #[arg(long, help_heading = "Sources")]
     no_forgejo: bool,
 

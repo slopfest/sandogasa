@@ -2,7 +2,7 @@
 
 //! `config` subcommand — interactively populate user profiles
 //! in the overlay at `~/.config/sandogasa-report/config.toml`,
-//! and forge tokens (GitLab, GitHub, Forgejo, Sourcehut) in the
+//! and forge tokens (GitLab, GitHub, Forgejo/Gitea, Sourcehut) in the
 //! desktop keyring, one entry per instance (the overlay when no
 //! keyring can be used). A profile binds a
 //! single logical person to their per-service identities (FAS
@@ -191,7 +191,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         ),
         (
             &forgejo_instances,
-            "Forgejo API tokens (per instance):",
+            "Forgejo/Gitea API tokens (per instance):",
             FORGEJO,
         ),
         (
@@ -334,7 +334,7 @@ fn prompt_profile(
         profile_key,
         existing,
         forgejo_instances,
-        ("Forgejo", "username"),
+        ("Forgejo/Gitea", "username"),
         "forgejo",
         |u, host| u.forgejo.get(host),
         crate::forgejo::instance_host,
@@ -643,7 +643,7 @@ const GITHUB: TokenKind = TokenKind {
 
 const FORGEJO: TokenKind = TokenKind {
     table: "forgejo_tokens",
-    what: "Forgejo token",
+    what: "Forgejo/Gitea token",
     host: crate::forgejo::instance_host,
     secret: crate::forgejo::secret,
     prompt: prompt_forgejo_token,

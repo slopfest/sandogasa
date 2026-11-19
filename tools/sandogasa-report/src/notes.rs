@@ -458,7 +458,8 @@ enum Forge {
 impl Forge {
     fn from_heading(line: &str) -> Option<Forge> {
         match line.trim_end() {
-            "### Forgejo" => Some(Forge::Forgejo),
+            // Reports before the heading named Gitea too.
+            "### Forgejo/Gitea" | "### Forgejo" => Some(Forge::Forgejo),
             "### GitHub" => Some(Forge::Github),
             "### GitLab" => Some(Forge::Gitlab),
             "### Sourcehut" => Some(Forge::Sourcehut),
