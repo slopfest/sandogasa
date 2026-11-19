@@ -267,15 +267,17 @@ pub fn check_crate(
         .map_err(|e| format!("failed to create async runtime: {e}"))?;
     let registry = CratesIo { rt: &rt };
     let repos = RepoStack {
-        base: Box::new(sandogasa_fedrq::Fedrq {
-            branch: opts.branch.clone(),
-            repo: opts.repo.clone(),
-        }),
+        base: Box::new(
+            sandogasa_fedrq::Fedrq::default()
+                .with_branch(opts.branch.clone())
+                .with_repo(opts.repo.clone()),
+        ),
         copr: opts.copr.as_ref().map(|c| {
-            Box::new(sandogasa_fedrq::Fedrq {
-                branch: opts.branch.clone(),
-                repo: Some(format!("@copr:{c}")),
-            }) as Box<dyn CapabilityIndex>
+            Box::new(
+                sandogasa_fedrq::Fedrq::default()
+                    .with_branch(opts.branch.clone())
+                    .with_repo(Some(format!("@copr:{c}"))),
+            ) as Box<dyn CapabilityIndex>
         }),
     };
     check_crate_with(name, version, opts, &registry, &repos)
@@ -2964,10 +2966,7 @@ mod tests {
 
     #[test]
     fn check_dep_in_repo_missing() {
-        let fedrq = sandogasa_fedrq::Fedrq {
-            branch: Some("nonexistent-test-branch-xyz".to_string()),
-            repo: None,
-        };
+        let fedrq = sandogasa_fedrq::Fedrq::for_branch("nonexistent-test-branch-xyz".to_string());
         let dep = make_dep("nonexistent-crate-xyz", "normal", false);
         let status = check_dep_in_repo(&fedrq, &dep);
         assert!(matches!(status, DepStatus::Missing));

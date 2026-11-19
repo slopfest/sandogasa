@@ -328,13 +328,12 @@ pub fn survey(
     distgit: &BTreeMap<String, String>,
 ) -> Vec<ReleaseState> {
     let vr = |release: &str, repo: Option<&str>| {
-        sandogasa_fedrq::Fedrq {
-            branch: Some(format!("rpmfusion-{release}")),
-            repo: repo.map(str::to_string),
-        }
-        .pkgs_source_vr(&[rf])
-        .ok()
-        .and_then(|rows| rows.into_iter().next().map(|(_, v)| v))
+        sandogasa_fedrq::Fedrq::default()
+            .with_branch(Some(format!("rpmfusion-{release}")))
+            .with_repo(repo.map(str::to_string))
+            .pkgs_source_vr(&[rf])
+            .ok()
+            .and_then(|rows| rows.into_iter().next().map(|(_, v)| v))
     };
     releases
         .iter()

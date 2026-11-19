@@ -227,14 +227,8 @@ pub fn safe_to_backport(
     let provides = compare_provides::compare_provides(srpm, target_branch, source_branch)?;
     let requires = compare_requires::compare_requires(srpm, target_branch, source_branch)?;
 
-    let target_fq = Fedrq {
-        branch: Some(target_branch.to_string()),
-        ..Default::default()
-    };
-    let source_fq = Fedrq {
-        branch: Some(source_branch.to_string()),
-        ..Default::default()
-    };
+    let target_fq = Fedrq::for_branch(target_branch.to_string());
+    let source_fq = Fedrq::for_branch(source_branch.to_string());
 
     // Use the target branch's subpackage names for all reverse-dep checks,
     // since those are the subpackages being replaced.
@@ -259,10 +253,7 @@ pub fn safe_to_backport(
     reverse_deps.insert(target_branch.to_string(), target_affected);
 
     for branch in also_check {
-        let branch_fq = Fedrq {
-            branch: Some(branch.clone()),
-            ..Default::default()
-        };
+        let branch_fq = Fedrq::for_branch(branch.clone());
         let affected = check_branch_reverse_deps(
             srpm,
             &branch_fq,

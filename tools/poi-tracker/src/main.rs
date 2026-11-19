@@ -2043,10 +2043,9 @@ fn cmd_deps(paths: &[String], args: &DepsArgs) -> CmdResult {
         return Err("no shipped packages match the filters".into());
     }
 
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(args.walk.branch.clone()),
-        repo: args.walk.repo.clone(),
-    };
+    let fedrq = sandogasa_fedrq::Fedrq::default()
+        .with_branch(Some(args.walk.branch.clone()))
+        .with_repo(args.walk.repo.clone());
     let from: std::collections::BTreeSet<String> = args.walk.from.iter().cloned().collect();
     let own: Option<std::collections::BTreeSet<String>> = match &args.fixpoint {
         Some(path) => Some(
@@ -2301,10 +2300,9 @@ fn cmd_keep(paths: &[String], args: &KeepArgs) -> CmdResult {
     }
     let owned = names_of(&args.owned)?;
 
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(args.walk.branch.clone()),
-        repo: args.walk.repo.clone(),
-    };
+    let fedrq = sandogasa_fedrq::Fedrq::default()
+        .with_branch(Some(args.walk.branch.clone()))
+        .with_repo(args.walk.repo.clone());
     let query = deps::GraphBackedQuery::new(&fedrq, &graph);
     let from: BTreeSet<String> = args.walk.from.iter().cloned().collect();
     let (report, new_graph) = deps::walk(
@@ -3695,10 +3693,9 @@ fn cmd_sync_rpmfusion(args: &SyncRpmfusionArgs) -> CmdResult {
     let mut added = 0usize;
     for release in &args.release {
         let branch = rpmfusion_branch(release);
-        let fedrq = sandogasa_fedrq::Fedrq {
-            branch: Some(branch.clone()),
-            repo: args.repo.clone(),
-        };
+        let fedrq = sandogasa_fedrq::Fedrq::default()
+            .with_branch(Some(branch.clone()))
+            .with_repo(args.repo.clone());
         let names = fedrq
             .all_sources()
             .map_err(|e| format!("querying {branch}: {e}"))?;

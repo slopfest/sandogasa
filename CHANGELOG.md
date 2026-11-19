@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### sandogasa-fedrq reads repositories as well as a branch's own (breaking)
+
+A query could name a branch and replace its repositories with a class
+(`-r`), but not add one, so a SIG's published repository could not be
+read together with CentOS Stream's own: `-r @baseurl:<url>` drops
+BaseOS and AppStream. `Fedrq::with_enabled` passes repositories as
+fedrq's `-e`, in addition to the branch's.
+
+Breaking, in sandogasa-fedrq: `Fedrq` is now `#[non_exhaustive]` and
+gains the field `enabled`, so it can no longer be built with a struct
+literal. Use `Fedrq::for_branch(branch)`, or `Fedrq::default()` with
+`.with_branch(…)` and `.with_repo(…)` (each taking the `Option` the
+field held), then `.with_enabled(repos)` where needed.
+
 ### New crate: sandogasa-depcheck
 
 ebranch `check-update`'s dependency check, which finds the Provides an

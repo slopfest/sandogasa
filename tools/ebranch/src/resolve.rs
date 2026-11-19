@@ -2483,10 +2483,7 @@ packages = ["a"]
         // The source fedrq points at a branch that cannot exist, so any
         // lookup that escapes the graph fails loudly instead of
         // passing by accident.
-        let bogus = || sandogasa_fedrq::Fedrq {
-            branch: Some("no-such-branch-for-a-test".to_string()),
-            repo: None,
-        };
+        let bogus = || sandogasa_fedrq::Fedrq::for_branch("no-such-branch-for-a-test".to_string());
         let mut graph = DepsGraph::default();
         graph
             .binary_sources

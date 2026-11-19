@@ -87,14 +87,8 @@ pub fn compare_attr(
     read: fn(&Fedrq, &str) -> Result<Vec<String>, crate::fedrq::Error>,
     filter_self: bool,
 ) -> Result<CompareResult, crate::fedrq::Error> {
-    let source_fq = Fedrq {
-        branch: Some(source_branch.to_string()),
-        ..Default::default()
-    };
-    let target_fq = Fedrq {
-        branch: Some(target_branch.to_string()),
-        ..Default::default()
-    };
+    let source_fq = Fedrq::for_branch(source_branch.to_string());
+    let target_fq = Fedrq::for_branch(target_branch.to_string());
 
     let mut source = read(&source_fq, srpm)?;
     let mut target = read(&target_fq, srpm)?;

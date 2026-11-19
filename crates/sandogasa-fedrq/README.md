@@ -15,9 +15,18 @@ for querying Fedora and EPEL RPM repositories.
 ```rust
 use sandogasa_fedrq::Fedrq;
 
-let fq = Fedrq { branch: Some("rawhide".to_string()), ..Default::default() };
+let fq = Fedrq::for_branch("rawhide");
 let provides = fq.subpkgs_provides("systemd")?;
+
+// CentOS Stream 10 with a SIG's published repository read as well (-e)
+let sig = Fedrq::for_branch("c10s").with_enabled(vec![
+    "@baseurl:https://mirror.stream.centos.org/SIGs/10-stream/hyperscale/$basearch/packages-main/"
+        .to_string(),
+]);
 ```
+
+`repo` (`-r`) replaces the branch's repositories with a repository
+class; `with_enabled` (`-e`) adds repositories to the branch's own.
 
 ## License
 

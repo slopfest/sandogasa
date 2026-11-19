@@ -161,10 +161,9 @@ fn walk_new(
     verbose: bool,
 ) -> Result<(deps::DepsReport, usize, usize), String> {
     sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(c.branch.clone()),
-        repo: c.repo.clone(),
-    };
+    let fedrq = sandogasa_fedrq::Fedrq::default()
+        .with_branch(Some(c.branch.clone()))
+        .with_repo(c.repo.clone());
     let query = deps::GraphBackedQuery::new(&fedrq, graph);
     let (from, base) = walk_filters(c);
     let (report, new_graph) = deps::walk(
@@ -466,10 +465,9 @@ fn offer_watching(
         return Ok(Vec::new());
     }
     sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--version"))])?;
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(c.branch.clone()),
-        repo: c.repo.clone(),
-    };
+    let fedrq = sandogasa_fedrq::Fedrq::default()
+        .with_branch(Some(c.branch.clone()))
+        .with_repo(c.repo.clone());
     let into = opts.into.clone().unwrap_or_else(|| resolve(&c.keeps[0]));
     let maintainer = sandogasa_inventory::load(&resolve(&c.keeps[0]))?
         .inventory

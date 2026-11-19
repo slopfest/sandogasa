@@ -411,10 +411,11 @@ pub(crate) struct FedrqRepos;
 
 impl Repos for FedrqRepos {
     fn view(&self, branch: Option<&str>, repo: Option<&str>) -> Box<dyn RepoQuery + Send + Sync> {
-        Box::new(sandogasa_fedrq::Fedrq {
-            branch: branch.map(str::to_string),
-            repo: repo.map(str::to_string),
-        })
+        Box::new(
+            sandogasa_fedrq::Fedrq::default()
+                .with_branch(branch.map(str::to_string))
+                .with_repo(repo.map(str::to_string)),
+        )
     }
 }
 

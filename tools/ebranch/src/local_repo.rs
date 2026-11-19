@@ -59,10 +59,8 @@ impl LocalRepo {
             }
             buildrequires.insert(name.clone(), srpm_buildrequires(&srpm)?);
         }
-        let fedrq = sandogasa_fedrq::Fedrq {
-            branch: None,
-            repo: Some(format!("@baseurl:file://{}", dir.display())),
-        };
+        let fedrq = sandogasa_fedrq::Fedrq::default()
+            .with_repo(Some(format!("@baseurl:file://{}", dir.display())));
         let binaries = fedrq
             .binaries_info()
             .map_err(|e| format!("reading {}: {e}", dir.display()))?

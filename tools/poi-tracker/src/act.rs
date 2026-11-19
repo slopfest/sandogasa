@@ -148,10 +148,7 @@ pub fn resolve_dependents(package: &str, requirers: Vec<(String, String)>) -> Ve
 /// subpackages (so feature-gated capabilities are covered), resolved
 /// to requiring source packages with their severability.
 pub fn probe_dependents(branch: &str, package: &str) -> Result<Probe, String> {
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(branch.to_string()),
-        repo: None,
-    };
+    let fedrq = sandogasa_fedrq::Fedrq::for_branch(branch.to_string());
     let binaries = fedrq
         .subpkgs_names(package)
         .map_err(|e| format!("subpackages of {package} on {branch}: {e}"))?;

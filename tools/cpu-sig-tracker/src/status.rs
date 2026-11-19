@@ -1402,10 +1402,7 @@ pub(crate) fn fetch_stream_nvrs(
     if packages.is_empty() {
         return HashMap::new();
     }
-    let fq = Fedrq {
-        branch: Some(release.to_string()),
-        repo: None,
-    };
+    let fq = Fedrq::for_branch(release.to_string());
     match fq.src_nvrs(packages) {
         Ok(nvrs) => nvrs
             .into_iter()

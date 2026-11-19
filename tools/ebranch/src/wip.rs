@@ -1699,10 +1699,7 @@ fn refresh_shipped(ledger: &mut Ledger, branches: &[String], today: &str, only: 
         return;
     }
     for branch in branches {
-        let fedrq = sandogasa_fedrq::Fedrq {
-            branch: Some(branch.clone()),
-            repo: None,
-        };
+        let fedrq = sandogasa_fedrq::Fedrq::for_branch(branch.clone());
         let nvrs = match fedrq.src_nvrs(&names) {
             Ok(nvrs) => nvrs,
             Err(e) => {

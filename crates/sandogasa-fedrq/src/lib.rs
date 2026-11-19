@@ -7,13 +7,47 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Options for fedrq queries.
+/// Options for fedrq queries, built with [`Fedrq::for_branch`] or
+/// [`Fedrq::default`] and the `with_` methods, so an option added later
+/// is not a breaking change.
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct Fedrq {
     /// Branch/release to query (e.g. "rawhide", "f41", "epel9").
     pub branch: Option<String>,
-    /// Repository class (e.g. "@base", "@testing").
+    /// Repository class (e.g. "@base", "@testing"), which replaces the
+    /// branch's own repositories (`-r`).
     pub repo: Option<String>,
+    /// Repositories queried as well as the branch's (`-e`), such as a
+    /// SIG's published repository, `@baseurl:<url>`.
+    pub enabled: Vec<String>,
+}
+
+impl Fedrq {
+    /// Queries of `branch` in its own repositories.
+    pub fn for_branch(branch: impl Into<String>) -> Self {
+        Self::default().with_branch(Some(branch.into()))
+    }
+
+    /// The same queries, of `branch` (fedrq's default when `None`).
+    pub fn with_branch(mut self, branch: Option<String>) -> Self {
+        self.branch = branch;
+        self
+    }
+
+    /// The same queries, in the repository class `repo` instead of the
+    /// branch's own repositories (`-r`), when given.
+    pub fn with_repo(mut self, repo: Option<String>) -> Self {
+        self.repo = repo;
+        self
+    }
+
+    /// The same queries, also reading `repos` (`-e`), in addition to
+    /// any already added.
+    pub fn with_enabled(mut self, repos: Vec<String>) -> Self {
+        self.enabled.extend(repos);
+        self
+    }
 }
 
 /// Errors from fedrq invocations.
@@ -500,6 +534,9 @@ impl Fedrq {
         }
         if let Some(repo) = &self.repo {
             cmd.args(["-r", repo]);
+        }
+        for repo in &self.enabled {
+            cmd.args(["-e", repo]);
         }
     }
 
@@ -1097,10 +1134,9 @@ mod tests {
         // indexes source RPMs the answer would otherwise merge the
         // binary's Requires with the source's BuildRequires, which
         // read as an update nobody could install.
-        let f = Fedrq {
-            branch: Some("al10.2".to_string()),
-            repo: Some("@epel".to_string()),
-        };
+        let f = Fedrq::default()
+            .with_branch(Some("al10.2".to_string()))
+            .with_repo(Some("@epel".to_string()));
         let batch = ["libheif".to_string()];
         for args in [
             argv(&f.pkg_requires_command("libheif")),
@@ -1228,6 +1264,16 @@ mod tests {
         // Verify the struct starts with no options set.
         assert!(fq.branch.is_none());
         assert!(fq.repo.is_none());
+        assert!(fq.enabled.is_empty());
+        // The builders set what they name, and repositories add up.
+        let fq = Fedrq::for_branch("c10s")
+            .with_repo(Some("@epel".to_string()))
+            .with_enabled(vec!["a".to_string()])
+            .with_enabled(vec!["b".to_string()]);
+        assert_eq!(fq.branch.as_deref(), Some("c10s"));
+        assert_eq!(fq.repo.as_deref(), Some("@epel"));
+        assert_eq!(fq.enabled, ["a", "b"]);
+        assert_eq!(Fedrq::default().with_branch(None).branch, None);
     }
 
     #[test]
@@ -1335,10 +1381,7 @@ mod tests {
 
     #[test]
     fn whatrequires_src_asks_about_source_packages_by_name() {
-        let f = Fedrq {
-            branch: Some("rawhide".to_string()),
-            repo: None,
-        };
+        let f = Fedrq::for_branch("rawhide".to_string());
         let args = argv(&f.whatrequires_src_command(&["pkgconfig(libical)".to_string()]));
         let sep = args.iter().position(|a| a == "--").expect("separator");
         let before = &args[..sep];
@@ -1350,10 +1393,7 @@ mod tests {
 
     #[test]
     fn binaries_info_lists_every_binary_of_a_local_repo() {
-        let f = Fedrq {
-            branch: None,
-            repo: Some("@baseurl:file:///srv/results".to_string()),
-        };
+        let f = Fedrq::default().with_repo(Some("@baseurl:file:///srv/results".to_string()));
         let args = argv(&f.binaries_info_command());
         let sep = args.iter().position(|a| a == "--").expect("separator");
         assert_eq!(&args[..2], ["pkgs", "-S"], "{args:?}");
@@ -1372,10 +1412,7 @@ mod tests {
 
     #[test]
     fn whatrequires_notsrc_asks_about_binary_packages_only() {
-        let f = Fedrq {
-            branch: Some("rawhide".to_string()),
-            repo: None,
-        };
+        let f = Fedrq::for_branch("rawhide".to_string());
         let args = argv(&f.whatrequires_notsrc_command(&["libical-devel".to_string()]));
         let sep = args.iter().position(|a| a == "--").expect("separator");
         let before = &args[..sep];
@@ -1389,11 +1426,30 @@ mod tests {
     }
 
     #[test]
+    fn enabled_repositories_are_read_besides_the_branch_repositories() {
+        let f = Fedrq::for_branch("c10s".to_string()).with_enabled(vec![
+            "@epel".to_string(),
+            "@baseurl:https://mirror.example/hyperscale/$basearch/packages-main/".to_string(),
+        ]);
+        let args = argv(&f.whatrequires_notsrc_command(&["foo".to_string()]));
+        let sep = args.iter().position(|a| a == "--").expect("separator");
+        let before = &args[..sep];
+        assert!(before.windows(2).any(|w| w == ["-b", "c10s"]), "{args:?}");
+        assert!(before.windows(2).any(|w| w == ["-e", "@epel"]), "{args:?}");
+        assert!(
+            before.windows(2).any(|w| w
+                == [
+                    "-e",
+                    "@baseurl:https://mirror.example/hyperscale/$basearch/packages-main/"
+                ]),
+            "{args:?}"
+        );
+        assert!(!before.iter().any(|a| a == "-r"), "{args:?}");
+    }
+
+    #[test]
     fn whatrequires_notsrc_info_asks_for_each_binarys_requires_and_source() {
-        let f = Fedrq {
-            branch: Some("c10s".to_string()),
-            repo: None,
-        };
+        let f = Fedrq::for_branch("c10s".to_string());
         let args = argv(&f.whatrequires_notsrc_info_command(&["libfoo.so.1()(64bit)".to_string()]));
         let sep = args.iter().position(|a| a == "--").expect("separator");
         let before = &args[..sep];

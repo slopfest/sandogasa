@@ -261,10 +261,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
                 names.len()
             );
         }
-        let fedrq = sandogasa_fedrq::Fedrq {
-            branch: Some(branch.clone()),
-            repo: None,
-        };
+        let fedrq = sandogasa_fedrq::Fedrq::for_branch(branch.clone());
         for nvr in fedrq.src_nvrs(&names).map_err(|e| e.to_string())? {
             // `name-version-release`: the name is one of ours.
             if let Some(name) = names

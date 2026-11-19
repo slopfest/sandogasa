@@ -2708,10 +2708,9 @@ fn main() -> ExitCode {
                 Err(e) => eprintln!("warning: could not expire the cached metadata of {tag}: {e}"),
                 _ => {}
             }
-            sandogasa_fedrq::Fedrq {
-                branch: args.source.clone(),
-                repo: Some(format!("@koji-src:{tag}")),
-            }
+            sandogasa_fedrq::Fedrq::default()
+                .with_branch(args.source.clone())
+                .with_repo(Some(format!("@koji-src:{tag}")))
         })
     });
 
@@ -2754,37 +2753,36 @@ fn main() -> ExitCode {
         None => None,
     };
     let resolver = FedrqResolver {
-        source: sandogasa_fedrq::Fedrq {
-            branch: args.source.clone(),
-            repo: args.source_repo.clone(),
-        },
+        source: sandogasa_fedrq::Fedrq::default()
+            .with_branch(args.source.clone())
+            .with_repo(args.source_repo.clone()),
         source_src,
-        target: sandogasa_fedrq::Fedrq {
-            branch: args.target.clone(),
-            repo: args.target_repo.clone(),
-        },
+        target: sandogasa_fedrq::Fedrq::default()
+            .with_branch(args.target.clone())
+            .with_repo(args.target_repo.clone()),
         // Where updates-testing lives for this target. A plain branch
         // has its own; the CBS pattern (-b c10s -r @epel) has none,
         // since fedrq knows no @epel-testing for a base branch, so it
         // reads EPEL's own branch instead. A side tag or COPR carries
         // its builds already and gets nothing.
         target_testing: match (args.target.as_deref(), args.target_repo.as_deref()) {
-            (Some(branch), None) => Some(sandogasa_fedrq::Fedrq {
-                branch: Some(branch.to_string()),
-                repo: Some("@testing".to_string()),
-            }),
+            (Some(branch), None) => Some(
+                sandogasa_fedrq::Fedrq::default()
+                    .with_branch(Some(branch.to_string()))
+                    .with_repo(Some("@testing".to_string())),
+            ),
             (Some(branch), Some(repo)) if repo.contains("@epel") => {
-                resolve::epel_branch_for_base(branch).map(|epel| sandogasa_fedrq::Fedrq {
-                    branch: Some(epel.to_string()),
-                    repo: Some("@testing".to_string()),
+                resolve::epel_branch_for_base(branch).map(|epel| {
+                    sandogasa_fedrq::Fedrq::default()
+                        .with_branch(Some(epel.to_string()))
+                        .with_repo(Some("@testing".to_string()))
                 })
             }
             _ => None,
         },
-        base: base_branch.as_ref().map(|b| sandogasa_fedrq::Fedrq {
-            branch: Some(b.clone()),
-            repo: None,
-        }),
+        base: base_branch
+            .as_ref()
+            .map(|b| sandogasa_fedrq::Fedrq::for_branch(b.clone())),
         source_graph,
         source_offline: Default::default(),
         source_online: Default::default(),

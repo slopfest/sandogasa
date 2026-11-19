@@ -682,10 +682,9 @@ fn src_probe_repo(
     repo: Option<&str>,
     packages: &[String],
 ) -> Result<BTreeMap<String, String>, String> {
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(branch.to_string()),
-        repo: repo.map(str::to_string),
-    };
+    let fedrq = sandogasa_fedrq::Fedrq::default()
+        .with_branch(Some(branch.to_string()))
+        .with_repo(repo.map(str::to_string));
     let nvrs = fedrq
         .src_nvrs(packages)
         .map_err(|e| format!("pre-flight ({branch}): {e}"))?;

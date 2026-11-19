@@ -417,10 +417,7 @@ impl FedrqLookup {
         if !self.installed {
             return Err("fedrq is not installed (sudo dnf install fedrq)".into());
         }
-        Ok(sandogasa_fedrq::Fedrq {
-            branch: Some(branch.to_string()),
-            repo: None,
-        })
+        Ok(sandogasa_fedrq::Fedrq::for_branch(branch.to_string()))
     }
 }
 

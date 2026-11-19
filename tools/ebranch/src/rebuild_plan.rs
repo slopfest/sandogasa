@@ -2045,10 +2045,7 @@ pub fn run(opts: &Options) -> Result<(), String> {
         }
         None => (None, Vec::new()),
     };
-    let fedrq = sandogasa_fedrq::Fedrq {
-        branch: Some(opts.branch.clone()),
-        repo: None,
-    };
+    let fedrq = sandogasa_fedrq::Fedrq::for_branch(opts.branch.clone());
     let plan = plan(
         &opts.library,
         &opts.branch,
@@ -2273,10 +2270,7 @@ impl ContactQuery for DistGitLookup {
     }
 
     fn source_vrs(&self, packages: &[String]) -> Result<BTreeMap<String, String>, String> {
-        let fedrq = sandogasa_fedrq::Fedrq {
-            branch: Some(self.branch.clone()),
-            repo: None,
-        };
+        let fedrq = sandogasa_fedrq::Fedrq::for_branch(self.branch.clone());
         let nvrs = fedrq.src_nvrs(packages).map_err(|e| e.to_string())?;
         Ok(crate::branch_request::match_nvrs_to_packages(
             &nvrs, packages,
@@ -2695,10 +2689,7 @@ fn read_side_tag(tag: &str, koji: &dyn KojiQuery, verbose: bool) -> Result<SideT
         Err(e) => eprintln!("warning: could not expire the cached metadata of {tag}: {e}"),
         _ => {}
     }
-    let side = sandogasa_fedrq::Fedrq {
-        branch: None,
-        repo: Some(format!("@koji:{tag}")),
-    };
+    let side = sandogasa_fedrq::Fedrq::default().with_repo(Some(format!("@koji:{tag}")));
     let infos = side.providers_vr_info(&names).map_err(|e| e.to_string())?;
     let sonames = sonames_by_source(&nvrs, &infos);
     Ok(SideTag {
