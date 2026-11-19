@@ -5,6 +5,28 @@ sandogasa tools need today: user identity lookup, token
 validation, user-event listing for activity reports, the Search
 API for pull requests, and per-repo authored-commit counts.
 
+Through GraphQL it also reads, for activity reports over any
+period:
+- `contributions(login, from, to)`: the repositories committed to,
+  with a count each, and the pull requests reviewed, a year per
+  request at most;
+- `issue_comments(login, since)`: the user's comments on issues and
+  pull requests, newest edit first, back to a day;
+- `recent_annotated_tags(repos)`: each repository's annotated tags
+  among its 50 newest, ten repositories to a request, tagger dates in
+  UTC;
+- `commit_counts(login, repos, since, until)`: the user's commits on
+  each repository's default branch, 25 repositories to a request.
+
+A window that names 100 repositories, the most GitHub gives, is split
+until none does. Items GitHub withholds from the token (an
+organization refusing classic personal access tokens) are left out
+and counted in `unreadable`, with GitHub's reasons; a batch that fails
+is listed in `failures` while the others count.
+`private_repos_pushed_since` lists the private repositories the
+token's owner (`token_login`) can read that were pushed to since a
+day, since contributions count those without naming them.
+
 Designed to mirror `sandogasa-gitlab` in shape so a GitHub
 domain in `sandogasa-report` looks structurally identical to a
 GitLab one (token resolution, group/org filter, per-instance

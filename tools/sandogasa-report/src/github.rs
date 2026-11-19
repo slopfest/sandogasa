@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
-use sandogasa_github::{Client, Event, PullRequest, PullRequestDetail, RepoCommit, User};
+use sandogasa_github::{Client, Event, ItemNode, PullRequest, PullRequestDetail, RepoCommit, User};
 use serde::Serialize;
 
 use crate::config::GithubConfig;
@@ -202,14 +202,15 @@ pub fn github_report(
         .map(into_pr_ref)
         .collect();
 
-    // Reviewed/commented PRs come from user events, not Search.
-    // GitHub Search's `reviewed-by:`/`commenter:` qualifiers match
-    // "user has done this at any time" and the temporal filters
-    // (`updated:`, `created:`, etc.) apply to the PR itself, not
-    // the user's action — so a 2021 PR with any modification
-    // in our window (e.g. a comment from someone else) would
-    // surface as "reviewed in window". Walking the user's events
-    // gives us "the user *actually did* the thing in the window".
+    // Reviewed/commented PRs come from the user's own actions, not
+    // Search. GitHub Search's `reviewed-by:`/`commenter:` qualifiers
+    // match "user has done this at any time" and the temporal filters
+    // (`updated:`, `created:`, etc.) apply to the PR itself, not the
+    // user's action — so a 2021 PR with any modification in our
+    // window (e.g. a comment from someone else) would surface as
+    // "reviewed in window". The events stream says what the user did
+    // and when, but holds only their newest 300 events (#181), so
+    // GraphQL's contributions and comment list fill in the rest.
     if verbose {
         eprintln!("[github] {base}: fetching user events");
     }
@@ -244,53 +245,157 @@ pub fn github_report(
         }
         kept
     };
-    let (reviewed, commented) = prs_from_events(&events, since, until, cfg.org.as_deref());
-    report.reviewed_prs = reviewed;
-    report.commented_prs = commented;
-    report.releases_published = releases_from_events(&events, since, until, cfg.org.as_deref());
-    let touched_repos: BTreeSet<String> = events
+    let org = cfg.org.as_deref();
+    if verbose {
+        eprintln!("[github] {base}: reading contributions and comments since {since}");
+    }
+    // A failed read is a warning: the events still give what they
+    // reach, and the searches above are kept.
+    let contrib = client
+        .contributions(login, since, until)
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "warning: cannot read GitHub contributions on {base} ({e}); commits and \
+             reviews come from the recent events alone"
+            );
+            Default::default()
+        });
+    let comments = client.issue_comments(login, since).unwrap_or_else(|e| {
+        eprintln!(
+            "warning: cannot read GitHub comments on {base} ({e}); they come from the \
+             recent events alone"
+        );
+        Default::default()
+    });
+    if contrib.capped {
+        eprintln!(
+            "warning: GitHub ({base}) names at most 100 repositories a day, and a day \
+             reached it; commits in others are missing"
+        );
+    }
+    for (what, unreadable) in [
+        ("review", &contrib.unreadable),
+        ("comment", &comments.unreadable),
+    ] {
+        if unreadable.count > 0 {
+            eprintln!(
+                "warning: GitHub ({base}) withheld {} {what}(s) this token cannot read, and \
+                 commits in the same organizations go uncounted: {}",
+                unreadable.count,
+                unreadable
+                    .reasons
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+    }
+    if contrib.restricted > 0 {
+        eprintln!(
+            "note: GitHub ({base}) counts {} contribution(s) in private repositories \
+             without naming them{}",
+            contrib.restricted,
+            if include_private {
+                "; the ones the token can read that were pushed to in the period are \
+                 counted here"
+            } else {
+                "; left out without --private"
+            }
+        );
+    }
+    // In the org, if one is set, and public unless --private.
+    let shown = |item: &ItemNode| {
+        repo_in_org(&item.repository.name_with_owner, org)
+            && (include_private || !item.repository.is_private)
+    };
+    let (reviewed, commented) = prs_from_events(&events, since, until, org);
+    report.reviewed_prs = merge_prs(
+        contrib
+            .reviewed
+            .iter()
+            .filter(|pr| shown(pr))
+            .map(item_pr_ref),
+        reviewed,
+    );
+    report.commented_prs = merge_prs(
+        comments
+            .comments
+            .iter()
+            .filter(|c| date_in_range(&c.created_at, since, until))
+            .filter_map(|c| c.pull_request.as_ref())
+            .filter(|pr| shown(pr))
+            .map(item_pr_ref),
+        commented,
+    );
+    report.releases_published = releases_from_events(&events, since, until, org);
+
+    // Commits: GitHub's contributions count them per repository, but
+    // leave out forks, and name no private repository the token cannot
+    // see there (`restricted`). So repos pushed to in the events, and
+    // with --private the private ones pushed to since `since`, are
+    // counted separately.
+    let counted: BTreeMap<String, u64> = contrib
+        .commits
+        .iter()
+        .filter(|(slug, _)| repo_in_org(slug, org))
+        .filter(|(slug, _)| include_private || !contrib.private_repos.contains(*slug))
+        .map(|(slug, n)| (slug.clone(), *n))
+        .collect();
+    let mut by_hand: BTreeSet<String> = events
         .iter()
         .filter(|e| e.event_type == "PushEvent")
         .filter(|e| event_in_range(e, since, until))
         .filter_map(|e| e.repo_slug().map(String::from))
-        .filter(|slug| repo_in_org(slug, cfg.org.as_deref()))
+        .filter(|slug| repo_in_org(slug, org))
         .collect();
+    if include_private {
+        by_hand.extend(
+            private_repos(&client, base, login, since, verbose)
+                .into_iter()
+                .filter(|slug| repo_in_org(slug, org)),
+        );
+    }
+    by_hand.retain(|slug| !counted.contains_key(slug));
+    if verbose {
+        eprintln!(
+            "[github] {base}: counting authored commits in {} more repo(s)",
+            by_hand.len()
+        );
+    }
+    report.commits_authored = counted;
+    let repos: Vec<String> = by_hand.iter().cloned().collect();
+    match client.commit_counts(login, &repos, since, until) {
+        Ok(counts) => {
+            for failure in &counts.failures {
+                eprintln!("warning: cannot count GitHub commits in {failure}");
+            }
+            report.commits_authored.extend(counts.counts);
+        }
+        Err(e) => eprintln!(
+            "warning: cannot count GitHub commits in {} repo(s) on {base} ({e})",
+            repos.len()
+        ),
+    }
 
     // Tags can't be derived from the user-events stream: a
     // `git push --follow-tags` folds the tag creation into the
-    // existing PushEvent (which lists only the branch ref). Walk
-    // the Git Refs API per touched repo instead, resolving
-    // annotated tags so we can check the tagger date and identity.
+    // existing PushEvent (which lists only the branch ref). Read each
+    // repo's newest annotated tags instead, with tagger date and
+    // identity.
+    let tag_repos: BTreeSet<String> = report
+        .commits_authored
+        .keys()
+        .cloned()
+        .chain(by_hand)
+        .collect();
     if verbose {
         eprintln!(
-            "[github] {base}: scanning tags across {} touched repo(s)",
-            touched_repos.len()
+            "[github] {base}: scanning tags across {} repo(s)",
+            tag_repos.len()
         );
     }
-    report.tags_pushed = collect_tags(&client, &touched_repos, &user_obj, since, until, verbose);
-
-    if verbose {
-        eprintln!(
-            "[github] {base}: counting authored commits across {} touched repo(s)",
-            touched_repos.len()
-        );
-    }
-    for slug in &touched_repos {
-        let Some((owner, repo)) = slug.split_once('/') else {
-            continue;
-        };
-        match client.count_authored_commits(owner, repo, login, since, until) {
-            Ok(n) => {
-                if n > 0 {
-                    report.commits_authored.insert(slug.clone(), n);
-                }
-            }
-            Err(e) if verbose => {
-                eprintln!("[github] {base}: authored-commit lookup failed for {slug}: {e}");
-            }
-            Err(_) => {}
-        }
-    }
+    report.tags_pushed = collect_tags(&client, &tag_repos, &user_obj, since, until);
 
     Ok(report)
 }
@@ -461,73 +566,102 @@ fn prs_from_events(
     )
 }
 
-/// Walk the Git Refs API for each repo the user pushed to and
-/// collect annotated tags they cut in the window. Lightweight
-/// tags are skipped — they carry no tagger info and there's no
-/// reliable signal that the user (rather than a co-maintainer)
-/// pushed them.
-///
-/// Match heuristic: an annotated tag belongs to the user when
-/// `tagger.date` is inside the window AND the tagger's `name`
-/// or `email` matches the user's GitHub profile (case-
-/// insensitive). The profile fallback works for users who set a
-/// public name even when their commit email differs from the
-/// public GitHub email (the common Fedora case where commits
-/// are signed with `salimma@fedoraproject.org` but the GitHub
-/// account lists a personal address).
+/// The annotated tags `user` made in the window in `repos`, read in
+/// batches through GraphQL. A failed batch is a warning: the report
+/// goes on with the others' tags.
 fn collect_tags(
     client: &Client,
     repos: &BTreeSet<String>,
     user: &User,
     since: NaiveDate,
     until: NaiveDate,
-    verbose: bool,
 ) -> Vec<TagRef> {
+    let repos: Vec<String> = repos.iter().cloned().collect();
+    let recent = client.recent_annotated_tags(&repos);
+    for failure in &recent.failures {
+        eprintln!("warning: cannot read GitHub tags in {failure}");
+    }
     let mut out: Vec<TagRef> = Vec::new();
-    for slug in repos {
-        let Some((owner, repo)) = slug.split_once('/') else {
-            continue;
-        };
-        let refs = match client.list_tag_refs(owner, repo) {
-            Ok(r) => r,
-            Err(e) => {
-                if verbose {
-                    eprintln!("[github] list_tag_refs failed for {slug}: {e}");
-                }
-                continue;
-            }
-        };
-        for r in refs {
-            if r.object.object_type != "tag" {
-                continue;
-            }
-            let annotated = match client.get_annotated_tag(owner, repo, &r.object.sha) {
-                Ok(t) => t,
-                Err(e) => {
-                    if verbose {
-                        eprintln!(
-                            "[github] get_annotated_tag failed for {slug}#{}: {e}",
-                            r.tag_name()
-                        );
-                    }
-                    continue;
-                }
-            };
-            if !date_in_range(&annotated.tagger.date, since, until) {
-                continue;
-            }
-            if !tagger_matches_user(&annotated.tagger, user) {
+    for (slug, list) in recent.tags {
+        for t in list {
+            if !date_in_range(&t.tagger.date, since, until) || !tagger_matches_user(&t.tagger, user)
+            {
                 continue;
             }
             out.push(TagRef {
+                url: format!("https://github.com/{slug}/tree/{}", t.tag),
                 repo: slug.clone(),
-                tag: annotated.tag,
-                url: format!("https://github.com/{slug}/tree/{}", r.tag_name()),
+                tag: t.tag,
             });
         }
     }
     out.sort_by(|a, b| a.repo.cmp(&b.repo).then(a.tag.cmp(&b.tag)));
     out
+}
+
+/// With --private, the private repositories pushed to since `since`.
+/// GitHub lists them for the token's owner only, so for another user
+/// they are skipped with a note; a failed read is a warning.
+fn private_repos(
+    client: &Client,
+    base: &str,
+    login: &str,
+    since: NaiveDate,
+    verbose: bool,
+) -> Vec<String> {
+    match client.token_login() {
+        Ok(owner) if owner.eq_ignore_ascii_case(login) => {}
+        Ok(owner) => {
+            eprintln!(
+                "note: GitHub ({base}) lists private repositories for the token's owner, \
+                 {owner}, not {login}; theirs are left out"
+            );
+            return Vec::new();
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: cannot tell whose GitHub token this is on {base} ({e}); private repositories are left out"
+            );
+            return Vec::new();
+        }
+    }
+    if verbose {
+        eprintln!("[github] {base}: listing private repos pushed to since {since}");
+    }
+    client
+        .private_repos_pushed_since(since)
+        .unwrap_or_else(|e| {
+            eprintln!("warning: cannot list private GitHub repositories on {base} ({e})");
+            Vec::new()
+        })
+}
+
+/// A pull request GraphQL gave, for the report's lists.
+fn item_pr_ref(pr: &ItemNode) -> PrRef {
+    let merged = pr.state == "MERGED";
+    PrRef {
+        repo: pr.repository.name_with_owner.clone(),
+        number: pr.number,
+        title: pr.title.clone(),
+        url: pr.url.clone(),
+        state: if merged {
+            "closed".to_string()
+        } else {
+            pr.state.to_lowercase()
+        },
+        merged,
+        applied: false,
+    }
+}
+
+/// `first` and `more`, each pull request once (by repo and number),
+/// `first`'s where both have it.
+fn merge_prs(first: impl Iterator<Item = PrRef>, more: Vec<PrRef>) -> Vec<PrRef> {
+    let mut all: BTreeMap<(String, u64), PrRef> = BTreeMap::new();
+    for pr in first.chain(more) {
+        all.entry((pr.repo.clone(), pr.number)).or_insert(pr);
+    }
+    all.into_values().collect()
 }
 
 fn tagger_matches_user(tagger: &sandogasa_github::Tagger, user: &User) -> bool {
@@ -993,6 +1127,11 @@ mod tests {
     /// `o/since` (public then, private now). The PR searches answer
     /// only the query the visibility asks for.
     fn mock_github(include_private: bool) -> GithubReport {
+        mock_github_with(include_private, false).unwrap()
+    }
+
+    /// The mock GitHub, with GraphQL answering 502 when `graphql_down`.
+    fn mock_github_with(include_private: bool, graphql_down: bool) -> Result<GithubReport, String> {
         use serde_json::json;
         use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1009,14 +1148,13 @@ mod tests {
             json!({"id": "1", "type": "PushEvent", "repo": {"id": 1, "name": repo},
                    "created_at": "2026-02-15T10:00:00Z", "public": public, "payload": {}})
         };
-        let commits = |n: usize| json!(vec![json!({"sha": "x"}); n]);
         rt.block_on(async {
             let get = |p: &str, body: serde_json::Value| {
                 Mock::given(method("GET"))
                     .and(path(p.to_string()))
                     .respond_with(ResponseTemplate::new(200).set_body_json(body))
             };
-            get("/users/me", json!({"id": 1, "login": "me"}))
+            get("/users/me", json!({"id": 1, "login": "me", "name": "Me"}))
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
@@ -1057,17 +1195,91 @@ mod tests {
             get("/repos/o/since", json!({"id": 3, "private": true}))
                 .mount(&server)
                 .await;
-            get("/repos/o/pub/commits", commits(2)).mount(&server).await;
-            get("/repos/o/priv/commits", commits(5))
+            // GraphQL: o/old has commits but no event (#181), o/secret
+            // is private; a review, comments, and a tag.
+            let repo = |name: &str, private: bool| {
+                json!({"nameWithOwner": name, "isPrivate": private})
+            };
+            let item = |name: &str, private: bool, n: u64, state: &str| {
+                json!({"number": n, "title": format!("PR {n}"), "state": state,
+                       "url": format!("https://github.com/{name}/pull/{n}"),
+                       "repository": repo(name, private)})
+            };
+            let graphql = |marker: &str, data: serde_json::Value| {
+                Mock::given(method("POST"))
+                    .and(path("/graphql"))
+                    .and(wiremock::matchers::body_string_contains(marker.to_string()))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": data})))
+            };
+            graphql("contributionsCollection", json!({"user": {"contributionsCollection": {
+                "commitContributionsByRepository": [
+                    {"repository": repo("o/old", false), "contributions": {"totalCount": 4}},
+                    {"repository": repo("o/secret", true), "contributions": {"totalCount": 3}}
+                ],
+                "pullRequestReviewContributions": {
+                    "pageInfo": {"hasNextPage": false, "endCursor": null},
+                    "nodes": [{"pullRequest": item("o/old", false, 9, "MERGED")}]
+                }
+            }}}))
+            .mount(&server)
+            .await;
+            let comment = |at: &str, pr: serde_json::Value| {
+                json!({"createdAt": at, "updatedAt": at, "url": "u", "issue": null, "pullRequest": pr})
+            };
+            graphql("issueComments", json!({"user": {"issueComments": {
+                "pageInfo": {"hasNextPage": true, "endCursor": "more"},
+                "nodes": [
+                    comment("2026-02-20T10:00:00Z", item("o/pub", false, 5, "OPEN")),
+                    comment("2026-02-19T10:00:00Z", item("o/secret", true, 2, "OPEN")),
+                    // Before the period: the read stops here.
+                    comment("2026-01-02T10:00:00Z", item("o/pub", false, 1, "OPEN"))
+                ]
+            }}}))
+            // One page: the older comment ends the read.
+            .expect(u64::from(!graphql_down))
+            .mount(&server)
+            .await;
+            // The tag query names the first repo, in order, r0: o/old.
+            graphql("refs/tags/", json!({"r0": {"refs": {"nodes": [
+                {"name": "v1", "target": {"tagger": {
+                    "name": "Me", "email": "me@example.org", "date": "2026-02-10T09:00:00Z"}}},
+                {"name": "v0", "target": {"tagger": {
+                    "name": "Me", "email": "me@example.org", "date": "2025-12-10T09:00:00Z"}}},
+                {"name": "light", "target": {}}
+            ]}}}))
+            .mount(&server)
+            .await;
+            get(
+                "/user/repos",
+                json!([
+                    {"full_name": "o/secret2", "pushed_at": "2026-02-20T00:00:00Z"},
+                    {"full_name": "o/ancient", "pushed_at": "2025-01-01T00:00:00Z"}
+                ]),
+            )
+            .mount(&server)
+            .await;
+            get("/user", json!({"id": 1, "login": "me"}))
                 .mount(&server)
                 .await;
-            get("/repos/o/since/commits", commits(7))
+            graphql("user(login: $login) { id }", json!({"user": {"id": "U_me"}}))
                 .mount(&server)
                 .await;
-            for repo in ["o/pub", "o/priv", "o/since"] {
-                Mock::given(method("GET"))
-                    .and(path(format!("/repos/{repo}/git/refs/tags")))
-                    .respond_with(ResponseTemplate::new(404))
+            // Counted separately, in name order: o/pub alone shared;
+            // o/priv, o/pub, o/secret2 and o/since with --private.
+            let history = |n: u64| {
+                json!({"defaultBranchRef": {"target": {"history": {"totalCount": n}}}})
+            };
+            let counts = if include_private {
+                json!({"r0": history(5), "r1": history(2), "r2": history(1), "r3": history(7)})
+            } else {
+                json!({"r0": history(2)})
+            };
+            graphql("history(author", counts).mount(&server).await;
+            if graphql_down {
+                Mock::given(method("POST"))
+                    .and(path("/graphql"))
+                    .respond_with(ResponseTemplate::new(502))
+                    .with_priority(1)
                     .mount(&server)
                     .await;
             }
@@ -1086,26 +1298,99 @@ mod tests {
             include_private,
             false,
         )
-        .unwrap()
+    }
+
+    #[test]
+    fn a_report_goes_on_without_graphql() {
+        // The searches and events are kept; commits, reviews, comments
+        // and tags that need GraphQL are missing, with warnings.
+        let report = mock_github_with(true, true).unwrap();
+        assert_eq!(report.opened_prs.len(), 1);
+        assert!(report.commits_authored.is_empty());
+        assert!(report.tags_pushed.is_empty());
+    }
+
+    #[test]
+    fn private_repos_are_the_token_owners() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(async {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/user"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"id": 2, "login": "Someone"})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/user/repos"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    {"full_name": "s/p", "pushed_at": "2026-02-01T00:00:00Z"}
+                ])))
+                // Only for the owner's own report.
+                .expect(1)
+                .mount(&server)
+                .await;
+            server
+        });
+        let client = Client::new(&server.uri(), "tok").unwrap();
+        let since = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        assert!(private_repos(&client, "b", "me", since, false).is_empty());
+        assert_eq!(
+            private_repos(&client, "b", "someone", since, false),
+            ["s/p"]
+        );
+        // A token that cannot be read: nothing listed.
+        let down = Client::new("http://127.0.0.1:9", "tok").unwrap();
+        assert!(private_repos(&down, "b", "me", since, false).is_empty());
+        drop(rt);
     }
 
     #[test]
     fn a_shared_report_asks_only_for_public_work() {
+        let prs = |list: &[PrRef]| -> Vec<String> {
+            list.iter()
+                .map(|p| format!("{}#{} {}", p.repo, p.number, p.state))
+                .collect()
+        };
         let shared = mock_github(false);
         assert_eq!(shared.opened_prs.len(), 1);
+        // o/old has no event: its commits come from the contributions.
         assert_eq!(
             shared.commits_authored,
-            BTreeMap::from([("o/pub".to_string(), 2)])
+            BTreeMap::from([("o/old".to_string(), 4), ("o/pub".to_string(), 2)])
         );
+        assert_eq!(prs(&shared.reviewed_prs), ["o/old#9 closed"]);
+        assert!(shared.reviewed_prs[0].merged);
+        assert_eq!(prs(&shared.commented_prs), ["o/pub#5 open"]);
+        let tags: Vec<String> = shared
+            .tags_pushed
+            .iter()
+            .map(|t| format!("{} {}", t.repo, t.tag))
+            .collect();
+        assert_eq!(tags, ["o/old v1"]);
         let full = mock_github(true);
         assert_eq!(full.opened_prs.len(), 1);
         assert_eq!(
             full.commits_authored,
             BTreeMap::from([
+                ("o/old".to_string(), 4),
                 ("o/priv".to_string(), 5),
                 ("o/pub".to_string(), 2),
+                ("o/secret".to_string(), 3),
+                ("o/secret2".to_string(), 1),
                 ("o/since".to_string(), 7)
             ])
+        );
+        assert_eq!(
+            prs(&full.commented_prs),
+            ["o/pub#5 open", "o/secret#2 open"]
         );
     }
 

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### sandogasa-report's GitHub section covers the whole period
+
+sandogasa-report's GitHub section left out every repository the user
+had last pushed to before their newest 300 events: a report from
+2026-07-01 run on 2026-11-19 counted commits and scanned tags in four
+repositories, and missed libbpf, damo, wprof, the private hansei and
+others. Reviewed and commented PRs had the same limit. The repositories
+came from the events stream, which GitHub caps at 300 events, so the
+longer the period, or the later the report, the more went missing.
+
+Commits and reviews now come from GitHub's contribution counts
+(GraphQL `contributionsCollection`, a year per request), comments
+from the user's comment list, read back to `--since`, and tags from
+each repository's newest annotated tags, ten repositories to a
+request instead of one request per tag. The events still add pushes
+to forks, which contributions do not count, and releases. With
+`--private`, the private repositories pushed to in the period are
+counted too, 25 to a request, since GitHub counts their contributions
+without naming them; this lists the token owner's repositories, so a
+report about someone else leaves them out and says so. Items an
+organization withholds from the token (meta and facebookincubator
+refuse classic personal access tokens) are left out with a warning
+saying how many and why, and a source that fails is a warning rather
+than the end of the run.
+
+sandogasa-github gains `contributions`, `issue_comments`,
+`recent_annotated_tags`, `commit_counts`, `private_repos_pushed_since`
+and `token_login`.
+
+Fixes #181
+
 ### sandogasa-report reads every page of a user's Bodhi updates
 
 The Bodhi section stopped after a user's first 500 updates without

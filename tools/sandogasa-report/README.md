@@ -27,7 +27,18 @@ packaging activity across multiple systems:
   or `(applied)`, rebased commits included
 - **GitHub**: PRs opened / merged / reviewed / commented on,
   authored commit counts per repo, annotated tags cut, and
-  GitHub Releases published. Optionally scoped by
+  GitHub Releases published. Commits and reviews come from GitHub's
+  contribution counts (commits on a repository's default branch, as
+  the contribution graph counts them), comments from the user's
+  comment list, and tags from each such repository's newest tags, so
+  a period of any length is covered; the user's recent events add
+  pushes to forks and releases. With `--private`, private
+  repositories pushed to in the period are counted too, when the
+  report is about the token's owner. A source GitHub fails to answer
+  is a warning; the rest of the section stands.
+  Organizations that refuse classic personal access tokens (meta,
+  facebookincubator) withhold their items from one; the report says
+  how many were withheld. Optionally scoped by
   organization. See `TODO.md` for why GitHub ships only the
   authored count today (mirror-pusher detection deferred). The
   opened list carries the same `(merged)` / `(closed)` /
@@ -263,11 +274,13 @@ notes. `--private` carries them all, for your own use such as a
 self-review.
 
 On GitHub the same switch covers the items themselves. A shared report
-searches for PRs with `is:public` and keeps only events (reviews,
-comments, releases, and the pushes its tags and commit counts come
-from) that were public when they happened and are in a repository
-that is public now; how many it left out is printed on standard
-error. `--private` includes them. The GitLab, Forgejo/Gitea, Sourcehut,
+searches for PRs with `is:public`, counts commits, reviews and
+comments only in repositories that are public now, and keeps only
+events (releases, and pushes to forks) that were public when they
+happened and are in a repository that is public now; how many events
+it left out is printed on standard error. `--private` includes them,
+and counts commits in the private repositories pushed to in the
+period. The GitLab, Forgejo/Gitea, Sourcehut,
 Bugzilla, Bodhi and Koji sections include whatever your tokens can see,
 with or without `--private`.
 
@@ -502,7 +515,8 @@ GitHub Enterprise server's host), then the overlay's
 **Where to create a token.** GitHub's settings tree buries
 this; the direct URLs are easier:
 
-- **Fine-grained PATs** (recommended): <https://github.com/settings/personal-access-tokens>
+- **Fine-grained PATs** (recommended, and the only kind some
+  organizations, such as meta and facebookincubator, accept): <https://github.com/settings/personal-access-tokens>
   → *Generate new token*. Pick "All repositories" or a specific
   org/repo set, then under *Repository permissions* grant
   read-only on:
