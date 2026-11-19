@@ -21,6 +21,7 @@ sandogasa-bugzilla = { workspace = true }
 sandogasa-discourse = { workspace = true }
 sandogasa-distgit = { workspace = true }
 sandogasa-fasjson = { workspace = true }
+sandogasa-fedocal = { workspace = true }
 sandogasa-forgejo = { workspace = true }
 sandogasa-mailman = { workspace = true }
 sandogasa-meetbot = { workspace = true }

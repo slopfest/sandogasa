@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use sandogasa_fasjson::kerberos;
 use serde::Serialize;
 
+mod calendar;
 mod forge;
 mod holidays;
 mod locale;
@@ -77,6 +78,8 @@ struct Cli {
 enum Service {
     Bodhi,
     Bugzilla,
+    /// Fedora Calendar's vacation calendar: planned absences.
+    Calendar,
     Discourse,
     Distgit,
     Forge,
@@ -112,6 +115,36 @@ fn parse_now(s: &str) -> Result<DateTime<Utc>, String> {
 
 #[derive(Subcommand)]
 enum Command {
+    /// File your own absence in Fedora Calendar's vacation calendar
+    ///
+    /// Logs in with your Kerberos ticket (renewing it or running kinit
+    /// for the principal in ~/.fedora.upn when needed), shows the entry,
+    /// and files it once you confirm. An absence filed already is not
+    /// filed again.
+    Away {
+        /// First day away (YYYY-MM-DD)
+        first: chrono::NaiveDate,
+
+        /// Last day away (YYYY-MM-DD)
+        last: chrono::NaiveDate,
+
+        /// Log in and check the entry, but file nothing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// A note shown with the entry, e.g. who covers for you
+        #[arg(long)]
+        note: Option<String>,
+
+        /// The entry's title (default: your FAS username)
+        #[arg(long)]
+        title: Option<String>,
+
+        /// File without asking
+        #[arg(short, long)]
+        yes: bool,
+    },
+
     /// Show a contributor's recent Bodhi updates and comments
     Bodhi {
         /// Bodhi/FAS username to look up
@@ -429,6 +462,25 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let refresh = cli.refresh;
     let now = cli.now.unwrap_or_else(Utc::now);
     match cli.command {
+        Command::Away {
+            first,
+            last,
+            dry_run,
+            note,
+            title,
+            yes,
+        } => {
+            let args = calendar::AwayArgs {
+                first,
+                last,
+                title,
+                note,
+                dry_run,
+                yes,
+                json,
+            };
+            cmd_away(&args).await
+        }
         Command::Bodhi { username, url } => cmd_bodhi(&username, &url, json).await,
         Command::Bugzilla {
             username,
@@ -896,6 +948,50 @@ fn resolve_emails(
     Ok(resolve_fas(username, email_overrides, no_fas)?.emails)
 }
 
+/// `away`: file the user's own absence, the user being the FAS account in
+/// ~/.fedora.upn, which the Kerberos ticket is for.
+async fn cmd_away(args: &calendar::AwayArgs) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    if args.json && !args.yes && !args.dry_run {
+        return Err(
+            "--json prints only the outcome, so it files without asking: \
+                    add --yes, or --dry-run"
+                .into(),
+        );
+    }
+    let user = kerberos::read_fedora_upn()
+        .filter(|u| !u.is_empty())
+        .ok_or("no ~/.fedora.upn: write your FAS username there (fedpkg reads it too)")?;
+    let at_terminal = io::stdin().is_terminal();
+    let confirm = |question: &str, default_yes: bool| -> Result<bool, String> {
+        if !at_terminal {
+            return Err(format!(
+                "{question} needs a terminal to answer; pass --yes to file without asking"
+            ));
+        }
+        sandogasa_cli::confirm(question, default_yes).map_err(|e| e.to_string())
+    };
+    // The ticket is seen to only once the days need filing: renewing it
+    // or running kinit may ask for a password, which needs a terminal.
+    let login = move || {
+        let ticket = if at_terminal {
+            ensure_kerberos_ticket().map_err(|e| e.to_string())
+        } else if kerberos::ticket_status() == kerberos::TicketStatus::Valid {
+            Ok(())
+        } else {
+            Err("no valid Kerberos ticket; run `fkinit -u <FAS username>` first".to_string())
+        };
+        ticket.map_err(sandogasa_fedocal::Error::Login)?;
+        sandogasa_fedocal::session::Session::kerberos(sandogasa_fedocal::DEFAULT_BASE_URL)
+    };
+    let client = sandogasa_fedocal::Client::new();
+    let outcome = calendar::away(&client, &user, args, confirm, login).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    }
+    Ok(())
+}
+
 /// Ensure a valid Kerberos ticket exists, offering to renew or acquire one.
 fn ensure_kerberos_ticket() -> Result<(), Box<dyn std::error::Error>> {
     match kerberos::ticket_status() {
@@ -1334,6 +1430,15 @@ async fn gather_last_seen(
     let mut checks: Vec<tokio::task::JoinHandle<(ServiceLastSeen, Option<String>)>> = Vec::new();
     let progress = |what: &str| eprintln!("{username}: checking {what}...");
 
+    if service_enabled(Service::Calendar, skip, only) {
+        progress("Fedora Calendar");
+        let (u, today) = (username.to_string(), now.date_naive());
+        checks.push(tokio::spawn(async move {
+            let client = sandogasa_fedocal::Client::new();
+            (calendar::check_calendar(&client, &u, today).await, None)
+        }));
+    }
+
     if service_enabled(Service::Discourse, skip, only) {
         progress("Discourse");
         let u = username.to_string();
@@ -1407,6 +1512,8 @@ async fn gather_last_seen(
         }
     }
 
+    // No absence filed: nothing to say.
+    services.retain(|s| !calendar::is_empty(s));
     // Sort by most recent first (entries with dates before those without)
     services.sort_by(|a, b| b.last_active.cmp(&a.last_active));
 
@@ -1535,6 +1642,12 @@ fn print_last_seen(summary: &LastSeenSummary, color: bool, working_hours: (u8, u
             }
         } else if let Some(err) = &svc.error {
             println!("  {:<14} error: {err}", svc.service);
+        } else if let Some(status) = &svc.status {
+            // A status without activity: a planned absence.
+            println!("  {:<14} {status}", svc.service);
+            if let Some(detail) = &svc.detail {
+                println!("  {:<14} {detail}", "");
+            }
         } else {
             println!("  {:<14} no activity found", svc.service);
         }
@@ -1708,7 +1821,10 @@ async fn cmd_group(
                     None => ts.clone(),
                 },
                 (None, Some(err)) => format!("error: {err}"),
-                (None, None) => "no activity found".to_string(),
+                (None, None) => svc
+                    .status
+                    .clone()
+                    .unwrap_or_else(|| "no activity found".to_string()),
             };
             println!("      {:<14} {line}", svc.service);
         }

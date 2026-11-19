@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-hattrack 1 2026-11-16 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH sandogasa-hattrack 1 2026-11-19 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 sandogasa\-hattrack \- Look up a Fedora contributor\*(Aqs activity across services
 .SH SYNOPSIS
@@ -63,6 +63,81 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS sandogasa-hattrack away
+\fBsandogasa\-hattrack away\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-\-note\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-title\fR] [\fB\-\-working\-hours\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-refresh\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIFIRST\fR> <\fILAST\fR>
+.PP
+File your own absence in Fedora Calendar\*(Aqs vacation calendar
+.PP
+Logs in with your Kerberos ticket (renewing it or running kinit for the principal in ~/.fedora.upn when needed), shows the entry, and files it once you confirm. An absence filed already is not filed again.
+.TP
+\fB\-\-dry\-run\fR
+Log in and check the entry, but file nothing
+.TP
+\fB\-\-json\fR
+Output machine\-readable JSON
+.TP
+\fB\-\-note\fR \fI<NOTE>\fR
+A note shown with the entry, e.g. who covers for you
+.TP
+\fB\-\-tz\-source\fR \fI<TZ_SOURCE>\fR [default: auto]
+Source for tzdb\*(Aqs zone1970.tab (country lookup table). `auto` picks the newer of system + bundled
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto
+.IP \(bu 2
+system
+.IP \(bu 2
+bundled
+.RE
+.TP
+\fB\-\-color\fR \fI<COLOR>\fR [default: auto]
+Colorize output. `auto` = TTY + NO_COLOR\-aware
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+auto: Auto\-detect: enable on a TTY when `NO_COLOR` is unset
+.IP \(bu 2
+always: Force colored output even when piped
+.IP \(bu 2
+never: Disable colored output entirely
+.RE
+.TP
+\fB\-\-title\fR \fI<TITLE>\fR
+The entry\*(Aqs title (default: your FAS username)
+.TP
+\fB\-\-working\-hours\fR \fI<WORKING_HOURS>\fR [default: 9\-18]
+Working\-hours range `START\-END` (24h local). Outside is dimmed
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+File without asking
+.TP
+\fB\-\-no\-holidays\fR
+Skip the Nager.Date public\-holiday lookup
+.TP
+\fB\-\-refresh\-holidays\fR
+Force\-refetch holiday data from Nager.Date even when a cached copy is present
+.TP
+\fB\-\-refresh\fR
+Ignore the meeting listings and logs kept under the cache directory and fetch them afresh
+.TP
+\fB\-\-now\fR \fI<NOW>\fR
+Override "now" used for local\-time / holiday lookups. Accepts `YYYY\-MM\-DD` (midnight UTC) or full RFC 3339 (e.g. `2026\-03\-17T10:00:00Z`). For testing / demos
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIFIRST\fR>
+First day away (YYYY\-MM\-DD)
+.TP
+<\fILAST\fR>
+Last day away (YYYY\-MM\-DD)
 .SS sandogasa-hattrack bodhi
 \fBsandogasa\-hattrack bodhi\fR [\fB\-\-json\fR] [\fB\-\-url\fR] [\fB\-\-tz\-source\fR] [\fB\-\-color\fR] [\fB\-\-working\-hours\fR] [\fB\-\-no\-holidays\fR] [\fB\-\-refresh\-holidays\fR] [\fB\-\-refresh\fR] [\fB\-\-now\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIUSERNAME\fR>
 .PP
@@ -436,6 +511,8 @@ bodhi
 .IP \(bu 2
 bugzilla
 .IP \(bu 2
+calendar: Fedora Calendar\*(Aqs vacation calendar: planned absences
+.IP \(bu 2
 discourse
 .IP \(bu 2
 distgit
@@ -467,6 +544,8 @@ Skip these services (comma\-separated, repeatable). Mailman is skipped unless as
 bodhi
 .IP \(bu 2
 bugzilla
+.IP \(bu 2
+calendar: Fedora Calendar\*(Aqs vacation calendar: planned absences
 .IP \(bu 2
 discourse
 .IP \(bu 2
@@ -575,6 +654,8 @@ bodhi
 .IP \(bu 2
 bugzilla
 .IP \(bu 2
+calendar: Fedora Calendar\*(Aqs vacation calendar: planned absences
+.IP \(bu 2
 discourse
 .IP \(bu 2
 distgit
@@ -597,6 +678,8 @@ Skip these services (comma\-separated, repeatable). Mailman is the slowest, so `
 bodhi
 .IP \(bu 2
 bugzilla
+.IP \(bu 2
+calendar: Fedora Calendar\*(Aqs vacation calendar: planned absences
 .IP \(bu 2
 discourse
 .IP \(bu 2

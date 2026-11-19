@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### hattrack shows who is away, and files your own absence
+
+hattrack's `last-seen` showed a contributor's Discourse vacation status,
+but not Fedora Calendar's vacation calendar, where many record planned
+time off, so someone who filed an absence only there looked merely
+inactive. Filing one's own absence there meant the web form.
+
+`last-seen` and `group` now carry a `calendar` service: the current or
+next absence filed in the vacation calendar for the coming 90 days,
+and any later ones (`--skip calendar` leaves it out). `hattrack away
+FIRST LAST` files your own: it shows the entry, logs in to Fedora
+Calendar with your Kerberos ticket (renewing it, or running `kinit` for
+the principal in `~/.fedora.upn`), files it once you confirm, and reads
+it back. An absence filed already for the same days is not filed
+again. `--dry-run` logs in and checks, filing nothing.
+
+New crate sandogasa-fedocal: Fedora Calendar's read API, and adding
+entries. fedocal has no API for writing, so its `Session` logs in as a
+browser would, through id.fedoraproject.org with a Kerberos ticket
+(`curl --negotiate --location-trusted`), and submits the add form.
+
+Resolves #163
+
 ### sandogasa-report's GitHub section covers the whole period
 
 sandogasa-report's GitHub section left out every repository the user

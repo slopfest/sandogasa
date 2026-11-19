@@ -1,6 +1,7 @@
 # sandogasa-hattrack
 
-Look up a Fedora contributor's activity across services.
+Look up a Fedora contributor's activity across services, and whether
+they are away, and file your own absence in Fedora Calendar.
 
 ## Installation
 
@@ -28,10 +29,16 @@ Last seen: salimma
                  expires: 2026-04-01 00:00 UTC (in 1 week)
   Mailing lists  2026-03-13T09:58:20+00:00 (1 week ago)
                  Retiring python-sphinx-hoverxref
+  Calendar       away 2026-03-23 to 2026-04-01
 ```
+
+`Calendar` is Fedora Calendar's vacation calendar: the current or next
+absence filed for the coming 90 days, and any later ones. The row is
+left out when none is filed.
 
 ### Subcommands
 
+- `away` — file your own absence in Fedora Calendar's vacation calendar
 - `bodhi` — recent Bodhi updates and comments
 - `bugzilla` — recent Bugzilla activity
 - `distgit` — dist-git activity, PRs filed, and PRs awaiting review
@@ -196,10 +203,41 @@ repeat lookups never touch the network.
   `--now 2026-03-17 discourse salimma` to see what
   St. Patrick's Day looks like.
 
+### Filing your own absence
+
+```
+$ sandogasa-hattrack away 2026-12-21 2027-01-03 --note "Back on the 4th"
+To file in https://calendar.fedoraproject.org/vacation/:
+  title:     salimma
+  days:      2026-12-21 to 2027-01-03 (full days, 14 day(s))
+  note:      Back on the 4th
+
+Logging in to Fedora Calendar with your Kerberos ticket...
+File this absence? [Y/n]:
+Filed: https://calendar.fedoraproject.org/meeting/11460/
+```
+
+`away` files a full-day entry in the vacation calendar for the FAS
+account in `~/.fedora.upn`, titled with its username unless `--title`
+says otherwise. Fedora Calendar has no API for adding entries, so
+`away` logs in to it as a browser would, with your Kerberos ticket
+instead of a password: get one with `fkinit -u <FAS username>`, or let
+`away` renew an expired one or run `kinit` for you, once it knows the
+days need filing. The login takes about ten seconds. An absence already filed for the same days is not
+filed again; one that overlaps only in part is listed, and filing
+another needs a "yes". After filing, the entry is read back from the
+calendar. `--dry-run` logs in and checks that you may add to the
+vacation calendar, but files nothing; `--yes` files without asking,
+which is also how to run it without a terminal, given a valid ticket.
+With `--json` (and `--yes` or `--dry-run`) it prints the outcome
+(`already_filed`, `declined`, `dry_run` or `filed`, with the entry's
+page), its messages going to standard error. It needs `curl` and
+`klist` (krb5-workstation).
+
 ### Narrowing the `last-seen` service set
 
-`last-seen` queries six services (Bodhi, Bugzilla, Discourse,
-dist-git, Forgejo, Mailman), and meetings when asked. The Mailman scan is the slow path because
+`last-seen` queries seven services (Bodhi, Bugzilla, Calendar,
+Discourse, dist-git, Forgejo, Mailman), and meetings when asked. The Mailman scan is the slow path because
 it walks HyperKitty archives page by page, so skipping it is
 the common speed-up when the user clearly doesn't post:
 
@@ -211,8 +249,8 @@ sandogasa-hattrack last-seen alice --only discourse,bodhi
 
 `--skip` and `--only` are mutually exclusive. Both accept a
 comma-separated list (or can be repeated). Values:
-`bodhi`, `bugzilla`, `discourse`, `distgit`, `forge`, `mailman`,
-`meetings` (the last only does anything with `--meeting`).
+`bodhi`, `bugzilla`, `calendar`, `discourse`, `distgit`, `forge`,
+`mailman`, `meetings` (the last only does anything with `--meeting`).
 
 ### JSON output
 

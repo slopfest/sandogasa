@@ -2160,6 +2160,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sandogasa-fedocal"
+version = "0.28.2"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "sandogasa-cli",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "wiremock",
+]
+
+[[package]]
 name = "sandogasa-fedrq"
 version = "0.28.2"
 dependencies = [
@@ -2222,6 +2236,7 @@ dependencies = [
  "sandogasa-discourse",
  "sandogasa-distgit",
  "sandogasa-fasjson",
+ "sandogasa-fedocal",
  "sandogasa-forgejo",
  "sandogasa-mailman",
  "sandogasa-meetbot",

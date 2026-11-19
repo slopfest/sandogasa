@@ -1,0 +1,21 @@
+[package]
+name = "sandogasa-fedocal"
+description = "Fedora Calendar (fedocal) client: read entries, add them with Kerberos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sandogasa-cli = { workspace = true, features = ["http"] }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }

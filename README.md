@@ -68,6 +68,7 @@ library crates:
 - **sandogasa-discourse** — Discourse forum API client
 - **sandogasa-distgit** — Fedora dist-git client, ACL management, and RPM spec file parser
 - **sandogasa-fasjson** — FASJSON (Fedora Account System) API client with Kerberos auth
+- **sandogasa-fedocal** — Fedora Calendar (fedocal) client: read calendars, add entries with a Kerberos login
 - **sandogasa-fedrq** — wrapper for the fedrq RPM repository query tool
 - **sandogasa-forgejo** — Forgejo / Gitea REST API client (PR activity + issue filing)
 - **sandogasa-github** — GitHub REST API client (user identity + activity)

@@ -1,0 +1,714 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Adding entries to Fedora Calendar as a logged-in user.
+//!
+//! fedocal has no API for writing, and logs users in through
+//! id.fedoraproject.org's OpenID Connect provider, which takes a Kerberos
+//! ticket as well as a password. [`Session::kerberos`] follows that login
+//! with curl, which answers the provider's `Negotiate` challenge with the
+//! user's ticket (from `fkinit`), and keeps fedocal's session cookie;
+//! [`Session::add`] then fills in and submits the add form, CSRF token
+//! included, as the browser would.
+//!
+//! curl must be told to send the ticket across the redirect from fedocal
+//! to id.fedoraproject.org (`--location-trusted`); it does not otherwise
+//! authenticate to a host other than the one first asked. fedocal's
+//! session lasts an hour, so a session is for one run.
+
+use chrono::NaiveDate;
+
+use crate::Error;
+
+/// An entry to add.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NewEntry {
+    pub calendar: String,
+    pub name: String,
+    pub first_day: NaiveDate,
+    /// The last day it takes (fedocal stores the day after).
+    pub last_day: NaiveDate,
+    pub information: String,
+    pub location: String,
+}
+
+/// A logged-in session on a Fedora Calendar instance.
+#[derive(Debug, Clone)]
+pub struct Session {
+    http: reqwest::Client,
+    base_url: String,
+    /// The `Cookie` header: every cookie the login left for the host
+    /// (fedocal's session, named by its deployment, and the load
+    /// balancer's).
+    cookie: String,
+}
+
+impl NewEntry {
+    /// A full-day entry in `calendar` from `first_day` to `last_day`.
+    pub fn full_days(
+        calendar: impl Into<String>,
+        name: impl Into<String>,
+        first_day: NaiveDate,
+        last_day: NaiveDate,
+    ) -> Self {
+        Self {
+            calendar: calendar.into(),
+            name: name.into(),
+            first_day,
+            last_day,
+            information: String::new(),
+            location: String::new(),
+        }
+    }
+
+    pub fn information(mut self, information: impl Into<String>) -> Self {
+        self.information = information.into();
+        self
+    }
+
+    /// The add form's fields: a full-day entry is sent from 00:00 to 00:00
+    /// UTC, as fedocal's form still asks for times and a time zone.
+    pub fn form(&self, csrf_token: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("csrf_token", csrf_token.to_string()),
+            ("calendar_name", self.calendar.clone()),
+            ("meeting_name", self.name.clone()),
+            ("meeting_date", self.first_day.to_string()),
+            ("meeting_date_end", self.last_day.to_string()),
+            ("meeting_time_start", "00:00".to_string()),
+            ("meeting_time_stop", "00:00".to_string()),
+            ("meeting_timezone", "UTC".to_string()),
+            ("full_day", "y".to_string()),
+            ("information", self.information.clone()),
+            ("meeting_location", self.location.clone()),
+        ]
+    }
+}
+
+impl Session {
+    /// Log in to the instance at `base_url` with the user's Kerberos
+    /// ticket. Blocking: it runs curl, about a second. Checks first that
+    /// curl and a ticket are there, and says how to get a ticket if not.
+    pub fn kerberos(base_url: &str) -> Result<Session, Error> {
+        sandogasa_cli::require_tools(&[("curl", "sudo dnf install curl", Some("--version"))])
+            .map_err(Error::Login)?;
+        let ticket = std::process::Command::new("klist")
+            .arg("-s")
+            .status()
+            .map_err(|e| {
+                Error::Login(format!(
+                    "cannot run klist ({e}); install krb5-workstation and run \
+                     `fkinit -u <FAS username>`"
+                ))
+            })?;
+        if !ticket.success() {
+            return Err(Error::Login(
+                "no Kerberos ticket; run `fkinit -u <FAS username>`".into(),
+            ));
+        }
+        Session::login_with(base_url, |argv| {
+            let out = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .output()
+                .map_err(|e| format!("cannot run curl: {e}"))?;
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            } else {
+                Err(format!(
+                    "curl failed ({}): {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ))
+            }
+        })
+    }
+
+    /// [`Session::kerberos`] with the curl run given: `run` takes the
+    /// command line [`login_command`] makes and returns what curl printed
+    /// (the URL it ended at), the cookie jar being read afterwards.
+    pub fn login_with(
+        base_url: &str,
+        run: impl FnOnce(&[String]) -> Result<String, String>,
+    ) -> Result<Session, Error> {
+        let base_url = base_url.trim_end_matches('/');
+        let jar = tempfile::NamedTempFile::new()
+            .map_err(|e| Error::Login(format!("cannot make a cookie jar: {e}")))?;
+        let argv = login_command(base_url, &jar.path().display().to_string());
+        let ended_at = run(&argv).map_err(Error::Login)?;
+        let jar_text = std::fs::read_to_string(jar.path())
+            .map_err(|e| Error::Login(format!("cannot read the cookie jar: {e}")))?;
+        let host = host_of(base_url);
+        // A login the ticket did not get through ends on
+        // id.fedoraproject.org's password form instead.
+        let cookies = host_cookies(&jar_text, host);
+        let cookie =
+            Some(cookies.join("; ")).filter(|c| !c.is_empty() && host_of(&ended_at) == host);
+        let Some(cookie) = cookie else {
+            return Err(Error::Login(format!(
+                "the login ended at {} without a session; is the Kerberos ticket \
+                 (`klist`) for your FAS account?",
+                if ended_at.is_empty() {
+                    "no page"
+                } else {
+                    ended_at.trim()
+                }
+            )));
+        };
+        Ok(Session {
+            http: no_redirect_client(),
+            base_url: base_url.to_string(),
+            cookie,
+        })
+    }
+
+    /// Whether the user may add to `calendar`: its add form opens, with a
+    /// CSRF token. Nothing is submitted; a refusal carries fedocal's
+    /// reasons.
+    pub async fn can_add(&self, calendar: &str) -> Result<(), Error> {
+        self.form_token(calendar).await.map(|_| ())
+    }
+
+    /// Add `entry`: read the add form for its CSRF token, then submit it.
+    /// fedocal answers a success with a redirect to the calendar; a
+    /// refusal shows the form again, with its reasons, which are
+    /// returned as [`Error::Refused`].
+    pub async fn add(&self, entry: &NewEntry) -> Result<(), Error> {
+        let url = format!("{}/{}/add/", self.base_url, entry.calendar);
+        let token = self.form_token(&entry.calendar).await?;
+        let resp = self
+            .http
+            .post(&url)
+            .header(reqwest::header::COOKIE, self.cookie_header())
+            .form(&entry.form(&token))
+            .send()
+            .await
+            .map_err(|e| Error::Http(format!("POST {url}: {e}")))?;
+        let status = resp.status();
+        if status.is_redirection() {
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|l| l.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            // fedocal shows a filed entry's day in the calendar; any
+            // other redirect (the calendar itself when the user may not
+            // add, the front page when the session expired) is a refusal,
+            // with its reasons on the page it leads to.
+            if is_filed_redirect(&location, &self.base_url, &entry.calendar) {
+                return Ok(());
+            }
+            let page = self
+                .page(&self.absolute(&location))
+                .await
+                .unwrap_or_default();
+            let mut reasons = page_messages(&page);
+            if reasons.is_empty() {
+                reasons.push(format!("the form led to {location}, not the entry's day"));
+            }
+            return Err(Error::Refused(reasons));
+        }
+        let body = resp.text().await.unwrap_or_default();
+        if status.is_success() {
+            return Err(Error::Refused(page_messages(&body)));
+        }
+        Err(Error::Http(format!("POST {url}: HTTP {status}")))
+    }
+
+    /// The CSRF token of `calendar`'s add form; when the form does not
+    /// open, fedocal's reasons.
+    async fn form_token(&self, calendar: &str) -> Result<String, Error> {
+        let url = format!("{}/{calendar}/add/", self.base_url);
+        let page = self.page(&url).await?;
+        csrf_token(&page).ok_or_else(|| {
+            let reasons = page_messages(&page);
+            if reasons.is_empty() {
+                Error::Http(format!(
+                    "no CSRF token on {url}; is the session still valid?"
+                ))
+            } else {
+                Error::Refused(reasons)
+            }
+        })
+    }
+
+    /// A page, as the logged-in user. A redirect away from it (to the
+    /// calendar, when the user may not add to it) is followed once, for
+    /// its messages.
+    async fn page(&self, url: &str) -> Result<String, Error> {
+        let resp = self
+            .http
+            .get(url)
+            .header(reqwest::header::COOKIE, self.cookie_header())
+            .send()
+            .await
+            .map_err(|e| Error::Http(format!("GET {url}: {e}")))?;
+        if resp.status().is_redirection() {
+            let next = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|l| l.to_str().ok())
+                .map(|l| self.absolute(l))
+                .unwrap_or_default();
+            if next.is_empty() || host_of(&next) != host_of(&self.base_url) {
+                return Err(Error::Http(format!("GET {url}: redirected to {next:?}")));
+            }
+            let resp = self
+                .http
+                .get(&next)
+                .header(reqwest::header::COOKIE, self.cookie_header())
+                .send()
+                .await
+                .map_err(|e| Error::Http(format!("GET {next}: {e}")))?;
+            return resp
+                .text()
+                .await
+                .map_err(|e| Error::Http(format!("GET {next}: {e}")));
+        }
+        let resp = sandogasa_cli::http::ok(resp, &format!("GET {url}"))
+            .await
+            .map_err(Error::Http)?;
+        resp.text()
+            .await
+            .map_err(|e| Error::Http(format!("GET {url}: {e}")))
+    }
+
+    /// `location` (a redirect's) as an absolute URL on this instance.
+    fn absolute(&self, location: &str) -> String {
+        if location.starts_with('/') {
+            format!("{}{location}", self.base_url)
+        } else {
+            location.to_string()
+        }
+    }
+
+    fn cookie_header(&self) -> String {
+        self.cookie.clone()
+    }
+}
+
+/// The curl command that logs in to `base_url` with the Kerberos ticket
+/// and keeps the cookies in `jar`, printing the URL it ends at. HTTPS
+/// only, unless `base_url` itself is not (a test server).
+pub fn login_command(base_url: &str, jar: &str) -> Vec<String> {
+    let mut argv: Vec<String> = [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--location",
+        // Send the ticket to id.fedoraproject.org too, after fedocal's
+        // redirect there.
+        "--location-trusted",
+        "--negotiate",
+        "--user",
+        ":",
+        "--max-redirs",
+        "15",
+        "--max-time",
+        "60",
+        "--user-agent",
+        concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")),
+        "--cookie-jar",
+        jar,
+        "--cookie",
+        jar,
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "%{url_effective}",
+    ]
+    .map(String::from)
+    .into();
+    if base_url.starts_with("https://") {
+        argv.extend(["--proto".to_string(), "=https".to_string()]);
+    }
+    argv.push(format!("{base_url}/login/"));
+    argv
+}
+
+/// The cookies for `host` in a Netscape-format cookie jar, as curl writes
+/// one, as `name=value`.
+fn host_cookies(jar: &str, host: &str) -> Vec<String> {
+    jar.lines()
+        .filter_map(|line| {
+            // curl marks HttpOnly cookies with this prefix.
+            let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+            if line.starts_with('#') {
+                return None;
+            }
+            let fields: Vec<&str> = line.split('\t').collect();
+            let [domain, _, _, _, _, name, value] = fields[..] else {
+                return None;
+            };
+            (domain.trim_start_matches('.') == host && !name.is_empty())
+                .then(|| format!("{name}={value}"))
+        })
+        .collect()
+}
+
+/// Whether a redirect after submitting leads to a day in `calendar`
+/// (`/<calendar>/<year>/<month>/<day>/`) on the instance at `base_url`,
+/// which is where fedocal shows an entry it filed.
+fn is_filed_redirect(location: &str, base_url: &str, calendar: &str) -> bool {
+    let path = if location.starts_with('/') {
+        location
+    } else if host_of(location) == host_of(base_url) {
+        let rest = location.split_once("://").map_or(location, |(_, r)| r);
+        rest.find('/').map_or("/", |at| &rest[at..])
+    } else {
+        return false;
+    };
+    let Some(rest) = path.strip_prefix(&format!("/{calendar}/")) else {
+        return false;
+    };
+    let year = rest.split('/').next().unwrap_or("");
+    year.len() == 4 && year.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The host of a URL, without scheme, port or path.
+fn host_of(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    authority.split(':').next().unwrap_or("")
+}
+
+/// The CSRF token of the first form on a page.
+fn csrf_token(page: &str) -> Option<String> {
+    let at = page.find("name=\"csrf_token\"")?;
+    let start = page[..at].rfind('<')?;
+    let end = at + page[at..].find('>')?;
+    let tag = &page[start..end];
+    let value = tag.split_once("value=\"")?.1;
+    Some(value.split('"').next()?.to_string()).filter(|v| !v.is_empty())
+}
+
+/// The messages a fedocal page shows: flashed errors and warnings, and
+/// the errors listed under form fields.
+fn page_messages(page: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for marker in [
+        "<li class=\"errors\">",
+        "<li class=\"warnings\">",
+        "<li class=\"error\">",
+    ] {
+        let mut rest = page;
+        while let Some(at) = rest.find(marker) {
+            rest = &rest[at + marker.len()..];
+            let text = rest.split("</li>").next().unwrap_or("");
+            push_text(&mut out, text);
+        }
+    }
+    let mut rest = page;
+    while let Some(at) = rest.find("<ul class=\"errors\">") {
+        rest = &rest[at..];
+        let list = rest.split("</ul>").next().unwrap_or("");
+        for item in list.split("<li>").skip(1) {
+            push_text(&mut out, item.split("</li>").next().unwrap_or(""));
+        }
+        rest = &rest[list.len()..];
+    }
+    out
+}
+
+/// `html` as plain text, added to `out` when not empty or already there.
+fn push_text(out: &mut Vec<String>, html: &str) {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let text = text
+        .replace("&#39;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !text.is_empty() && !out.contains(&text) {
+        out.push(text);
+    }
+}
+
+/// A client that does not follow redirects, so a submission's answer
+/// can be read.
+fn no_redirect_client() -> reqwest::Client {
+    sandogasa_cli::http::builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .redirect(reqwest::redirect::Policy::none())
+    .build()
+    .expect("build reqwest client")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{body_string_contains, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn day(s: &str) -> NaiveDate {
+        NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    /// A login whose curl run writes `jar` and ends at `ended_at`.
+    fn login(base: &str, jar: &str, ended_at: &str) -> Result<Session, Error> {
+        let jar = jar.to_string();
+        let ended_at = ended_at.to_string();
+        Session::login_with(base, move |argv| {
+            let path = &argv[argv.iter().position(|a| a == "--cookie-jar").unwrap() + 1];
+            std::fs::write(path, jar).unwrap();
+            Ok(ended_at)
+        })
+    }
+
+    const JAR: &str = "# Netscape HTTP Cookie File\n\
+        #HttpOnly_id.fedoraproject.org\tFALSE\t/\tTRUE\t0\tfedora_ipsilon_session_id\tx\n\
+        #HttpOnly_calendar.fedoraproject.org\tFALSE\t/\tTRUE\t1795110000\tfedocal\tabc.def\n\
+        calendar.fedoraproject.org\tFALSE\t/\tTRUE\t0\tfc3e\t9\n";
+
+    #[test]
+    fn the_login_command_sends_the_ticket_across_the_redirect() {
+        let argv = login_command("https://calendar.fedoraproject.org", "/tmp/jar");
+        assert_eq!(argv[0], "curl");
+        for flag in ["--location-trusted", "--negotiate"] {
+            assert!(argv.iter().any(|a| a == flag), "{flag}");
+        }
+        assert!(argv.windows(2).any(|w| w == ["--proto", "=https"]));
+        assert_eq!(
+            argv.last().unwrap(),
+            "https://calendar.fedoraproject.org/login/"
+        );
+        // A test server over plain HTTP is not limited to HTTPS.
+        let local = login_command("http://127.0.0.1:1", "/tmp/jar");
+        assert!(!local.iter().any(|a| a == "--proto"));
+    }
+
+    #[test]
+    fn a_login_keeps_the_calendars_session_cookie() {
+        let s = login(
+            "https://calendar.fedoraproject.org/",
+            JAR,
+            "https://calendar.fedoraproject.org/",
+        )
+        .unwrap();
+        // Every cookie for the calendar's host, none for the provider's.
+        assert_eq!(s.cookie_header(), "fedocal=abc.def; fc3e=9");
+        assert_eq!(s.base_url, "https://calendar.fedoraproject.org");
+        // Ending on id.fedoraproject.org's password form: refused.
+        let err = login(
+            "https://calendar.fedoraproject.org",
+            JAR,
+            "https://id.fedoraproject.org/login/gssapi/negotiate?x=1",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("ended at https://id.fedoraproject.org"),
+            "{err}"
+        );
+        // No session cookie: refused, and a failed curl is reported.
+        assert!(login("https://calendar.fedoraproject.org", "", "").is_err());
+        let failed =
+            Session::login_with("https://c.example", |_| Err("curl failed".into())).unwrap_err();
+        assert_eq!(
+            failed.to_string(),
+            "cannot log in to Fedora Calendar: curl failed"
+        );
+    }
+
+    #[test]
+    fn pages_give_their_token_and_messages() {
+        let form = r#"<form method="post"><input id="csrf_token" name="csrf_token" type="hidden" value="tok-1"></form>"#;
+        assert_eq!(csrf_token(form).as_deref(), Some("tok-1"));
+        assert_eq!(csrf_token("<form></form>"), None);
+        let refused = r#"<ul id="flashes"><li class="warnings">You are not one of the editors &amp; admins</li></ul>
+            <td><input name="meeting_time_start"><ul class="errors"><li>Time must be of type "HH:MM"</li></ul></td>
+            <ul class="errors"><li>This field is required.</li><li>This field is required.</li></ul>"#;
+        assert_eq!(
+            page_messages(refused),
+            [
+                "You are not one of the editors & admins",
+                "Time must be of type \"HH:MM\"",
+                "This field is required."
+            ]
+        );
+        assert_eq!(host_of("http://127.0.0.1:8080/x?y"), "127.0.0.1");
+        assert_eq!(
+            host_of("calendar.fedoraproject.org"),
+            "calendar.fedoraproject.org"
+        );
+    }
+
+    #[test]
+    fn a_full_day_entry_is_sent_from_midnight_to_midnight_utc() {
+        let entry = NewEntry::full_days("vacation", "PTO", day("2026-12-21"), day("2027-01-04"))
+            .information("Back on the 5th");
+        let form = entry.form("tok");
+        let get = |k: &str| form.iter().find(|(n, _)| *n == k).unwrap().1.clone();
+        assert_eq!(get("csrf_token"), "tok");
+        assert_eq!(get("meeting_date"), "2026-12-21");
+        assert_eq!(get("meeting_date_end"), "2027-01-04");
+        assert_eq!(get("meeting_time_start"), "00:00");
+        assert_eq!(get("meeting_timezone"), "UTC");
+        assert_eq!(get("full_day"), "y");
+        assert_eq!(get("information"), "Back on the 5th");
+    }
+
+    /// A session against `server`, as if logged in.
+    fn session(server: &MockServer) -> Session {
+        let host = host_of(&server.uri()).to_string();
+        let jar = format!("{host}\tFALSE\t/\tFALSE\t0\tsession\ts1\n");
+        login(&server.uri(), &jar, &format!("{}/", server.uri())).unwrap()
+    }
+
+    const FORM: &str = r#"<input name="csrf_token" type="hidden" value="t1">"#;
+
+    #[tokio::test]
+    async fn an_entry_is_added_with_the_forms_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/vacation/add/"))
+            .and(header("cookie", "session=s1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/vacation/add/"))
+            .and(body_string_contains("csrf_token=t1"))
+            .and(body_string_contains("meeting_date_end=2027-01-04"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "/vacation/2026/12/21/"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let entry = NewEntry::full_days("vacation", "PTO", day("2026-12-21"), day("2027-01-04"));
+        let s = session(&server);
+        s.can_add("vacation").await.unwrap();
+        s.add(&entry).await.unwrap();
+    }
+
+    #[test]
+    fn only_a_redirect_to_the_filed_day_means_filed() {
+        let base = "https://calendar.fedoraproject.org";
+        assert!(is_filed_redirect("/vacation/2026/12/21/", base, "vacation"));
+        assert!(is_filed_redirect(
+            "https://calendar.fedoraproject.org/vacation/2026/12/21/",
+            base,
+            "vacation"
+        ));
+        assert!(!is_filed_redirect("/vacation/", base, "vacation"));
+        assert!(!is_filed_redirect("/", base, "vacation"));
+        assert!(!is_filed_redirect("/login?next=x", base, "vacation"));
+        assert!(!is_filed_redirect("/other/2026/12/21/", base, "vacation"));
+        assert!(!is_filed_redirect(
+            "https://evil.example/vacation/2026/1/1/",
+            base,
+            "vacation"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_redirect_elsewhere_is_a_refusal() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/vacation/add/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        // An expired session: back to the front page, with a message.
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"<li class="errors">You must be logged in</li>"#),
+            )
+            .mount(&server)
+            .await;
+        let entry = NewEntry::full_days("vacation", "PTO", day("2026-12-21"), day("2027-01-04"));
+        let err = session(&server).add(&entry).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Fedora Calendar refused the entry: You must be logged in"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_carries_fedocals_reasons() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"<li class="warnings">The start date of your meeting is later than the stop date.</li>"#,
+            ))
+            .mount(&server)
+            .await;
+        let entry = NewEntry::full_days("vacation", "PTO", day("2027-01-04"), day("2026-12-21"));
+        let err = session(&server).add(&entry).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Fedora Calendar refused the entry: The start date of your meeting is later than \
+             the stop date."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_calendar_the_user_may_not_add_to_says_why() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/vacation/add/"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/vacation/"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/vacation/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"<li class="errors">You are not one of the editors of this calendar</li>"#,
+            ))
+            .mount(&server)
+            .await;
+        let entry = NewEntry::full_days("vacation", "PTO", day("2026-12-21"), day("2027-01-04"));
+        let err = session(&server).add(&entry).await.unwrap_err();
+        assert!(
+            matches!(err, Error::Refused(ref r) if r[0].starts_with("You are not")),
+            "{err}"
+        );
+        // A page without a token or a reason: an expired session.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html></html>"))
+            .mount(&server)
+            .await;
+        let err = session(&server).add(&entry).await.unwrap_err();
+        assert!(err.to_string().contains("no CSRF token"), "{err}");
+        // A server error on submitting.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let err = session(&server).add(&entry).await.unwrap_err();
+        assert!(
+            err.to_string().ends_with("HTTP 500 Internal Server Error"),
+            "{err}"
+        );
+    }
+}
