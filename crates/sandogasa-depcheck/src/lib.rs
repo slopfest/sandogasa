@@ -10,6 +10,7 @@
 pub mod analysis;
 pub mod arrival;
 mod fedrq;
+pub mod render;
 pub mod repo;
 pub mod report;
 pub mod rich;

@@ -570,6 +570,16 @@ them, exactly as a batch of side tags would."
     )]
     rpmfusion_renames: Option<String>,
 
+    /// Color the report: auto (on a terminal), always or never; never
+    /// prints the Markdown a Bodhi comment carries.
+    #[arg(
+        long,
+        value_name = "WHEN",
+        default_value = "auto",
+        help_heading = "Output"
+    )]
+    color: sandogasa_cli::style::ColorChoice,
+
     /// Show full lists instead of counts.
     #[arg(
         help_heading = "Output",
@@ -2323,7 +2333,7 @@ fn main() -> ExitCode {
                     if a.json {
                         print_json(&report);
                     } else {
-                        check_update::print_report(&report, a.detailed);
+                        check_update::print_report(&report, a.detailed, a.color);
                     }
                     // Kept as soon as it exists, so a submit or vote
                     // that fails below does not lose the analysis

@@ -6,7 +6,6 @@
 //! compares old vs new subpackage Provides to detect removed capabilities,
 //! then finds reverse dependencies in the stable repo that would break.
 
-use sandogasa_depfilter::provide_name;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -21,9 +20,7 @@ use sandogasa_depcheck::analysis::{
 pub use sandogasa_depcheck::arrival::{Arrival, ArrivalNote, PackageHistory};
 use sandogasa_depcheck::arrival::{arrival, day_of};
 use sandogasa_depcheck::repo::filter_none;
-pub use sandogasa_depcheck::report::{
-    BreakKind, ChangedProvide, PackageChange, RevDepResult, UnsatisfiedDep,
-};
+pub use sandogasa_depcheck::report::{ChangedProvide, PackageChange, RevDepResult, UnsatisfiedDep};
 use sandogasa_review::Resolution;
 use serde::{Deserialize, Serialize};
 
@@ -1733,10 +1730,6 @@ fn skip_note(report: &CheckUpdateReport) -> String {
     sandogasa_cli::wrap_prefixed(&body, "> ", 76)
 }
 
-/// In non-detailed output, how many list items to show before
-/// collapsing the rest into "… and N more".
-const LIST_CAP: usize = 15;
-
 /// Extract the blocking findings a reviewer curates before karma is cast:
 /// every installability issue, plus reverse-dependency breakage grouped by
 /// the changed Provide that causes it (one finding per Provide, listing the
@@ -1835,15 +1828,20 @@ pub fn render_addressed(addressed: &[(Finding, String)]) -> String {
     out
 }
 
-/// Print a human-readable report to stdout.
-pub fn print_report(report: &CheckUpdateReport, detailed: bool) {
-    print!("{}", render_report(report, detailed));
+/// Print the report to stdout: in color as `color` decides (on a
+/// terminal by default), otherwise the Markdown [`render_report`] gives.
+pub fn print_report(
+    report: &CheckUpdateReport,
+    detailed: bool,
+    color: sandogasa_cli::style::ColorChoice,
+) {
+    let color = sandogasa_cli::style::use_color(color);
+    print!(
+        "{}",
+        sandogasa_depcheck::render::to_terminal(&render_report(report, detailed), color)
+    );
 }
 
-/// Render the report as Markdown — the same text `print_report` writes
-/// to stdout, reusable as a Bodhi comment body. With `detailed` off,
-/// the report shows counts plus the actionable problems only (so a
-/// 330-package update stays readable); with it on, every list is shown.
 /// The blocking note on what changed in the target while the side tag
 /// was open: builds of the update the target has since outranked
 /// (#78), and reverse dependencies that would break and are new or
@@ -1905,6 +1903,30 @@ fn target_moved(report: &CheckUpdateReport) -> String {
     o
 }
 
+/// What the shared renderer shows of `report`.
+fn findings(report: &CheckUpdateReport) -> sandogasa_depcheck::render::Findings<'_> {
+    sandogasa_depcheck::render::Findings {
+        updated_packages: &report.updated_packages,
+        changes: &report.changes,
+        changed_provides: &report.changed_provides,
+        installability_issues: &report.installability_issues,
+        reverse_deps: &report.reverse_deps,
+    }
+}
+
+/// How check-update shows the shared sections: capped unless
+/// `detailed`, pointing at `--detailed` for the rest.
+fn render_options(detailed: bool) -> sandogasa_depcheck::render::Options<'static> {
+    sandogasa_depcheck::render::Options {
+        detailed,
+        more: "use --detailed",
+    }
+}
+
+/// Render the report as Markdown: what a Bodhi comment carries, and
+/// what `print_report` prints without color. With `detailed` off, the
+/// report shows counts plus the actionable problems only (so a
+/// 330-package update stays readable); with it on, every list is shown.
 pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
     use std::fmt::Write as _;
     let mut o = String::new();
@@ -1918,7 +1940,11 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
         }
     }
 
-    o.push_str(&package_summary(report, detailed));
+    o.push_str(&sandogasa_depcheck::render::package_summary(
+        &report.updated_packages,
+        &report.changes,
+        &render_options(detailed),
+    ));
 
     o.push_str(&target_moved(report));
     if !report.in_other_update.is_empty() {
@@ -1981,309 +2007,16 @@ pub fn render_report(report: &CheckUpdateReport, detailed: bool) -> String {
         return o;
     }
 
-    let updated: Vec<&ChangedProvide> = report
-        .changed_provides
-        .iter()
-        .filter(|c| c.is_updated())
-        .collect();
-    let removed: Vec<&ChangedProvide> = report
-        .changed_provides
-        .iter()
-        .filter(|c| !c.is_updated())
-        .collect();
-    let broken: Vec<(&String, &RevDepResult)> = report
-        .reverse_deps
-        .iter()
-        .filter(|(_, r)| r.status != "ok")
-        .collect();
-
-    // Analysis counts (always).
-    let _ = writeln!(o, "## Analysis\n");
-    let _ = writeln!(
-        o,
-        "- **Changed Provides:** {} ({} updated, {} removed)",
-        report.changed_provides.len(),
-        updated.len(),
-        removed.len(),
-    );
-    let _ = writeln!(
-        o,
-        "- **Installability issues:** {}",
-        report.installability_issues.len()
-    );
-    if !report.reverse_deps.is_empty() {
-        // Split the damage by kind: a package fails to install (FTI)
-        // when a binary Requires breaks, and fails to build (FTBFS)
-        // when a BuildRequires does.
-        let fti = broken
-            .iter()
-            .filter(|(_, r)| r.issues.iter().any(|i| i.kind == BreakKind::Fti))
-            .count();
-        let ftbfs = broken
-            .iter()
-            .filter(|(_, r)| r.issues.iter().any(|i| i.kind == BreakKind::Ftbfs))
-            .count();
-        let breakdown = if broken.is_empty() {
-            String::new()
-        } else {
-            format!(" ({fti} FTI, {ftbfs} FTBFS)")
-        };
-        let _ = writeln!(
-            o,
-            "- **Reverse dependencies:** {} checked, {} would break{breakdown}",
-            report.reverse_deps.len(),
-            broken.len(),
-        );
-    }
-    let _ = writeln!(o);
-
-    // An update with no packages was not examined, so there is no
-    // verdict to give: a mistyped side tag, or one whose builds are not
-    // tagged yet, would otherwise read as a clean bill.
-    let examined_nothing = report.updated_packages.is_empty()
-        && report.changes.is_empty()
-        && report.changed_provides.is_empty()
-        && report.installability_issues.is_empty()
-        && report.reverse_deps.is_empty();
-    if examined_nothing {
-        let _ = writeln!(
-            o,
+    o.push_str(&sandogasa_depcheck::render::findings(
+        &findings(report),
+        &render_options(detailed),
+        &format!(
             "Nothing to check: no builds found for `{}`. A side tag whose \
              builds are not tagged yet, or a name that does not match, \
              looks like this.",
             report.input
-        );
-        return o;
-    }
-
-    let clean = removed.is_empty() && report.installability_issues.is_empty() && broken.is_empty();
-    if clean && !detailed {
-        let _ = writeln!(o, "No breakage expected.");
-        return o;
-    }
-
-    // Removed Provides — the breakage signal; always shown (capped).
-    if !removed.is_empty() {
-        let _ = writeln!(o, "## Removed Provides ({})\n", removed.len());
-        let lines: Vec<String> = removed.iter().map(|c| format!("- `{}`", c.old)).collect();
-        write_capped(&mut o, lines, detailed);
-        let _ = writeln!(o);
-    }
-    // Installability issues — actionable; always shown (capped).
-    if !report.installability_issues.is_empty() {
-        let _ = writeln!(
-            o,
-            "## Installability issues ({})\n",
-            report.installability_issues.len()
-        );
-        let lines: Vec<String> = report
-            .installability_issues
-            .iter()
-            .map(|i| {
-                if i.unresolved.is_empty() {
-                    format!("- **{}**: `{}`", i.package, i.dep)
-                } else {
-                    format!(
-                        "- **{}**: `{}` (unresolved: {})",
-                        i.package,
-                        i.dep,
-                        i.unresolved.join(", ")
-                    )
-                }
-            })
-            .collect();
-        write_capped(&mut o, lines, detailed);
-        let _ = writeln!(o);
-    }
-    // Reverse deps that would break — always shown (capped).
-    if !broken.is_empty() {
-        let _ = writeln!(
-            o,
-            "## Reverse dependencies that would break ({})\n",
-            broken.len()
-        );
-        for (pkg, result) in &broken {
-            match result.arrival.as_ref().map(|a| a.arrival) {
-                Some(Arrival::NewPackage) => {
-                    let _ = writeln!(o, "- **{pkg}** (new since the side tag opened)");
-                }
-                Some(Arrival::Rebuilt) => {
-                    let _ = writeln!(o, "- **{pkg}** (rebuilt since the side tag opened)");
-                }
-                Some(Arrival::PreExisting) => {
-                    let _ = writeln!(o, "- **{pkg}** (already there when the side tag opened)");
-                }
-                None => {
-                    let _ = writeln!(o, "- **{pkg}**");
-                }
-            }
-            for issue in &result.issues {
-                let _ = writeln!(
-                    o,
-                    "  - [{}] `{}` (changed: `{}`)",
-                    issue.kind.label(),
-                    issue.dep,
-                    issue.changed_provide
-                );
-            }
-        }
-        let _ = writeln!(o);
-    }
-
-    // Detailed-only sections: the full updated-Provides list and the OK
-    // reverse deps (the bulky, non-actionable parts).
-    if detailed && !updated.is_empty() {
-        let _ = writeln!(o, "## Updated Provides ({})\n", updated.len());
-        for c in &updated {
-            let name = provide_name(&c.old);
-            let old_ver = c
-                .old
-                .strip_prefix(name)
-                .unwrap_or("")
-                .trim()
-                .trim_start_matches("= ");
-            let new_ver = c
-                .new
-                .as_deref()
-                .and_then(|n| n.strip_prefix(name))
-                .unwrap_or("")
-                .trim()
-                .trim_start_matches("= ");
-            let _ = writeln!(o, "- `{name}` ({old_ver} → {new_ver})");
-        }
-        let _ = writeln!(o);
-    }
-    if detailed {
-        let ok: Vec<&String> = report
-            .reverse_deps
-            .iter()
-            .filter(|(_, r)| r.status == "ok")
-            .map(|(p, _)| p)
-            .collect();
-        if !ok.is_empty() {
-            let _ = writeln!(o, "## Reverse dependencies OK ({})\n", ok.len());
-            for pkg in ok {
-                let _ = writeln!(o, "- {pkg}");
-            }
-            let _ = writeln!(o);
-        }
-    }
-
-    if clean {
-        let _ = writeln!(o, "No breakage expected.");
-    }
-    o
-}
-
-/// Write `lines` to `o`, capping at [`LIST_CAP`] unless `detailed`, with
-/// a "… and N more" footer when truncated.
-fn write_capped(o: &mut String, lines: Vec<String>, detailed: bool) {
-    use std::fmt::Write as _;
-    let cap = if detailed {
-        lines.len()
-    } else {
-        LIST_CAP.min(lines.len())
-    };
-    for line in &lines[..cap] {
-        let _ = writeln!(o, "{line}");
-    }
-    if cap < lines.len() {
-        let _ = writeln!(o, "- … and {} more (use --detailed)", lines.len() - cap);
-    }
-}
-
-/// The "## Packages" summary: a count line plus updated packages grouped
-/// by their `old → new` version transition (biggest groups first), and
-/// the newly-introduced packages. Group bodies and the new-package list
-/// are capped unless `detailed`.
-fn package_summary(report: &CheckUpdateReport, detailed: bool) -> String {
-    use std::fmt::Write as _;
-    let mut o = String::new();
-    let total = report.updated_packages.len();
-    let _ = writeln!(o, "## Packages\n");
-
-    // Without per-package change data, fall back to a plain count/list.
-    if report.changes.is_empty() {
-        let _ = writeln!(o, "**{total}** package(s).");
-        if total > 0 && (detailed || total <= LIST_CAP) {
-            let _ = writeln!(o, "\n{}", report.updated_packages.join(", "));
-        }
-        let _ = writeln!(o);
-        return o;
-    }
-
-    let new_pkgs: Vec<&str> = report
-        .changes
-        .iter()
-        .filter(|c| c.old.is_none())
-        .map(|c| c.package.as_str())
-        .collect();
-    let updated_n = total.saturating_sub(new_pkgs.len());
-    let _ = writeln!(
-        o,
-        "**{total}** package(s): {updated_n} updated, {} new\n",
-        new_pkgs.len()
-    );
-
-    // Group version updates by (old → new), biggest groups first.
-    let mut buckets: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
-    for c in &report.changes {
-        if let Some(old) = &c.old {
-            buckets
-                .entry((old.as_str(), c.new.as_str()))
-                .or_default()
-                .push(&c.package);
-        }
-    }
-    let mut sorted: Vec<_> = buckets.into_iter().collect();
-    // Biggest groups first, then alphabetically by the group's first
-    // package name (each bucket's packages are already in name order
-    // because `report.changes` is built from a sorted package set).
-    sorted.sort_by(|a, b| {
-        b.1.len()
-            .cmp(&a.1.len())
-            .then(a.1.first().cmp(&b.1.first()))
-    });
-    let shown = if detailed {
-        sorted.len()
-    } else {
-        sorted.len().min(LIST_CAP)
-    };
-    for ((old, new), pkgs) in sorted.iter().take(shown) {
-        // Name the packages for small groups (or in detailed); just
-        // count the big ones.
-        if detailed || pkgs.len() <= 3 {
-            let _ = writeln!(o, "- `{old}` → `{new}` ({})", pkgs.join(", "));
-        } else {
-            let _ = writeln!(o, "- `{old}` → `{new}` ({} packages)", pkgs.len());
-        }
-    }
-    if sorted.len() > shown {
-        let _ = writeln!(
-            o,
-            "- … and {} more version transition(s) (use --detailed)",
-            sorted.len() - shown
-        );
-    }
-
-    if !new_pkgs.is_empty() {
-        let cap = if detailed {
-            new_pkgs.len()
-        } else {
-            LIST_CAP.min(new_pkgs.len())
-        };
-        let shown_new = new_pkgs[..cap].join(", ");
-        if cap < new_pkgs.len() {
-            let _ = writeln!(
-                o,
-                "\n**New ({}):** {shown_new}, … (use --detailed)",
-                new_pkgs.len()
-            );
-        } else {
-            let _ = writeln!(o, "\n**New ({}):** {shown_new}", new_pkgs.len());
-        }
-    }
-    let _ = writeln!(o);
+        ),
+    ));
     o
 }
 
@@ -3118,7 +2851,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sandogasa_depcheck::report::BrokenRequires;
+    use sandogasa_depcheck::report::{BreakKind, BrokenRequires};
+    use sandogasa_depfilter::provide_name;
     use std::sync::Mutex;
 
     #[test]

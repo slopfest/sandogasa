@@ -616,9 +616,12 @@ $ ebranch check-update epel9-build-side-134436 \
 No packages depend on the changed Provides. No breakage expected.
 ```
 
-The output is Markdown, so it can be pasted directly into Bodhi
-comments. While it works, a counter on stderr names the phase and the
-item it is on (`reading new provides 23/39: evolution-data-server`);
+On a terminal the report is in color: what the update drops in yellow
+(red for a soname), what would break in red, a clean result in green.
+Piped or redirected, or with `--color never`, it is Markdown, so it can
+be pasted directly into Bodhi comments; the comments ebranch posts are
+that Markdown. While it works, a counter on stderr names the phase and
+the item it is on (`reading new provides 23/39: evolution-data-server`);
 `-v` replaces it with a line per step.
 
 Reverse dependencies are checked on two axes, with full rich-dep

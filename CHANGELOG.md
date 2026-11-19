@@ -13,7 +13,12 @@ check now lives in the sandogasa-depcheck crate, with its rich
 dependency evaluator and the report types, behind a `RepoQuery` trait
 for the repositories it reads. ebranch uses it unchanged: golden tests
 pin `check-update`'s report, its JSON and its Bodhi comment byte for
-byte (Refs #157).
+byte. The report's shared sections are rendered by the crate too, as
+Markdown for comments and in color on a terminal: ebranch's
+`check-update` now shows what an update drops in yellow (red for a
+soname), what would break in red and a clean result in green, and
+prints the Markdown as before when piped or with the new `--color
+never` (Refs #157).
 
 ### cbspkg tells a tracking issue about builds older than it asks for (breaking)
 

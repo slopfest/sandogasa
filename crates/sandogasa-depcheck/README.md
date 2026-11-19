@@ -20,6 +20,12 @@ The repositories come through the `RepoQuery` trait, which fedrq's view
 implements; a tool can supply its own, for builds no repository holds
 yet. ebranch's `check-update` uses it for Fedora and EPEL updates.
 
+`render` shows the result the same way in every tool: `package_summary`
+and `findings` give the Markdown a comment carries (Bodhi, GitLab), the
+lists capped unless detailed, and `to_terminal` gives the colored text a
+terminal shows, the Markdown unchanged without color. A tool adds its
+own sections around them.
+
 ## Installation
 
 ```sh
