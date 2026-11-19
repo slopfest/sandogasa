@@ -52,6 +52,10 @@ pub struct GithubReport {
     pub reviewed_prs: Vec<PrRef>,
     /// PRs the user commented on in the window.
     pub commented_prs: Vec<PrRef>,
+    /// Issues the user opened in the window.
+    pub opened_issues: Vec<IssueRef>,
+    /// Issues the user commented on in the window.
+    pub commented_issues: Vec<IssueRef>,
 
     /// Per-repo count of commits authored by the user. Computed
     /// only for repos the user pushed to (discovered via the
@@ -110,6 +114,23 @@ impl PrRef {
             ""
         }
     }
+}
+
+/// Pointer to an issue for the report's summary lists.
+#[derive(Debug, Clone, Serialize)]
+pub struct IssueRef {
+    /// `owner/name` slug.
+    pub repo: String,
+    /// Issue number.
+    pub number: u64,
+    /// Issue title.
+    pub title: String,
+    /// Issue URL (the canonical web link).
+    pub url: String,
+    /// Current state (`open` / `closed`) where the source knows it; the
+    /// event-derived ones leave it empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub state: String,
 }
 
 /// A tag the user pushed.
@@ -201,6 +222,18 @@ pub fn github_report(
         .into_iter()
         .map(into_pr_ref)
         .collect();
+
+    // Issues opened in window: the same search, for issues.
+    let q = format!("type:issue author:{login} created:{since}..{until}{org_clause}{vis_clause}",);
+    // A failure leaves the list empty, with a warning: the pull
+    // requests are kept.
+    report.opened_issues = match run_search(&client, "issue", &q, verbose) {
+        Ok(found) => found.into_iter().map(into_issue_ref).collect(),
+        Err(e) => {
+            eprintln!("warning: {e}; issues opened are left out");
+            Vec::new()
+        }
+    };
 
     // Reviewed/commented PRs come from the user's own actions, not
     // Search. GitHub Search's `reviewed-by:`/`commenter:` qualifiers
@@ -309,7 +342,7 @@ pub fn github_report(
         repo_in_org(&item.repository.name_with_owner, org)
             && (include_private || !item.repository.is_private)
     };
-    let (reviewed, commented) = prs_from_events(&events, since, until, org);
+    let (reviewed, commented, commented_issues) = prs_from_events(&events, since, until, org);
     report.reviewed_prs = merge_prs(
         contrib
             .reviewed
@@ -318,15 +351,29 @@ pub fn github_report(
             .map(item_pr_ref),
         reviewed,
     );
+    let in_period: Vec<&sandogasa_github::IssueComment> = comments
+        .comments
+        .iter()
+        .filter(|c| date_in_range(&c.created_at, since, until))
+        .collect();
     report.commented_prs = merge_prs(
-        comments
-            .comments
+        in_period
             .iter()
-            .filter(|c| date_in_range(&c.created_at, since, until))
             .filter_map(|c| c.pull_request.as_ref())
             .filter(|pr| shown(pr))
             .map(item_pr_ref),
         commented,
+    );
+    // A comment on a pull request names it as an issue too: only those
+    // without one are on issues.
+    report.commented_issues = merge_issues(
+        in_period
+            .iter()
+            .filter(|c| c.pull_request.is_none())
+            .filter_map(|c| c.issue.as_ref())
+            .filter(|issue| shown(issue))
+            .map(item_issue_ref),
+        commented_issues,
     );
     report.releases_published = releases_from_events(&events, since, until, org);
 
@@ -425,6 +472,12 @@ pub fn format_markdown(report: &GithubReport, detail: u8) -> String {
     );
     stat(&mut stats, "PRs reviewed", report.reviewed_prs.len());
     stat(&mut stats, "PRs commented on", report.commented_prs.len());
+    stat(&mut stats, "Issues opened", report.opened_issues.len());
+    stat(
+        &mut stats,
+        "Issues commented on",
+        report.commented_issues.len(),
+    );
     stat_across(
         &mut stats,
         "Commits authored",
@@ -475,6 +528,19 @@ pub fn format_markdown(report: &GithubReport, detail: u8) -> String {
     prs(&mut out, "Merged", &report.merged_prs);
     prs(&mut out, "Reviewed", &report.reviewed_prs);
     prs(&mut out, "Commented on", &report.commented_prs);
+    let issues = |out: &mut String, heading: &str, issues: &[IssueRef]| {
+        if issues.is_empty() {
+            return;
+        }
+        out.push_str(&format!("#### {heading}\n\n"));
+        if deep {
+            write_issue_list(out, issues);
+        } else {
+            forge::write_counts_by(out, issues, |i| i.repo.as_str());
+        }
+    };
+    issues(&mut out, "Issues opened", &report.opened_issues);
+    issues(&mut out, "Issues commented on", &report.commented_issues);
     if !report.commits_authored.is_empty() {
         out.push_str("#### Commits by repo\n\n");
         for (repo, count) in &report.commits_authored {
@@ -519,9 +585,10 @@ fn prs_from_events(
     since: NaiveDate,
     until: NaiveDate,
     org: Option<&str>,
-) -> (Vec<PrRef>, Vec<PrRef>) {
+) -> (Vec<PrRef>, Vec<PrRef>, Vec<IssueRef>) {
     let mut reviewed: BTreeMap<(String, u64), PrRef> = BTreeMap::new();
     let mut commented: BTreeMap<(String, u64), PrRef> = BTreeMap::new();
+    let mut commented_issues: BTreeMap<(String, u64), IssueRef> = BTreeMap::new();
     for ev in events {
         if !event_in_range(ev, since, until) {
             continue;
@@ -543,16 +610,18 @@ fn prs_from_events(
                 }
             }
             "IssueCommentEvent" => {
-                // Only count if the issue is actually a PR.
+                // A pull request, or an issue.
                 let is_pr = ev
                     .payload
                     .get("issue")
                     .and_then(|i| i.get("pull_request"))
                     .is_some();
                 if !is_pr {
-                    continue;
-                }
-                if let Some(pr) = pr_ref_from_issue_event(&ev.payload, &repo) {
+                    if let Some(issue) = issue_ref_from_issue_event(&ev.payload, &repo) {
+                        let key = (repo.clone(), issue.number);
+                        commented_issues.entry(key).or_insert(issue);
+                    }
+                } else if let Some(pr) = pr_ref_from_issue_event(&ev.payload, &repo) {
                     let key = (repo.clone(), pr.number);
                     commented.entry(key).or_insert(pr);
                 }
@@ -563,6 +632,7 @@ fn prs_from_events(
     (
         reviewed.into_values().collect(),
         commented.into_values().collect(),
+        commented_issues.into_values().collect(),
     )
 }
 
@@ -660,6 +730,27 @@ fn merge_prs(first: impl Iterator<Item = PrRef>, more: Vec<PrRef>) -> Vec<PrRef>
     let mut all: BTreeMap<(String, u64), PrRef> = BTreeMap::new();
     for pr in first.chain(more) {
         all.entry((pr.repo.clone(), pr.number)).or_insert(pr);
+    }
+    all.into_values().collect()
+}
+
+/// An issue GraphQL gave, for the report's lists.
+fn item_issue_ref(issue: &ItemNode) -> IssueRef {
+    IssueRef {
+        repo: issue.repository.name_with_owner.clone(),
+        number: issue.number,
+        title: issue.title.clone(),
+        url: issue.url.clone(),
+        state: issue.state.to_lowercase(),
+    }
+}
+
+/// `first`, then those of `more` not among them, each issue once.
+fn merge_issues(first: impl Iterator<Item = IssueRef>, more: Vec<IssueRef>) -> Vec<IssueRef> {
+    let mut all: BTreeMap<(String, u64), IssueRef> = BTreeMap::new();
+    for issue in first.chain(more) {
+        all.entry((issue.repo.clone(), issue.number))
+            .or_insert(issue);
     }
     all.into_values().collect()
 }
@@ -781,6 +872,33 @@ fn pr_ref_from_issue_event(payload: &serde_json::Value, repo: &str) -> Option<Pr
     })
 }
 
+/// The issue an `IssueCommentEvent` on an issue (not a pull request)
+/// is about.
+fn issue_ref_from_issue_event(payload: &serde_json::Value, repo: &str) -> Option<IssueRef> {
+    let issue = payload.get("issue")?;
+    let number = issue.get("number").and_then(|n| n.as_u64())?;
+    let text = |field: &str| {
+        issue
+            .get(field)
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let url = issue
+        .get("html_url")
+        .and_then(|u| u.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| format!("https://github.com/{repo}/issues/{number}"));
+    // The state then, not now: left empty, as for pull requests.
+    Some(IssueRef {
+        repo: repo.to_string(),
+        number,
+        title: text("title"),
+        url,
+        state: String::new(),
+    })
+}
+
 /// The search qualifier that keeps a report to share to public
 /// repositories; nothing for one that may include private work.
 fn visibility_clause(include_private: bool) -> &'static str {
@@ -822,12 +940,34 @@ fn shareable_events(events: Vec<Event>, public: &BTreeSet<String>) -> Vec<Event>
 }
 
 fn run_pr_search(client: &Client, query: &str, verbose: bool) -> Result<Vec<PullRequest>, String> {
+    run_search(client, "PR", query, verbose)
+}
+
+/// Search issues or pull requests (`what`, for messages): GitHub's
+/// issue search answers both.
+fn run_search(
+    client: &Client,
+    what: &str,
+    query: &str,
+    verbose: bool,
+) -> Result<Vec<PullRequest>, String> {
     if verbose {
-        eprintln!("[github] search: {query}");
+        eprintln!("[github] {what} search: {query}");
     }
     client
         .search_pull_requests(query)
-        .map_err(|e| format!("GitHub PR search failed: {e}"))
+        .map_err(|e| format!("GitHub {what} search failed: {e}"))
+}
+
+/// An issue the search gave, for the report's lists.
+fn into_issue_ref(issue: PullRequest) -> IssueRef {
+    IssueRef {
+        repo: issue.repo_slug().unwrap_or_default(),
+        number: issue.number,
+        title: issue.title,
+        url: issue.html_url,
+        state: issue.state,
+    }
 }
 
 fn into_pr_ref(pr: PullRequest) -> PrRef {
@@ -952,6 +1092,21 @@ fn write_pr_list(out: &mut String, prs: &[PrRef]) {
             pr.url,
             pr.title,
             pr.status_marker(),
+        ));
+    }
+    out.push('\n');
+}
+
+fn write_issue_list(out: &mut String, issues: &[IssueRef]) {
+    for issue in issues {
+        let closed = if issue.state == "closed" {
+            " (closed)"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "- [{}#{}]({}) {}{closed}\n",
+            issue.repo, issue.number, issue.url, issue.title,
         ));
     }
     out.push('\n');
@@ -1170,6 +1325,19 @@ mod tests {
                 .and(path("/search/issues"))
                 .and(query_param(
                     "q",
+                    format!("type:issue author:me created:2026-02-01..2026-02-28{vis}"),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "total_count": 1, "items": [{
+                        "number": 4, "title": "It breaks", "state": "closed",
+                        "html_url": "https://github.com/o/pub/issues/4"}]
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/search/issues"))
+                .and(query_param(
+                    "q",
                     format!("type:pr author:me is:merged merged:2026-02-01..2026-02-28{vis}"),
                 ))
                 .respond_with(
@@ -1224,13 +1392,20 @@ mod tests {
             .mount(&server)
             .await;
             let comment = |at: &str, pr: serde_json::Value| {
-                json!({"createdAt": at, "updatedAt": at, "url": "u", "issue": null, "pullRequest": pr})
+                json!({"createdAt": at, "updatedAt": at, "url": "u", "issue": pr.clone(), "pullRequest": pr})
+            };
+            let on_issue = |at: &str, name: &str, private: bool, n: u64| {
+                let mut issue = item(name, private, n, "OPEN");
+                issue["url"] = json!(format!("https://github.com/{name}/issues/{n}"));
+                json!({"createdAt": at, "updatedAt": at, "url": "u", "issue": issue, "pullRequest": null})
             };
             graphql("issueComments", json!({"user": {"issueComments": {
                 "pageInfo": {"hasNextPage": true, "endCursor": "more"},
                 "nodes": [
                     comment("2026-02-20T10:00:00Z", item("o/pub", false, 5, "OPEN")),
                     comment("2026-02-19T10:00:00Z", item("o/secret", true, 2, "OPEN")),
+                    on_issue("2026-02-18T10:00:00Z", "o/pub", false, 6),
+                    on_issue("2026-02-17T10:00:00Z", "o/secret", true, 8),
                     // Before the period: the read stops here.
                     comment("2026-01-02T10:00:00Z", item("o/pub", false, 1, "OPEN"))
                 ]
@@ -1369,6 +1544,14 @@ mod tests {
         assert_eq!(prs(&shared.reviewed_prs), ["o/old#9 closed"]);
         assert!(shared.reviewed_prs[0].merged);
         assert_eq!(prs(&shared.commented_prs), ["o/pub#5 open"]);
+        let issues = |list: &[IssueRef]| -> Vec<String> {
+            list.iter()
+                .map(|i| format!("{}#{} {}", i.repo, i.number, i.state))
+                .collect()
+        };
+        assert_eq!(issues(&shared.opened_issues), ["o/pub#4 closed"]);
+        // A comment on a pull request is not one on an issue.
+        assert_eq!(issues(&shared.commented_issues), ["o/pub#6 open"]);
         let tags: Vec<String> = shared
             .tags_pushed
             .iter()
@@ -1391,6 +1574,10 @@ mod tests {
         assert_eq!(
             prs(&full.commented_prs),
             ["o/pub#5 open", "o/secret#2 open"]
+        );
+        assert_eq!(
+            issues(&full.commented_issues),
+            ["o/pub#6 open", "o/secret#8 open"]
         );
     }
 
@@ -1437,7 +1624,7 @@ mod tests {
                 }
             }),
         )];
-        let (reviewed, commented) = prs_from_events(
+        let (reviewed, commented, _) = prs_from_events(
             &events,
             NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
@@ -1463,7 +1650,7 @@ mod tests {
                 "pull_request": {"number": 2612, "title": "old", "html_url": "x"}
             }),
         )];
-        let (reviewed, commented) = prs_from_events(
+        let (reviewed, commented, _) = prs_from_events(
             &events,
             NaiveDate::from_ymd_opt(2026, 4, 26).unwrap(),
             NaiveDate::from_ymd_opt(2026, 5, 16).unwrap(),
@@ -1498,7 +1685,7 @@ mod tests {
                 }
             }),
         );
-        let (_, commented) = prs_from_events(
+        let (_, commented, issues) = prs_from_events(
             &[on_issue, on_pr],
             NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
@@ -1506,6 +1693,12 @@ mod tests {
         );
         assert_eq!(commented.len(), 1);
         assert_eq!(commented[0].number, 5);
+        // The comment on the issue is kept, as an issue.
+        assert_eq!(issues.len(), 1);
+        assert_eq!(
+            issues[0].url,
+            "https://github.com/slopfest/sandogasa/issues/1"
+        );
     }
 
     #[test]
@@ -1532,7 +1725,7 @@ mod tests {
                 serde_json::json!({"pull_request": {"number": 7, "title": "x", "html_url": "https://github.com/o/r/pull/7"}}),
             ),
         ];
-        let (reviewed, commented) = prs_from_events(
+        let (reviewed, commented, _) = prs_from_events(
             &events,
             NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
@@ -1729,6 +1922,59 @@ mod tests {
             "level 1 counts, it does not list: {md}"
         );
         assert!(format_markdown(&report, 2).contains("pull/1) pr 1"));
+    }
+
+    #[test]
+    fn issues_are_counted_listed_and_take_their_notes() {
+        let mut report = GithubReport {
+            instance: "https://api.github.com".into(),
+            user: "octocat".into(),
+            ..Default::default()
+        };
+        let issue = |repo: &str, number: u64, title: &str, state: &str| IssueRef {
+            repo: repo.into(),
+            number,
+            title: title.into(),
+            url: format!("https://github.com/{repo}/issues/{number}"),
+            state: state.into(),
+        };
+        report
+            .opened_issues
+            .push(issue("o/a", 1, "it breaks", "closed"));
+        report
+            .opened_issues
+            .push(issue("o/b", 2, "it bends", "open"));
+        report
+            .commented_issues
+            .push(issue("o/b", 3, "asked about", ""));
+        let md = format_markdown(&report, 1);
+        assert!(md.contains("- **Issues opened:** 2"), "{md}");
+        assert!(md.contains("- **Issues commented on:** 1"), "{md}");
+        assert!(
+            md.contains("#### Issues opened\n\n- `o/a`: 1\n- `o/b`: 1\n"),
+            "{md}"
+        );
+        let md = format_markdown(&report, 2);
+        assert!(
+            md.contains("- [o/a#1](https://github.com/o/a/issues/1) it breaks (closed)\n"),
+            "{md}"
+        );
+        assert!(md.contains("issues/2) it bends\n"), "{md}");
+        assert!(md.contains("#### Issues commented on\n\n- [o/b#3]"), "{md}");
+        // A note on a comment of the issue attaches to it.
+        let note = crate::notes::Stored {
+            path: "n.md".into(),
+            note: crate::notes::parse(
+                "url: https://github.com/o/b/issues/3#issuecomment-9\ndate: 2026-02-03\n\nAsked for the reporter's logs.\n",
+            )
+            .unwrap(),
+        };
+        let (with_notes, unplaced) = crate::notes::attach(&md, &[note]);
+        assert!(unplaced.is_empty());
+        assert!(
+            with_notes.contains("Asked for the reporter's logs."),
+            "{with_notes}"
+        );
     }
 
     #[test]

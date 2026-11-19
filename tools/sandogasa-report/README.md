@@ -25,24 +25,24 @@ packaging activity across multiple systems:
   `CentOS/Hyperscale/rpms`, etc.). The opened list flags each
   MR's fate the way the Forgejo one does: `(merged)`, `(closed)`,
   or `(applied)`, rebased commits included
-- **GitHub**: PRs opened / merged / reviewed / commented on,
-  authored commit counts per repo, annotated tags cut, and
-  GitHub Releases published. Commits and reviews come from GitHub's
-  contribution counts (commits on a repository's default branch, as
-  the contribution graph counts them), comments from the user's
-  comment list, and tags from each such repository's newest tags, so
-  a period of any length is covered; the user's recent events add
-  pushes to forks and releases. With `--private`, private
-  repositories pushed to in the period are counted too, when the
-  report is about the token's owner. A source GitHub fails to answer
-  is a warning; the rest of the section stands.
-  Organizations that refuse classic personal access tokens (meta,
+- **GitHub**: PRs opened / merged / reviewed / commented on, issues
+  opened / commented on, authored commit counts per repo, annotated
+  tags cut, and GitHub Releases published. Commits and reviews come
+  from GitHub's contribution counts (commits on a repository's
+  default branch, as the contribution graph counts them), comments
+  from the user's comment list, and tags from each such repository's
+  newest tags, so a period of any length is covered; the user's
+  recent events add pushes to forks and releases. With `--private`,
+  private repositories pushed to in the period are counted too, when
+  the report is about the token's owner. A source GitHub fails to
+  answer is a warning; the rest of the section stands. Organizations
+  that refuse classic personal access tokens (meta,
   facebookincubator) withhold their items from one; the report says
-  how many were withheld. Optionally scoped by
-  organization. See `TODO.md` for why GitHub ships only the
-  authored count today (mirror-pusher detection deferred). The
-  opened list carries the same `(merged)` / `(closed)` /
-  `(applied)` markers, rebased commits included
+  how many were withheld. Optionally scoped by organization. See
+  `TODO.md` for why GitHub ships only the authored count today
+  (mirror-pusher detection deferred). The opened list carries the
+  same `(merged)` / `(closed)` / `(applied)` markers, rebased
+  commits included
 - **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo,
   src.opensuse.org): PRs opened / merged and issues opened / closed
   in the window, across every repo you contribute to. Sourced from
@@ -188,7 +188,9 @@ $ sandogasa-report report -c config.toml -d hyperscale --period 2026Q3 --by repo
 
 A repository is keyed by host and path together, so the same
 `owner/name` on two forges stays two rows. Columns no repository used
-are dropped rather than printed as a line of zeroes. Commits are the
+are dropped rather than printed as a line of zeroes. Issues counts the
+issues opened or commented on (GitHub) and opened or closed
+(Forgejo/Gitea), each once. Commits are the
 ones pushed, which is what the per-forge sections already report — a
 push can carry work the pusher did not write, so pushed and authored
 counts are not added together.

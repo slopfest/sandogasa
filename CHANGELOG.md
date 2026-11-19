@@ -119,6 +119,23 @@ and `token_login`.
 
 Fixes #181
 
+### sandogasa-report lists GitHub issues
+
+sandogasa-report's GitHub section listed pull requests, commits and
+tags, but no issues: an issue the user filed or commented on in the
+period appeared nowhere, and a `--notes` note about one was left under
+"Notes", with no item to attach to. Issues were the largest group of
+notes left that way in a 2026H2 report.
+
+The section now has "Issues opened", from the same search as the pull
+requests, and "Issues commented on", from the comment list already
+read for pull requests, with the same organization and `--private`
+rules. A note with an issue's URL, or one of its comments', attaches to
+it. `--by repo` gains an Issues column, which counts Forgejo/Gitea's
+issues too.
+
+Resolves #190
+
 ### sandogasa-report reads every page of a user's Bodhi updates
 
 The Bodhi section stopped after a user's first 500 updates without

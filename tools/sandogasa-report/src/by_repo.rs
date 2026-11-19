@@ -12,7 +12,7 @@
 //! commit maps are keyed by it), so this is a regrouping of what was
 //! gathered rather than a second collection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
@@ -26,6 +26,8 @@ pub struct RepoActivity {
     pub merged: usize,
     pub reviewed: usize,
     pub commented: usize,
+    /// Issues opened or commented on, each once.
+    pub issues: usize,
     pub commits: u64,
 }
 
@@ -37,6 +39,7 @@ impl RepoActivity {
             + self.merged as u64
             + self.reviewed as u64
             + self.commented as u64
+            + self.issues as u64
             + self.commits
     }
 }
@@ -74,6 +77,8 @@ fn at(rows: &mut BTreeMap<String, RepoActivity>, k: String) -> &mut RepoActivity
 /// matters because these reports are committed and diffed.
 pub fn gather(report: &crate::report::Report) -> Vec<RepoActivity> {
     let mut rows: BTreeMap<String, RepoActivity> = BTreeMap::new();
+    // Per row, the issues seen: one opened and commented on is one.
+    let mut issues: BTreeMap<String, BTreeSet<u64>> = BTreeMap::new();
 
     for domain in &report.domains {
         if let Some(gl) = &domain.gitlab {
@@ -108,6 +113,12 @@ pub fn gather(report: &crate::report::Report) -> Vec<RepoActivity> {
             for (repo, n) in &gh.commits_authored {
                 at(&mut rows, key(&gh.instance, repo)).commits += n;
             }
+            for issue in gh.opened_issues.iter().chain(&gh.commented_issues) {
+                issues
+                    .entry(key(&gh.instance, &issue.repo))
+                    .or_default()
+                    .insert(issue.number);
+            }
         }
         if let Some(fj) = &domain.forgejo {
             for (list, field) in [
@@ -118,9 +129,18 @@ pub fn gather(report: &crate::report::Report) -> Vec<RepoActivity> {
                     field.add(at(&mut rows, key(&fj.instance, &pr.repo)));
                 }
             }
+            for issue in fj.opened_issues.iter().chain(&fj.closed_issues) {
+                issues
+                    .entry(key(&fj.instance, &issue.repo))
+                    .or_default()
+                    .insert(issue.number);
+            }
         }
     }
 
+    for (k, seen) in issues {
+        at(&mut rows, k).issues = seen.len();
+    }
     let mut out: Vec<RepoActivity> = rows.into_values().filter(|r| r.total() > 0).collect();
     out.sort_by(|a, b| b.total().cmp(&a.total()).then_with(|| a.repo.cmp(&b.repo)));
     out
@@ -157,6 +177,7 @@ const ALL_COLUMNS: &[Column] = &[
     ("Merged", |r| r.merged as u64),
     ("Reviewed", |r| r.reviewed as u64),
     ("Commented", |r| r.commented as u64),
+    ("Issues", |r| r.issues as u64),
     ("Commits", |r| r.commits),
 ];
 
@@ -267,6 +288,98 @@ mod tests {
     }
 
     #[test]
+    fn issues_count_once_per_repository() {
+        use crate::github::{GithubReport, IssueRef};
+        let issue = |repo: &str, number: u64| IssueRef {
+            repo: repo.into(),
+            number,
+            title: String::new(),
+            url: String::new(),
+            state: String::new(),
+        };
+        let gh = GithubReport {
+            instance: "https://api.github.com".into(),
+            // #1 opened and commented on: one issue.
+            opened_issues: vec![issue("o/a", 1), issue("o/b", 2)],
+            commented_issues: vec![issue("o/a", 1), issue("o/a", 3)],
+            ..Default::default()
+        };
+        // GitLab and Forgejo/Gitea rows, gathered the same way.
+        let gl = crate::gitlab::GitlabReport {
+            instance: "https://gitlab.com".into(),
+            opened_mrs: vec![crate::gitlab::MrRef {
+                project: "g/p".into(),
+                iid: 1,
+                title: String::new(),
+                state: String::new(),
+                merged: false,
+                applied: false,
+            }],
+            commits_pushed: BTreeMap::from([("g/p".to_string(), 4)]),
+            ..Default::default()
+        };
+        let pr = crate::forgejo::PrRef {
+            repo: "o/c".into(),
+            number: 5,
+            title: String::new(),
+            url: String::new(),
+            state: String::new(),
+            merged: true,
+            applied: false,
+        };
+        let fj_issue = |number: u64| crate::forgejo::IssueRef {
+            repo: "o/c".into(),
+            number,
+            title: String::new(),
+            url: String::new(),
+        };
+        let fj = crate::forgejo::ForgejoReport {
+            instance: "https://codeberg.org".into(),
+            opened_prs: vec![pr.clone()],
+            merged_prs: vec![pr],
+            opened_issues: vec![fj_issue(6), fj_issue(7)],
+            closed_issues: vec![fj_issue(6)],
+            ..Default::default()
+        };
+        let report = crate::report::Report {
+            user: None,
+            domain: "upstream".into(),
+            since: chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            until: chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            domains: vec![crate::report::DomainReport {
+                name: "upstream".into(),
+                bodhi: None,
+                koji: None,
+                gitlab: Some(gl),
+                github: Some(gh),
+                forgejo: Some(fj),
+                sourcehut: None,
+            }],
+            bugzilla: vec![],
+        };
+        let rows = gather(&report);
+        let shown: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                format!(
+                    "{} {} {} {} {}",
+                    r.repo, r.opened, r.merged, r.issues, r.commits
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                "gitlab.com/g/p 1 0 0 4",
+                "codeberg.org/o/c 1 1 2 0",
+                "api.github.com/o/a 0 0 2 0",
+                "api.github.com/o/b 0 0 1 0",
+            ]
+        );
+        assert!(format_markdown(&rows).contains("| Issues |"));
+    }
+
+    #[test]
     fn a_row_totals_every_counter_it_holds() {
         let r = RepoActivity {
             repo: "x".into(),
@@ -274,9 +387,10 @@ mod tests {
             merged: 2,
             reviewed: 3,
             commented: 4,
+            issues: 6,
             commits: 5,
         };
-        assert_eq!(r.total(), 15);
+        assert_eq!(r.total(), 21);
         assert_eq!(RepoActivity::default().total(), 0);
     }
 }
