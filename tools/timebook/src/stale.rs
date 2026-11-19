@@ -21,6 +21,10 @@ use serde::Serialize;
 /// for it.
 const SLACK_MINUTES: i64 = 60;
 
+/// How long after a meeting starts its minutes may take to appear: it
+/// is not judged before then.
+const MINUTES_LAG: Duration = Duration::hours(2);
+
 /// fedocal's default end for a series with none, until 2026-05-29
 /// (fedocal 98fdece): a series created without an end stopped there.
 pub const OLD_DEFAULT_END: &str = "2025-12-31";
@@ -37,6 +41,8 @@ pub struct Series {
     pub room: Option<String>,
     pub owners: Vec<String>,
     pub occurrences: Vec<DateTime<Utc>>,
+    /// The time zone it was booked in, whose days name its occurrences.
+    pub timezone: String,
 }
 
 /// One meeting meetbot keeps minutes of.
@@ -72,6 +78,8 @@ pub struct Judgment {
     pub last_minutes: Option<String>,
     /// Rooms minutes were found in instead of the one it is booked in.
     pub elsewhere: Vec<String>,
+    /// The occurrences without minutes.
+    pub missed: Vec<DateTime<Utc>>,
 }
 
 /// The findings for one series.
@@ -89,6 +97,11 @@ pub struct SeriesReport {
     /// in: the booking may be out of date.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub elsewhere: Vec<String>,
+    /// For a series mostly or sometimes held, the days (its own) of the
+    /// occurrences without minutes: perhaps cancelled, and to be taken off
+    /// the calendar with `timebook cancel`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missed: Vec<NaiveDate>,
     /// The topics meetbot was searched for.
     pub searched: Vec<String>,
     /// The topics whose search failed.
@@ -168,6 +181,7 @@ pub fn series(meetings: &[Meeting]) -> Vec<Series> {
             room: m.room().map(|r| r.name),
             owners: m.meeting_manager.clone(),
             occurrences: Vec::new(),
+            timezone: m.meeting_timezone.clone(),
         });
         s.occurrences.push(start);
     }
@@ -261,6 +275,7 @@ pub fn judge(s: &Series, minutes: &[Minutes]) -> Judgment {
         None => topic_fits(s, &m.topic),
     };
     let mut held = 0;
+    let mut missed = Vec::new();
     let mut last: Option<&Minutes> = None;
     let mut elsewhere = BTreeSet::new();
     for occ in &s.occurrences {
@@ -286,6 +301,8 @@ pub fn judge(s: &Series, minutes: &[Minutes]) -> Judgment {
             if last.is_none_or(|l| m.at > l.at) {
                 last = Some(m);
             }
+        } else {
+            missed.push(*occ);
         }
     }
     let verdict = if held * 2 >= s.occurrences.len() {
@@ -302,6 +319,7 @@ pub fn judge(s: &Series, minutes: &[Minutes]) -> Judgment {
         held,
         last_minutes: last.map(|m| m.url.clone()),
         elsewhere: elsewhere.into_iter().collect(),
+        missed,
     }
 }
 
@@ -397,7 +415,7 @@ pub async fn recent_series(
 ) -> Result<Recent, String> {
     let today = now.date_naive();
     let meetings = read(client, today - Duration::weeks(weeks), today).await?;
-    let cutoff = now - Duration::hours(2);
+    let cutoff = now - MINUTES_LAG;
     let seen = meetings
         .iter()
         .filter(|m| m.starts_at().is_some_and(|t| t <= cutoff))
@@ -411,9 +429,17 @@ pub async fn recent_series(
 
 /// `list` judged against meetbot's minutes, without its owners'
 /// activity.
-pub async fn judge_all(list: Vec<Series>, sources: &Sources, refresh: bool) -> Vec<SeriesReport> {
+pub async fn judge_all(
+    list: Vec<Series>,
+    sources: &Sources,
+    now: DateTime<Utc>,
+    refresh: bool,
+) -> Vec<SeriesReport> {
     let found = search_for(list.iter(), sources, refresh).await;
-    list.into_iter().map(|s| judged(s, &found)).collect()
+    let settled = settled_by(now, refresh);
+    list.into_iter()
+        .map(|s| judged(s, &found, settled))
+        .collect()
 }
 
 /// Whether `s` is an entry for the same meeting as booking `b`: the same
@@ -511,7 +537,11 @@ pub async fn report(
         .collect();
 
     let found = search_for(recurring.iter().chain(&dropped), sources, refresh).await;
-    let mut reports: Vec<SeriesReport> = recurring.into_iter().map(|s| judged(s, &found)).collect();
+    let settled = settled_by(now, refresh);
+    let mut reports: Vec<SeriesReport> = recurring
+        .into_iter()
+        .map(|s| judged(s, &found, settled))
+        .collect();
     // Only the owners of series that look stale are looked up.
     let owners: BTreeSet<String> = reports
         .iter()
@@ -597,6 +627,15 @@ pub fn describe(
                         r.series.occurrences.len(),
                         r.last_minutes.as_deref().unwrap_or("-")
                     ));
+                    if !r.missed.is_empty() {
+                        let days: Vec<String> = r.missed.iter().map(|d| d.to_string()).collect();
+                        out.push_str(&format!(
+                            "    no minutes on {}; if not held, the owners can take them off with\n      timebook cancel {} {}\n",
+                            days.join(", "),
+                            r.series.meeting_id,
+                            days.join(" ")
+                        ));
+                    }
                     if !r.elsewhere.is_empty() {
                         out.push_str(&format!(
                             "    minutes are in {}, not the room booked\n",
@@ -713,8 +752,20 @@ fn minutes_for(found: &Found, s: &Series) -> (Vec<String>, Vec<String>, Vec<Minu
     (searched, failed, all)
 }
 
-/// `s` judged against the minutes in `found`, without owners.
-fn judged(s: Series, found: &Found) -> SeriesReport {
+/// Until when meetbot's answers are complete: minutes take a while to
+/// appear, and answers kept from the last day may predate them, unless
+/// asked again.
+fn settled_by(now: DateTime<Utc>, refresh: bool) -> DateTime<Utc> {
+    if refresh {
+        now - MINUTES_LAG
+    } else {
+        now - Duration::days(1) - MINUTES_LAG
+    }
+}
+
+/// `s` judged against the minutes in `found`, without owners; only
+/// occurrences by `settled` are listed as missed.
+fn judged(s: Series, found: &Found, settled: DateTime<Utc>) -> SeriesReport {
     let (searched, failed, minutes) = minutes_for(found, &s);
     let j = judge(&s, &minutes);
     // Few or no minutes with a search missing says nothing.
@@ -722,12 +773,25 @@ fn judged(s: Series, found: &Found) -> SeriesReport {
         Verdict::NotHeld | Verdict::RarelyHeld if !failed.is_empty() => Verdict::Unchecked,
         v => v,
     };
+    // Days to cancel only where the series is held otherwise, and every
+    // search answered: one never held needs its end, not its occurrences,
+    // taken off, and a failed search may hold the minutes missing.
+    let missed = match verdict {
+        Verdict::Held | Verdict::RarelyHeld if failed.is_empty() => j
+            .missed
+            .iter()
+            .filter(|o| **o <= settled)
+            .filter_map(|o| local_day(&s, *o))
+            .collect(),
+        _ => Vec::new(),
+    };
     SeriesReport {
         series: s,
         verdict,
         held: j.held,
         last_minutes: j.last_minutes,
         elsewhere: j.elsewhere,
+        missed,
         searched,
         failed,
         owners_seen: BTreeMap::new(),
@@ -745,6 +809,14 @@ fn up_to(series: Vec<Series>, cutoff: DateTime<Utc>) -> Vec<Series> {
         })
         .filter(|s| !s.occurrences.is_empty())
         .collect()
+}
+
+/// The day `at` falls on where `s` was booked, as fedocal's forms (and
+/// `Meeting::local_date`) name an occurrence; none when its time zone is
+/// unknown.
+fn local_day(s: &Series, at: DateTime<Utc>) -> Option<NaiveDate> {
+    let tz: chrono_tz::Tz = s.timezone.parse().ok()?;
+    Some(at.with_timezone(&tz).date_naive())
 }
 
 /// How far apart two instants are in the week, in minutes, whatever the
@@ -1055,9 +1127,15 @@ mod tests {
             j.last_minutes.as_deref(),
             Some("https://meetbot/2026-11-18 16:00")
         );
+        assert!(j.missed.is_empty());
         let j = judge(s, &all[..1]);
         assert_eq!((j.verdict, j.held), (Verdict::RarelyHeld, 1));
         assert!(j.elsewhere.is_empty());
+        let missed: Vec<String> = j.missed.iter().map(|o| o.to_string()).collect();
+        assert_eq!(
+            missed,
+            ["2026-11-11 16:00:00 UTC", "2026-11-18 16:00:00 UTC"]
+        );
         assert_eq!(judge(s, &[]).verdict, Verdict::NotHeld);
         // No room: minutes in any channel count, and none is elsewhere.
         let mut roomless = s.clone();
@@ -1185,6 +1263,7 @@ mod tests {
             held,
             last_minutes: Some("https://meetbot/x".into()),
             elsewhere: vec![],
+            missed: vec![],
             searched: vec!["sigs".into(), "some-sig".into()],
             failed: vec![],
             owners_seen: owners_seen
@@ -1198,6 +1277,10 @@ mod tests {
     fn the_report_reads_as_text_by_verdict() {
         let mut held = report(Verdict::Held, 2, &[]);
         held.elsewhere = vec!["meeting-1".into()];
+        held.missed = vec![
+            NaiveDate::from_ymd_opt(2026, 11, 11).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 11, 18).unwrap(),
+        ];
         let not = report(
             Verdict::NotHeld,
             0,
@@ -1249,7 +1332,7 @@ mod tests {
             "    searched meetbot for: sigs, some-sig\n    owners: a (seen 2026-11-01), b (not on Discourse), c (Discourse lookup failed)\n",
             "\nVideo calls, which meetbot does not log (1):\n  Some SIG (SIGs [shared calendar]): Wed 16:00 UTC, no location,",
             "\nHeld (1):\n",
-            "    held 2 of 2, last https://meetbot/x\n    minutes are in meeting-1, not the room booked\n",
+            "    held 2 of 2, last https://meetbot/x\n    no minutes on 2026-11-11, 2026-11-18; if not held, the owners can take them off with\n      timebook cancel 1 2026-11-11 2026-11-18\n    minutes are in meeting-1, not the room booked\n",
             "Stopped at 2025-12-31, fedocal's old default end for a series without one (3):\n",
             "    last minutes on 2026-06-11 (https://meetbot/z), none in the period\n",
             "    still held: minutes on 2026-11-04 (https://meetbot/y); its entry needs a new end\n",
@@ -1397,7 +1480,7 @@ mod tests {
             .into_iter()
             .filter(|s| s.name == "Quiet")
             .collect();
-        let judged = judge_all(few, &sources, false).await;
+        let judged = judge_all(few, &sources, Utc::now(), false).await;
         assert_eq!(judged.len(), 1);
         assert_eq!(judged[0].verdict, Verdict::NotHeld);
     }
@@ -1577,11 +1660,14 @@ mod tests {
             ),
         ])
         .remove(0);
+        let far = DateTime::<Utc>::MAX_UTC;
         let mut found: Found = BTreeMap::new();
         found.insert("some-sig".into(), Some(vec![]));
         found.insert("fedora-some-sig".into(), None);
-        let r = judged(s.clone(), &found);
+        let r = judged(s.clone(), &found, far);
         assert_eq!(r.verdict, Verdict::Unchecked);
+        // Its occurrences without minutes are not offered for cancelling.
+        assert!(r.missed.is_empty());
         // "c" is too short to search; the unanswered one counts as failed.
         assert_eq!(r.failed, ["fedora-some-sig"]);
         // Minutes found all the same: the verdict stands.
@@ -1592,7 +1678,37 @@ mod tests {
                 "2026-11-04 16:00",
             )]),
         );
-        assert_eq!(judged(s, &found).verdict, Verdict::Held);
+        let r = judged(s.clone(), &found, far);
+        assert_eq!(r.verdict, Verdict::Held);
+        // The failed search may hold the other week's minutes.
+        assert!(r.missed.is_empty());
+        found.insert("fedora-some-sig".into(), Some(vec![]));
+        let r = judged(s.clone(), &found, far);
+        let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        assert_eq!(r.missed, [day("2026-11-11")]);
+        // Not yet, when meetbot's answer may predate its minutes.
+        let now = DateTime::parse_from_rfc3339("2026-11-12T10:00:00Z")
+            .unwrap()
+            .to_utc();
+        assert!(
+            judged(s.clone(), &found, settled_by(now, false))
+                .missed
+                .is_empty()
+        );
+        assert_eq!(
+            judged(s.clone(), &found, settled_by(now, true)).missed,
+            [day("2026-11-11")]
+        );
+        // Named by the day where it was booked: 02:00 UTC on the 12th is
+        // the 11th in New York.
+        let mut west = s;
+        west.timezone = "America/New_York".into();
+        let late = DateTime::parse_from_rfc3339("2026-11-12T02:00:00Z")
+            .unwrap()
+            .to_utc();
+        assert_eq!(local_day(&west, late), Some(day("2026-11-11")));
+        west.timezone = "Nowhere/Land".into();
+        assert_eq!(local_day(&west, late), None);
         let mut unchecked = report(Verdict::Unchecked, 0, &[]);
         unchecked.failed = vec!["some-sig".into()];
         let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();

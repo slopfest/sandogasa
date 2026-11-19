@@ -146,17 +146,22 @@ meeting
 
 ### stale
 
-Whether the recurring meetings of the last weeks (`--weeks`, default
-12) still take place. meetbot keeps minutes by topic, so each series is
+Whether the recurring meetings of the last weeks (`--weeks`, default 12)
+still take place. meetbot keeps minutes by topic, so each series is
 looked for under its calendar's name and its title as a topic (`fesco`,
 `fedora-eln-sig`); an occurrence counts as held when minutes start
-within an hour of it, preferably in the room it is booked in. Series
-are grouped as held, rarely held, without minutes, unchecked (a
-meetbot search failed, so nothing can be said), and video calls (which
-meetbot does not log); minutes found in another room than the
-one booked are pointed out, and for a series without minutes the
-owners' last activity on Discourse is shown. The topics searched are
-listed, so a series filed under another topic can be checked by hand.
+within an hour of it, preferably in the room it is booked in. Series are
+grouped as held, rarely held, without minutes, unchecked (a meetbot
+search failed, so nothing can be said), and video calls (which meetbot
+does not log); minutes found in another room than the one booked are
+pointed out, and for a series without minutes the owners' last activity
+on Discourse is shown. For a series held at least sometimes whose
+searches all answered, the days without minutes are listed with the
+`timebook cancel` command that takes them off the calendar, for its
+owners to run if those meetings did not take place; occurrences of the
+last day are left out unless `--refresh` is given, since meetbot's
+answers are kept for a day. The topics searched are listed, so a series
+filed under another topic can be checked by hand.
 
 ```
 $ timebook stale
@@ -169,6 +174,10 @@ Held (14):
   Fedora Infrastructure (infrastructure): Thu 16:00 UTC, in meeting-3, 13 occurrence(s)
     held 13 of 13, last https://meetbot.fedoraproject.org/...
     minutes are in meeting, not the room booked
+  FESCo Meeting (fesco): Tue 18:00 UTC, in meeting, 12 occurrence(s)
+    held 11 of 12, last https://meetbot.fedoraproject.org/...
+    no minutes on 2026-10-27; if not held, the owners can take them off with
+      timebook cancel 11273 2026-10-27
 ...
 Stopped at 2025-12-31, fedocal's old default end for a series without one (19):
   Fedora Infra Ops Daily Standup (infrastructure): Wed 19:00 UTC, fedora-admin@irc.libera.chat, 5 occurrence(s)

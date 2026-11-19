@@ -36,7 +36,10 @@ its next occurrence (`--one`: that occurrence alone). `timebook cancel
 ENTRY DATE...` takes occurrences of one of your own meetings off the
 calendar, past or coming, finding each by the meeting's calendar and
 title (fedocal starts a series anew, as a new entry, after each
-cancelled occurrence) and checking it is gone. Asking owners to drop
+cancelled occurrence) and checking it is gone. `stale` lists the days
+a series held otherwise has no minutes for, with the `timebook cancel`
+command for its owners, so cancelled meetings stop counting as missed
+and holding their room. Asking owners to drop
 stale entries comes next (#142).
 
 sandogasa-fedocal gains `Meeting::starts_at`, `ends_at` and `room`, and

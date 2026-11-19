@@ -144,9 +144,12 @@ enum Command {
     /// minutes (by its calendar's name and its title as a topic), an
     /// occurrence counting as held when minutes in its room start within
     /// an hour of it. For a series without any, its owners' last activity
-    /// on Discourse is shown. Series that stopped at 2025-12-31, fedocal's
-    /// old default end for a series without one, are listed with any
-    /// minutes since: those may still be held.
+    /// on Discourse is shown; for one held at least sometimes, the days
+    /// without minutes are listed with the `timebook cancel` command that
+    /// takes them off (the last day only with --refresh, as meetbot's
+    /// answers are kept for a day). Series that stopped at 2025-12-31,
+    /// fedocal's old default end for a series without one, are listed
+    /// with any minutes since: those may still be held.
     Stale {
         /// Ask meetbot again instead of using answers from the last day
         #[arg(long)]
@@ -409,7 +412,8 @@ async fn suggest_rooms(client: &Client, results: &mut [RoomCheck]) {
         return;
     }
     eprintln!("Checking whether the meetings in the taken rooms still take place...");
-    let recent = match stale::recent_series(client, Utc::now(), WEEKS).await {
+    let now = Utc::now();
+    let recent = match stale::recent_series(client, now, WEEKS).await {
         Ok(recent) => recent,
         Err(e) => {
             eprintln!("warning: cannot read the meetings' past occurrences ({e}); no suggestions");
@@ -425,7 +429,7 @@ async fn suggest_rooms(client: &Client, results: &mut [RoomCheck]) {
                 .any(|b| b.meeting_id == s.meeting_id || stale::same_entry(s, b))
         })
         .collect();
-    let judged = stale::judge_all(wanted, &stale::Sources::default(), false).await;
+    let judged = stale::judge_all(wanted, &stale::Sources::default(), now, false).await;
     for r in results.iter_mut() {
         if let Some(why) = stale::likely_free(r, &judged, &recent.seen) {
             r.likely_free = why;
