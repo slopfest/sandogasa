@@ -176,6 +176,18 @@ missing project.
 
 Resolves #191
 
+### sandogasa-report attaches a note on a repository to its line
+
+A `--notes` note whose URL is a repository itself, such as
+`https://github.com/slopfest/upstream-primer`, was left under "Notes on
+items not in this report" though the repository was in the report: only
+commit URLs matched a repository's line in "Commits by repo" and
+"Commits by project". A repository's own URL now matches that line too,
+on GitHub, GitLab (at any depth of groups), Forgejo/Gitea and
+sourcehut, with or without `.git`.
+
+Resolves #194
+
 ### sandogasa-report says why notes are left over, and lets the user choose
 
 With `--notes`, a note whose item the report does not list closed the

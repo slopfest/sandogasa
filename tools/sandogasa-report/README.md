@@ -256,25 +256,25 @@ dir = "~/Nextcloud/projects/notes/sandogasa-report"
 
 `report --notes` adds the notes dated in the report's period. Each note
 goes under the first item in the report that links its URL, or, for a
-commit, under its repository's line in that forge's commit counts, since
-reports count commits rather than list them; items show only with
-`--detailed --detailed`. URLs match when they point at the same item:
-the scheme, the host's case, a trailing slash, a fragment and tracking
-parameters (`utm_*`) do not count, nor the path's case on GitHub and
-GitLab; a Bugzilla bug matches in any form (`rhbz#N`, `/N`,
-`show_bug.cgi?id=N` with other parameters), a GitHub API URL matches the
-web page, and a GitLab work item (`/-/work_items/N`) its issue page
-(`/-/issues/N`). Notes no item took close the report in a section of
-their own, "Notes on items not in this report", grouped by the host
-their URL points at, those without a URL last, so the sources a report
-does not cover show at a glance. `--unattached-notes exclude` leaves
-them out of the Markdown report and `ask` asks (including them without a
-terminal); the default is `include`, or what `[notes] unattached` in the
-config says. Below `--detailed --detailed`, some items are counted
-rather than listed, so their notes land in this section too. With
-`--json`, the notes come as a `notes` array beside `report`, each with
-the `key` its URL is matched by and whether an item took it
-(`attached`), whatever `--unattached-notes` says.
+commit or a repository's own URL, under the repository's line in that
+forge's commit counts, since reports count commits rather than list
+them; items show only with `--detailed --detailed`. URLs match when they
+point at the same item: the scheme, the host's case, a trailing slash, a
+fragment and tracking parameters (`utm_*`) do not count, nor the path's
+case on GitHub and GitLab; a Bugzilla bug matches in any form (`rhbz#N`,
+`/N`, `show_bug.cgi?id=N` with other parameters), a GitHub API URL
+matches the web page, and a GitLab work item (`/-/work_items/N`) its
+issue page (`/-/issues/N`). Notes no item took close the report in a
+section of their own, "Notes on items not in this report", grouped by
+the host their URL points at, those without a URL last, so the sources a
+report does not cover show at a glance. `--unattached-notes exclude`
+leaves them out of the Markdown report and `ask` asks (including them
+without a terminal); the default is `include`, or what `[notes]
+unattached` in the config says. Below `--detailed --detailed`, some
+items are counted rather than listed, so their notes land in this
+section too. With `--json`, the notes come as a `notes` array beside
+`report`, each with the `key` its URL is matched by and whether an item
+took it (`attached`), whatever `--unattached-notes` says.
 
 A report is made to be shared unless `--private` is given: a note then
 shows only under an item the printed report shows (so it is no more

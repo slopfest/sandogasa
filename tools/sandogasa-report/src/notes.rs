@@ -514,6 +514,29 @@ fn commit_repo(key: &str) -> Option<(Forge, &str)> {
     Some((forge, repo))
 }
 
+/// The forge and repository a repository's own URL key names, which a
+/// note about the repository attaches under, as a commit's does: a
+/// GitHub or Forgejo `owner/repo`, a sourcehut `~owner/repo`, a GitLab
+/// project at any depth of groups. `.git` at the end does not count.
+fn repo_url(key: &str) -> Option<(Forge, &str)> {
+    let (host, path) = key.split_once('/')?;
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    if path.is_empty() || path.contains("/-/") || path.contains('?') {
+        return None;
+    }
+    let depth = path.split('/').count();
+    let (forge, fits) = if host.contains("github") {
+        (Forge::Github, depth == 2)
+    } else if host == "git.sr.ht" {
+        (Forge::Sourcehut, depth == 2 && path.starts_with('~'))
+    } else if host.contains("gitlab") || host == "salsa.debian.org" {
+        (Forge::Gitlab, depth >= 2)
+    } else {
+        (Forge::Forgejo, depth == 2)
+    };
+    fits.then_some((forge, path))
+}
+
 /// The repository a list item is about, when it opens with one in
 /// backticks (``- `owner/repo`: 12``).
 fn item_repo(line: &str) -> Option<&str> {
@@ -585,7 +608,7 @@ pub fn attach(markdown: &str, notes: &[Stored]) -> (String, Vec<usize>) {
         .iter()
         .map(|k| {
             k.as_deref()
-                .and_then(commit_repo)
+                .and_then(|k| commit_repo(k).or_else(|| repo_url(k)))
                 .map(|(f, r)| (f, r.to_lowercase()))
         })
         .collect();
@@ -1144,6 +1167,13 @@ mod tests {
         // Outside a forge section, a repository line takes no commit.
         let (_, rest) = attach("## By repository\n\n- `o/r`: 3\n", &notes);
         assert_eq!(rest, [0, 1]);
+        // A note on the repository itself goes to the same line.
+        let mut repo = notes[1].clone();
+        repo.note.url = Some("https://github.com/O/R".into());
+        repo.note.text = "The repository.".into();
+        let (out, rest) = attach(md, &[repo]);
+        assert!(rest.is_empty());
+        assert!(out.contains("- `O/R`: 3\n  > The repository.\n"), "{out}");
     }
 
     #[test]
@@ -1247,6 +1277,22 @@ mod tests {
             Some((Forge::Forgejo, "o/r"))
         );
         assert_eq!(commit_repo("github.com/o/r/pull/1"), None);
+        assert_eq!(
+            repo_url("github.com/slopfest/upstream-primer"),
+            Some((Forge::Github, "slopfest/upstream-primer"))
+        );
+        assert_eq!(
+            repo_url("gitlab.com/centos/hyperscale/rpms/perf.git"),
+            Some((Forge::Gitlab, "centos/hyperscale/rpms/perf"))
+        );
+        assert_eq!(repo_url("git.sr.ht/~u/r"), Some((Forge::Sourcehut, "~u/r")));
+        assert_eq!(repo_url("codeberg.org/o/r"), Some((Forge::Forgejo, "o/r")));
+        // An owner, an item, a page within a project: not a repository.
+        assert_eq!(repo_url("github.com/slopfest"), None);
+        assert_eq!(repo_url("github.com/o/r/pull/1"), None);
+        assert_eq!(repo_url("gitlab.com/a/b/-/issues/1"), None);
+        assert_eq!(repo_url("bugs.debian.org/1018193"), None);
+        assert_eq!(repo_url("git.sr.ht/u/r"), None);
         assert_eq!(commit_repo("nohost"), None);
         assert_eq!(link_urls("[a](u1) and [b](u2) [c](broken"), ["u1", "u2"]);
         assert_eq!(
