@@ -989,6 +989,18 @@ has to reach EPEL before then, rewrite that one guard as a nested
 `match` (it is the only construct above 1.92 — `make msrv-check` with a
 1.92 toolchain confirms) and lower `rust-version` accordingly.
 
+## Fedora spec: recommend secret-tool (2026-11-20)
+
+The tools keep tokens in the desktop keyring by running `secret-tool`
+(`sandogasa_config::secret::SecretTool`), and fall back to their config
+files without it. Nothing declares it: Cargo cannot, and the spec does
+not yet. At the next spec update add `Recommends: /usr/bin/secret-tool`
+to the subpackages of the tools with a `config` command that keeps a
+secret (`docs/tokens.md` lists them). Fedora and RHEL ship it in
+`libsecret` (`fedrq pkgs -P /usr/bin/secret-tool`: 0.21.8 in rawhide,
+0.21.2 in c10s), so EPEL can carry the same line. On Debian it is
+`libsecret-tools`; dbranch keeps no secret, so its package needs nothing.
+
 ## dbranch: restate the Debusine workflow URL after an upload (2026-10-14)
 
 dput prints the work request it created -- "Created workflow:

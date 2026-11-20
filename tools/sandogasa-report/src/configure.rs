@@ -34,6 +34,8 @@ pub struct ConfigArgs {
     /// instance with a token, are kept as they are, unchecked.
     #[arg(long)]
     pub missing: bool,
+    #[command(flatten)]
+    pub token: sandogasa_cli::TokenArgs,
 }
 
 /// Where a prompt's answer is read from: the terminal, or a test's
@@ -138,99 +140,121 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
 
     eprintln!(
         "Configuring sandogasa-report overlay.\n\
-         File: {}\n",
+         File: {}",
         overlay_path.display()
     );
 
-    // Profile section.
-    let existing_keys: Vec<&str> = merged.users.keys().map(String::as_str).collect();
-    eprintln!(
-        "Existing profiles: {}",
-        if existing_keys.is_empty() {
-            "(none)".to_string()
-        } else {
-            existing_keys.join(", ")
-        }
-    );
-    // With --missing and one profile, that one: it is what there is to
-    // complete.
-    let only = (args.missing && existing_keys.len() == 1).then(|| existing_keys[0].to_string());
-    let profile_key = match only {
-        Some(key) => {
-            eprintln!("Completing profile {key}.");
-            key
-        }
-        None => ask_with(
-            &Setting::new("profile", "to configure (an existing name or a new one)").optional(),
-            "",
-            false,
-            read,
-        )?,
-    };
     let mut ask = Asker {
         read,
         missing: args.missing,
         kept: 0,
     };
-    if profile_key.is_empty() {
-        eprintln!("No profile name given, aborting.");
-        return Ok(());
+    // With --token, only those instances' tokens: they must be ones
+    // the config has.
+    let redo = &args.token;
+    if redo.given() && (args.missing || args.all) {
+        return Err("--token asks for the tokens given and nothing else: \
+                    leave out --missing and --all"
+            .into());
     }
-    let existing_profile = merged.users.get(&profile_key).cloned();
-    let mut changed = prompt_profile(
-        &mut overlay,
-        &profile_key,
-        existing_profile.as_ref(),
-        bts,
-        &gitlab_instances,
-        &github_instances,
-        &forgejo_instances,
-        &sourcehut_instances,
-        &pagure_instances,
-        &bugzilla_instances,
-        &mut ask,
-    )?;
-
-    // Where `note` writes notes, and `notes` and `report --notes` read
-    // them (#167).
-    // With --missing, a heading only over something asked.
-    if !(ask.missing && notes_dir_set(&overlay)) {
-        eprintln!("\nNotes:");
-    }
-    let notes_dir = ask.field(
-        &Setting::new("notes", "directory")
-            .optional()
-            .hint(
-                "Where `note` writes notes: an absolute path or one under ~/; \
-                 empty for ~/.local/share/sandogasa-report/notes",
-            )
-            .validated(&crate::notes::check_dir),
-        merged.notes.dir.as_deref().unwrap_or(""),
-        true,
-        // Set in the user's own file: one from /etc is not theirs.
-        notes_dir_set(&overlay),
-    )?;
-    let notes_dir_changed = overlay_update(
-        &mut overlay,
-        &["notes", "dir"],
-        merged.notes.dir.as_deref(),
-        &notes_dir,
-    );
-    changed |= notes_dir_changed;
-    // The profile is saved before the tokens are asked for, so a token
-    // that cannot be stored does not lose the answers above.
+    let mut changed = false;
     let mut saved_profile = false;
-    if changed {
-        if write_overlay(&overlay_cf, &as_read, &overlay, &[])? {
-            eprintln!(
-                "\nNothing left to keep in {}; removed it.",
-                overlay_path.display()
-            );
-        } else {
-            eprintln!("\nSaved the profile to {}", overlay_path.display());
+    if !redo.given() {
+        // Profile section.
+        let existing_keys: Vec<&str> = merged.users.keys().map(String::as_str).collect();
+        eprintln!(
+            "\nExisting profiles: {}",
+            if existing_keys.is_empty() {
+                "(none)".to_string()
+            } else {
+                existing_keys.join(", ")
+            }
+        );
+        // With --missing and one profile, that one: it is what there is to
+        // complete.
+        let only = (args.missing && existing_keys.len() == 1).then(|| existing_keys[0].to_string());
+        let profile_key = match only {
+            Some(key) => {
+                eprintln!("Completing profile {key}.");
+                key
+            }
+            None => ask_with(
+                &Setting::new("profile", "to configure (an existing name or a new one)").optional(),
+                "",
+                false,
+                ask.read,
+            )?,
+        };
+        if profile_key.is_empty() {
+            eprintln!("No profile name given, aborting.");
+            return Ok(());
         }
-        saved_profile = true;
-        changed = false;
+        let existing_profile = merged.users.get(&profile_key).cloned();
+        changed = prompt_profile(
+            &mut overlay,
+            &profile_key,
+            existing_profile.as_ref(),
+            bts,
+            &gitlab_instances,
+            &github_instances,
+            &forgejo_instances,
+            &sourcehut_instances,
+            &pagure_instances,
+            &bugzilla_instances,
+            &mut ask,
+        )?;
+
+        // Where `note` writes notes, and `notes` and `report --notes` read
+        // them (#167).
+        // With --missing, a heading only over something asked.
+        if !(ask.missing && notes_dir_set(&overlay)) {
+            eprintln!("\nNotes:");
+        }
+        let notes_dir = ask.field(
+            &Setting::new("notes", "directory")
+                .optional()
+                .hint(
+                    "Where `note` writes notes: an absolute path or one under ~/; \
+                     empty for ~/.local/share/sandogasa-report/notes",
+                )
+                .validated(&crate::notes::check_dir),
+            merged.notes.dir.as_deref().unwrap_or(""),
+            true,
+            // Set in the user's own file: one from /etc is not theirs.
+            notes_dir_set(&overlay),
+        )?;
+        let notes_dir_changed = overlay_update(
+            &mut overlay,
+            &["notes", "dir"],
+            merged.notes.dir.as_deref(),
+            &notes_dir,
+        );
+        changed |= notes_dir_changed;
+        // The profile is saved before the tokens are asked for, so a token
+        // that cannot be stored does not lose the answers above.
+        if changed {
+            if write_overlay(&overlay_cf, &as_read, &overlay, &[])? {
+                eprintln!(
+                    "\nNothing left to keep in {}; removed it.",
+                    overlay_path.display()
+                );
+            } else {
+                eprintln!("\nSaved the profile to {}", overlay_path.display());
+            }
+            saved_profile = true;
+            changed = false;
+        }
+    } else {
+        let known: Vec<String> = [
+            (&gitlab_instances, GITLAB),
+            (&github_instances, GITHUB),
+            (&forgejo_instances, FORGEJO),
+            (&sourcehut_instances, SOURCEHUT),
+        ]
+        .into_iter()
+        .flat_map(|(instances, kind)| instances.iter().map(move |i| (kind.host)(i)))
+        .collect();
+        redo.check(known.iter().map(String::as_str))?;
     }
 
     // Token section: one prompt per unique instance, per forge.
@@ -263,29 +287,63 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     let mut out_of_file: Vec<(&str, String)> = Vec::new();
 
     for (instances, heading, kind) in forges {
-        // With --missing, the heading waits for a token to ask for.
-        let mut headed = instances.is_empty() || ask.missing;
-        if !headed {
+        // With --missing or --token, the heading waits for a token to ask
+        // for.
+        let lazy = ask.missing || redo.given();
+        // Nothing to head without instances; otherwise printed now, or,
+        // when lazy, before the first prompt.
+        let mut headed = instances.is_empty();
+        if !headed && !lazy {
             eprintln!("\n{heading}");
             headed = true;
         }
         for instance in instances {
             let host = (kind.host)(instance);
+            let again = redo.again(&host);
+            if redo.given() && !again {
+                continue;
+            }
             let outcome = instance_token(
                 &mut overlay,
                 &kind,
                 instance,
                 &host,
-                args.all,
-                &sandogasa_cli::ask_to_reenable,
+                args.all || again,
+                // Asked again, a token turned off is asked for anew,
+                // not offered from the keyring.
+                match again {
+                    true => &sandogasa_config::secret::never,
+                    false => &sandogasa_cli::ask_to_reenable,
+                },
                 |existing| match existing {
+                    // Asked again: as if none were saved, but Enter
+                    // keeps the saved one.
+                    _ if again => {
+                        if !std::mem::replace(&mut headed, true) {
+                            eprintln!("\n{heading}");
+                        }
+                        let (field, prompt) = match existing {
+                            Some(_) => (
+                                "token (empty keeps the saved one)",
+                                token_prompt_saying(
+                                    kind.label,
+                                    instance,
+                                    "a new token",
+                                    "keep the saved one",
+                                ),
+                            ),
+                            None => (SKIP, token_prompt(kind.label, instance)),
+                        };
+                        prompt_token(instance, None, &prompt, field, kind.validate, ask.read)
+                            .map(asked_again)
+                    }
                     // A stored token is kept, unchecked, with --missing.
                     Some(_) if ask.missing => {
                         ask.kept += 1;
                         Ok(TokenChoice::KeepExisting)
                     }
                     _ => {
-                        if ask.missing && !std::mem::replace(&mut headed, true) {
+                        if lazy && !std::mem::replace(&mut headed, true) {
                             eprintln!("\n{heading}");
                         }
                         (kind.prompt)(instance, existing)
@@ -603,7 +661,10 @@ fn prompt_per_instance_usernames(
 enum TokenChoice {
     Saved(String),
     KeepExisting,
+    /// Nothing entered.
     Skipped,
+    /// The off marker entered: turned off for this tool.
+    Off,
 }
 
 /// Where [`instance_token`] left a token.
@@ -624,6 +685,9 @@ enum TokenOutcome {
 struct TokenKind {
     table: &'static str,
     what: &'static str,
+    /// The keyring label the tools share, for the credentials table.
+    label: &'static str,
+    validate: ValidateFn,
     host: fn(&str) -> String,
     secret: fn(&str) -> sandogasa_config::secret::SecretRef,
     prompt: PromptFn,
@@ -650,6 +714,7 @@ fn prompt_token(
     instance: &str,
     existing: Option<&str>,
     prompt: &str,
+    field: &str,
     validate: ValidateFn,
     read: &mut Reader<'_>,
 ) -> Result<TokenChoice, Box<dyn std::error::Error>> {
@@ -682,7 +747,7 @@ fn prompt_token(
     let hint = prompt.trim_end();
     // A token the forge rejects is asked for again, not the end of the
     // run: the answers before it would be lost with it.
-    let setting = Setting::new(instance, "token (empty to skip)")
+    let setting = Setting::new(instance, field)
         .sensitive()
         .optional()
         .hint(hint);
@@ -690,6 +755,9 @@ fn prompt_token(
         let token = ask_with(&setting, "", false, read)?;
         // Checked here, not by `validated_key_blocking`: neither an empty
         // answer nor the off marker is sent to the forge as a token.
+        if token == sandogasa_config::secret::OFF {
+            return Ok(TokenChoice::Off);
+        }
         if !sandogasa_config::secret::is_set(&token) {
             return Ok(TokenChoice::Skipped);
         }
@@ -712,13 +780,32 @@ fn prompt_token(
     }
 }
 
+/// The field a token prompt asks for: Enter skips the instance.
+const SKIP: &str = "token (empty to skip)";
+
+/// The answer to a token asked for again with `--token`, which was
+/// asked as if none were saved: an empty one keeps the saved token,
+/// rather than turning it off.
+fn asked_again(choice: TokenChoice) -> TokenChoice {
+    match choice {
+        TokenChoice::Skipped => TokenChoice::KeepExisting,
+        other => other,
+    }
+}
+
 /// What a token prompt for `instance` shows: that one is asked for,
 /// and, from the shared credentials table, where to create it, what
 /// the report needs from it and what the other tools sharing the
 /// keyring entry under `label` need.
 fn token_prompt(label: &str, instance: &str) -> String {
+    token_prompt_saying(label, instance, "a token", "skip")
+}
+
+/// [`token_prompt`], asking for `what` ("a new token"), and saying what
+/// an empty answer does (`empty`: "skip", "keep the saved one").
+fn token_prompt_saying(label: &str, instance: &str, what: &str, empty: &str) -> String {
     format!(
-        "  Paste a token for {instance}, or nothing to skip.\n{}",
+        "  Paste {what} for {instance}, or nothing to {empty}.\n{}",
         sandogasa_config::credentials::token_help(label, "sandogasa-report", instance)
     )
 }
@@ -733,6 +820,7 @@ fn prompt_gitlab_token(
         instance,
         existing,
         &token_prompt("sandogasa: GitLab token", instance),
+        SKIP,
         sandogasa_gitlab::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )
@@ -749,6 +837,7 @@ fn prompt_github_token(
         instance,
         existing,
         &token_prompt("sandogasa: GitHub token", instance),
+        SKIP,
         sandogasa_github::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )
@@ -765,6 +854,7 @@ fn prompt_forgejo_token(
         instance,
         existing,
         &token_prompt("sandogasa: Forgejo token", instance),
+        SKIP,
         sandogasa_forgejo::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )
@@ -779,6 +869,7 @@ fn prompt_sourcehut_token(
         instance,
         existing,
         &token_prompt("sandogasa: SourceHut token", instance),
+        SKIP,
         sandogasa_sourcehut::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )
@@ -787,6 +878,8 @@ fn prompt_sourcehut_token(
 const GITLAB: TokenKind = TokenKind {
     table: "gitlab_tokens",
     what: "GitLab token",
+    label: "sandogasa: GitLab token",
+    validate: sandogasa_gitlab::validate_token,
     host: crate::gitlab::instance_host,
     secret: crate::gitlab::secret,
     prompt: prompt_gitlab_token,
@@ -795,6 +888,8 @@ const GITLAB: TokenKind = TokenKind {
 const GITHUB: TokenKind = TokenKind {
     table: "github_tokens",
     what: "GitHub token",
+    label: "sandogasa: GitHub token",
+    validate: sandogasa_github::validate_token,
     host: crate::github::instance_host,
     secret: crate::github::secret,
     prompt: prompt_github_token,
@@ -803,6 +898,8 @@ const GITHUB: TokenKind = TokenKind {
 const FORGEJO: TokenKind = TokenKind {
     table: "forgejo_tokens",
     what: "Forgejo/Gitea token",
+    label: "sandogasa: Forgejo token",
+    validate: sandogasa_forgejo::validate_token,
     host: crate::forgejo::instance_host,
     secret: crate::forgejo::secret,
     prompt: prompt_forgejo_token,
@@ -811,6 +908,8 @@ const FORGEJO: TokenKind = TokenKind {
 const SOURCEHUT: TokenKind = TokenKind {
     table: "sourcehut_tokens",
     what: "Sourcehut token",
+    label: "sandogasa: SourceHut token",
+    validate: sandogasa_sourcehut::validate_token,
     host: crate::sourcehut::instance_host,
     secret: crate::sourcehut::secret,
     prompt: prompt_sourcehut_token,
@@ -911,7 +1010,7 @@ fn instance_token_in(
                     value = t;
                 }
                 TokenChoice::KeepExisting => {}
-                TokenChoice::Skipped => value.clear(),
+                TokenChoice::Skipped | TokenChoice::Off => value.clear(),
             }
         }
     }
@@ -1651,6 +1750,7 @@ mod tests {
             all: false,
             config: Some(main.display().to_string()),
             missing: false,
+            token: Default::default(),
         };
         let asked = std::cell::RefCell::new(Vec::new());
         // Profile, FAS (keeping the profile's name), Bugzilla email,
@@ -1712,6 +1812,104 @@ mod tests {
         assert_eq!(asked.borrow().len(), 1);
     }
 
+    /// `--token` asks only for the hosts given, and a host the config
+    /// has no instance for is refused before anything is asked; an
+    /// empty answer to a token asked again keeps the saved one.
+    #[test]
+    #[serial_test::serial]
+    fn token_names_a_host_the_config_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let main = dir.path().join("main.toml");
+        std::fs::write(
+            &main,
+            "[domains.fedora.forgejo]\ninstance = \"https://forge.example.org\"\n",
+        )
+        .unwrap();
+        let mut token = sandogasa_cli::TokenArgs::default();
+        token.hosts.push("forge.example.com".into());
+        let args = ConfigArgs {
+            all: false,
+            config: Some(main.display().to_string()),
+            missing: false,
+            token,
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let err = run_inner(&args, &mut scripted(&[], &asked)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--token: no secret is kept for forge.example.com; this configuration has: \
+             forge.example.org"
+        );
+        assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+        assert!(matches!(
+            asked_again(TokenChoice::Skipped),
+            TokenChoice::KeepExisting
+        ));
+        assert!(matches!(
+            asked_again(TokenChoice::Saved("t".into())),
+            TokenChoice::Saved(t) if t == "t"
+        ));
+    }
+
+    /// `--token` end to end: only the instance given is asked about,
+    /// a new answer replaces its token and leaves the other instance's,
+    /// and Enter keeps it. Both instances are on loopback, so the check
+    /// against the forge cannot reach one and keeps the token.
+    #[test]
+    #[serial_test::serial]
+    fn token_asks_again_for_one_instance_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let main = dir.path().join("main.toml");
+        let (a, b) = ("http://127.0.0.1:9", "http://127.0.0.1:10");
+        std::fs::write(
+            &main,
+            format!(
+                "[domains.a.forgejo]\ninstance = \"{a}\"\n\
+                 [domains.b.forgejo]\ninstance = \"{b}\"\n"
+            ),
+        )
+        .unwrap();
+        let ha = (FORGEJO.host)(a);
+        let hb = (FORGEJO.host)(b);
+        write_user_overlay(&format!(
+            "[forgejo_tokens]\n\"{ha}\" = \"old-a\"\n\"{hb}\" = \"old-b\"\n"
+        ));
+        let mut token = sandogasa_cli::TokenArgs::default();
+        token.hosts.push(a.to_string());
+        let mut args = ConfigArgs {
+            all: false,
+            config: Some(main.display().to_string()),
+            missing: false,
+            token,
+        };
+        let found = || {
+            let cfg = config::load_config(None).unwrap();
+            [a, b].map(|i| crate::forgejo::find_token(i, &cfg.forgejo_tokens).unwrap())
+        };
+        assert_eq!(found(), ["old-a", "old-b"]);
+
+        let asked = std::cell::RefCell::new(Vec::new());
+        run_inner(&args, &mut scripted(&["new-a"], &asked)).unwrap();
+        assert_eq!(asked.borrow().len(), 1, "{:?}", asked.borrow());
+        assert!(
+            asked.borrow()[0].contains("token (empty keeps the saved one)"),
+            "{:?}",
+            asked.borrow()
+        );
+        assert_eq!(found(), ["new-a", "old-b"]);
+
+        // Enter keeps it.
+        run_inner(&args, &mut scripted(&[""], &asked)).unwrap();
+        assert_eq!(found(), ["new-a", "old-b"]);
+
+        // Not with --missing, which would keep what --token replaces.
+        args.missing = true;
+        let err = run_inner(&args, &mut scripted(&[], &asked)).unwrap_err();
+        assert!(err.to_string().contains("leave out --missing"), "{err}");
+    }
+
     #[test]
     #[serial_test::serial]
     fn missing_asks_only_for_what_is_not_set() {
@@ -1727,6 +1925,7 @@ mod tests {
             all: false,
             config: Some(main.display().to_string()),
             missing: false,
+            token: Default::default(),
         };
         let asked = std::cell::RefCell::new(Vec::new());
         let answers = ["me", "", "me@example.com", "me@suse.example", "~/notes"];
@@ -1911,6 +2110,7 @@ mod tests {
                 "gitlab.example",
                 None,
                 "  Paste a token (enter to skip): ",
+                SKIP,
                 validate,
                 &mut scripted(answers, &asked),
             )
@@ -1920,7 +2120,7 @@ mod tests {
         let unreachable: ValidateFn = |_, _| Err("no route".into());
         assert!(matches!(ask(&["glpat"], ok).unwrap(), TokenChoice::Saved(t) if t == "glpat"));
         assert!(matches!(ask(&[""], ok).unwrap(), TokenChoice::Skipped));
-        assert!(matches!(ask(&["-"], ok).unwrap(), TokenChoice::Skipped));
+        assert!(matches!(ask(&["-"], ok).unwrap(), TokenChoice::Off));
         // A refused token is asked for again, and the next answer stands.
         assert!(matches!(
             ask(&["bad", ""], refused).unwrap(),
@@ -1934,6 +2134,7 @@ mod tests {
             "gitlab.example",
             Some("glpat-saved"),
             "",
+            SKIP,
             ok,
             &mut scripted(&[], &asked),
         )

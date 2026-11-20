@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### sandogasa-report config --token asks for one instance's token again
+
+Replacing a token that worked but lacked a scope (a Fedora Forge token
+without `read:issue`, which ended the report with a 403) meant clearing
+its keyring entry with `secret-tool` and running `config` again: a plain
+run keeps a token that passes its check, and `--all` goes over every
+setting. `config --token <HOST>` (or the instance's URL) asks only for
+that instance's token, as if none were saved: Enter keeps the saved one,
+`-` turns it off, and a token turned off is asked for anew rather than
+taken back from the keyring. A host the configuration has no instance
+for is refused, with the hosts it has, and so is `--token` with
+`--missing` or `--all`.
+The flag comes from sandogasa-cli's new `TokenArgs`, for the other
+tools' `config` commands to take up.
+
 ### config prompts say what each token needs, and docs/tokens.md lists them all
 
 Setting sandogasa up meant finding, tool by tool, which services want a

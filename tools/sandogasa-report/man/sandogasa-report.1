@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS sandogasa-report config
-\fBsandogasa\-report config\fR [\fB\-\-all\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-missing\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-report config\fR [\fB\-\-all\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-missing\fR] [\fB\-\-token\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Interactively set per\-user overrides in `~/.config/sandogasa\-report/config.toml`
 .TP
@@ -28,6 +28,9 @@ Main config file to enumerate domains / forge instances from. Without one, there
 .TP
 \fB\-\-missing\fR
 Ask only for what is not set yet: a field with a value, and an instance with a token, are kept as they are, unchecked
+.TP
+\fB\-\-token\fR \fI<HOST>\fR
+Ask again only for the token kept for HOST (e.g. forge.fedoraproject.org, or its URL), even though one is saved; Enter keeps it. May be given more than once
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

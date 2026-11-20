@@ -119,7 +119,11 @@ Four subcommands:
   instance is added to the main config: a field with a value and an
   instance with a stored token are kept, unchecked, and with a single
   profile it is completed without asking its name. It ends by saying
-  how many settings it kept.
+  how many settings it kept. `--token HOST` asks again only for the
+  token of the instance on that host, even though one is saved, to
+  replace it with one granting more or a rotated one; Enter keeps the
+  saved one. The prompt says what the token needs; see
+  [docs/tokens.md](../../docs/tokens.md).
 - `sandogasa-report note` — record why a piece of work was done (see
   [Notes](#notes)).
 - `sandogasa-report notes` — list recorded notes.

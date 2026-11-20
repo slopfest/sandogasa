@@ -61,6 +61,69 @@ pub struct ConfigArgs {
     pub all: bool,
 }
 
+/// `config --token HOST`: ask again for the token or key kept for
+/// each host, even though one is saved, and nothing else, so one secret
+/// can be replaced (a new scope, a rotated token) without going over
+/// every setting or clearing the keyring's entry by hand. Flatten it
+/// into a `config` command beside [`ConfigArgs`].
+#[derive(Debug, Clone, Default, clap::Args)]
+#[non_exhaustive]
+pub struct TokenArgs {
+    /// Ask again only for the token kept for HOST (e.g.
+    /// forge.fedoraproject.org, or its URL), even though one is saved;
+    /// Enter keeps it. May be given more than once
+    #[arg(long = "token", value_name = "HOST")]
+    pub hosts: Vec<String>,
+}
+
+impl TokenArgs {
+    /// Whether any host was given: then only those are asked about.
+    pub fn given(&self) -> bool {
+        !self.hosts.is_empty()
+    }
+
+    /// Whether `host`'s secret is to be asked for again. A host given
+    /// as a URL counts by its host, and hosts compare ignoring case.
+    pub fn again(&self, host: &str) -> bool {
+        self.hosts
+            .iter()
+            .any(|h| token_host(h).eq_ignore_ascii_case(host))
+    }
+
+    /// An error naming each host given that is not among `known`, the
+    /// hosts the tool keeps a secret for, and listing those; checked
+    /// before asking anything, so a typo is not a run that asks nothing.
+    pub fn check<'a>(&self, known: impl IntoIterator<Item = &'a str>) -> Result<(), String> {
+        let mut known: Vec<&str> = known.into_iter().collect();
+        known.sort_unstable();
+        known.dedup();
+        let unknown: Vec<&str> = self
+            .hosts
+            .iter()
+            .map(String::as_str)
+            .filter(|h| !known.iter().any(|k| k.eq_ignore_ascii_case(token_host(h))))
+            .collect();
+        match unknown.is_empty() {
+            true => Ok(()),
+            false => Err(format!(
+                "--token: no secret is kept for {}; this configuration has: {}",
+                unknown.join(", "),
+                match known.is_empty() {
+                    true => "none".to_string(),
+                    false => known.join(", "),
+                }
+            )),
+        }
+    }
+}
+
+/// The host a `--token` argument names: itself, or a URL's host
+/// (scheme, path and trailing slash dropped).
+fn token_host(arg: &str) -> &str {
+    let rest = arg.split_once("://").map_or(arg, |(_, r)| r);
+    rest.split('/').next().unwrap_or(rest)
+}
+
 /// Free text a command adds to what it files (a Bodhi update's notes,
 /// a merge request's description), given inline or read from a file,
 /// so the two flags and their errors read the same in every tool.
@@ -409,6 +472,38 @@ fn parse_list_answer(answer: &str, default_yes: bool) -> ListAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_args_pick_hosts_and_refuse_unknown_ones() {
+        let none = TokenArgs::default();
+        assert!(!none.given());
+        assert!(none.check(["gitlab.com"]).is_ok());
+        let args = TokenArgs {
+            hosts: vec!["Forge.FedoraProject.org".into()],
+        };
+        assert!(args.given());
+        assert!(args.again("forge.fedoraproject.org"));
+        assert!(!args.again("codeberg.org"));
+        assert!(
+            args.check(["codeberg.org", "forge.fedoraproject.org"])
+                .is_ok()
+        );
+        let url = TokenArgs {
+            hosts: vec!["https://forge.fedoraproject.org/".into()],
+        };
+        assert!(url.again("forge.fedoraproject.org"));
+        assert!(url.check(["forge.fedoraproject.org"]).is_ok());
+        let typo = TokenArgs {
+            hosts: vec!["forge.fedora.org".into()],
+        };
+        assert_eq!(
+            typo.check(["gitlab.com", "codeberg.org", "gitlab.com"])
+                .unwrap_err(),
+            "--token: no secret is kept for forge.fedora.org; this configuration has: \
+             codeberg.org, gitlab.com"
+        );
+        assert!(typo.check([]).unwrap_err().ends_with("has: none"));
+    }
 
     /// Without a terminal to ask at, a secret turned off stays off,
     /// whichever the default.
