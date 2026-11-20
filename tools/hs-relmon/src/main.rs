@@ -1331,6 +1331,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     outcome.unsourced.join(", ")
                 );
             }
+            for u in &outcome.unplaced {
+                eprintln!("note: {u}; not compared");
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&outcome)?);
             } else {
@@ -1343,9 +1346,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     targets.len(),
                     outcome.unbuilt.len(),
                     outcome.recent.len(),
-                    match outcome.unsourced.len() {
+                    match outcome.unsourced.len() + outcome.unplaced.len() {
                         0 => String::new(),
-                        n => format!("; {n} with no commit recorded"),
+                        n => format!("; {n} with no commit to compare"),
                     },
                     match outcome.problems.len() {
                         0 => String::new(),

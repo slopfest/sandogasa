@@ -116,9 +116,15 @@ impl GitLab {
 
 impl Repository for GitLab {
     fn containing(&self, target: &Target, sha: &str) -> Result<Vec<String>, String> {
-        self.client(target, &format!("branches holding {}", short(sha)))?
+        match self
+            .client(target, &format!("branches holding {}", short(sha)))?
             .branches_containing(sha)
-            .map_err(|e| e.to_string())
+        {
+            Ok(branches) => Ok(branches),
+            // A commit GitLab no longer has is on no branch.
+            Err(e) if e.to_string().contains("404 Commit Not Found") => Ok(Vec::new()),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     fn since(&self, target: &Target, sha: &str, branch: &str) -> Result<Vec<RepoCommit>, String> {
@@ -140,7 +146,13 @@ pub struct Outcome {
     /// Builds CBS records no commit for (one made from an uploaded
     /// SRPM), which cannot be compared.
     pub unsourced: Vec<String>,
-    /// Builds that could not be checked, and why.
+    /// Builds whose commit no branch they may have come from holds, or
+    /// GitLab no longer has (built from a merge request's branch, or
+    /// from a branch since rewritten), and why: an old build, usually,
+    /// with nothing to compare.
+    pub unplaced: Vec<String>,
+    /// Builds that could not be checked, GitLab or the hub failing, and
+    /// why.
     pub problems: Vec<String>,
 }
 
@@ -232,21 +244,36 @@ pub fn check(
 ) -> Outcome {
     let mut outcome = Outcome::default();
     let jobs: Vec<(&Target, &Option<String>)> = targets.iter().zip(built).collect();
+    // Each branch compared, with what each build from it lacks: several
+    // dist tags can come from one branch (a variant built from `cNs-hs`),
+    // and the branch is built once any of them is at its head.
+    let mut branches: Vec<Unbuilt> = Vec::new();
     for (r, (t, _)) in bounded(&jobs, |(t, sha)| sha.as_deref().map(|s| one(t, s, repo)))
         .into_iter()
         .zip(&jobs)
     {
         match r {
             None => outcome.unsourced.push(t.nvr.clone()),
-            Some(Err(e)) => outcome.problems.push(e),
+            Some(Err(Missed::Unplaced(e))) => outcome.unplaced.push(e),
+            Some(Err(Missed::Failed(e))) => outcome.problems.push(e),
             Some(Ok(found)) => {
                 for u in found {
-                    match settled(&u.commits, cutoff) {
-                        true => outcome.unbuilt.push(u),
-                        false => outcome.recent.push(u),
+                    match branches
+                        .iter_mut()
+                        .find(|b| b.package == u.package && b.branch == u.branch)
+                    {
+                        Some(b) if u.commits.len() < b.commits.len() => *b = u,
+                        Some(_) => {}
+                        None => branches.push(u),
                     }
                 }
             }
+        }
+    }
+    for u in branches.into_iter().filter(|u| !u.commits.is_empty()) {
+        match settled(&u.commits, cutoff) {
+            true => outcome.unbuilt.push(u),
+            false => outcome.recent.push(u),
         }
     }
     outcome
@@ -367,33 +394,41 @@ pub fn paragraph(branch: &str, commits: Vec<RepoCommit>) -> Option<String> {
     Some(text)
 }
 
+/// Why a build was not compared.
+enum Missed {
+    /// No branch it may have come from holds its commit.
+    Unplaced(String),
+    /// GitLab failed.
+    Failed(String),
+}
+
 /// One target: each branch it picks among those holding `sha`, with the
-/// commits it gained since, those with none left out.
-fn one(target: &Target, sha: &str, repo: &dyn Repository) -> Result<Vec<Unbuilt>, String> {
-    let fail = |e: String| format!("{}: {}: {e}", target.package, target.nvr);
-    let containing = repo.containing(target, sha).map_err(fail)?;
+/// commits it gained since, none for a branch at the build's commit.
+fn one(target: &Target, sha: &str, repo: &dyn Repository) -> Result<Vec<Unbuilt>, Missed> {
+    let about = |e: String| format!("{}: {}: {e}", target.package, target.nvr);
+    let containing = repo
+        .containing(target, sha)
+        .map_err(|e| Missed::Failed(about(e)))?;
     let branches = pick(&target.branches, &containing);
     if branches.is_empty() {
-        return Err(fail(format!(
+        return Err(Missed::Unplaced(about(format!(
             "none of {} holds the commit it was built from ({})",
             target.branches.join(", "),
             short(sha)
-        )));
+        ))));
     }
     let mut found = Vec::new();
     for branch in branches {
         let commits = repo
             .since(target, sha, &branch)
-            .map_err(|e| fail(format!("{branch}: {e}")))?;
-        if !commits.is_empty() {
-            found.push(Unbuilt {
-                package: target.package.clone(),
-                branch,
-                nvr: target.nvr.clone(),
-                built: sha.to_string(),
-                commits: commits.into_iter().map(pending).collect(),
-            });
-        }
+            .map_err(|e| Missed::Failed(about(format!("{branch}: {e}"))))?;
+        found.push(Unbuilt {
+            package: target.package.clone(),
+            branch,
+            nvr: target.nvr.clone(),
+            built: sha.to_string(),
+            commits: commits.into_iter().map(pending).collect(),
+        });
     }
     Ok(found)
 }
@@ -652,12 +687,13 @@ mod tests {
         );
         assert_eq!(names(&out.recent), ["fresh c9s-hs"]);
         assert_eq!(out.unsourced, ["nosource-1-1.hs+fb.el9"]);
-        assert_eq!(out.problems.len(), 2, "{:?}", out.problems);
+        assert_eq!(out.problems.len(), 1, "{:?}", out.problems);
         assert!(out.problems[0].contains("502"), "{:?}", out.problems);
+        assert_eq!(out.unplaced.len(), 1, "{:?}", out.unplaced);
         assert!(
-            out.problems[1].contains("none of c9s-hs holds"),
+            out.unplaced[0].contains("none of c9s-hs holds"),
             "{:?}",
-            out.problems
+            out.unplaced
         );
 
         let text = render(&out.unbuilt[0]);
@@ -667,6 +703,85 @@ mod tests {
              was built, the newest from 2026-11-10\n  2026-10-11 c1 Rebase on c9s release 17\n  \
              2026-11-10 c2aaaaaaaaaa Merge branch 'x' (g/openssh!7)\n"
         );
+    }
+
+    #[test]
+    fn a_branch_is_built_once_any_build_from_it_is_at_its_head() {
+        // perf: an old experimental build and a current main one, both
+        // from c9s-hs; qemu: both behind, reported once.
+        let targets = [
+            target("perf", &["c9s-hsx", "c9s-hs"]),
+            target("perf", &["c9s-hs"]),
+            target("qemu", &["c9s-hsx", "c9s-hs"]),
+            target("qemu", &["c9s-hs"]),
+        ];
+        let built = [
+            Some("old".to_string()),
+            Some("head".to_string()),
+            Some("older".to_string()),
+            Some("behind".to_string()),
+        ];
+        let repo = Fake {
+            holding: vec![
+                ("old", vec!["c9s-hs"]),
+                ("head", vec!["c9s-hs"]),
+                ("older", vec!["c9s-hs"]),
+                ("behind", vec!["c9s-hs"]),
+            ],
+            since: vec![
+                (
+                    ("old", "c9s-hs"),
+                    Ok(vec![commit("a", "2026-09-08T00:00:00Z", "x"); 10]),
+                ),
+                (("head", "c9s-hs"), Ok(vec![])),
+                (
+                    ("older", "c9s-hs"),
+                    Ok(vec![commit("b", "2026-09-08T00:00:00Z", "y"); 5]),
+                ),
+                (
+                    ("behind", "c9s-hs"),
+                    Ok(vec![commit("c", "2026-09-09T00:00:00Z", "z")]),
+                ),
+            ],
+        };
+        let out = check(&targets, &built, &repo, at("2026-11-17T00:00:00Z"));
+        assert_eq!(out.unbuilt.len(), 1, "{:?}", out.unbuilt);
+        assert_eq!(out.unbuilt[0].package, "qemu");
+        assert_eq!(out.unbuilt[0].commits.len(), 1);
+    }
+
+    #[test]
+    fn a_commit_gitlab_no_longer_has_is_on_no_branch() {
+        let mut server = mockito::Server::new();
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex("/repository/commits/gone/refs".into()),
+            )
+            .match_query(mockito::Matcher::Any)
+            .with_status(404)
+            .with_body(r#"{"message": "404 Commit Not Found"}"#)
+            .create();
+        server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex("/repository/commits/flaky/refs".into()),
+            )
+            .match_query(mockito::Matcher::Any)
+            .with_status(502)
+            .create();
+        let repo = GitLab::new(&server.url(), "g/rpms", "");
+        let t = target("rpm", &["c8s-hs"]);
+        assert_eq!(repo.containing(&t, "gone").unwrap(), Vec::<String>::new());
+        assert!(repo.containing(&t, "flaky").is_err());
+        let out = check(
+            &[t.clone(), t],
+            &[Some("gone".into()), Some("flaky".into())],
+            &repo,
+            at("2026-11-17T00:00:00Z"),
+        );
+        assert_eq!(out.unplaced.len(), 1, "{:?}", out.unplaced);
+        assert_eq!(out.problems.len(), 1, "{:?}", out.problems);
     }
 
     #[test]

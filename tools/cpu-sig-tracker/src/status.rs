@@ -719,6 +719,7 @@ fn fill_unbuilt(
         outcome
             .problems
             .iter()
+            .chain(&outcome.unplaced)
             .any(|e| e.starts_with(&format!("{p}: ")))
             || targets
                 .iter()
@@ -739,7 +740,8 @@ fn fill_unbuilt(
             n.recent.push(u);
         }
     }
-    let mut warnings = outcome.problems;
+    let mut warnings = outcome.problems.clone();
+    warnings.extend(outcome.unplaced.iter().cloned());
     warnings.extend(
         outcome
             .unsourced

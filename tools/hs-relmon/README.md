@@ -365,15 +365,19 @@ openssh c9s-hs+fb: 9 commit(s) merged since openssh-9.9p1-16.1.hs+fb.el9 (55ea23
   2026-11-10 ba5701fb91ea Merge c9s release 17 into c9s-hs+fb
 ```
 
-A branch whose newest unbuilt commit is younger than `--grace-days`
+Several dist tags can come from one branch (an `hsx` build and an `hs`
+one both from `c9s-hs`); the branch counts as built once any of them is
+at its head, and is otherwise reported by the build closest to it. A
+branch whose newest unbuilt commit is younger than `--grace-days`
 (3 by default) is only counted, so one merged and built the same week
 is not flagged. A build CBS records no commit for (one made from an
-uploaded SRPM) is noted and left out. `--json` gives the branches
-found, those within the grace period, the builds without a commit and
-those that could not be checked. A build that could not be checked
-(GitLab failed, or no candidate branch holds its commit) is reported
-on standard error and fails the run, as does a `--package` the
-manifest does not list.
+uploaded SRPM), or whose commit no candidate branch holds or GitLab no
+longer has (an old build, made from a branch since rewritten), is noted
+and left out. `--json` gives the branches found, those within the grace
+period, the builds without a commit or a branch (`unsourced`,
+`unplaced`) and those that could not be checked. A build that could not
+be checked, GitLab or the hub failing, is reported on standard error
+and fails the run, as does a `--package` the manifest does not list.
 
 ### Configuration
 

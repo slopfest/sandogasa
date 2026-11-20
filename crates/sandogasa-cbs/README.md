@@ -160,8 +160,11 @@ implements over a SIG's GitLab group) is asked which branches hold the
 commit, the first entry naming any of them picks those to compare
 (`unbuilt::pick`), and each is compared with it. A branch whose newest
 unbuilt commit is older than the cutoff is in `unbuilt`, a newer one in
-`recent`; a build without a recorded commit is in `unsourced`, and one
-that could not be checked in `problems`. `unbuilt::render` prints one
+`recent`; a branch several builds come from is reported only when none
+of them is at its head, by the one closest to it. A build without a
+recorded commit is in `unsourced`, one whose commit no branch it may
+have come from holds (or GitLab no longer has) in `unplaced`, and one
+that could not be checked, GitLab or the hub failing, in `problems`. `unbuilt::render` prints one
 branch, `unbuilt::body_line` gives the `- **Not built**:` line a
 tracking issue carries for them and `unbuilt::with_body_line` sets or
 removes it in a body, and `unbuilt::bounded` runs other remote calls
