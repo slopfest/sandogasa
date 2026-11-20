@@ -104,6 +104,11 @@ Four subcommands:
   them only where no keyring can be used. An instance whose token is
   turned off (`"-"` in the overlay) is skipped; `--all` goes over it
   too, offering the keyring's token again where it has one.
+  `--missing` asks only for what is not set yet, after a new domain or
+  instance is added to the main config: a field with a value and an
+  instance with a stored token are kept, unchecked, and with a single
+  profile it is completed without asking its name. It ends by saying
+  how many settings it kept.
 - `sandogasa-report note` — record why a piece of work was done (see
   [Notes](#notes)).
 - `sandogasa-report notes` — list recorded notes.

@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-report 1 2026-11-19 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH sandogasa-report 1 2026-11-20 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 sandogasa\-report \- Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
 .SH SYNOPSIS
@@ -16,7 +16,7 @@ Print help
 Print version
 .SH COMMANDS
 .SS sandogasa-report config
-\fBsandogasa\-report config\fR [\fB\-\-all\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-report config\fR [\fB\-\-all\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-missing\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Interactively set per\-user overrides in `~/.config/sandogasa\-report/config.toml`
 .TP
@@ -25,6 +25,9 @@ Also go over the instances whose token is turned off ("\-"), offering the keyrin
 .TP
 \fB\-c\fR, \fB\-\-config\fR \fI<PATH>\fR
 Main config file to enumerate domains / forge instances from. Without one, there are no instances to configure
+.TP
+\fB\-\-missing\fR
+Ask only for what is not set yet: a field with a value, and an instance with a token, are kept as they are, unchecked
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

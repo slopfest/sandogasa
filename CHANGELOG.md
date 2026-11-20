@@ -176,6 +176,20 @@ missing project.
 
 Resolves #191
 
+### sandogasa-report config asks only for what is missing
+
+`sandogasa-report config` went over every profile field and every
+instance the main config's domains use, every time. Adding one domain
+meant stepping through every prompt already answered, the FAS name, the
+Bugzilla emails, each forge's username and token, to reach the new ones.
+
+`config --missing` asks only for what is not set: a field with a value,
+and an instance with a stored token, are kept as they are, unchecked,
+and with a single profile it is completed without asking its name. It
+ends by saying how many settings it kept.
+
+Resolves #197
+
 ### sandogasa-report reads Fedora Forge, and Forgejo issues commented on
 
 sandogasa-report did not query Fedora Forge at all, so FESCo tickets,

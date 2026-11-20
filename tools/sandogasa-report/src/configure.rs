@@ -30,11 +30,41 @@ pub struct ConfigArgs {
     /// from. Without one, there are no instances to configure.
     #[arg(short, long, value_name = "PATH")]
     pub config: Option<String>,
+    /// Ask only for what is not set yet: a field with a value, and an
+    /// instance with a token, are kept as they are, unchecked.
+    #[arg(long)]
+    pub missing: bool,
 }
 
 /// Where a prompt's answer is read from: the terminal, or a test's
 /// answers ([`sandogasa_config::ask_with`]'s `read`).
 type Reader<'a> = dyn FnMut(&str, bool) -> std::io::Result<String> + 'a;
+
+/// Asks for each setting, or, with `--missing`, only for those not set
+/// yet, counting the ones it kept.
+struct Asker<'r, 'a> {
+    read: &'r mut Reader<'a>,
+    missing: bool,
+    kept: usize,
+}
+
+impl Asker<'_, '_> {
+    /// The answer for `setting`, defaulting to `current`; with
+    /// `--missing`, `current` itself when `have` (a value is set).
+    fn field(
+        &mut self,
+        setting: &Setting<'_>,
+        current: &str,
+        show: bool,
+        have: bool,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        if self.missing && have {
+            self.kept += 1;
+            return Ok(current.to_string());
+        }
+        ask_with(setting, current, show, self.read)
+    }
+}
 
 pub fn run(args: &ConfigArgs) -> ExitCode {
     let mut terminal = sandogasa_config::read_line_from_terminal;
@@ -114,12 +144,26 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
             existing_keys.join(", ")
         }
     );
-    let profile_key = ask_with(
-        &Setting::new("profile", "to configure (an existing name or a new one)").optional(),
-        "",
-        false,
+    // With --missing and one profile, that one: it is what there is to
+    // complete.
+    let only = (args.missing && existing_keys.len() == 1).then(|| existing_keys[0].to_string());
+    let profile_key = match only {
+        Some(key) => {
+            eprintln!("Completing profile {key}.");
+            key
+        }
+        None => ask_with(
+            &Setting::new("profile", "to configure (an existing name or a new one)").optional(),
+            "",
+            false,
+            read,
+        )?,
+    };
+    let mut ask = Asker {
         read,
-    )?;
+        missing: args.missing,
+        kept: 0,
+    };
     if profile_key.is_empty() {
         eprintln!("No profile name given, aborting.");
         return Ok(());
@@ -134,13 +178,13 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         &forgejo_instances,
         &sourcehut_instances,
         &bugzilla_instances,
-        read,
+        &mut ask,
     )?;
 
     // Where `note` writes notes, and `notes` and `report --notes` read
     // them (#167).
     eprintln!("\nNotes:");
-    let notes_dir = ask_with(
+    let notes_dir = ask.field(
         &Setting::new("notes", "directory")
             .optional()
             .hint(
@@ -150,7 +194,8 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
             .validated(&crate::notes::check_dir),
         merged.notes.dir.as_deref().unwrap_or(""),
         true,
-        read,
+        // Set in the user's own file: one from /etc is not theirs.
+        overlay_get_str(&overlay, &["notes", "dir"]).is_some(),
     )?;
     let notes_dir_changed = overlay_update(
         &mut overlay,
@@ -216,7 +261,14 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
                 &host,
                 args.all,
                 &sandogasa_cli::ask_to_reenable,
-                |existing| (kind.prompt)(instance, existing),
+                |existing| match existing {
+                    // A stored token is kept, unchecked, with --missing.
+                    Some(_) if ask.missing => {
+                        ask.kept += 1;
+                        Ok(TokenChoice::KeepExisting)
+                    }
+                    _ => (kind.prompt)(instance, existing),
+                },
             )?;
             match outcome {
                 TokenOutcome::Unchanged => {}
@@ -232,6 +284,9 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         }
     }
 
+    if ask.missing {
+        eprintln!("\nKept {} setting(s) already set.", ask.kept);
+    }
     if !changed {
         if !stored && !saved_profile {
             eprintln!("\nNo changes.");
@@ -262,13 +317,18 @@ fn prompt_profile(
     forgejo_instances: &BTreeSet<String>,
     sourcehut_instances: &BTreeSet<String>,
     bugzilla_instances: &BTreeSet<String>,
-    read: &mut Reader<'_>,
+    ask: &mut Asker<'_, '_>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     let fas_default = existing
         .and_then(|p| p.fas.clone())
         .unwrap_or_else(|| profile_key.to_string());
-    let fas = ask_with(&Setting::new("FAS", "username"), &fas_default, true, read)?;
+    let fas = ask.field(
+        &Setting::new("FAS", "username"),
+        &fas_default,
+        true,
+        existing.and_then(|p| p.fas.as_ref()).is_some(),
+    )?;
     if existing.and_then(|p| p.fas.as_deref()) != Some(&fas) {
         overlay_set_str(overlay, &["users", profile_key, "fas"], &fas);
         changed = true;
@@ -277,13 +337,13 @@ fn prompt_profile(
     let bz_default = existing
         .and_then(|p| p.bugzilla_email.clone())
         .unwrap_or_default();
-    let bz = ask_with(
+    let bz = ask.field(
         &Setting::new("Bugzilla", "email")
             .optional()
             .validated(&sandogasa_config::validate_email),
         &bz_default,
         true,
-        read,
+        !bz_default.is_empty(),
     )?;
     changed |= overlay_update(
         overlay,
@@ -300,7 +360,7 @@ fn prompt_profile(
         "bugzilla_emails",
         |p, host| p.bugzilla_emails.get(host),
         forge::instance_host,
-        read,
+        ask,
     )?;
 
     if prompt_per_instance_usernames(
@@ -312,7 +372,7 @@ fn prompt_profile(
         "gitlab",
         |u, host| u.gitlab.get(host),
         crate::gitlab::instance_host,
-        read,
+        ask,
     )? {
         changed = true;
     }
@@ -325,7 +385,7 @@ fn prompt_profile(
         "github",
         |u, host| u.github.get(host),
         crate::github::instance_host,
-        read,
+        ask,
     )? {
         changed = true;
     }
@@ -338,7 +398,7 @@ fn prompt_profile(
         "forgejo",
         |u, host| u.forgejo.get(host),
         crate::forgejo::instance_host,
-        read,
+        ask,
     )? {
         changed = true;
     }
@@ -351,7 +411,7 @@ fn prompt_profile(
         "sourcehut",
         |u, host| u.sourcehut.get(host),
         crate::sourcehut::instance_host,
-        read,
+        ask,
     )? {
         changed = true;
     }
@@ -362,7 +422,7 @@ fn prompt_profile(
     if !sourcehut_instances.is_empty() {
         let existing_emails = existing.map(|p| p.git_emails.clone()).unwrap_or_default();
         let emails_default = existing_emails.join(", ");
-        let answer = ask_with(
+        let answer = ask.field(
             &Setting::new(
                 "Sourcehut",
                 "commit attribution git emails (comma-separated, * for all)",
@@ -370,7 +430,7 @@ fn prompt_profile(
             .optional(),
             &emails_default,
             true,
-            read,
+            !emails_default.is_empty(),
         )?;
         let emails: Vec<String> = answer
             .split(',')
@@ -400,7 +460,7 @@ fn prompt_per_instance_usernames(
     forge_key: &str,
     lookup: impl for<'a> Fn(&'a config::User, &str) -> Option<&'a String>,
     host_of: impl Fn(&str) -> String,
-    read: &mut Reader<'_>,
+    ask: &mut Asker<'_, '_>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut changed = false;
     for instance in instances {
@@ -423,7 +483,7 @@ fn prompt_per_instance_usernames(
         } else {
             setting
         };
-        let u = ask_with(&setting, &current, true, read)?;
+        let u = ask.field(&setting, &current, true, !current.is_empty())?;
         changed |= overlay_update(
             overlay,
             &["users", profile_key, forge_key, &host],
@@ -1411,6 +1471,7 @@ mod tests {
         let args = ConfigArgs {
             all: false,
             config: Some(main.display().to_string()),
+            missing: false,
         };
         let asked = std::cell::RefCell::new(Vec::new());
         // Profile, FAS (keeping the profile's name), Bugzilla email,
@@ -1472,6 +1533,62 @@ mod tests {
         assert_eq!(asked.borrow().len(), 1);
     }
 
+    #[test]
+    #[serial_test::serial]
+    fn missing_asks_only_for_what_is_not_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let main = dir.path().join("main.toml");
+        std::fs::write(
+            &main,
+            "[domains.opensuse.bugzilla]\ninstance = \"https://bugzilla.opensuse.org\"\n",
+        )
+        .unwrap();
+        let mut args = ConfigArgs {
+            all: false,
+            config: Some(main.display().to_string()),
+            missing: false,
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let answers = ["me", "", "me@example.com", "me@suse.example", "~/notes"];
+        run_inner(&args, &mut scripted(&answers, &asked)).unwrap();
+
+        // Everything set, and one profile: nothing asked, not even its name.
+        args.missing = true;
+        asked.borrow_mut().clear();
+        let cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
+        let before = std::fs::read_to_string(cf.path()).unwrap();
+        run_inner(&args, &mut scripted(&[], &asked)).unwrap();
+        assert!(asked.borrow().is_empty(), "{:?}", asked.borrow());
+        assert_eq!(std::fs::read_to_string(cf.path()).unwrap(), before);
+
+        // A new instance in the main config: only its email is asked.
+        std::fs::write(
+            &main,
+            "[domains.opensuse.bugzilla]\ninstance = \"https://bugzilla.opensuse.org\"\n\
+             [domains.other.bugzilla]\ninstance = \"https://bugzilla.example.org\"\n",
+        )
+        .unwrap();
+        run_inner(&args, &mut scripted(&["me@other.example"], &asked)).unwrap();
+        assert_eq!(
+            *asked.borrow(),
+            ["Enter Bugzilla email on bugzilla.example.org: "]
+        );
+        let saved = parse_overlay(&std::fs::read_to_string(cf.path()).unwrap()).unwrap();
+        assert_eq!(
+            overlay_get_str(
+                &saved,
+                &["users", "me", "bugzilla_emails", "bugzilla.example.org"]
+            )
+            .as_deref(),
+            Some("me@other.example")
+        );
+        assert_eq!(
+            overlay_get_str(&saved, &["users", "me", "bugzilla_email"]).as_deref(),
+            Some("me@example.com")
+        );
+    }
+
     /// Every forge's username is asked per instance and recorded under
     /// its host, the Sourcehut commit emails as a list; an answer that
     /// clears a username removes it.
@@ -1500,7 +1617,11 @@ mod tests {
             &set(&["https://codeberg.org"]),
             &set(&["sr.ht"]),
             &BTreeSet::new(),
-            &mut scripted(&answers, &asked),
+            &mut Asker {
+                read: &mut scripted(&answers, &asked),
+                missing: false,
+                kept: 0,
+            },
         )
         .unwrap();
         assert!(changed);
