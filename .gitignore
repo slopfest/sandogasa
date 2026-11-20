@@ -64,3 +64,6 @@ crates/*/Cargo.lock
 
 # The trajectory report's build output (scripts/build-trajectory.sh).
 /reports/trajectory/*.json
+
+# Rendered from casts/*.cast by `make casts`; attached to the release.
+casts/*.gif

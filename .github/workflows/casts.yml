@@ -1,0 +1,103 @@
+# Attach an animated GIF of each terminal recording a release adds or
+# changes (casts/<name>.cast) to that release, as talks.yml does for
+# the talks' PDFs. GitHub does not play asciinema recordings, and the
+# GIFs are several megabytes each, too big to keep in git; the release
+# is where a reader finds them.
+#
+# Triggered by the tag push, for the reasons talks.yml gives, and by
+# hand: with a tag, it attaches that release's GIFs; without one, it
+# renders every recording and keeps the GIFs as a workflow artifact,
+# to check how they look before a release relies on them.
+name: Casts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to render and attach recordings for (empty: all, as an artifact)'
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  AGG_VERSION: '1.9.0'
+  # GitHub's published digest for agg-x86_64-unknown-linux-musl.
+  AGG_SHA256: 'ddcbf6ca044c8ac3a434dcb9ee89fb9e3be87209982b7c2adb55f782e8f0f390'
+
+jobs:
+  casts:
+    name: render and attach recordings
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || (github.event_name == 'push' && github.ref_name) || '' }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # The previous tag, to tell which recordings changed.
+          fetch-depth: 0
+
+      - name: Find the recordings to render
+        id: changed
+        run: |
+          if [ -z "$TAG" ]; then
+            files=$(git ls-files 'casts/*.cast')
+          else
+            prev=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2>/dev/null || true)
+            if [ -n "$prev" ]; then
+              files=$(git diff --name-only --diff-filter=d "$prev" "$TAG" -- 'casts/*.cast')
+            else
+              files=$(git ls-tree -r --name-only "$TAG" -- casts/ | grep '\.cast$' || true)
+            fi
+          fi
+          casts=$(echo "$files" | tr '\n' ' ' | xargs)
+          echo "Recordings to render: ${casts:-none}"
+          echo "casts=$casts" >> "$GITHUB_OUTPUT"
+
+      - name: Install agg and fonts
+        if: steps.changed.outputs.casts != ''
+        run: |
+          curl -sSLf -o agg \
+            "https://github.com/asciinema/agg/releases/download/v$AGG_VERSION/agg-x86_64-unknown-linux-musl"
+          echo "$AGG_SHA256  agg" | sha256sum -c -
+          sudo install -m 755 agg /usr/local/bin/agg
+          rm agg
+          agg --version
+          # The prompts' Powerline glyphs, symbols such as U+2B22, and
+          # the emoji in tracking-issue comments.
+          sudo apt-get update -q
+          sudo apt-get install -y -q fonts-dejavu-core fonts-powerline \
+            fonts-noto-core fonts-noto-color-emoji
+
+      - name: Render
+        if: steps.changed.outputs.casts != ''
+        run: make casts CAST="${{ steps.changed.outputs.casts }}"
+
+      - name: Keep as an artifact
+        if: steps.changed.outputs.casts != '' && env.TAG == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: casts
+          path: casts/*.gif
+
+      - name: Wait for the release
+        if: steps.changed.outputs.casts != '' && env.TAG != ''
+        run: |
+          for _ in $(seq 60); do
+            gh release view "$TAG" > /dev/null 2>&1 && exit 0
+            sleep 10
+          done
+          echo "No release for $TAG after 10 minutes: create it, then re-run this job" >&2
+          exit 1
+
+      - name: Attach
+        if: steps.changed.outputs.casts != '' && env.TAG != ''
+        run: |
+          for cast in ${{ steps.changed.outputs.casts }}; do
+            gh release upload "$TAG" --clobber "${cast%.cast}.gif"
+          done

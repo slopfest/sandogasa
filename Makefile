@@ -47,6 +47,10 @@ man: ## Regenerate every tool's man page from its clap definition
 findings: ## Render FINDINGS to HTML and PDF (SRC=... for another file)
 	scripts/render-findings.sh $(SRC)
 
+.PHONY: casts
+casts: ## Render the terminal recordings under casts/ to GIF (CAST=casts/<name>.cast for one)
+	scripts/render-casts.sh $(CAST)
+
 .PHONY: talks
 talks: ## Compile the talks under talks/ to PDF (TALK=talks/<name> for one)
 	scripts/build-talks.sh $(TALK)
