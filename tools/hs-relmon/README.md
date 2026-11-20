@@ -26,6 +26,10 @@ hs-relmon check-manifest <manifest> [--json]
     [--issue-status <status>] [--issue-assignee <username>]
 hs-relmon check-repos <manifest> [--package <list>] [--gitlab-group <url>]
     [--apply] [--yes] [--json] [--verbose]
+hs-relmon check-stock <manifest> [--repositories <list>] [--skip <list>]
+    [--verbose]
+hs-relmon check-unbuilt <manifest> [--package <list>] [--gitlab-group <url>]
+    [--grace-days <N>] [--json] [--verbose]
 hs-relmon config
 hs-relmon dupe-subpkgs [--repositories <list>] [--release <list>]
     [--package <list>] [--fix] [--json] [--verbose]
@@ -42,8 +46,6 @@ hs-relmon prune-manifest <manifest>
     [--skip <list>] [--dry-run] [--yes] [--verbose]
 hs-relmon prune-archived <manifest>
     [--repositories <list>] [--skip <list>] [--dry-run] [--yes]
-    [--verbose]
-hs-relmon check-stock <manifest> [--repositories <list>] [--skip <list>]
     [--verbose]
 hs-relmon retire <package>... --manifest <path> [--gitlab-group <url>]
     [--dry-run] [--force] [--yes] [--verbose]
@@ -331,6 +333,39 @@ then moves the default branch to the release that still has builds.
 
 `retire` requires `koji` with the `cbs` profile and a GitLab token
 (`GITLAB_TOKEN` or `hs-relmon config`); a dry run needs neither.
+
+### Finding merged commits that were never built
+
+A merge into a package's branch ships nothing until someone builds
+from it. `check-unbuilt <manifest>` takes each package's newest build
+per dist tag, from every Hyperscale `-candidate`, `-testing` and
+`-release` tag (so a build waiting in testing counts as built), reads
+the commit CBS says it was built from, and asks GitLab which branches
+hold that commit and which commits each has gained since. The dist tag
+says which branch to compare: `hs+fb` is `c9s-hs+fb` if that branch
+holds the commit, else `c9s-hs` (a package built for both the main
+repository and a flavor builds both from the main branch), else the
+old `c9s-sig-hyperscale`. Each branch with unbuilt commits is listed
+with their count, the day of the newest, and each commit with the
+merge request that merged it:
+
+```console
+$ hs-relmon check-unbuilt packages.toml --package openssh
+openssh c9s-hs+fb: 9 commit(s) merged since openssh-9.9p1-16.1.hs+fb.el9 (55ea23169e5c) was built, the newest from 2026-11-10
+  2026-10-29 50fd979035e5 Fix CVE-2026-106552
+  …
+  2026-11-10 ba5701fb91ea Merge c9s release 17 into c9s-hs+fb
+```
+
+A branch whose newest unbuilt commit is younger than `--grace-days`
+(3 by default) is only counted, so one merged and built the same week
+is not flagged. A build CBS records no commit for (one made from an
+uploaded SRPM) is noted and left out. `--json` gives the branches
+found, those within the grace period, the builds without a commit and
+those that could not be checked. A build that could not be checked
+(GitLab failed, or no candidate branch holds its commit) is reported
+on standard error and fails the run, as does a `--package` the
+manifest does not list.
 
 ### Configuration
 

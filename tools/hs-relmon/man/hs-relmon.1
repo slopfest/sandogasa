@@ -162,6 +162,31 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIMANIFEST\fR>
 Path to the TOML manifest file
+.SS hs-relmon check-unbuilt
+\fBhs\-relmon check\-unbuilt\fR [\fB\-\-gitlab\-group\fR] [\fB\-\-grace\-days\fR] [\fB\-\-json\fR] [\fB\-\-package\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR>
+.PP
+Find Hyperscale branches with merged commits that were never built: each branch\*(Aqs newest build (in any candidate, testing or release tag) against the branch head
+.TP
+\fB\-\-gitlab\-group\fR \fI<URL>\fR [default: https://gitlab.com/CentOS/Hyperscale/rpms]
+GitLab group the packages\*(Aq repos live under
+.TP
+\fB\-\-grace\-days\fR \fI<DAYS>\fR [default: 3]
+Days a merged commit may wait for its build before it is flagged; branches with only newer ones are counted, not listed
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable
+.TP
+\fB\-\-package\fR \fI<LIST>\fR
+Comma\-separated packages to check (default: all)
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIMANIFEST\fR>
+Path to the TOML manifest file
 .SS hs-relmon config
 \fBhs\-relmon config\fR [\fB\-\-all\fR] [\fB\-\-token\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP

@@ -20,6 +20,7 @@ use hs_relmon::repology;
 use hs_relmon::repos;
 use hs_relmon::retire;
 use hs_relmon::review;
+use hs_relmon::unbuilt;
 
 // The keyring lives here, not in the library: the library is built
 // without cfg(test) for this binary's tests, so a keyring it chose
@@ -220,6 +221,36 @@ stock. The repository is the segment between
         /// Comma-separated packages to skip.
         #[arg(long, value_name = "LIST")]
         skip: Option<String>,
+
+        /// Print progress to stderr.
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Find Hyperscale branches with merged commits that were never
+    /// built: each branch's newest build (in any candidate, testing or
+    /// release tag) against the branch head.
+    CheckUnbuilt {
+        /// Path to the TOML manifest file.
+        manifest: PathBuf,
+
+        /// GitLab group the packages' repos live under.
+        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
+        gitlab_group: String,
+
+        /// Days a merged commit may wait for its build before it is
+        /// flagged; branches with only newer ones are counted, not
+        /// listed.
+        #[arg(long, default_value_t = unbuilt::DEFAULT_GRACE_DAYS, value_name = "DAYS")]
+        grace_days: u32,
+
+        /// Output as JSON instead of human-readable.
+        #[arg(long)]
+        json: bool,
+
+        /// Comma-separated packages to check (default: all).
+        #[arg(long, value_name = "LIST")]
+        package: Option<String>,
 
         /// Print progress to stderr.
         #[arg(short, long)]
@@ -1238,6 +1269,91 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 failures += outcome.failed;
             }
             if failures > 0 {
+                std::process::exit(1);
+            }
+        }
+        Command::CheckUnbuilt {
+            manifest: path,
+            gitlab_group,
+            grace_days,
+            json,
+            package,
+            verbose,
+        } => {
+            let m = manifest::Manifest::load(&path)?;
+            let only: Vec<String> = package
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let unknown: Vec<&str> = only
+                .iter()
+                .filter(|o| !m.packages.iter().any(|p| &&p.name == o))
+                .map(String::as_str)
+                .collect();
+            if !unknown.is_empty() {
+                return Err(format!("not in {}: {}", path.display(), unknown.join(", ")).into());
+            }
+            // The token and the group before the long tag scan.
+            let token = gitlab::load_token(keyring())?;
+            let (base, group) = sandogasa_gitlab::parse_project_url(&gitlab_group)?;
+            let mut repo = sandogasa_cbs::unbuilt::GitLab::new(&base, &group, &token);
+            if verbose {
+                repo = repo.logged("hs-relmon");
+            }
+            let index = prune_tags::TagIndex::load_built(&cbs::Client::new(), verbose)?;
+            let targets: Vec<sandogasa_cbs::unbuilt::Target> = m
+                .packages
+                .iter()
+                .filter(|p| only.is_empty() || only.contains(&p.name))
+                .flat_map(|p| {
+                    let builds = index.for_package(&p.name).into_iter().flat_map(|(_, b)| b);
+                    unbuilt::targets(&p.name, builds)
+                })
+                .collect();
+            eprintln!(
+                "Comparing {} build(s) with the branches they were built from",
+                targets.len()
+            );
+            let cutoff = chrono::Utc::now() - chrono::Duration::days(grace_days.into());
+            let outcome =
+                sandogasa_cbs::unbuilt::find(sandogasa_cbs::HUB_URL, &targets, &repo, cutoff)?;
+            for p in &outcome.problems {
+                eprintln!("warning: {p}");
+            }
+            if !outcome.unsourced.is_empty() {
+                eprintln!(
+                    "note: CBS records no commit for {} (built from an uploaded SRPM?), \
+                     so they were not compared",
+                    outcome.unsourced.join(", ")
+                );
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&outcome)?);
+            } else {
+                for u in &outcome.unbuilt {
+                    print!("{}", sandogasa_cbs::unbuilt::render(u));
+                }
+                println!(
+                    "{} build(s): {} branch(es) with merged commits not built, {} with only \
+                     commits from the last {grace_days} day(s){}{}",
+                    targets.len(),
+                    outcome.unbuilt.len(),
+                    outcome.recent.len(),
+                    match outcome.unsourced.len() {
+                        0 => String::new(),
+                        n => format!("; {n} with no commit recorded"),
+                    },
+                    match outcome.problems.len() {
+                        0 => String::new(),
+                        n => format!("; {n} could not be checked"),
+                    }
+                );
+            }
+            if !outcome.problems.is_empty() {
                 std::process::exit(1);
             }
         }

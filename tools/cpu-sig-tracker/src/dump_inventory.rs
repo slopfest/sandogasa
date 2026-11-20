@@ -66,6 +66,12 @@ pub fn proposed_updates_testing_tag(release: &str) -> Result<String, String> {
     proposed_updates_tag_with_suffix(release, Stage::Testing)
 }
 
+/// Build the CBS `-candidate` sibling tag, where the build target puts
+/// a new build before it is offered for testing.
+pub fn proposed_updates_candidate_tag(release: &str) -> Result<String, String> {
+    proposed_updates_tag_with_suffix(release, Stage::Candidate)
+}
+
 fn proposed_updates_tag_with_suffix(release: &str, stage: Stage) -> Result<String, String> {
     let major = release
         .strip_prefix('c')

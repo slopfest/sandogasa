@@ -147,6 +147,24 @@ so a check can look in them as in a repository. A collection's
 `published_repo` is the mirror URL its `-release` is published at, and
 `stock_branch` the fedrq branch of the distribution its users run.
 
+## Unbuilt commits
+
+`unbuilt::find` reports the branches with merged commits their newest
+build does not have. The caller gives each package's newest build and
+the branches it may have come from, likeliest first, an entry ending in
+`*` standing for every branch with that prefix (`unbuilt::Target`),
+since that is the SIG's convention. The commit each build was made from
+is read from the hub in one call. Then, `unbuilt::CONCURRENT` builds at
+a time, the repository (`unbuilt::Repository`, which `unbuilt::GitLab`
+implements over a SIG's GitLab group) is asked which branches hold the
+commit, the first entry naming any of them picks those to compare
+(`unbuilt::pick`), and each is compared with it. A branch whose newest
+unbuilt commit is older than the cutoff is in `unbuilt`, a newer one in
+`recent`; a build without a recorded commit is in `unsourced`, and one
+that could not be checked in `problems`. `unbuilt::render` prints one
+branch, and `unbuilt::bounded` runs other remote calls with no batch
+form the same few at a time.
+
 ## Reviews
 
 `review::review` is the karma-style review loop SIG trackers share,

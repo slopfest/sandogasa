@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### hs-relmon and cpu-sig-tracker find merged commits that were never built
+
+A merge into a SIG branch ships nothing until someone builds from it,
+and nothing said when no one did. Hyperscale's openssh MRs !7 and !8
+were merged on 2026-11-17, while CBS still had the 16.1 and 30.1
+hs+fb builds on 2026-11-20, nine and sixteen commits behind,
+CVE fixes included; stock's newer builds sort above them, so hs+fb
+hosts get stock's openssh. `hs-relmon check-unbuilt <manifest>` takes
+each package's newest build per dist tag, in any `-candidate`,
+`-testing` or `-release` tag, reads the commit CBS says it was built
+from, finds the branch holding it (`c9s-hs+fb`, else `c9s-hs`, which
+packages built for both the main repository and a flavor build from),
+and lists the commits the branch gained since, with their count, the
+day of the newest and the merge request each merged; a branch whose
+newest commit is within `--grace-days` (3) is only counted.
+`cpu-sig-tracker status --unbuilt` does the same for Proposed Updates,
+against the `<release>-proposed-*` branches holding the SIG build's
+commit. The check is sandogasa-cbs's new `unbuilt` module;
+sandogasa-gitlab's `Client` gains `commits_between` and
+`branches_containing` (Resolves #205).
+
 ### sandogasa-report hides embargoed notes unless asked
 
 `notes` and `report --notes --private` printed an embargoed note in

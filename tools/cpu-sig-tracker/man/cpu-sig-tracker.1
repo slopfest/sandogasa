@@ -342,7 +342,7 @@ Skip the interactive confirmation prompt
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
 .SS cpu-sig-tracker status
-\fBcpu\-sig\-tracker status\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-p\fR|\fB\-\-package\fR] [\fB\-\-release\fR] [\fB\-\-include\-closed\fR] [\fB\-\-refresh\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBcpu\-sig\-tracker status\fR [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-p\fR|\fB\-\-package\fR] [\fB\-\-release\fR] [\fB\-\-include\-closed\fR] [\fB\-\-refresh\fR] [\fB\-\-unbuilt\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Report JIRA status and suggested next action for each active tracking issue
 .TP
@@ -365,6 +365,10 @@ With \-\-refresh, also process closed tracking issues — backfill their start_d
 .TP
 \fB\-\-refresh\fR
 Rewrite tracking issue bodies to the standardized format, refreshing the MR state and JIRA status lines to their current values. Normalizes legacy bodies and keeps already\-standard bodies up to date. Mutates GitLab state; off by default
+.SH CHECKS
+.TP
+\fB\-\-unbuilt\fR
+Also check each SIG build against its branch: the commits on its `<release>\-proposed\-*` branch merged since it was built and never built, once the newest has waited three days
 .SH OUTPUT
 .TP
 \fB\-\-json\fR

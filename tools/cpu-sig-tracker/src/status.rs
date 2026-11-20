@@ -73,6 +73,12 @@ pub struct StatusArgs {
     #[arg(long, help_heading = "Writing")]
     pub refresh: bool,
 
+    /// Also check each SIG build against its branch: the commits on
+    /// its `<release>-proposed-*` branch merged since it was built and
+    /// never built, once the newest has waited three days.
+    #[arg(long, help_heading = "Checks")]
+    pub unbuilt: bool,
+
     /// Emit JSON instead of grouped text.
     #[arg(long, help_heading = "Output")]
     pub json: bool,
@@ -111,6 +117,13 @@ pub struct Row {
     /// untag and retire judge it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub landed: Option<String>,
+    /// With --unbuilt, the branches with commits the SIG's build lacks.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unbuilt: Vec<sandogasa_cbs::unbuilt::Unbuilt>,
+    /// With --unbuilt, those whose newest such commit is from the last
+    /// three days.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unbuilt_recent: Vec<sandogasa_cbs::unbuilt::Unbuilt>,
 }
 
 /// The suggestion stock's evidence makes, which outranks Jira's: an
@@ -530,12 +543,141 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                 stream_nvr,
                 suggestion,
                 landed: landed_note,
+                unbuilt: Vec::new(),
+                unbuilt_recent: Vec::new(),
             });
         }
     }
 
     rows.sort_by(|a, b| a.release.cmp(&b.release).then(a.package.cmp(&b.package)));
+    if args.unbuilt {
+        add_unbuilt(&mut rows, args.verbose);
+    }
     Ok(rows)
+}
+
+/// The SIG's newest build in `row`, or `candidate` (its build in the
+/// `-candidate` tag) when that is newer: what the branch's merged
+/// commits are compared with, so a build not yet offered for testing
+/// counts as built.
+fn newest_sig_build(row: &Row, candidate: Option<&str>) -> Option<String> {
+    let released = row.proposed_updates_nvr.as_deref();
+    let testing = row.proposed_updates_testing_nvr.as_deref();
+    let tagged = match testing_is_current(released, testing) {
+        true => testing,
+        false => released,
+    };
+    match (tagged, candidate) {
+        (Some(t), Some(c)) if stream_newer_than_proposed(Some(t), Some(c)) => Some(c),
+        (None, c) => c,
+        (t, _) => t,
+    }
+    .map(str::to_string)
+}
+
+/// Fill each row's `unbuilt` and `unbuilt_recent`: the SIG's newest
+/// build, its commit read for every row at once, and the
+/// `<release>-proposed-*` branches holding it compared with it
+/// ([`sandogasa_cbs::unbuilt::check`]). The table still prints when
+/// this fails: it only warns.
+fn add_unbuilt(rows: &mut [Row], verbose: bool) {
+    let releases: std::collections::BTreeSet<String> =
+        rows.iter().map(|r| r.release.clone()).collect();
+    let candidates: HashMap<String, HashMap<String, String>> = releases
+        .into_iter()
+        .map(|release| {
+            let nvrs = match crate::dump_inventory::proposed_updates_candidate_tag(&release) {
+                Ok(tag) => fetch_koji_nvrs(&tag, verbose),
+                Err(_) => HashMap::new(),
+            };
+            (release, nvrs)
+        })
+        .collect();
+    let builds: Vec<(usize, String)> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| {
+            let candidate = candidates
+                .get(&r.release)
+                .and_then(|m| m.get(&r.package))
+                .map(String::as_str);
+            newest_sig_build(r, candidate).map(|nvr| (i, nvr))
+        })
+        .collect();
+    eprintln!(
+        "Checking {} SIG build(s) against their branches",
+        builds.len()
+    );
+    let nvrs: Vec<String> = builds.iter().map(|(_, n)| n.clone()).collect();
+    let commits = match sandogasa_cbs::packages::build_commits(&nvrs) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "warning: cannot read what the SIG's builds were made from ({e}); not checked"
+            );
+            return;
+        }
+    };
+    let mut repo = sandogasa_cbs::unbuilt::GitLab::new(
+        &gitlab_base(),
+        PROPOSED_UPDATES_GROUP,
+        &gitlab::load_token().unwrap_or_default(),
+    );
+    if verbose {
+        repo = repo.logged("cpu-sig-tracker");
+    }
+    let cutoff = chrono::Utc::now()
+        - chrono::Duration::days(sandogasa_cbs::unbuilt::DEFAULT_GRACE_DAYS.into());
+    for w in fill_unbuilt(rows, &builds, &commits, &repo, cutoff) {
+        eprintln!("warning: {w}");
+    }
+}
+
+/// [`add_unbuilt`] once each build's commit is known (`commits`, one
+/// per entry of `builds`, which pairs a row with its SIG's build),
+/// asking `repo`. The warnings, for what could not be checked.
+fn fill_unbuilt(
+    rows: &mut [Row],
+    builds: &[(usize, String)],
+    commits: &[Option<String>],
+    repo: &dyn sandogasa_cbs::unbuilt::Repository,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Vec<String> {
+    use sandogasa_cbs::unbuilt::{self, Target};
+    let targets: Vec<Target> = builds
+        .iter()
+        .map(|(i, nvr)| Target {
+            package: rows[*i].package.clone(),
+            branches: vec![format!("{}-proposed-*", rows[*i].release)],
+            nvr: nvr.clone(),
+        })
+        .collect();
+    let outcome = unbuilt::check(&targets, commits, repo, cutoff);
+    let row_of = |u: &unbuilt::Unbuilt| {
+        targets
+            .iter()
+            .zip(builds)
+            .find(|(t, _)| t.nvr == u.nvr && t.package == u.package)
+            .map(|(_, (i, _))| *i)
+    };
+    for u in outcome.unbuilt {
+        if let Some(i) = row_of(&u) {
+            rows[i].unbuilt.push(u);
+        }
+    }
+    for u in outcome.recent {
+        if let Some(i) = row_of(&u) {
+            rows[i].unbuilt_recent.push(u);
+        }
+    }
+    let mut warnings = outcome.problems;
+    warnings.extend(
+        outcome
+            .unsourced
+            .iter()
+            .map(|nvr| format!("CBS records no commit for {nvr}, so it was not compared")),
+    );
+    warnings
 }
 
 /// One RHEL issue of an update, as Jira reports it now.
@@ -1529,6 +1671,26 @@ fn current_vr(r: &Row) -> String {
 }
 
 fn print_human(rows: &[Row]) {
+    print_table(rows);
+    let unbuilt: Vec<&sandogasa_cbs::unbuilt::Unbuilt> =
+        rows.iter().flat_map(|r| &r.unbuilt).collect();
+    if !unbuilt.is_empty() {
+        println!("\nMerged but not built:");
+        for u in unbuilt {
+            print!("{}", sandogasa_cbs::unbuilt::render(u));
+        }
+    }
+    let recent = rows.iter().map(|r| r.unbuilt_recent.len()).sum::<usize>();
+    if recent > 0 {
+        println!(
+            "\n{recent} branch(es) with commits not built yet, all from the last {} day(s)",
+            sandogasa_cbs::unbuilt::DEFAULT_GRACE_DAYS
+        );
+    }
+}
+
+/// The status table.
+fn print_table(rows: &[Row]) {
     const H_REL: &str = "RELEASE";
     const H_PKG: &str = "PACKAGE";
     const H_JIRA: &str = "JIRA";
@@ -1648,6 +1810,149 @@ fn format_jira_state(r: &Row) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pu_row(release: &str, package: &str, released: Option<&str>, testing: Option<&str>) -> Row {
+        Row {
+            release: release.into(),
+            package: package.into(),
+            issue_state: "opened".into(),
+            issue_url: String::new(),
+            mr_url: None,
+            jira: Vec::new(),
+            jira_resolved: false,
+            proposed_updates_nvr: released.map(String::from),
+            proposed_updates_testing_nvr: testing.map(String::from),
+            stream_nvr: None,
+            suggestion: "in-progress",
+            landed: None,
+            unbuilt: Vec::new(),
+            unbuilt_recent: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_newest_sig_build_is_compared() {
+        let r = pu_row(
+            "c10s",
+            "blktrace",
+            Some("blktrace-1.3.0-13~proposed.el10"),
+            Some("blktrace-1.3.0-14~proposed.el10"),
+        );
+        assert_eq!(
+            newest_sig_build(&r, None).as_deref(),
+            Some("blktrace-1.3.0-14~proposed.el10")
+        );
+        // A newer build waiting in -candidate counts as built.
+        assert_eq!(
+            newest_sig_build(&r, Some("blktrace-1.3.0-15~proposed.el10")).as_deref(),
+            Some("blktrace-1.3.0-15~proposed.el10")
+        );
+        assert_eq!(
+            newest_sig_build(&r, Some("blktrace-1.3.0-12~proposed.el10")).as_deref(),
+            Some("blktrace-1.3.0-14~proposed.el10")
+        );
+        let r = pu_row("c10s", "git", Some("git-2.52.1-1~proposed.el10"), None);
+        assert_eq!(
+            newest_sig_build(&r, None).as_deref(),
+            Some("git-2.52.1-1~proposed.el10")
+        );
+        let none = pu_row("c10s", "x", None, None);
+        assert_eq!(newest_sig_build(&none, None), None);
+        assert_eq!(
+            newest_sig_build(&none, Some("x-1-1~proposed.el10")).as_deref(),
+            Some("x-1-1~proposed.el10")
+        );
+    }
+
+    /// Proposed Updates' repositories, answered from tables.
+    struct FakeRepo;
+
+    impl sandogasa_cbs::unbuilt::Repository for FakeRepo {
+        fn containing(
+            &self,
+            t: &sandogasa_cbs::unbuilt::Target,
+            sha: &str,
+        ) -> Result<Vec<String>, String> {
+            match (t.package.as_str(), sha) {
+                ("git", "a879194") => Ok(vec!["c10s".into(), "c10s-proposed-RHEL-306261".into()]),
+                ("git", _) => Ok(vec!["c9s-proposed-RHEL-306262".into()]),
+                ("rsync", _) => Ok(vec!["c10s-proposed-RHEL-1".into()]),
+                ("fresh", _) => Ok(vec!["c10s-proposed-RHEL-2".into()]),
+                _ => Ok(vec!["c10s".into()]),
+            }
+        }
+        fn since(
+            &self,
+            _: &sandogasa_cbs::unbuilt::Target,
+            sha: &str,
+            branch: &str,
+        ) -> Result<Vec<sandogasa_gitlab::RepoCommit>, String> {
+            let one = |date: &str| {
+                serde_json::from_value(serde_json::json!({
+                    "id": "c0ffee", "title": "Fix CVE-2026-1", "committed_date": date,
+                }))
+                .unwrap()
+            };
+            match (sha, branch) {
+                ("a879194", "c10s-proposed-RHEL-306261") => Ok(vec![one("2026-11-01T00:00:00Z")]),
+                ("f00", _) => Ok(vec![one("2026-11-19T00:00:00Z")]),
+                ("5e5704e", _) => Err("502 Bad Gateway".into()),
+                _ => Ok(vec![]),
+            }
+        }
+    }
+
+    #[test]
+    fn merged_commits_never_built_are_added_to_their_row() {
+        let mut rows = vec![
+            pu_row("c10s", "git", Some("git-2.52.1-1~proposed.el10"), None),
+            pu_row("c9s", "git", Some("git-2.52.1-1~proposed.el9"), None),
+            pu_row("c10s", "rsync", Some("rsync-3.5.0-2~proposed.el10"), None),
+            pu_row("c10s", "mesa", Some("mesa-1-1~proposed.el10"), None),
+            pu_row("c10s", "lost", Some("lost-1-1~proposed.el10"), None),
+            pu_row("c10s", "fresh", Some("fresh-1-1~proposed.el10"), None),
+        ];
+        let builds: Vec<(usize, String)> = rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| newest_sig_build(r, None).map(|n| (i, n)))
+            .collect();
+        let commits = vec![
+            Some("a879194".to_string()),
+            Some("eb8d270".to_string()),
+            Some("5e5704e".to_string()),
+            None,
+            Some("0ld".to_string()),
+            Some("f00".to_string()),
+        ];
+        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-11-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let warnings = fill_unbuilt(&mut rows, &builds, &commits, &FakeRepo, cutoff);
+        assert_eq!(rows[0].unbuilt.len(), 1);
+        assert_eq!(rows[0].unbuilt[0].branch, "c10s-proposed-RHEL-306261");
+        assert_eq!(rows[5].unbuilt_recent.len(), 1);
+        assert!(rows[1..5].iter().all(|r| r.unbuilt.is_empty()));
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings[0].contains("502"), "{warnings:?}");
+        assert!(
+            warnings[1].contains("none of c10s-proposed-* holds"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[2].contains("no commit for mesa-1-1"),
+            "{warnings:?}"
+        );
+        // In the row's JSON.
+        let json = serde_json::to_value(&rows[0]).unwrap();
+        assert_eq!(json["unbuilt"][0]["commits"][0]["id"], "c0ffee");
+        assert!(
+            serde_json::to_value(&rows[1])
+                .unwrap()
+                .get("unbuilt")
+                .is_none()
+        );
+    }
 
     #[test]
     fn parse_mr_line_returns_url_and_state() {
@@ -2297,6 +2602,8 @@ mod tests {
             stream_nvr: None,
             suggestion: "in-testing",
             landed: None,
+            unbuilt: Vec::new(),
+            unbuilt_recent: Vec::new(),
         };
         assert_eq!(current_vr(&r), "2.52.1-1~proposed.el10 (testing)");
         // A rebuild in testing, newer than the released build, is the
@@ -2349,6 +2656,8 @@ mod tests {
             stream_nvr: None,
             suggestion: "untag-candidate",
             landed: None,
+            unbuilt: Vec::new(),
+            unbuilt_recent: Vec::new(),
         };
         assert_eq!(format_jira_state(&r), "Closed (Done)");
     }
@@ -2374,6 +2683,8 @@ mod tests {
             stream_nvr: None,
             suggestion: "in-progress",
             landed: None,
+            unbuilt: Vec::new(),
+            unbuilt_recent: Vec::new(),
         };
         assert_eq!(format_jira_state(&r), "In Progress");
     }
@@ -2401,6 +2712,8 @@ mod tests {
             stream_nvr: None,
             suggestion: "—",
             landed: None,
+            unbuilt: Vec::new(),
+            unbuilt_recent: Vec::new(),
         };
         assert_eq!(format_jira_state(&r), "closed");
     }
@@ -2420,6 +2733,8 @@ mod tests {
             stream_nvr: None,
             suggestion: "no-jira",
             landed: None,
+            unbuilt: Vec::new(),
+            unbuilt_recent: Vec::new(),
         };
         assert_eq!(format_jira_state(&r), "unknown");
     }
@@ -2537,6 +2852,7 @@ name = "PackageKit"
             json: false,
             refresh: false,
             include_closed: false,
+            unbuilt: false,
             verbose: false,
         };
         let rows = build_rows(&args).expect("build_rows");
@@ -2722,6 +3038,7 @@ name = "PackageKit"
             json: false,
             refresh: true,
             include_closed: false,
+            unbuilt: false,
             verbose: false,
         };
         let rows = build_rows(&args).expect("refresh build_rows");

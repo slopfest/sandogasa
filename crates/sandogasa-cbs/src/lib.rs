@@ -34,6 +34,7 @@ pub mod tags;
 #[cfg(test)]
 mod test_support;
 pub mod tracking;
+pub mod unbuilt;
 
 /// The koji profile CBS is reached through, and the `cbs` command
 /// that wraps it.

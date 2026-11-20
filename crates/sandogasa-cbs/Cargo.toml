@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 # explain: tag changes run through sandogasa_cli::explain::Ui (tags.rs)
 sandogasa-cli = { workspace = true, features = ["explain"] }
 sandogasa-depcheck = { workspace = true }
@@ -16,6 +17,7 @@ sandogasa-depfilter = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-kojihub = { workspace = true }
 sandogasa-rpmvercmp = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 mockito = { workspace = true }

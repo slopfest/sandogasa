@@ -890,6 +890,7 @@ dependencies = [
 name = "hs-relmon"
 version = "0.28.2"
 dependencies = [
+ "chrono",
  "clap",
  "mockito",
  "reqwest",
@@ -2023,6 +2024,7 @@ version = "0.28.2"
 name = "sandogasa-cbs"
 version = "0.28.2"
 dependencies = [
+ "chrono",
  "mockito",
  "sandogasa-cli",
  "sandogasa-depcheck",
@@ -2030,6 +2032,7 @@ dependencies = [
  "sandogasa-gitlab",
  "sandogasa-kojihub",
  "sandogasa-rpmvercmp",
+ "serde",
  "serde_json",
  "serial_test",
  "tempfile",

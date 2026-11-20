@@ -13,6 +13,7 @@ pub mod prune_tags;
 pub mod repos;
 pub mod retire;
 pub mod review;
+pub mod unbuilt;
 
 pub use sandogasa_repology as repology;
 pub use sandogasa_rpmvercmp as rpmvercmp;

@@ -150,17 +150,37 @@ impl TagIndex {
     /// tag, whatever its repository — for a question about the SIG as
     /// a whole rather than one repository's channels.
     pub fn load_all(client: &Client, verbose: bool) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::load_stages(client, &["-release", "-testing"], verbose)
+    }
+
+    /// Every Hyperscale tag a build lands in, `-candidate` included, and
+    /// their contents: every build still tagged anywhere, for asking
+    /// what was last built from a branch.
+    pub fn load_built(client: &Client, verbose: bool) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::load_stages(client, &["-candidate", "-release", "-testing"], verbose)
+    }
+
+    /// The `-packages-` tags ending in one of `stages`, and their
+    /// contents.
+    fn load_stages(
+        client: &Client,
+        stages: &[&str],
+        verbose: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let tags: Vec<String> = client
             .list_tags_matching("hyperscale*")?
             .into_iter()
-            .filter(|t| {
-                t.contains("-packages-") && (t.ends_with("-release") || t.ends_with("-testing"))
-            })
+            .filter(|t| t.contains("-packages-") && stages.iter().any(|s| t.ends_with(s)))
             .collect();
         if verbose {
             eprintln!(
-                "[hs-relmon] {} release/testing tag(s); reading their contents",
-                tags.len()
+                "[hs-relmon] {} {} tag(s); reading their contents",
+                tags.len(),
+                stages
+                    .iter()
+                    .map(|s| s.trim_start_matches('-'))
+                    .collect::<Vec<_>>()
+                    .join("/")
             );
         }
         let mut index = Self::default();
@@ -507,6 +527,89 @@ mod tests {
         let version = parts[1].to_string();
         let name = parts[2].to_string();
         (name, version, release)
+    }
+
+    /// A hub answering `listTags` with `tags` and `listTagged` with one
+    /// build of `pkg` per tag.
+    fn hub_with(tags: &[&str]) -> mockito::ServerGuard {
+        let mut server = mockito::Server::new();
+        let names: String = tags
+            .iter()
+            .map(|t| {
+                format!(
+                    "<value><struct><member><name>name</name><value><string>{t}</string>\
+                     </value></member></struct></value>"
+                )
+            })
+            .collect();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("<methodName>listTags<".into()))
+            .with_body(format!(
+                "<?xml version='1.0'?><methodResponse><params><param><value><array><data>\
+                 {names}</data></array></value></param></params></methodResponse>"
+            ))
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("<methodName>listTagged<".into()))
+            .with_body(
+                "<?xml version='1.0'?><methodResponse><params><param><value><array><data>\
+                 <value><struct>\
+                 <member><name>build_id</name><value><int>7</int></value></member>\
+                 <member><name>name</name><value><string>pkg</string></value></member>\
+                 <member><name>version</name><value><string>1</string></value></member>\
+                 <member><name>release</name><value><string>1.hs.el9</string></value></member>\
+                 <member><name>nvr</name><value><string>pkg-1-1.hs.el9</string></value></member>\
+                 </struct></value></data></array></value></param></params></methodResponse>",
+            )
+            .create();
+        server
+    }
+
+    #[test]
+    fn built_builds_include_the_candidate_tags() {
+        let server = hub_with(&[
+            "hyperscale9s-packages-main-candidate",
+            "hyperscale9s-packages-main-release",
+            "hyperscale9s-packages-main-testing",
+            "hyperscale9s-packages-main-el9s-build",
+            "hyperscale9s-something-release",
+        ]);
+        let client = Client::with_hub_url(&server.url());
+        let tags = |index: &TagIndex| -> Vec<String> {
+            index
+                .for_package("pkg")
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect()
+        };
+        let built = TagIndex::load_built(&client, true).unwrap();
+        assert_eq!(
+            tags(&built),
+            [
+                "hyperscale9s-packages-main-candidate",
+                "hyperscale9s-packages-main-release",
+                "hyperscale9s-packages-main-testing",
+            ]
+        );
+        // One repository's managed tags, those that exist.
+        let main = TagIndex::load(&client, &["main".to_string()], true).unwrap();
+        assert_eq!(
+            tags(&main),
+            [
+                "hyperscale9s-packages-main-release",
+                "hyperscale9s-packages-main-testing",
+            ]
+        );
+        let all = TagIndex::load_all(&client, false).unwrap();
+        assert_eq!(
+            tags(&all),
+            [
+                "hyperscale9s-packages-main-release",
+                "hyperscale9s-packages-main-testing",
+            ]
+        );
     }
 
     #[test]

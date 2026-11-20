@@ -402,6 +402,19 @@ struct CompareResult {
     commits: Vec<serde::de::IgnoredAny>,
 }
 
+/// The same answer, with the commits read.
+#[derive(Debug, Deserialize)]
+struct CompareCommits {
+    #[serde(default)]
+    commits: Vec<RepoCommit>,
+}
+
+/// A ref from `/repository/commits/:sha/refs`.
+#[derive(Debug, Deserialize)]
+struct CommitRef {
+    name: String,
+}
+
 /// Client for the GitLab REST API v4.
 pub struct Client {
     http: reqwest::blocking::Client,
@@ -651,6 +664,45 @@ impl Client {
         let cmp: CompareResult =
             blocking_json_ok(resp, &format!("GitLab compare {branch}..{sha}"))?;
         Ok(cmp.commits.is_empty())
+    }
+
+    /// The commits on `branch` that `sha` lacks, oldest first: what
+    /// was merged since a build made from `sha`, say. Empty when `sha`
+    /// is the branch head or ahead of it.
+    pub fn commits_between(
+        &self,
+        sha: &str,
+        branch: &str,
+    ) -> Result<Vec<RepoCommit>, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/repository/compare",
+            self.base_url, encoded
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .query(&[("from", sha), ("to", branch)])
+            .send()?;
+        let cmp: CompareCommits =
+            blocking_json_ok(resp, &format!("GitLab compare {sha}..{branch}"))?;
+        Ok(cmp.commits)
+    }
+
+    /// The branches whose history contains `sha`, sorted.
+    pub fn branches_containing(
+        &self,
+        sha: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let encoded = self.project_path.replace('/', "%2F");
+        let url = format!(
+            "{}/api/v4/projects/{}/repository/commits/{}/refs",
+            self.base_url, encoded, sha
+        );
+        let refs: Vec<CommitRef> = get_all_pages(&self.http, &url, &[("type", "branch")], &[])?;
+        let mut names: Vec<String> = refs.into_iter().map(|r| r.name).collect();
+        names.sort();
+        Ok(names)
     }
 
     /// Fetch a single issue by its internal ID (iid).
@@ -2130,6 +2182,66 @@ mod tests {
             .create();
         let client = Client::new(&server.url(), "g/p", "tok").unwrap();
         assert!(!client.commit_contained("main", "other").unwrap());
+    }
+
+    #[test]
+    fn commits_between_lists_what_a_sha_lacks() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock("GET", "/api/v4/projects/g%2Fp/repository/compare")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("from".into(), "55ea231".into()),
+                mockito::Matcher::UrlEncoded("to".into(), "c9s-hs+fb".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{"commits": [{"id": "a1", "title": "Merge branch 'x'",
+                    "message": "Merge branch 'x'\n\nSee merge request g/p!7",
+                    "committed_date": "2026-11-17T10:00:00.000+00:00"}], "diffs": []}"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        let commits = client.commits_between("55ea231", "c9s-hs+fb").unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].id, "a1");
+        assert!(commits[0].message.ends_with("g/p!7"));
+        mock.assert();
+
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v4/projects/g%2Fp/repository/compare")
+            .match_query(mockito::Matcher::Any)
+            .with_status(404)
+            .with_body(r#"{"message": "404 Ref Not Found"}"#)
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        assert!(client.commits_between("55ea231", "gone").is_err());
+    }
+
+    #[test]
+    fn branches_containing_names_the_branches_with_a_commit() {
+        let mut server = mockito::Server::new();
+        let mock = server
+            .mock(
+                "GET",
+                "/api/v4/projects/g%2Fp/repository/commits/a879194/refs",
+            )
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("type".into(), "branch".into()),
+                mockito::Matcher::UrlEncoded("page".into(), "1".into()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"[{"type": "branch", "name": "c10s-proposed-RHEL-306261"},
+                    {"type": "branch", "name": "c10s"}]"#,
+            )
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        assert_eq!(
+            client.branches_containing("a879194").unwrap(),
+            ["c10s", "c10s-proposed-RHEL-306261"]
+        );
+        mock.assert();
     }
 
     #[test]
