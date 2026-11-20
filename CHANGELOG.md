@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### cbspkg promote shows what its dependency check reads, and spaces the reports evenly
+
+Promoting rasdaemon 1.0.0-2 into two Hyperscale variants on 2026-11-20,
+the step "Check what the builds of rasdaemon change for other packages"
+showed no command under it, unlike every other step, so it read as if
+it did nothing; and the two variants' reports had two blank lines
+between them. The step now lists what it reads and queries as commands
+a person could run (`koji --profile cbs list-tagged --latest` and
+`buildinfo`, and per collection `fedrq whatrequires` against CentOS
+Stream, EPEL and the `-release` repository, and `fedrq pkgs` for the
+SIG's own source packages), and sandogasa-depcheck's `to_terminal`
+ends a report with one line break, so reports are spaced by one blank
+line (Resolves #202).
+
 ### specport checks a converted spec against what meson.build declares
 
 Converting rasdaemon 1.0.0's spec, specport left the person to find

@@ -36,6 +36,37 @@ pub trait Places: Sync {
         true
     }
 
+    /// The fedrq commands a person would run to look where the check
+    /// looks: what requires the package in the stock distribution, EPEL
+    /// and the collection's published `-release`, and the source
+    /// packages of that `-release` (the SIG's own).
+    fn commands(&self, collection: &Collection, package: &str) -> Vec<Vec<String>> {
+        let mut stable = vec![
+            "fedrq".to_string(),
+            "whatrequires".to_string(),
+            "-b".to_string(),
+            collection.stock_branch(),
+            "-e".to_string(),
+            "@epel".to_string(),
+        ];
+        let mut out = Vec::new();
+        if self.published(collection) {
+            let repo = format!("@baseurl:{}", collection.published_repo());
+            stable.extend(["-e".to_string(), repo.clone()]);
+            stable.push(package.to_string());
+            out.push(stable);
+            out.push(
+                ["fedrq", "pkgs", "-r", &repo, "-F", "source", "*"]
+                    .map(String::from)
+                    .to_vec(),
+            );
+        } else {
+            stable.push(package.to_string());
+            out.push(stable);
+        }
+        out
+    }
+
     /// The places, for the report: "CentOS Stream 10, EPEL 10 and
     /// hyperscale10s-packages-main-release".
     fn describe(&self, collection: &Collection) -> String {
@@ -275,6 +306,43 @@ mod tests {
             }],
             arrival: None,
         }
+    }
+
+    #[test]
+    fn the_commands_name_where_the_check_looks() {
+        struct Unpublished;
+        impl Places for Unpublished {
+            fn stable(
+                &self,
+                _: &Collection,
+            ) -> Result<Box<dyn sandogasa_depcheck::RepoQuery + Send + Sync>, String> {
+                Err("unused".into())
+            }
+            fn own_sources(&self, _: &Collection) -> Result<BTreeSet<String>, String> {
+                Ok(BTreeSet::new())
+            }
+            fn published(&self, _: &Collection) -> bool {
+                false
+            }
+        }
+        let c = sandogasa_cbs::hyperscale_collections(9, &["main".into()], &[])
+            .unwrap()
+            .remove(0);
+        let cmds = Unpublished.commands(&c, "rasdaemon");
+        assert_eq!(
+            cmds,
+            [[
+                "fedrq",
+                "whatrequires",
+                "-b",
+                "c9s",
+                "-e",
+                "@epel",
+                "rasdaemon"
+            ]
+            .map(String::from)
+            .to_vec()]
+        );
     }
 
     #[test]

@@ -569,6 +569,36 @@ fn check_moves(
         .iter()
         .map(|(c, _, _)| c.tag(Stage::Release))
         .collect();
+    // What the check reads and where it looks, as commands a person
+    // could run: the hub's answers come in one call each, and fedrq's
+    // queries run per collection.
+    for tag in &tags {
+        ui.show_command(
+            &[
+                "koji",
+                "--profile",
+                "cbs",
+                "list-tagged",
+                "--latest",
+                tag,
+                package,
+            ]
+            .map(String::from),
+        );
+    }
+    for (_, nvr, _) in &to_check {
+        ui.show_command(&["koji", "--profile", "cbs", "buildinfo", nvr].map(String::from));
+    }
+    let mut shown: Vec<String> = Vec::new();
+    for (c, _, _) in &to_check {
+        if shown.contains(&c.tag(Stage::Release)) {
+            continue;
+        }
+        shown.push(c.tag(Stage::Release));
+        for argv in places.commands(c, package) {
+            ui.show_command(&argv);
+        }
+    }
     let latest = match hub.latest_in_tags(&tags, package) {
         Ok(l) => l,
         Err(e) => {

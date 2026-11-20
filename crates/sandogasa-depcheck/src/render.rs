@@ -442,6 +442,12 @@ pub fn to_terminal(markdown: &str, color: bool) -> String {
         out.push_str(&shown);
         out.push('\n');
     }
+    // One line break at the end, as the Markdown has: the blank line
+    // before a dropped `</details>` would otherwise stay, and a caller
+    // spacing reports would get two.
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
     out
 }
 
@@ -478,6 +484,18 @@ mod tests {
                 arrival: None,
             },
         )])
+    }
+
+    /// The blank line before a `</details>` the terminal drops does not
+    /// stay at the end, so reports printed one after another are spaced
+    /// by their caller alone.
+    #[test]
+    fn a_report_ends_with_one_line_break() {
+        let md =
+            "**Checked** x\n\n<details><summary>Changes</summary>\n\n- `a` to `b`\n\n</details>\n";
+        let tty = to_terminal(md, true);
+        assert!(tty.ends_with("- a to b\n"), "{tty:?}");
+        assert!(!tty.ends_with("\n\n"), "{tty:?}");
     }
 
     #[test]
