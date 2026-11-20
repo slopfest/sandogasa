@@ -45,13 +45,15 @@ packaging activity across multiple systems:
   (mirror-pusher detection deferred). The opened list carries the
   same `(merged)` / `(closed)` / `(applied)` markers, rebased
   commits included
-- **Forgejo / Gitea** (e.g. codeberg.org, a Fedora Forgejo,
+- **Forgejo / Gitea** (e.g. codeberg.org, Fedora Forge,
   src.opensuse.org): PRs opened / merged and issues opened / closed
-  in the window, across every repo you contribute to. Sourced from
-  the token owner's issue/pull search — or, with no token, the public
-  search by username, on instances whose API answers anonymously —
-  so it captures contributions to other people's repos, not just
-  your own namespace. Optionally scoped by repo-owner.
+  / commented on in the window, across every repo you contribute to.
+  Sourced from the token owner's issue/pull search — or, with no
+  token, the public search by username, on instances that offer one
+  (Gitea does; Forgejo, Fedora Forge's, needs a token, and says so)
+  — so it captures contributions to other people's repos, not just
+  your own namespace; the issues commented on come from your
+  activity feed. Optionally scoped by repo-owner.
   The opened list flags each PR's fate — `(merged)`, `(closed)`,
   or `(applied)` when a closed-unmerged PR's commit still landed
   on the target branch: as-is (a maintainer cherry-picked or

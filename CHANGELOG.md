@@ -176,6 +176,32 @@ missing project.
 
 Resolves #191
 
+### sandogasa-report reads Fedora Forge, and Forgejo issues commented on
+
+sandogasa-report did not query Fedora Forge at all, so FESCo tickets,
+packaging guideline issues and release engineering requests a packager
+works on never appeared, and `--notes` notes about them were left over.
+Pointing a domain at it would not have helped: Fedora Forge runs
+Forgejo, which has no search by creator, so the anonymous search by
+username ignored the name and paged through every pull request on the
+instance, which looked like a hang.
+
+The shipped config's `fedora` domain now reads Fedora Forge. The
+Forgejo/Gitea section lists the issues the user commented on, from the
+activity feed of the account the searches cover (the token's owner, or
+the name searched by), with the titles looked up eight at a time. A
+by-name search that the server answers with someone else's items stops
+after one page; the report warns, asks for a token, and says in the
+section what is not listed, so a missing list does not read as a quiet
+period. A search with a token that fails still ends the run, as before.
+Without a token, Fedora Forge gives only the issues commented on; a
+domain with neither a user nor a token is skipped with a warning.
+sandogasa-forgejo's `pull_requests_by` and `issues_by` return that error
+instead of reading the whole instance, and the client gains
+`current_user` and `FEED_EVENT_CAP`.
+
+Refs #192
+
 ### sandogasa-report attaches a note on a repository to its line
 
 A `--notes` note whose URL is a repository itself, such as

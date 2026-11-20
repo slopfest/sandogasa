@@ -635,12 +635,26 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 .map(String::from)
                 .or_else(|| fas_user.clone())
                 .unwrap_or_default();
-            match forgejo::forgejo_report(fj, &user, since, until, &cfg.forgejo_tokens, cli.verbose)
-            {
-                Ok(fj_report) => dr.forgejo = Some(fj_report),
-                Err(e) => {
-                    eprintln!("error: forgejo ({name}): {e}");
-                    return ExitCode::FAILURE;
+            if user.is_empty() && forgejo::find_token(&fj.instance, &cfg.forgejo_tokens).is_err() {
+                eprintln!(
+                    "warning: Forgejo/Gitea domain '{name}' has no user and no token for \
+                     {host} — set --user, or store a token with `sandogasa-report config`, \
+                     skipping"
+                );
+            } else {
+                match forgejo::forgejo_report(
+                    fj,
+                    &user,
+                    since,
+                    until,
+                    &cfg.forgejo_tokens,
+                    cli.verbose,
+                ) {
+                    Ok(fj_report) => dr.forgejo = Some(fj_report),
+                    Err(e) => {
+                        eprintln!("error: forgejo ({name}): {e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
             }
         }

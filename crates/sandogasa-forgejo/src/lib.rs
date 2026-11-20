@@ -50,6 +50,9 @@ use std::collections::BTreeMap;
 const PAGE_LIMIT: u32 = 50;
 /// Most activity-feed pages fetched per query (2 500 events).
 pub const FEED_PAGE_CAP: u32 = 50;
+/// Most activity-feed events a query returns: a read that returns this
+/// many may have stopped before the date it was asked to reach.
+pub const FEED_EVENT_CAP: usize = (FEED_PAGE_CAP * PAGE_LIMIT) as usize;
 
 /// A Forgejo user as returned by `/api/v1/user`. Only the fields
 /// downstream tools currently consume.
@@ -596,7 +599,44 @@ impl Client {
         if let Some(o) = owner {
             query.push(("owner", o));
         }
-        self.get_paged(&url, &query, &format!("Forgejo {kind} search"))
+        let what = format!("Forgejo {kind} search");
+        let Some(user) = by else {
+            return self.get_paged(&url, &query, &what);
+        };
+        // An instance that does not know `created_by` (Forgejo has only
+        // `created`, for the token's owner) ignores it and answers with
+        // everyone's: stop at the first page that shows it, rather than
+        // read the whole instance.
+        let limit = PAGE_LIMIT.to_string();
+        let mut out: Vec<T> = Vec::new();
+        for page in 1u32.. {
+            let page_str = page.to_string();
+            let mut paged = query.clone();
+            paged.push(("limit", &limit));
+            paged.push(("page", &page_str));
+            let resp = self.http.get(&url).query(&paged).send()?;
+            let batch: Vec<serde_json::Value> = http::blocking_json_ok(resp, &what)?;
+            let n = batch.len() as u32;
+            for item in batch {
+                let poster = item.pointer("/user/login").and_then(|l| l.as_str());
+                if !poster.is_some_and(|p| p.eq_ignore_ascii_case(user)) {
+                    let whose = poster
+                        .filter(|p| !p.is_empty())
+                        .map_or("someone else's".to_string(), |p| format!("{p}'s"));
+                    return Err(format!(
+                        "{} does not search by creator (`created_by`) without a \
+                         token: it answered with {whose}",
+                        self.base_url
+                    )
+                    .into());
+                }
+                out.push(serde_json::from_value(item)?);
+            }
+            if n < PAGE_LIMIT {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     /// Fetch the fuller pull-request object for `owner/repo#number` —
@@ -930,6 +970,13 @@ impl Client {
         self.get_paged(&url, &query, &format!("Forgejo {kind} list"))
     }
 
+    /// The account the client's token belongs to.
+    pub fn current_user(&self) -> Result<User, Box<dyn std::error::Error>> {
+        let url = format!("{}/api/v1/user", self.base_url);
+        let resp = self.http.get(&url).send()?;
+        Ok(http::blocking_json_ok(resp, "Forgejo token owner")?)
+    }
+
     /// Fetch a single issue by number.
     pub fn issue(
         &self,
@@ -1187,6 +1234,39 @@ mod tests {
     fn new_rejects_plaintext_remote() {
         // A token must not be sent to a plaintext http non-loopback URL.
         assert!(Client::new("http://forge.example.com", "tok").is_err());
+    }
+
+    #[test]
+    fn a_search_by_name_the_server_ignores_stops_at_its_first_page() {
+        let mut server = mockito::Server::new();
+        // Forgejo has no `created_by`: everyone's, page after page.
+        let ignored = server
+            .mock("GET", "/api/v1/repos/issues/search")
+            .match_query(mockito::Matcher::UrlEncoded("type".into(), "pulls".into()))
+            .with_body(
+                serde_json::json!((0..50)
+                    .map(|n| serde_json::json!({"number": n, "title": "t", "user": {"login": "someone"}}))
+                    .collect::<Vec<_>>())
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        let honored = server
+            .mock("GET", "/api/v1/repos/issues/search")
+            .match_query(mockito::Matcher::UrlEncoded("type".into(), "issues".into()))
+            .with_body(r#"[{"number": 7, "title": "mine", "user": {"login": "Me"}}]"#)
+            .create();
+        let client = Client::anonymous(&server.url()).unwrap();
+        let err = client.pull_requests_by("me", "all", None).unwrap_err();
+        assert!(
+            err.to_string().contains("does not search by creator"),
+            "{err}"
+        );
+        assert!(err.to_string().contains("someone's"), "{err}");
+        let mine = client.issues_by("me", "all", None).unwrap();
+        assert_eq!(mine.len(), 1);
+        ignored.assert();
+        honored.assert();
     }
 
     #[test]

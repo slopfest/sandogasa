@@ -32,6 +32,15 @@ bodhi = true
 bodhi_releases = ["F*", "EPEL-*"]
 fedora_versions = [42, 43, 44]
 
+# Fedora Forge (Forgejo): tickets and pull requests filed in Fedora's
+# own projects (FESCo, the packaging guidelines, release engineering).
+# Without a token only the issues commented on are listed (from the
+# activity feed of the profile's FAS name): Forgejo searches by creator
+# only for a token's owner. Store a token for forge.fedoraproject.org
+# (`sandogasa-report config`) for the issues and pull requests opened.
+[domains.fedora.forgejo]
+instance = "https://forge.fedoraproject.org"
+
 [domains.epel]
 bugzilla = true
 bodhi = true

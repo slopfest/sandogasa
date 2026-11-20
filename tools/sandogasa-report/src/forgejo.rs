@@ -52,6 +52,13 @@ pub struct ForgejoReport {
     pub opened_issues: Vec<IssueRef>,
     /// Issues by the user that were closed in the window.
     pub closed_issues: Vec<IssueRef>,
+    /// Issues the user commented on in the window, from their activity
+    /// feed, each once.
+    pub commented_issues: Vec<IssueRef>,
+    /// What the instance could not be asked for, and why: an anonymous
+    /// search by name on a server without one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub not_listed: Vec<String>,
 }
 
 /// Pointer to an issue for the report's summary lists.
@@ -135,20 +142,23 @@ pub fn forgejo_report(
     if verbose {
         eprintln!("[forgejo] {base}: searching pulls created by {whose}");
     }
-    // One `state=all` search gives both opened and merged; we filter
-    // each by the relevant timestamp.
-    let pulls = match by {
-        Some(u) => client.pull_requests_by(u, "all", cfg.owner.as_deref()),
-        None => client.my_pull_requests("all", cfg.owner.as_deref()),
-    }
-    .map_err(|e| format!("Forgejo/Gitea pull search on {base}: {e}"))?;
-
     let mut report = ForgejoReport {
         instance: base.to_string(),
         user: user.to_string(),
         owner: cfg.owner.clone(),
         ..Default::default()
     };
+    // One `state=all` search gives both opened and merged; we filter
+    // each by the relevant timestamp.
+    let pulls = searched(
+        &mut report,
+        by.is_some(),
+        "pull requests",
+        match by {
+            Some(u) => client.pull_requests_by(u, "all", cfg.owner.as_deref()),
+            None => client.my_pull_requests("all", cfg.owner.as_deref()),
+        },
+    )?;
     for pr in pulls {
         if pr
             .created_at
@@ -176,11 +186,15 @@ pub fn forgejo_report(
     if verbose {
         eprintln!("[forgejo] {base}: searching issues created by {whose}");
     }
-    let issues = match by {
-        Some(u) => client.issues_by(u, "all", cfg.owner.as_deref()),
-        None => client.my_issues("all", cfg.owner.as_deref()),
-    }
-    .map_err(|e| format!("Forgejo/Gitea issue search on {base}: {e}"))?;
+    let issues = searched(
+        &mut report,
+        by.is_some(),
+        "issues",
+        match by {
+            Some(u) => client.issues_by(u, "all", cfg.owner.as_deref()),
+            None => client.my_issues("all", cfg.owner.as_deref()),
+        },
+    )?;
     for issue in issues {
         if issue
             .created_at
@@ -197,7 +211,127 @@ pub fn forgejo_report(
             report.closed_issues.push(into_issue_ref(&issue));
         }
     }
+    // The feed of the account the searches covered: the token's owner,
+    // whose login the profile need not name, or the name searched by.
+    let feed_user = match by {
+        Some(u) => Some(u.to_string()),
+        None => match client.current_user() {
+            Ok(owner) => Some(owner.login),
+            Err(e) => {
+                eprintln!(
+                    "warning: cannot tell whose token is used on {base} ({e}); issues \
+                     commented on are left out"
+                );
+                None
+            }
+        },
+    };
+    if let Some(feed_user) = feed_user {
+        report.commented_issues = commented_issues(&client, base, &feed_user, since, until);
+    }
     Ok(report)
+}
+
+/// What a search found. An anonymous search by name that failed is a
+/// warning, recorded in `report` as not listed, since the other lists
+/// and the activity feed's still stand; a search with a token that
+/// failed (an expired token, one meant for another instance) ends the
+/// run, as a wrong token should not read as a quiet period.
+fn searched<T>(
+    report: &mut ForgejoReport,
+    anonymous: bool,
+    what: &str,
+    found: Result<Vec<T>, Box<dyn std::error::Error>>,
+) -> Result<Vec<T>, String> {
+    match found {
+        Ok(found) => Ok(found),
+        Err(e) if anonymous => {
+            eprintln!(
+                "warning: {what} are not listed: {e}; give a token for {} \
+                 (`sandogasa-report config`)",
+                report.instance
+            );
+            // Said in the report without the error, which quotes a
+            // stranger's login from the answer.
+            let why = if e.to_string().contains("does not search by creator") {
+                "searching by creator needs a token here"
+            } else {
+                "the search failed"
+            };
+            report.not_listed.push(format!("{what} ({why})"));
+            Ok(Vec::new())
+        }
+        Err(e) => Err(format!(
+            "Forgejo/Gitea {what} search on {}: {e}",
+            report.instance
+        )),
+    }
+}
+
+/// How many requests to a Forgejo instance are in flight at once.
+const PARALLEL: usize = 8;
+
+/// The issues `user` commented on in the window, each once, newest
+/// first: from their activity feed (which names the issue but not its
+/// title), with the titles looked up a few at a time. A feed that
+/// cannot be read is a warning, and the list stays empty.
+fn commented_issues(
+    client: &Client,
+    base: &str,
+    user: &str,
+    since: NaiveDate,
+    until: NaiveDate,
+) -> Vec<IssueRef> {
+    eprintln!("Reading the activity of {user} on {base} since {since}...");
+    let feed = match client.user_activity(user, Some(&format!("{since}T00:00:00Z"))) {
+        Ok(feed) => feed,
+        Err(e) => {
+            eprintln!(
+                "warning: cannot read the activity of {user} on {base} ({e}); issues \
+                 commented on are left out"
+            );
+            return Vec::new();
+        }
+    };
+    if feed.len() >= sandogasa_forgejo::FEED_EVENT_CAP {
+        eprintln!(
+            "warning: the activity of {user} on {base} has more than {} events since \
+             {since}; issues commented on early in the period may be missing",
+            sandogasa_forgejo::FEED_EVENT_CAP
+        );
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let wanted: Vec<(String, u64)> = feed
+        .iter()
+        .filter(|a| a.op_type == "comment_issue" && date_in_range(&a.created, since, until))
+        .filter_map(|a| Some((a.repo_slug()?.to_string(), a.issue_ref()?.0)))
+        .filter(|key| seen.insert(key.clone()))
+        .collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    eprintln!(
+        "Looking up {} issue(s) commented on at {base}...",
+        wanted.len()
+    );
+    let titles = forge::in_parallel(&wanted, PARALLEL, |(slug, number)| {
+        let (owner, repo) = slug.split_once('/')?;
+        client.issue(owner, repo, *number).ok().map(|i| i.title)
+    });
+    let unread = titles.iter().filter(|t| t.is_none()).count();
+    if unread > 0 {
+        eprintln!("warning: cannot read the titles of {unread} issue(s) on {base}");
+    }
+    wanted
+        .into_iter()
+        .zip(titles)
+        .map(|((repo, number), title)| IssueRef {
+            url: format!("{base}/{repo}/issues/{number}"),
+            repo,
+            number,
+            title: title.unwrap_or_else(|| "(title not readable)".to_string()),
+        })
+        .collect()
 }
 
 /// Whether a closed-unmerged PR's commit nonetheless landed on its
@@ -311,7 +445,17 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     stat(&mut stats, "PRs applied (landed unmerged)", applied);
     stat(&mut stats, "Issues opened", report.opened_issues.len());
     stat(&mut stats, "Issues closed", report.closed_issues.len());
+    stat(
+        &mut stats,
+        "Issues commented on",
+        report.commented_issues.len(),
+    );
 
+    // What could not be asked for is said, so a missing list does not
+    // read as a quiet period.
+    for what in &report.not_listed {
+        stats.push_str(&format!("- _Not listed: {what}_\n"));
+    }
     if stats.is_empty() {
         return format!("{heading}No Forgejo/Gitea activity.\n\n");
     }
@@ -351,6 +495,7 @@ pub fn format_markdown(report: &ForgejoReport, detail: u8) -> String {
     prs(&mut out, "PRs merged", &report.merged_prs, false);
     issues(&mut out, "Issues opened", &report.opened_issues);
     issues(&mut out, "Issues closed", &report.closed_issues);
+    issues(&mut out, "Issues commented on", &report.commented_issues);
     out
 }
 
@@ -625,6 +770,258 @@ mod tests {
         assert_eq!(r.repo, "o/r");
         assert_eq!(r.number, 91);
         assert_eq!(r.url, "https://codeberg.org/o/r/issues/91");
+    }
+
+    #[test]
+    fn issues_commented_on_come_from_the_activity_feed() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let at = |when: &str| format!("{when}T10:00:00Z");
+        let event = |op: &str, repo: &str, content: &str, when: &str| json!({"op_type": op, "repo": {"full_name": repo}, "content": content, "created": at(when)});
+        rt.block_on(async {
+            // The search ignores created_by: a warning, not a failure.
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/issues/search"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {"number": 1, "title": "t", "user": {"login": "someone"}}
+                ])))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/users/me/activities/feeds"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    event("comment_issue", "fesco/tickets", "3704|LGTM", "2026-11-17"),
+                    event(
+                        "comment_issue",
+                        "fesco/tickets",
+                        "[\"3704\",\"again\"]",
+                        "2026-11-02"
+                    ),
+                    event(
+                        "comment_issue",
+                        "packaging/guidelines",
+                        "1569|ok",
+                        "2026-11-05"
+                    ),
+                    // An issue that cannot be read: listed without its title.
+                    event("comment_issue", "hidden/repo", "5|x", "2026-11-04"),
+                    event(
+                        "create_issue",
+                        "releng/tickets",
+                        "13584|Stalled",
+                        "2026-11-06"
+                    ),
+                    // Before the period.
+                    event("comment_issue", "fesco/tickets", "3600|old", "2026-06-20")
+                ])))
+                .mount(&server)
+                .await;
+            for (repo, n, title) in [
+                ("fesco/tickets", 3704, "Change: eBPF"),
+                ("packaging/guidelines", 1569, "Guideline"),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/repos/{repo}/issues/{n}")))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(json!({"number": n, "title": title})),
+                    )
+                    .mount(&server)
+                    .await;
+            }
+        });
+        let cfg: ForgejoConfig = serde_json::from_value(json!({"instance": server.uri()})).unwrap();
+        let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let r = forgejo_report(
+            &cfg,
+            "me",
+            day("2026-07-01"),
+            day("2026-11-20"),
+            &BTreeMap::new(),
+            false,
+        )
+        .unwrap();
+        assert!(r.opened_prs.is_empty() && r.opened_issues.is_empty());
+        // What the server could not be asked for is in the report.
+        assert_eq!(r.not_listed.len(), 2);
+        assert_eq!(
+            r.not_listed,
+            [
+                "pull requests (searching by creator needs a token here)",
+                "issues (searching by creator needs a token here)"
+            ]
+        );
+        let commented: Vec<String> = r
+            .commented_issues
+            .iter()
+            .map(|i| format!("{}#{} {} {}", i.repo, i.number, i.title, i.url))
+            .collect();
+        let base = server.uri();
+        assert_eq!(
+            commented,
+            [
+                format!("fesco/tickets#3704 Change: eBPF {base}/fesco/tickets/issues/3704"),
+                format!(
+                    "packaging/guidelines#1569 Guideline {base}/packaging/guidelines/issues/1569"
+                ),
+                format!("hidden/repo#5 (title not readable) {base}/hidden/repo/issues/5"),
+            ]
+        );
+        let md = format_markdown(&r, 2);
+        assert!(md.contains("- **Issues commented on:** 3"), "{md}");
+        assert!(
+            md.contains("- _Not listed: issues (searching by creator needs a token here)_"),
+            "{md}"
+        );
+        assert!(
+            md.contains("#### Issues commented on\n\n- [fesco/tickets#3704]"),
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn with_a_token_the_owners_pulls_and_issues_are_sorted_into_lists() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let repo = json!({"full_name": "o/r", "name": "r", "owner": "o"});
+        rt.block_on(async {
+            let get = |p: &str, body: serde_json::Value| {
+                Mock::given(method("GET"))
+                    .and(path(p.to_string()))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            };
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/issues/search"))
+                .and(query_param("type", "pulls"))
+                .and(query_param("created", "true"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    // Opened and merged in the period.
+                    {"number": 1, "title": "merged", "state": "closed", "html_url": "u1",
+                     "created_at": "2026-08-01T00:00:00Z", "repository": repo,
+                     "pull_request": {"merged": true, "merged_at": "2026-08-02T00:00:00Z"}},
+                    // Opened in the period, declined, but its commit landed.
+                    {"number": 2, "title": "applied", "state": "closed", "html_url": "u2",
+                     "created_at": "2026-08-03T00:00:00Z", "repository": repo},
+                    // Declined, and nothing landed.
+                    {"number": 3, "title": "declined", "state": "closed", "html_url": "u3",
+                     "created_at": "2026-08-04T00:00:00Z", "repository": repo}
+                ])))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/issues/search"))
+                .and(query_param("type", "issues"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                    {"number": 9, "title": "bug", "state": "closed", "html_url": "u9",
+                     "created_at": "2026-07-10T00:00:00Z", "closed_at": "2026-07-12T00:00:00Z",
+                     "repository": repo}
+                ])))
+                .mount(&server)
+                .await;
+            let detail = |n: u64, sha: &str| {
+                json!({"number": n, "merged": false, "created_at": "2026-08-03T00:00:00Z",
+                       "head": {"ref": "fix", "sha": sha}, "base": {"ref": "main", "sha": "b"}})
+            };
+            get("/api/v1/repos/o/r/pulls/2", detail(2, "landed"))
+                .mount(&server)
+                .await;
+            get("/api/v1/repos/o/r/pulls/3", detail(3, "lost"))
+                .mount(&server)
+                .await;
+            get(
+                "/api/v1/repos/o/r/compare/main...landed",
+                json!({"total_commits": 0}),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v1/repos/o/r/compare/main...lost",
+                json!({"total_commits": 1}),
+            )
+            .mount(&server)
+            .await;
+            get("/api/v1/repos/o/r/pulls/3/commits", json!([]))
+                .mount(&server)
+                .await;
+            get("/api/v1/repos/o/r/commits", json!([]))
+                .mount(&server)
+                .await;
+            // The feed read is the token owner's, whatever the profile
+            // calls them; one that cannot be read is a warning.
+            get("/api/v1/user", json!({"id": 1, "login": "owner"}))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/users/owner/activities/feeds"))
+                .respond_with(ResponseTemplate::new(500))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let cfg: ForgejoConfig = serde_json::from_value(json!({"instance": server.uri()})).unwrap();
+        let tokens = BTreeMap::from([(instance_host(&server.uri()), "tok".to_string())]);
+        let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        let r = forgejo_report(
+            &cfg,
+            "me",
+            day("2026-07-01"),
+            day("2026-08-31"),
+            &tokens,
+            true,
+        )
+        .unwrap();
+        let prs = |v: &[PrRef]| -> Vec<String> {
+            v.iter()
+                .map(|p| format!("{}{}", p.number, p.status_marker()))
+                .collect()
+        };
+        assert_eq!(
+            prs(&r.opened_prs),
+            ["1 (merged)", "2 (applied)", "3 (closed)"]
+        );
+        assert_eq!(prs(&r.merged_prs), ["1 (merged)"]);
+        assert_eq!(r.opened_issues.len(), 1);
+        assert_eq!(r.closed_issues[0].number, 9);
+        assert!(r.commented_issues.is_empty());
+        assert!(r.not_listed.is_empty());
+        let md = format_markdown(&r, 1);
+        assert!(md.contains("- **Issues closed:** 1"), "{md}");
+        // A token the server refuses ends the run, not reads as quiet.
+        let refused = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/issues/search"))
+                .respond_with(ResponseTemplate::new(401))
+                .mount(&refused),
+        );
+        let cfg: ForgejoConfig =
+            serde_json::from_value(json!({"instance": refused.uri()})).unwrap();
+        let tokens = BTreeMap::from([(instance_host(&refused.uri()), "tok".to_string())]);
+        let err = forgejo_report(
+            &cfg,
+            "me",
+            day("2026-07-01"),
+            day("2026-08-31"),
+            &tokens,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            err.starts_with("Forgejo/Gitea pull requests search on"),
+            "{err}"
+        );
     }
 
     #[test]

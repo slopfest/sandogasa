@@ -140,7 +140,12 @@ pub fn gather(report: &crate::report::Report) -> Vec<RepoActivity> {
                     field.add(at(&mut rows, key(&fj.instance, &pr.repo)));
                 }
             }
-            for issue in fj.opened_issues.iter().chain(&fj.closed_issues) {
+            for issue in fj
+                .opened_issues
+                .iter()
+                .chain(&fj.closed_issues)
+                .chain(&fj.commented_issues)
+            {
                 issues
                     .entry(key(&fj.instance, &issue.repo))
                     .or_default()
