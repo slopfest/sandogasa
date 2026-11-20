@@ -243,14 +243,15 @@ Change its days from 2026-11-24 to 2027-01-03 (back Mon 2027-01-04) to 2026-12-0
 Changes to https://calendar.fedoraproject.org/meeting/11459/:
   note:      (none) -> "Back on the 4th"
 ```
- After filing, the entry is read back from the
-calendar. `--dry-run` logs in and checks that you may add to the
-vacation calendar, but files nothing; `--yes` files without asking,
-which is also how to run it without a terminal, given a valid ticket.
-With `--json` (and `--yes` or `--dry-run`) it prints the outcome
-(`already_filed`, `declined`, `dry_run`, `filed`, `unchanged` or
-`updated`, with the entry's page), its messages going to standard error. It needs `curl` and
-`klist` (krb5-workstation).
+
+After filing, the entry is read back from the calendar. `--dry-run` logs
+in and checks that you may add to the vacation calendar, but files
+nothing; `--yes` files without asking, which is also how to run it
+without a terminal, given a valid ticket. With `--json` (and `--yes` or
+`--dry-run`) it prints the outcome (`already_filed`, `declined`,
+`dry_run`, `filed`, `unchanged` or `updated`, with the entry's page),
+its messages going to standard error. It needs `curl` and `klist`
+(krb5-workstation).
 
 ### Narrowing the `last-seen` service set
 
