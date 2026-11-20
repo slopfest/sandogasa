@@ -98,6 +98,14 @@ pub fn credentials(
                         crate::secrets::bugzilla().lookup_command(),
                         file.path().display()
                     );
+                    eprint!(
+                        "{}",
+                        sandogasa_config::credentials::token_help(
+                            "sandogasa: Bugzilla API key",
+                            "fedora-review-digest",
+                            crate::secrets::BUGZILLA_URL,
+                        )
+                    );
                     cfg.bugzilla.api_key =
                         sandogasa_config::prompt_field("Bugzilla", "API key", true, None)?;
                     dirty = true;

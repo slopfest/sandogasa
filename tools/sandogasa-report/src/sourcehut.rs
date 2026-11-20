@@ -31,7 +31,7 @@ const TOKEN_SPEC: TokenSpec = TokenSpec {
     // Sourcehut hosts routinely contain `-` (e.g. `git.sr.ht`
     // mirrors), which isn't legal in an env-var name.
     host_separators: &['.', '-'],
-    hint: " (generate at meta.sr.ht/oauth2/personal-token)",
+    hint: " (generate one at https://meta.sr.ht/oauth2/personal-token)",
 };
 
 /// A user's Sourcehut activity for a single domain.

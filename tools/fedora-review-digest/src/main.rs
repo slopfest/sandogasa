@@ -260,11 +260,15 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
         args.all,
         &sandogasa_cli::ask_to_reenable,
     );
+    let hint = sandogasa_config::credentials::token_help(
+        "sandogasa: Bugzilla API key",
+        "fedora-review-digest",
+        BUGZILLA_URL,
+    );
     cfg.bugzilla.api_key = ask(
-        &Setting::new("Bugzilla", "API key").sensitive().hint(
-            "Create an API key at \
-             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey",
-        ),
+        &Setting::new("Bugzilla", "API key")
+            .sensitive()
+            .hint(hint.trim_end()),
         cfg.bugzilla.api_key.trim(),
         args.all,
     )

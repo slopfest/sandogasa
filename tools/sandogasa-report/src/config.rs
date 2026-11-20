@@ -48,7 +48,7 @@ pub struct ReportConfig {
     /// Per-instance Sourcehut (sr.ht) personal access tokens, keyed by
     /// host (e.g. `"sr.ht"`). Env vars (`SOURCEHUT_TOKEN_<HOST>` or
     /// generic `SOURCEHUT_TOKEN`) take precedence. Generate one at
-    /// meta.sr.ht/oauth2/personal-token.
+    /// https://meta.sr.ht/oauth2/personal-token.
     #[serde(default)]
     pub sourcehut_tokens: BTreeMap<String, String>,
 

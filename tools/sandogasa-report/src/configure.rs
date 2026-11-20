@@ -642,8 +642,8 @@ type ValidateFn = fn(&str, &str) -> Result<bool, Box<dyn std::error::Error>>;
 /// skips the instance — useful when a shell env var is providing
 /// the token and the user doesn't want to persist it.
 ///
-/// `prompt` is shown before asking (it names the scope the
-/// forge needs). A failed check keeps the existing token for every
+/// `prompt` is shown before asking: from [`token_prompt`], where to
+/// create the token and what the tools sharing it need. A failed check keeps the existing token for every
 /// forge: an unreachable API says nothing about a credential, and
 /// discarding one over a transient outage is guesswork.
 fn prompt_token(
@@ -679,11 +679,7 @@ fn prompt_token(
         }
         return Ok(TokenChoice::Saved(checked.key));
     }
-    let hint = prompt
-        .trim_end()
-        .trim_end_matches(':')
-        .trim_end_matches("(enter to skip)")
-        .trim_end();
+    let hint = prompt.trim_end();
     // A token the forge rejects is asked for again, not the end of the
     // run: the answers before it would be lost with it.
     let setting = Setting::new(instance, "token (empty to skip)")
@@ -716,6 +712,17 @@ fn prompt_token(
     }
 }
 
+/// What a token prompt for `instance` shows: that one is asked for,
+/// and, from the shared credentials table, where to create it, what
+/// the report needs from it and what the other tools sharing the
+/// keyring entry under `label` need.
+fn token_prompt(label: &str, instance: &str) -> String {
+    format!(
+        "  Paste a token for {instance}, or nothing to skip.\n{}",
+        sandogasa_config::credentials::token_help(label, "sandogasa-report", instance)
+    )
+}
+
 /// GitLab tokens. An unreachable API re-prompts rather than
 /// keeping the existing token.
 fn prompt_gitlab_token(
@@ -725,10 +732,7 @@ fn prompt_gitlab_token(
     prompt_token(
         instance,
         existing,
-        &format!(
-            "  Paste a personal access token for {instance} with 'api' scope \
-             (enter to skip): "
-        ),
+        &token_prompt("sandogasa: GitLab token", instance),
         sandogasa_gitlab::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )
@@ -744,10 +748,7 @@ fn prompt_github_token(
     prompt_token(
         instance,
         existing,
-        &format!(
-            "  Paste a personal access token for {instance} with 'repo' scope \
-             (enter to skip): "
-        ),
+        &token_prompt("sandogasa: GitHub token", instance),
         sandogasa_github::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )
@@ -763,18 +764,13 @@ fn prompt_forgejo_token(
     prompt_token(
         instance,
         existing,
-        &format!(
-            "  Paste a personal access token for {instance} \
-             (enter to skip): "
-        ),
+        &token_prompt("sandogasa: Forgejo token", instance),
         sandogasa_forgejo::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )
 }
 
-/// Sourcehut tokens — a personal access token from
-/// meta.sr.ht/oauth2/personal-token (which grants read access
-/// across services by default).
+/// Sourcehut tokens.
 fn prompt_sourcehut_token(
     instance: &str,
     existing: Option<&str>,
@@ -782,10 +778,7 @@ fn prompt_sourcehut_token(
     prompt_token(
         instance,
         existing,
-        &format!(
-            "  Paste a personal access token for {instance} \
-             (from meta.sr.ht/oauth2/personal-token; enter to skip): "
-        ),
+        &token_prompt("sandogasa: SourceHut token", instance),
         sandogasa_sourcehut::validate_token,
         &mut sandogasa_config::read_line_from_terminal,
     )

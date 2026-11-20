@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+pub mod credentials;
 pub mod secret;
 #[cfg(feature = "test-support")]
 pub mod test_support;

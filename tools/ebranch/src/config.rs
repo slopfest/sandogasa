@@ -320,12 +320,14 @@ pub async fn ask_forgejo_token(forge: &mut ForgejoConfig, review: bool) -> Resul
     use sandogasa_cli::credential::{KeyVerdict, validated_key};
     use sandogasa_config::{Setting, ask};
     let hint = format!(
-        "\nescalate files a releng ticket for a branch request whose maintainers \
-         have not answered. Create a token at {}/user/settings/applications with \
-         the issue scope at Read and Write (to search and file tickets) and the \
-         organization scope at Read (for the tracker's organization-wide labels), \
-         or leave empty to skip.",
-        forge.url.trim_end_matches('/')
+        "\n  escalate files a releng ticket for a branch request whose maintainers \
+         have not answered. Empty to skip.\n{}",
+        sandogasa_config::credentials::token_help(
+            "sandogasa: Forgejo token",
+            "ebranch",
+            &forge.url
+        )
+        .trim_end()
     );
     let saved = forge.token.clone();
     forge.token = ask(
@@ -564,11 +566,17 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     let filled = secrets_from_keyring(&mut config, review, &sandogasa_cli::ask_to_reenable);
 
     // API key.
+    let hint = format!(
+        "\n{}",
+        sandogasa_config::credentials::token_help(
+            "sandogasa: Bugzilla API key",
+            "ebranch",
+            &config.bugzilla.url
+        )
+        .trim_end()
+    );
     config.bugzilla.api_key = ask(
-        &Setting::new("Bugzilla", "API key").sensitive().hint(
-            "\nGenerate an API key at:\n  \
-             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey\n",
-        ),
+        &Setting::new("Bugzilla", "API key").sensitive().hint(&hint),
         &config.bugzilla.api_key,
         review,
     )
@@ -664,11 +672,11 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         &Setting::new("NVD", "API key (optional, empty to skip)")
             .sensitive()
             .optional()
-            .hint(
-                "\nAn NVD API key raises the rate limit from 5 to 50 requests per 30 s \
-                 when check-update judges CVE bugs. Request one free at \
-                 https://nvd.nist.gov/developers/request-an-api-key, or leave empty to skip.",
-            ),
+            .hint(&format!(
+                "\n  Empty to skip.\n{}",
+                sandogasa_config::credentials::token_help("sandogasa: NVD API key", "ebranch", "")
+                    .trim_end()
+            )),
         &config.nvd.api_key,
         review,
     )
@@ -709,11 +717,16 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     // leaves check-update holding auto-push and filing nothing,
     // which is the safe half of the guard.
     let hint = format!(
-        "\nRPM Fusion runs its own Bugzilla. A key there lets check-update \
+        "\n  RPM Fusion runs its own Bugzilla. A key there lets check-update \
          file the rebuild request for a counterpart (libheif -> \
          libheif-freeworld) instead of only holding the update's auto-push. \
-         Generate one at {}/userprefs.cgi?tab=apikey, or leave empty to skip.",
-        config.rpmfusion_bugzilla.url
+         Empty to skip.\n{}",
+        sandogasa_config::credentials::token_help(
+            "sandogasa: Bugzilla API key",
+            "ebranch",
+            &config.rpmfusion_bugzilla.url
+        )
+        .trim_end()
     );
     config.rpmfusion_bugzilla.api_key = ask(
         &Setting::new("RPM Fusion Bugzilla", "API key (optional, empty to skip)")

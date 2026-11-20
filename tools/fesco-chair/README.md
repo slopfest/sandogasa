@@ -26,22 +26,23 @@ inferred by scanning recent meeting minutes on
 cargo install fesco-chair
 ```
 
-A Forgejo API token is required for the tracker queries (and for the
-planned ticket-update support). Create one under Settings →
+A Forgejo API token is required for the tracker queries and the ticket
+updates. Create one under Settings →
 Applications on
 [forge.fedoraproject.org](https://forge.fedoraproject.org/user/settings/applications),
 then store it with `fesco-chair config`. Token scopes (Forgejo scopes
 tokens by category, each read-only or read-and-write):
 
-- **issue: read** — the agenda queries list tracker issues by label,
-  and `votes` reads each ticket's timeline
+- **issue: read-and-write** — the agenda queries list tracker issues
+  by label and `votes` reads each ticket's timeline; `agenda` and
+  `announced` comment on, label and close tickets
 - **repository: read** — the issue endpoints live under the `/repos`
   API group, so they need repository read access too
 - **user: read** — only for `fesco-chair config`'s validation step
   (it calls `/api/v1/user` to check the token works)
-- **issue: read-and-write** instead of read — optional today; choose
-  it if you want the token ready for the planned ticket-update
-  support (commenting on / closing tickets after the meeting)
+
+The token is shared with the other sandogasa tools that use Fedora
+Forge; [docs/tokens.md](../../docs/tokens.md) lists what each needs.
 
 The `FORGEJO_TOKEN_FORGE_FEDORAPROJECT_ORG` and `FORGEJO_TOKEN`
 environment variables override the stored token (matching

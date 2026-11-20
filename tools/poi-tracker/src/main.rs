@@ -1572,7 +1572,7 @@ fn cmd_act(paths: &[String], args: &ActArgs) -> CmdResult {
                 "dist-git token check failed: {e}\n\
                  orphaning and giving need an account token with the \
                  \"Modify an existing project\" ACL — regenerate one at \
-                 https://src.fedoraproject.org/settings#nav-api-tab"
+                 https://src.fedoraproject.org/settings/token/new"
             )
             .into());
         }

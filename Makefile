@@ -43,6 +43,11 @@ clippy: ## Lint the workspace, tests included; a warning fails the gate
 man: ## Regenerate every tool's man page from its clap definition
 	./scripts/gen-man.sh
 
+.PHONY: tokens
+tokens: ## Regenerate docs/tokens.md from the credentials table in sandogasa-config
+	cargo run -q -p sandogasa-config --example tokens-page > docs/tokens.md.new
+	mv docs/tokens.md.new docs/tokens.md
+
 .PHONY: findings
 findings: ## Render FINDINGS to HTML and PDF (SRC=... for another file)
 	scripts/render-findings.sh $(SRC)

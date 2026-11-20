@@ -294,9 +294,16 @@ async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
     };
     let (mut token, before) = saved_token(&mut config, args.all, &sandogasa_cli::ask_to_reenable);
     let mut review = args.all;
+    let hint = sandogasa_config::credentials::token_help(
+        "sandogasa: Pagure token",
+        "sandogasa-pkg-acl",
+        "",
+    );
     loop {
         token = sandogasa_config::ask(
-            &sandogasa_config::Setting::new("dist-git", "API token").sensitive(),
+            &sandogasa_config::Setting::new("dist-git", "API token")
+                .sensitive()
+                .hint(hint.trim_end()),
             &token,
             review,
         )?;

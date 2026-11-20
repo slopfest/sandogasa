@@ -461,6 +461,17 @@ no keyring can be used.
   an Atlassian email).
 - **Read with `resolve`:** environment variable, then keyring, then
   the file, so existing setups keep working.
+- **Say what a token needs from the shared table, not in a hint of the
+  tool's own.** `sandogasa_config::credentials::SERVICES` lists, per
+  service, where a token is created and, per tool, the least it must
+  grant and why. A `config` prompt shows `credentials::token_help` for
+  its label, tool and instance: where to create the token, what this
+  tool needs, and what the other tools sharing the keyring entry need,
+  so someone running one tool can grant less. A tool that starts using
+  a service, or needs more from it, updates its row, then runs
+  `make tokens` to regenerate `docs/tokens.md`; a test fails while the
+  page and the table disagree, and another while a label's tools differ
+  from `secret::USERS`.
 - **In the `config` command, use the shared helpers, not a copy of
   them.** List the tool's secrets as `secret::Slot`s (table, key, what to
   call it, entry, field); `secret::fill` sets each prompt's default,

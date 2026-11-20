@@ -165,11 +165,17 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         &sandogasa_cli::ask_to_reenable,
     );
 
+    let hint = format!(
+        "\n{}",
+        sandogasa_config::credentials::token_help(
+            "sandogasa: Bugzilla API key",
+            "poi-tracker",
+            &config.bugzilla.url
+        )
+        .trim_end()
+    );
     config.bugzilla.api_key = ask(
-        &Setting::new("Bugzilla", "API key").sensitive().hint(
-            "\nGenerate an API key at:\n  \
-             https://bugzilla.redhat.com/userprefs.cgi?tab=apikey\n",
-        ),
+        &Setting::new("Bugzilla", "API key").sensitive().hint(&hint),
         &config.bugzilla.api_key,
         args.all,
     )
@@ -191,12 +197,15 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         &Setting::new("dist-git", "API token (optional, empty to skip)")
             .sensitive()
             .optional()
-            .hint(
-                "\nOptional: a dist-git API token lets `adopt` take orphaned\n\
-                 packages. Generate one at\n  \
-                 https://src.fedoraproject.org/settings/token/new\n\
-                 with the \"Modify an existing project\" ACL.",
-            ),
+            .hint(&format!(
+                "\n  Optional: only adopt and act need it. Empty to skip.\n{}",
+                sandogasa_config::credentials::token_help(
+                    "sandogasa: Pagure token",
+                    "poi-tracker",
+                    ""
+                )
+                .trim_end()
+            )),
         &config.dist_git.api_token,
         args.all,
     )

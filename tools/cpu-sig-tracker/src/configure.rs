@@ -91,13 +91,15 @@ fn prompt_gitlab_token(
     all: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let saved = existing.map(|c| c.access_token.clone()).unwrap_or_default();
+    let hint = sandogasa_config::credentials::token_help(
+        "sandogasa: GitLab token",
+        "cpu-sig-tracker",
+        &crate::utils::gitlab_base(),
+    );
     let have = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
-            .hint(
-                "A GitLab legacy (classic) personal access token with the `api` scope is \
-                 needed, created at https://gitlab.com/-/user_settings/personal_access_tokens.",
-            ),
+            .hint(hint.trim_end()),
         &saved,
         all,
     )?;
@@ -165,13 +167,14 @@ fn prompt_jira(
     }
 
     let hint = format!(
-        "JIRA at {} is an Atlassian Cloud site. Create an API token at\n  \
-         https://id.atlassian.com/manage-profile/security/api-tokens\n\
-         (a scoped token needs read:jira-user and read:jira-work, and\n  \
-         write:jira-work to comment)\n\
-         and enter it with the email of the Atlassian account it belongs to.\n\
-         Empty to skip; anonymous access works for public issues.",
+        "  JIRA at {} is an Atlassian Cloud site. Empty to skip.\n{}",
         jira_base(),
+        sandogasa_config::credentials::token_help(
+            "sandogasa: Jira API token",
+            "cpu-sig-tracker",
+            &jira_base()
+        )
+        .trim_end(),
     );
     // With --all, or after a refusal, the saved pair is offered as the
     // default: Enter keeps each half.

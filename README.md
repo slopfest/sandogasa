@@ -143,6 +143,11 @@ other tool ships binaries — for those, `cargo binstall` finds nothing to
 download and falls back to building from source, which is the same as
 `cargo install`. See [tools/dbranch/README.md](tools/dbranch/README.md).
 
+The tokens and logins each tool needs, with the least each must be
+allowed to do and where to create it, are listed in
+[docs/tokens.md](docs/tokens.md). Each tool's `config` command says the
+same for its own tokens.
+
 ## Development
 
 `make help` lists the available targets — checks, coverage, man page

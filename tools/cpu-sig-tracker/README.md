@@ -49,7 +49,7 @@ tracker is an Atlassian Cloud site (`issues.redhat.com` redirects to
 `redhat.atlassian.net`), so those are an API token created at
 <https://id.atlassian.com/manage-profile/security/api-tokens> — for a
 scoped token, `read:jira-user` and `read:jira-work`, plus
-`write:jira-work` to comment or file an issue — together with the
+`write:jira-work` to file an issue with `jira --file` — together with the
 email of the Atlassian account it belongs to; both are checked against
 the site before being
 kept. Authenticated calls go through Atlassian's API gateway, the only

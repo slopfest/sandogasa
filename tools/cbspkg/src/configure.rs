@@ -24,14 +24,15 @@ fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
     let cf = config::config_file();
     let (saved, before) =
         secret.saved(&cf, config::keyring(), all, &sandogasa_cli::ask_to_reenable)?;
+    let hint = sandogasa_config::credentials::token_help(
+        "sandogasa: GitLab token",
+        "cbspkg",
+        &config::gitlab_base(),
+    );
     let have = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
-            .hint(
-                "A GitLab personal access token with the `api` scope, created at \
-                 https://gitlab.com/-/user_settings/personal_access_tokens. Creating a \
-                 SIG repo needs the Maintainer role in the SIG's group.",
-            ),
+            .hint(hint.trim_end()),
         &saved,
         all,
     )?;

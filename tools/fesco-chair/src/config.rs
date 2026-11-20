@@ -98,20 +98,15 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     println!("fesco-chair configuration\n");
     println!("Config file: {}\n", cf.path().display());
 
-    let hint = format!(
-        "Generate a Forgejo token at:\n  \
-         {}/user/settings/applications\n\
-         \n\
-         Scopes: read:issue + read:repository (agenda queries) and\n\
-         read:user (this validation step). Pick read-and-write on\n\
-         issue instead to be ready for the planned ticket updates.\n\
-         See the fesco-chair README for details.\n",
-        sources::FORGE_URL
+    let hint = sandogasa_config::credentials::token_help(
+        "sandogasa: Forgejo token",
+        "fesco-chair",
+        sources::FORGE_URL,
     );
     config.forgejo.token = sandogasa_config::ask(
         &sandogasa_config::Setting::new("Forgejo", "API token")
             .sensitive()
-            .hint(&hint),
+            .hint(hint.trim_end()),
         &config.forgejo.token,
         args.all,
     )

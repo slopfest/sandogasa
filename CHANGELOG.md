@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### config prompts say what each token needs, and docs/tokens.md lists them all
+
+Setting sandogasa up meant finding, tool by tool, which services want a
+token, what each must be allowed to do and where to create it, and the
+prompts disagreed with the code. sandogasa-report asked GitLab for
+`api` and GitHub for `repo`, though it only reads and needs `read_api`
+and no GitHub scope (`repo` only for `--private`); fesco-chair said its
+Forgejo token only read, though it already comments on, labels and
+closes tickets; cpu-sig-tracker said its Jira token needed
+`write:jira-work` to comment, though it only files issues;
+sandogasa-pkg-acl named neither a page nor an ACL; poi-tracker named two
+different pages; and ebranch's Bugzilla prompt named Red Hat's even for
+another Bugzilla.
+
+A token's keyring entry is shared by every tool that uses the service,
+so each `config` prompt now says where to create the token, what this
+tool needs and why, and what each other tool sharing the entry needs,
+so someone who runs only one tool can grant less. The prompts come from
+one table, `sandogasa_config::credentials`, which also generates
+[docs/tokens.md](docs/tokens.md) (`make tokens`), linked from the
+README. It opens with a table by tool, for someone setting up one
+tool, then lists every token and API key with what each tool needs,
+and the logins the tools check (Kerberos, the CBS certificate, the
+bodhi CLI's session, glab, Debusine, crates.io). Tests fail while the
+page and the table disagree, while the table's tools for a secret
+differ from those keeping it, or while a tool under `tools/` is
+missing from the page.
+
+Resolves #180
+
 ### sandogasa-report config removes a cleared field from the file
 
 Clearing a profile field at a `config` prompt (an empty answer, or `-`)

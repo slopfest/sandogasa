@@ -563,11 +563,10 @@ this; the direct URLs are easier:
   Account permissions can stay empty. Token starts with
   `github_pat_…`.
 - **Classic PATs**: <https://github.com/settings/tokens> →
-  *Generate new token (classic)*. Scopes:
-  - `public_repo` for public-only reports, or `repo` to include
-    private repos
-  - `read:user` for the username lookup
-  Token starts with `ghp_…`. Both PAT types work identically
+  *Generate new token (classic)*. No scope for public work, which
+  the token only lets run at a higher rate limit; `repo` for
+  `--private`, to count private repositories. Token starts with
+  `ghp_…`. Both PAT types work identically
   against the API; fine-grained is preferable because revoking
   one org's access doesn't affect the others.
 
@@ -594,15 +593,14 @@ read/write). Grant, at read level:
   group.
 - **`read:issue`** — pull requests are issues; the search is an issue
   endpoint.
-- **`read:user`** — *only* needed for `sandogasa-report config`, which
-  validates the token by calling `/api/v1/user`. A plain `report` run
-  works with just `read:repository` + `read:issue`; add `read:user` if
-  you want `config` to verify the token for you.
+- **`read:user`** — the report reads `/api/v1/user` to find whose
+  activity feed lists the issues you commented on, and `config` to
+  check the token. Without it the report leaves that list out, with a
+  warning.
 
 (Forgejo reports a missing category as `token does not have at least
-one of required scope(s)` — e.g. granting only issue + repository and
-running `config` complains it needs `user`, because of the `/user`
-validation call.)
+one of required scope(s)`.) [docs/tokens.md](../../docs/tokens.md)
+lists what the other tools sharing the token need.
 
 ### FTBFS/FTI tracking
 

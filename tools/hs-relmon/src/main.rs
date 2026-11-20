@@ -1492,10 +1492,15 @@ fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
     let secret = config::gitlab_token_secret();
     let (saved, before) =
         secret.saved(&cf, keyring(), args.all, &sandogasa_cli::ask_to_reenable)?;
+    let hint = sandogasa_config::credentials::token_help(
+        "sandogasa: GitLab token",
+        "hs-relmon",
+        "https://gitlab.com",
+    );
     let existing = sandogasa_config::ask(
         &sandogasa_config::Setting::new("GitLab", "token")
             .sensitive()
-            .hint("A GitLab personal access token with 'api' scope is needed."),
+            .hint(hint.trim_end()),
         &saved,
         args.all,
     )?;
