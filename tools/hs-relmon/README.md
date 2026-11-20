@@ -711,7 +711,10 @@ reviewed (an NVR is recognized by its `.el` dist marker).
 ## Data sources
 
 - **Repology** ([repology.org](https://repology.org/)) for upstream, Fedora,
-  and CentOS Stream versions
+  and CentOS Stream versions. When Repology refuses the network with a bot
+  check, hs-relmon says so once and carries on without them: the CBS
+  columns still show, the versions to compare with are unknown, and no
+  issue is filed, updated or closed for lack of them
 - **CBS Koji** ([cbs.centos.org](https://cbs.centos.org/koji/)) for
   Hyperscale builds and tag status
 

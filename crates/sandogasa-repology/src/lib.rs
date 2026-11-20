@@ -111,9 +111,15 @@ impl Client {
     /// (429) or unavailable (503) answer is retried after `Retry-After`
     /// — or a growing pause when the header is absent — a few times
     /// before it is an error. Any other non-success status is an error
-    /// naming it, rather than a failure to parse the error page.
+    /// naming it, rather than a failure to parse the error page; a bot
+    /// check is a refusal ([`sandogasa_cli::http::is_refusal`]), after
+    /// which this run sends Repology nothing more.
     pub fn get_project(&self, name: &str) -> Result<Vec<Package>, Box<dyn std::error::Error>> {
         let url = format!("{}/project/{}", self.base_url, name);
+        // Refused this run already (a bot check): not asked again.
+        if let Some(e) = sandogasa_cli::http::refused(&url) {
+            return Err(e.into());
+        }
         for attempt in 0..=RETRIES {
             self.pace();
             let resp = self.http.get(&url).send()?;

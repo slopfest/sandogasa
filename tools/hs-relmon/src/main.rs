@@ -705,6 +705,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("{package}: skipping issue filing ({reason})");
                 } else if track == TrackRef::Untracked {
                     eprintln!("{package}: skipping issue filing (--track none)");
+                } else if result.repology_refused {
+                    return Err(format!(
+                        "{package}: cannot file/update the issue: Repology refused this \
+                         network, so the version to track is unknown"
+                    )
+                    .into());
                 } else if result.ref_version().is_none() {
                     // Without a reference version nothing counts as
                     // outdated, so the issue can never be filed or
@@ -790,6 +796,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_else(|| default_issue_url(&pkg.name));
                     if let Some(reason) = project_issue_block_reason(&project_url) {
                         eprintln!("{}: skipping issue filing ({reason})", pkg.name);
+                    } else if result.repology_refused {
+                        // Said once already; the issue is left as it is.
+                        errors += 1;
                     } else if result.ref_version().is_none() {
                         // Failed reference resolution, not "fresh" —
                         // count it and move on (batch keeps going).

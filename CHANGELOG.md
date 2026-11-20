@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### hs-relmon carries on when Repology refuses the network
+
+On 2026-11-20 Repology began answering a home broadband connection with
+a "Bot access denied" challenge page, in a browser as well as to
+`hs-relmon check-manifest`, which then printed the whole HTML page for
+each of its 62 packages and checked none of them. sandogasa-cli's
+`http` helpers now recognize a bot-check page (a 403, 429 or 503 HTML
+answer from Repology, Anubis, Cloudflare or PerimeterX) and report it
+in one line, `<host> refused automated requests from this network`,
+remembering the host for the rest of the run (`refused`,
+`is_refusal`); sandogasa-repology's client asks no more once refused.
+hs-relmon's `check-latest` and `check-manifest` say it once and go on
+without Repology's versions, showing the CBS columns, and file,
+update or close no issue for lack of them (Refs #209).
+
 ### hs-relmon and cpu-sig-tracker find merged commits that were never built
 
 A merge into a SIG branch ships nothing until someone builds from it,

@@ -163,6 +163,10 @@ pub struct CheckResult {
     /// an issue update compares with the branches (not in JSON).
     #[serde(skip)]
     pub builds: Vec<crate::cbs::Build>,
+    /// Repology refused this network (a bot check), so the versions it
+    /// gives are unknown rather than missing.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub repology_refused: bool,
 }
 
 /// Reference to a GitLab issue.
@@ -361,12 +365,29 @@ pub fn check(
         issue: None,
         ref_version: None,
         builds: Vec::new(),
+        repology_refused: false,
     };
 
     // Fetch Repology data if needed for display or for tracking reference.
     let fetch_repology = distros.needs_repology() || distros.needs_cbs();
     let packages = if fetch_repology {
-        repology_client.get_project(repology_name)?
+        match repology_client.get_project(repology_name) {
+            Ok(packages) => packages,
+            // A bot check: the rest of the check still has CBS to go on,
+            // and every package after this one gets the same answer, so
+            // it is said once.
+            Err(e) if sandogasa_cli::http::is_refusal(&e.to_string()) => {
+                static TOLD: std::sync::Once = std::sync::Once::new();
+                TOLD.call_once(|| {
+                    eprintln!(
+                        "warning: {e}; upstream, Fedora and CentOS Stream versions are unknown"
+                    )
+                });
+                result.repology_refused = true;
+                Vec::new()
+            }
+            Err(e) => return Err(e),
+        }
     } else {
         Vec::new()
     };
@@ -399,7 +420,7 @@ pub fn check(
     // otherwise silently skip filing/updating (observed with perf,
     // whose repology project is empty — the kernel's perf lives
     // under repology project "linux").
-    if ref_version.is_none() && *track != TrackRef::Untracked {
+    if ref_version.is_none() && *track != TrackRef::Untracked && !result.repology_refused {
         eprintln!(
             "warning: {package}: cannot resolve the '{}' reference version \
              (repology project '{repology_name}' has no matching entries); \
@@ -697,6 +718,51 @@ mod tests {
     use crate::cbs::Build;
 
     #[test]
+    fn a_refusing_repology_leaves_the_versions_unknown() {
+        let mut server = mockito::Server::new();
+        let page = server
+            .mock("GET", "/project/ethtool")
+            .with_status(403)
+            .with_header("content-type", "text/html")
+            .with_body("<html><title>Bot access denied</title></html>")
+            .expect(1)
+            .create();
+        let repology = repology::Client::with_base_url(&server.url())
+            .with_min_interval(std::time::Duration::ZERO);
+        let cbs = cbs::Client::with_hub_url("http://127.0.0.1:1");
+        let distros = Distros::parse("upstream,fedora").unwrap();
+        let result = check(
+            &repology,
+            &cbs,
+            "ethtool",
+            "ethtool",
+            &distros,
+            &TrackRef::Upstream,
+        )
+        .unwrap();
+        assert!(result.repology_refused);
+        assert_eq!(result.upstream, None);
+        assert_eq!(result.ref_version(), None);
+        assert!(!result.is_outdated() && !result.is_released());
+        // Not asked again in this run.
+        assert!(
+            check(
+                &repology,
+                &cbs,
+                "ethtool",
+                "ethtool",
+                &distros,
+                &TrackRef::Upstream
+            )
+            .unwrap()
+            .repology_refused
+        );
+        page.assert();
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["repology_refused"], true);
+    }
+
+    #[test]
     fn test_distros_all() {
         let d = Distros::all();
         assert!(d.upstream);
@@ -850,6 +916,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 5);
@@ -875,6 +942,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 2);
@@ -900,6 +968,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 1);
@@ -922,6 +991,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 1);
@@ -945,6 +1015,7 @@ mod tests {
             issue: None,
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows[1].status, "outdated");
@@ -967,6 +1038,7 @@ mod tests {
             issue: None,
             ref_version: Some("6.15".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows[0].status, "newest");
@@ -989,6 +1061,7 @@ mod tests {
             issue: None,
             ref_version: Some("260".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows[0].distro, "Hyperscale 9 (release)");
@@ -1076,6 +1149,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["package"], "ethtool");
@@ -1104,6 +1178,7 @@ mod tests {
             issue: None,
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["hs9"]["newest_version"], false);
@@ -1131,6 +1206,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(result.is_outdated());
         assert_eq!(result.ref_version(), Some("2.0"));
@@ -1155,6 +1231,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_outdated());
     }
@@ -1172,6 +1249,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_outdated());
         assert_eq!(result.ref_version(), None);
@@ -1202,6 +1280,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(result.is_outdated());
     }
@@ -1225,6 +1304,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(result.is_outdated());
     }
@@ -1248,6 +1328,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_outdated());
     }
@@ -1271,6 +1352,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(result.is_in_testing());
     }
@@ -1294,6 +1376,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(result.is_in_testing());
         assert!(result.is_outdated());
@@ -1318,6 +1401,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_in_testing());
     }
@@ -1341,6 +1425,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_in_testing());
     }
@@ -1364,6 +1449,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_in_testing());
     }
@@ -1387,6 +1473,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(result.is_released());
         assert_eq!(result.release_builds(), vec![("Hyperscale 9", 1)]);
@@ -1417,6 +1504,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_released());
         assert!(result.release_builds().is_empty());
@@ -1441,6 +1529,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_released());
     }
@@ -1458,6 +1547,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_released());
     }
@@ -1488,6 +1578,7 @@ mod tests {
             issue: None,
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(!result.is_released());
         // Only hs9 has a release build
@@ -1519,6 +1610,7 @@ mod tests {
             issue: None,
             ref_version: Some("6.11".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         assert!(result.is_released());
         assert_eq!(
@@ -1551,6 +1643,7 @@ mod tests {
             issue: None,
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         let table = format_table(&result);
         assert!(table.contains("ethtool"));
@@ -1574,6 +1667,7 @@ mod tests {
             issue: None,
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
+            repology_refused: false,
         };
         let mut buf = Vec::new();
         write_table(&result, &mut buf).unwrap();
@@ -1601,6 +1695,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let mut buf = Vec::new();
         write_table(&result, &mut buf).unwrap();
@@ -1624,6 +1719,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let mut buf = Vec::new();
         write_table(&result, &mut buf).unwrap();
@@ -1643,6 +1739,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let mut buf = Vec::new();
         write_json(&result, &mut buf).unwrap();
@@ -1671,6 +1768,7 @@ mod tests {
             }),
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let mut buf = Vec::new();
         write_json(&result, &mut buf).unwrap();
@@ -1695,6 +1793,7 @@ mod tests {
                 issue: None,
                 ref_version: None,
                 builds: Vec::new(),
+                repology_refused: false,
             },
             CheckResult {
                 package: "b".into(),
@@ -1713,6 +1812,7 @@ mod tests {
                 }),
                 ref_version: None,
                 builds: Vec::new(),
+                repology_refused: false,
             },
         ];
         let mut buf = Vec::new();
@@ -1746,6 +1846,7 @@ mod tests {
             issue: None,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let json = serde_json::to_value(&result).unwrap();
         // newest_version should be absent when None
@@ -1771,6 +1872,7 @@ mod tests {
             }),
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["issue"]["iid"], 42);
@@ -1811,6 +1913,7 @@ mod tests {
                 issue: None,
                 ref_version: None,
                 builds: Vec::new(),
+                repology_refused: false,
             },
             CheckResult {
                 package: "b".into(),
@@ -1823,6 +1926,7 @@ mod tests {
                 issue: None,
                 ref_version: None,
                 builds: Vec::new(),
+                repology_refused: false,
             },
         ];
         let json = serde_json::to_value(&results).unwrap();
@@ -1872,6 +1976,7 @@ mod tests {
             issue,
             ref_version: None,
             builds: Vec::new(),
+            repology_refused: false,
         }
     }
 

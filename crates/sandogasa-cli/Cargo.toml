@@ -24,6 +24,8 @@ toml = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+mockito = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 wiremock = { workspace = true }

@@ -57,8 +57,12 @@ sandogasa's API clients share: `builder`/`blocking_builder` return a
 reqwest client builder with the crypto provider installed and the
 standard user agent and timeout set, and `ok`/`json_ok` (plus their
 `blocking_` variants) turn a non-success response into a uniform
-error naming the request, status, and body. It is off by default so
-tools that do no networking don't pull in reqwest.
+error naming the request, status, and body. A bot check (a captcha or
+JavaScript challenge page in place of the API's answer) is instead a
+one-line refusal (`is_refusal`) naming the host, which is remembered
+for the rest of the run: a client that asks `refused(url)` before each
+request sends that host nothing more. It is off by default so tools
+that do no networking don't pull in reqwest.
 
 The optional `man` feature adds a `man` module that renders a clap
 `Command` as a single roff man page, with each subcommand as a `.SS`

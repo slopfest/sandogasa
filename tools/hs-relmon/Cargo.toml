@@ -16,7 +16,7 @@ clap = { workspace = true }
 reqwest = { workspace = true }
 rpassword = { workspace = true }
 sandogasa-cbs = { workspace = true }
-sandogasa-cli = { workspace = true }
+sandogasa-cli = { workspace = true, features = ["http"] }
 sandogasa-kojihub = { workspace = true }
 sandogasa-config = { workspace = true }
 sandogasa-gitlab = { workspace = true }
