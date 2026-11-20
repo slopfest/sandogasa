@@ -131,6 +131,16 @@ pub fn gather(report: &crate::report::Report) -> Vec<RepoActivity> {
                     .insert(issue.number);
             }
         }
+        if let Some(pg) = &domain.pagure {
+            for (list, field) in [
+                (&pg.opened_prs, Field::Opened),
+                (&pg.merged_prs, Field::Merged),
+            ] {
+                for pr in list {
+                    field.add(at(&mut rows, key(&pg.instance, &pr.repo)));
+                }
+            }
+        }
         if let Some(fj) = &domain.forgejo {
             for (list, field) in [
                 (&fj.opened_prs, Field::Opened),
@@ -380,6 +390,7 @@ mod tests {
                 github: Some(gh),
                 forgejo: Some(fj),
                 sourcehut: None,
+                pagure: None,
             }],
             bugzilla: vec![],
         };

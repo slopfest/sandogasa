@@ -107,6 +107,11 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         .values()
         .filter_map(|d| d.sourcehut.as_ref().map(|s| s.instance.clone()))
         .collect();
+    let pagure_instances: BTreeSet<String> = merged
+        .domains
+        .values()
+        .filter_map(|d| d.pagure.as_ref().map(|p| p.instance.clone()))
+        .collect();
     // Bugzilla instances other than Red Hat's, whose email FASJSON
     // cannot supply.
     let bugzilla_instances: BTreeSet<String> = merged
@@ -177,6 +182,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         &github_instances,
         &forgejo_instances,
         &sourcehut_instances,
+        &pagure_instances,
         &bugzilla_instances,
         &mut ask,
     )?;
@@ -316,6 +322,7 @@ fn prompt_profile(
     github_instances: &BTreeSet<String>,
     forgejo_instances: &BTreeSet<String>,
     sourcehut_instances: &BTreeSet<String>,
+    pagure_instances: &BTreeSet<String>,
     bugzilla_instances: &BTreeSet<String>,
     ask: &mut Asker<'_, '_>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -402,6 +409,22 @@ fn prompt_profile(
     )? {
         changed = true;
     }
+    // Pagure logins, empty for the FAS name (the login on Fedora's
+    // dist-git).
+    if prompt_per_instance_usernames(
+        overlay,
+        profile_key,
+        existing,
+        pagure_instances,
+        ("Pagure", "username"),
+        "pagure",
+        |u, host| u.pagure.get(host),
+        crate::pagure::instance_host,
+        ask,
+    )? {
+        changed = true;
+    }
+
     if prompt_per_instance_usernames(
         overlay,
         profile_key,
@@ -1605,6 +1628,7 @@ mod tests {
             "me-gl",
             "me-gh",
             "me-fj",
+            "me-pg",
             "me-sh",
             "me@example.com, *",
         ];
@@ -1616,6 +1640,7 @@ mod tests {
             &set(&["https://api.github.com"]),
             &set(&["https://codeberg.org"]),
             &set(&["sr.ht"]),
+            &set(&["https://code.example.org"]),
             &BTreeSet::new(),
             &mut Asker {
                 read: &mut scripted(&answers, &asked),
@@ -1648,6 +1673,10 @@ mod tests {
         assert_eq!(
             get(&["users", "me", "forgejo", "codeberg.org"]).as_deref(),
             Some("me-fj")
+        );
+        assert_eq!(
+            get(&["users", "me", "pagure", "code.example.org"]).as_deref(),
+            Some("me-pg")
         );
         assert_eq!(
             get(&["users", "me", "sourcehut", "sr.ht"]).as_deref(),

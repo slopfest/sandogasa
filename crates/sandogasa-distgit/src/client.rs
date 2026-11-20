@@ -40,6 +40,9 @@ pub struct PullRequest {
     pub date_created: Option<String>,
     #[serde(default)]
     pub last_updated: Option<String>,
+    /// When it was merged or closed, as a Unix time in a string.
+    #[serde(default)]
+    pub closed_at: Option<String>,
     #[serde(default)]
     pub project: Option<PullRequestProject>,
     /// The branch it asks to merge into (`rawhide`).
@@ -663,6 +666,50 @@ impl DistGitClient {
         let resp = self.get_transient_retry(&url).await?.error_for_status()?;
         let data: PullRequestsResponse = resp.json().await?;
         Ok(data.requests)
+    }
+
+    /// The pull requests `username` filed with `status` ("all", "Open",
+    /// "Merged" or "Closed") and opened since `since` (a Unix time),
+    /// newest first: pages of a hundred, read until one reaches back
+    /// before `since`.
+    pub async fn user_pull_requests_since(
+        &self,
+        username: &str,
+        status: &str,
+        since: i64,
+    ) -> Result<Vec<PullRequest>, Box<dyn std::error::Error>> {
+        validate_segment(username, "username")?;
+        let created = |pr: &PullRequest| {
+            pr.date_created
+                .as_deref()
+                .and_then(|d| d.parse::<i64>().ok())
+        };
+        let mut out = Vec::new();
+        for page in 1u32.. {
+            let url = format!(
+                "{}/api/0/user/{}/requests/filed?per_page=100&status={status}&page={page}",
+                self.base_url, username
+            );
+            let resp = self.get_transient_retry(&url).await?.error_for_status()?;
+            let data: PullRequestsResponse = resp.json().await?;
+            let last_page = data
+                .pagination
+                .as_ref()
+                .is_none_or(|p| u64::from(page) >= p.pages);
+            let older = data
+                .requests
+                .iter()
+                .any(|pr| created(pr).is_some_and(|c| c < since));
+            out.extend(
+                data.requests
+                    .into_iter()
+                    .filter(|pr| created(pr).is_none_or(|c| c >= since)),
+            );
+            if last_page || older {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     /// A package's pull requests, optionally only those `author` opened.
@@ -1801,6 +1848,76 @@ mod tests {
             .await;
 
         assert!(client.group_exists("kde-sig").await.unwrap());
+    }
+
+    // ---- user_pull_requests_since ----
+
+    #[tokio::test]
+    async fn filed_pull_requests_are_read_back_to_a_date() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let pr = |id: u64, created: i64| {
+            serde_json::json!({"id": id, "title": "t", "status": "Merged",
+                "date_created": created.to_string(), "closed_at": (created + 10).to_string(),
+                "project": {"fullname": "rpms/x"}})
+        };
+        let page = |n: u32, requests: serde_json::Value, pages: Option<u64>| {
+            let mut body = serde_json::json!({"requests": requests});
+            if let Some(p) = pages {
+                body["pagination"] = serde_json::json!({"pages": p, "per_page": 100});
+            }
+            Mock::given(method("GET"))
+                .and(path("/api/0/user/me/requests/filed"))
+                .and(query_param("status", "Merged"))
+                .and(query_param("page", n.to_string()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        };
+        page(1, serde_json::json!([pr(5, 500)]), Some(3))
+            .mount(&server)
+            .await;
+        // Reaches back before the date: kept up to it, and the last read.
+        page(2, serde_json::json!([pr(4, 400), pr(3, 90)]), Some(3))
+            .mount(&server)
+            .await;
+        page(3, serde_json::json!([]), Some(3))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        let prs = client
+            .user_pull_requests_since("me", "Merged", 100)
+            .await
+            .unwrap();
+        let ids: Vec<u64> = prs.iter().map(|p| p.id).collect();
+        assert_eq!(ids, [5, 4]);
+        assert_eq!(prs[0].closed_at.as_deref(), Some("510"));
+        // Without pagination, one page is all there is.
+        let other = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/0/user/me/requests/filed"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"requests": [pr(1, 200)]})),
+            )
+            .expect(1)
+            .mount(&other)
+            .await;
+        let client = DistGitClient::with_base_url(&other.uri());
+        assert_eq!(
+            client
+                .user_pull_requests_since("me", "all", 0)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            client
+                .user_pull_requests_since("../x", "all", 0)
+                .await
+                .is_err()
+        );
     }
 
     // ---- user_activity_stats ----

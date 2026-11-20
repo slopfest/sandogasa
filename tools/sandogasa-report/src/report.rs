@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use crate::{bodhi, bugzilla, forgejo, github, gitlab, koji, sourcehut};
+use crate::{bodhi, bugzilla, forgejo, github, gitlab, koji, pagure, sourcehut};
 
 /// Full activity report.
 ///
@@ -59,6 +59,9 @@ pub struct DomainReport {
     /// Sourcehut section for this domain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sourcehut: Option<sourcehut::SourcehutReport>,
+    /// Pagure section for this domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pagure: Option<pagure::PagureReport>,
 }
 
 impl DomainReport {
@@ -71,6 +74,7 @@ impl DomainReport {
             || self.github.is_some()
             || self.forgejo.is_some()
             || self.sourcehut.is_some()
+            || self.pagure.is_some()
     }
 }
 
@@ -207,6 +211,9 @@ fn format_domain(
     if let Some(ref sh_report) = dr.sourcehut {
         body.push_str(&sourcehut::format_markdown(sh_report, detail));
     }
+    if let Some(ref pg_report) = dr.pagure {
+        body.push_str(&pagure::format_markdown(pg_report, detail));
+    }
     if body.is_empty() {
         return String::new();
     }
@@ -238,6 +245,7 @@ mod tests {
             github: None,
             forgejo: None,
             sourcehut: None,
+            pagure: None,
         }
     }
 

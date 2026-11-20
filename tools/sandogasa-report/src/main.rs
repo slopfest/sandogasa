@@ -17,6 +17,7 @@ mod github;
 mod gitlab;
 mod koji;
 mod notes;
+mod pagure;
 mod report;
 mod secrets;
 mod sourcehut;
@@ -152,6 +153,10 @@ struct ReportArgs {
     /// Skip Koji queries.
     #[arg(long, help_heading = "Sources")]
     no_koji: bool,
+
+    /// Skip Pagure queries.
+    #[arg(long, help_heading = "Sources")]
+    no_pagure: bool,
 
     /// Skip Sourcehut queries.
     #[arg(long, help_heading = "Sources")]
@@ -520,6 +525,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             github: None,
             forgejo: None,
             sourcehut: None,
+            pagure: None,
         };
 
         // Bodhi (per-domain).
@@ -655,6 +661,32 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                         eprintln!("error: forgejo ({name}): {e}");
                         return ExitCode::FAILURE;
                     }
+                }
+            }
+        }
+
+        // Pagure (per-domain): answered anonymously, by the profile's
+        // login for the instance, else the FAS name (the login on
+        // Fedora's dist-git).
+        if let Some(pg) = domain.pagure.as_ref()
+            && !cli.no_pagure
+        {
+            let host = pagure::instance_host(&pg.instance);
+            let login = profile
+                .and_then(|p| p.pagure_username(&host))
+                .map(String::from)
+                .or_else(|| fas_user.clone());
+            match login.as_deref() {
+                Some(user) => match pagure::pagure_report(pg, user, since, until, &rt, cli.verbose)
+                {
+                    Ok(pg_report) => dr.pagure = Some(pg_report),
+                    Err(e) => {
+                        eprintln!("error: pagure ({name}): {e}");
+                        return ExitCode::FAILURE;
+                    }
+                },
+                None => {
+                    eprintln!("warning: Pagure domain '{name}' has no user — set --user, skipping")
                 }
             }
         }
@@ -927,6 +959,7 @@ mod tests {
             no_bodhi: false,
             no_koji: false,
             no_gitlab: false,
+            no_pagure: false,
             no_github: false,
             no_forgejo: false,
             no_sourcehut: false,
@@ -955,6 +988,7 @@ mod tests {
             no_bodhi: false,
             no_koji: false,
             no_gitlab: false,
+            no_pagure: false,
             no_github: false,
             no_forgejo: false,
             no_sourcehut: false,

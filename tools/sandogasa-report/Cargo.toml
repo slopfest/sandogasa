@@ -18,6 +18,7 @@ sandogasa-bugclass = { workspace = true }
 sandogasa-bugzilla = { workspace = true }
 sandogasa-cli = { workspace = true }
 sandogasa-config = { workspace = true }
+sandogasa-distgit = { workspace = true }
 sandogasa-fasjson = { workspace = true }
 sandogasa-forgejo = { workspace = true }
 sandogasa-github = { workspace = true }

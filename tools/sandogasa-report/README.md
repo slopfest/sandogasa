@@ -61,6 +61,12 @@ packaging activity across multiple systems:
   reworded under a new sha, recognized by the same title *and the
   same author*. The same change redone by the maintainer stays
   `(closed)`.
+- **Pagure** (e.g. Fedora's dist-git, src.fedoraproject.org): pull
+  requests you filed, opened / merged in the window, with each
+  opened one's fate (`(merged)`, `(closed)`). Read anonymously, by
+  the profile's login for the instance (`[users.<key>.pagure]`),
+  else the FAS name; a pull request merged in the window counts if
+  it was opened up to 180 days before it.
 - **Sourcehut** (sr.ht): patches sent / applied (lists.sr.ht — the
   patch-based PR analog), tickets opened / closed (todo.sr.ht), and
   commits in your own repos (git.sr.ht), split into yours vs third-party.

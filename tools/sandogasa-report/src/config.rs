@@ -117,6 +117,12 @@ pub struct User {
     #[serde(default)]
     pub forgejo: BTreeMap<String, String>,
 
+    /// Per-instance Pagure logins, keyed by host (e.g.
+    /// `"code.opensuse.org" = "michel"`). Unset, the FAS name, which
+    /// is the login on Fedora's dist-git.
+    #[serde(default)]
+    pub pagure: BTreeMap<String, String>,
+
     /// Per-instance Sourcehut usernames, keyed by host (e.g.
     /// `"sr.ht" = "michel"`). The bare login without the leading `~`.
     #[serde(default)]
@@ -155,6 +161,11 @@ impl User {
     /// `"codeberg.org"`), if the profile has one configured.
     pub fn forgejo_username(&self, instance_host: &str) -> Option<&str> {
         self.forgejo.get(instance_host).map(String::as_str)
+    }
+
+    /// The Pagure login on `instance_host`, if the profile names one.
+    pub fn pagure_username(&self, instance_host: &str) -> Option<&str> {
+        self.pagure.get(instance_host).map(String::as_str)
     }
 
     /// Sourcehut username on a specific instance host (e.g. `"sr.ht"`),
@@ -218,6 +229,11 @@ pub struct DomainConfig {
     /// Include Sourcehut (sr.ht) activity (patches, tickets, commits).
     #[serde(default)]
     pub sourcehut: Option<SourcehutConfig>,
+
+    /// Include Pagure activity (pull requests filed), e.g. Fedora's
+    /// dist-git.
+    #[serde(default)]
+    pub pagure: Option<crate::pagure::PagureConfig>,
 }
 
 /// Red Hat's Bugzilla, where Fedora's bugs live: what `bugzilla = true`

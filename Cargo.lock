@@ -2400,6 +2400,7 @@ dependencies = [
  "sandogasa-build",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-distgit",
  "sandogasa-fasjson",
  "sandogasa-forgejo",
  "sandogasa-github",

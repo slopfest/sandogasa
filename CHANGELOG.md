@@ -176,6 +176,26 @@ missing project.
 
 Resolves #191
 
+### sandogasa-report reads Fedora dist-git pull requests
+
+Pull requests filed on Fedora's dist-git (src.fedoraproject.org, a
+Pagure instance) appeared in no report, and `--notes` notes about them
+were left over: a packager's fixes to packages they don't maintain are
+filed there.
+
+A new Pagure section lists the pull requests the user filed that were
+opened or merged in the window, each opened one with its fate (a pull
+request merged in the window counts if it was opened up to 180 days
+before it), read anonymously by the profile's login for the instance
+(`[users.<key>.pagure]`, which `config` asks for), else the FAS name;
+`[domains.<d>.pagure]` names the instance, and the shipped config's
+`fedora` domain reads src.fedoraproject.org. `--by repo` counts them,
+and `--no-pagure` skips the section. sandogasa-distgit gains
+`user_pull_requests_since`, reading a user's filed pull requests of a
+status back to a date, and `PullRequest::closed_at`.
+
+Refs #192
+
 ### sandogasa-report config asks only for what is missing
 
 `sandogasa-report config` went over every profile field and every

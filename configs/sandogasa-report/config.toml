@@ -41,6 +41,11 @@ fedora_versions = [42, 43, 44]
 [domains.fedora.forgejo]
 instance = "https://forge.fedoraproject.org"
 
+# Fedora's dist-git (Pagure): pull requests filed against packages.
+# Answered anonymously, by the profile's FAS name.
+[domains.fedora.pagure]
+instance = "https://src.fedoraproject.org"
+
 [domains.epel]
 bugzilla = true
 bodhi = true
