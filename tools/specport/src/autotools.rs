@@ -16,14 +16,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::meson_build::{self, MesonFile, Required};
 use crate::meson_options::{Kind, MesonOption};
 
 /// What the new source tree says about its build.
+#[derive(Default)]
 pub struct Source {
     pub options: Vec<MesonOption>,
     /// `meson.build`'s text, searched for where an autotools path
     /// option went.
     pub meson_build: String,
+    /// Every `meson.build` of the tree, the top one included, for the
+    /// dependencies, tests and installs it declares.
+    pub meson_files: Vec<MesonFile>,
+    /// The names at the top of the tree, for the spec's `%doc` lines.
+    pub top: Vec<String>,
 }
 
 /// The converted spec, and what a person has to check in it.
@@ -903,6 +910,360 @@ fn uses_make(lines: &[String]) -> bool {
     })
 }
 
+/// BuildRequires a Meson build's files would not name, but which it
+/// needs or which are the conversion's own.
+const BUILD_TOOLS: &[&str] = &[
+    "clang",
+    "cmake",
+    "gcc",
+    "gcc-c++",
+    "gcc-gfortran",
+    "git",
+    "git-core",
+    "make",
+    "meson",
+    "ninja-build",
+    "pkgconf",
+    "pkgconf-pkg-config",
+    "pkgconfig",
+    "python3-devel",
+    "systemd-rpm-macros",
+];
+
+/// The word a BuildRequires is about, to look for in `meson.build`:
+/// `pkgconfig(libpci)` and `libpci-devel` are about `libpci`,
+/// `perl-generators` about `perl`, `python3-sqlalchemy` about
+/// `sqlalchemy`.
+fn br_subject(name: &str) -> String {
+    let name = name
+        .strip_prefix("pkgconfig(")
+        .and_then(|n| n.strip_suffix(')'))
+        .unwrap_or(name);
+    if name.starts_with("perl-") || name.starts_with("perl(") {
+        return "perl".to_string();
+    }
+    let name = name.strip_prefix("python3-").unwrap_or(name);
+    name.trim_end_matches("-devel")
+        .trim_end_matches("-static")
+        .to_ascii_lowercase()
+}
+
+/// A name with `lib` taken off and a `-N.M` API version as `N`, for
+/// matching a dependency with a BuildRequires: `glib-2.0` and
+/// `glib2-devel` are both `glib2`, `libtraceevent` and
+/// `libtraceevent-devel` both `traceevent`.
+fn stem(name: &str) -> String {
+    let n = br_subject(name);
+    let n = n.strip_prefix("lib").unwrap_or(&n);
+    match n.rsplit_once('-') {
+        Some((base, ver))
+            if !ver.is_empty() && ver.chars().all(|c| c.is_ascii_digit() || c == '.') =>
+        {
+            format!("{base}{}", ver.split('.').next().unwrap_or(""))
+        }
+        _ => n.to_string(),
+    }
+}
+
+/// Whether BuildRequires `br` provides dependency `dep`: the same
+/// `pkgconfig(…)`, or the same stem; or, for a dependency ending in a
+/// version digit (`sqlite3`), a BuildRequires without one (`sqlite-devel`).
+/// `gtk4` is not `gtk3-devel`.
+fn provides(br: &str, dep: &str) -> bool {
+    if br == format!("pkgconfig({dep})") {
+        return true;
+    }
+    let (b, d) = (stem(br), stem(dep));
+    if b == d {
+        return true;
+    }
+    let bare = d.trim_end_matches(|c: char| c.is_ascii_digit());
+    !b.ends_with(|c: char| c.is_ascii_digit()) && bare != d && bare == b
+}
+
+/// The simple names of a `BuildRequires:` line, versions and rich
+/// dependencies (`(foo or bar)`) left out.
+fn br_names(line: &str) -> Vec<String> {
+    let Some(value) = line.strip_prefix("BuildRequires:") else {
+        return Vec::new();
+    };
+    // Words at the top level: a rich dependency's parentheses hold
+    // several, a pkgconfig(…) only its own name.
+    let mut words: Vec<String> = Vec::new();
+    let mut depth = 0;
+    let mut cur = String::new();
+    let mut rich = false;
+    for c in value.chars().chain([' ']) {
+        match c {
+            '(' => {
+                if depth == 0 && cur.is_empty() {
+                    rich = true;
+                }
+                depth += 1;
+                cur.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ' ' | '\t' | ',' if depth == 0 => {
+                if !cur.is_empty() && !rich {
+                    words.push(std::mem::take(&mut cur));
+                }
+                cur.clear();
+                rich = false;
+            }
+            _ => cur.push(c),
+        }
+    }
+    words
+        .into_iter()
+        .filter(|w| !w.starts_with(['<', '>', '=']) && !w.starts_with(|c: char| c.is_ascii_digit()))
+        .collect()
+}
+
+/// The comment listing what `installs` put where, grouped by directory,
+/// `%` written as `%%` so rpm leaves it alone.
+fn install_comment(installs: &[meson_build::Install]) -> Vec<String> {
+    let mut by_dir: Vec<(String, Vec<String>)> = Vec::new();
+    for i in installs {
+        let what = format!("{} ({})", i.what, i.file);
+        match by_dir.iter_mut().find(|(d, _)| *d == i.dir) {
+            Some((_, w)) => w.push(what),
+            None => by_dir.push((i.dir.clone(), vec![what])),
+        }
+    }
+    let mut out = vec![
+        "# specport: meson.build installs these; check %%files lists them, and drop \
+         %%install lines doing the same:"
+            .to_string(),
+    ];
+    for (dir, what) in by_dir {
+        // A directory Meson computes (a variable, a loop's) is named as
+        // such, for a person to look up.
+        let dir = match dir.contains(['%', '/']) {
+            true => dir,
+            false => format!("`{dir}` (a variable in meson.build)"),
+        };
+        out.push(format!(
+            "#   {}: {}",
+            dir.replace('%', "%%"),
+            what.join(", ").replace('%', "%%")
+        ));
+    }
+    out
+}
+
+/// `lines` (a converted spec) with what the new `meson.build` files say
+/// added for a person to check: the BuildRequires of the dependencies
+/// they require, the optional ones listed, BuildRequires none of them
+/// mentions flagged, a missing `%check` flagged when they define tests,
+/// what they install listed above `%files`, and `%doc` or `%license`
+/// files the new source does not have flagged.
+fn with_meson_build(lines: Vec<String>, source: &Source, notes: &mut Vec<String>) -> Vec<String> {
+    let files = &source.meson_files;
+    if files.is_empty() {
+        return lines;
+    }
+    // The words of every meson.build, to look a BuildRequires up in as a
+    // whole word, not a substring: `x11`, not any `x`.
+    let words: BTreeSet<String> = files
+        .iter()
+        .flat_map(|f| {
+            f.text
+                .to_ascii_lowercase()
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '+'))
+                .filter(|w| !w.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mentioned = |w: &str| {
+        words.contains(w)
+            || words.contains(&format!("lib{w}"))
+            || words.iter().any(|x| stem(x) == w)
+    };
+    // How the converted invocations set each option.
+    let mut set: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for line in &lines {
+        for word in line.split_whitespace() {
+            if let Some((k, v)) = word.strip_prefix("-D").and_then(|w| w.split_once('=')) {
+                set.entry(k.to_string()).or_default().insert(v.to_string());
+            }
+        }
+    }
+    let have: Vec<String> = lines.iter().flat_map(|l| br_names(l)).collect();
+    let covered = |name: &str| have.iter().any(|h| provides(h, name));
+    let mut required: Vec<String> = Vec::new();
+    let mut optional: Vec<String> = Vec::new();
+    for dep in meson_build::dependencies(files) {
+        if dep.names.iter().any(|n| covered(n)) {
+            continue;
+        }
+        let br = format!("pkgconfig({})", dep.names[0]);
+        let wanted = match &dep.required {
+            Required::Yes => Some(true),
+            Required::No => Some(false),
+            Required::Option(o) => {
+                // As the conversion sets it, else as it defaults: a feature
+                // left at `auto` is enabled by %meson's
+                // --auto-features=enabled, a boolean by its value.
+                let values = match set.get(o) {
+                    Some(v) => v.clone(),
+                    None => source
+                        .options
+                        .iter()
+                        .find(|opt| &opt.name == o)
+                        .map(|opt| {
+                            let v = match (opt.auto_feature(), opt.value.as_deref()) {
+                                (true, _) => "enabled",
+                                (false, Some(v)) => v,
+                                (false, None) => "true",
+                            };
+                            BTreeSet::from([v.to_string()])
+                        })
+                        .unwrap_or_default(),
+                };
+                if values.iter().any(|v| v == "enabled" || v == "true") {
+                    Some(true)
+                } else if !values.is_empty()
+                    && values.iter().all(|v| v == "disabled" || v == "false")
+                {
+                    None
+                } else {
+                    Some(false)
+                }
+            }
+        };
+        let (list, entry) = match wanted {
+            Some(true) => (&mut required, br),
+            Some(false) => (&mut optional, format!("{br} ({})", dep.file)),
+            None => continue,
+        };
+        if !list.contains(&entry) {
+            list.push(entry);
+        }
+    }
+    if meson_build::uses_python(files) && !have.iter().any(|h| h == "python3-devel") {
+        required.push("python3-devel".to_string());
+    }
+    let tests = meson_build::test_files(files);
+    let has_check = lines
+        .iter()
+        .any(|l| section(l.trim_start()) == Some("%check"));
+    let installs = meson_build::installs(files);
+
+    let mut out: Vec<String> = Vec::new();
+    let mut added_deps = false;
+    let mut current: Option<String> = None;
+    let mut listed_installs = false;
+    for line in lines {
+        let trimmed = line.trim_start().to_string();
+        if let Some(s) = section(&trimmed) {
+            // Before the section after %install: a missing %check.
+            if current.as_deref() == Some("%install") && !has_check && !tests.is_empty() {
+                out.push(format!(
+                    "# FIXME specport: meson.build defines tests ({}), and there is no \
+                     %%check: add one running %%meson_test",
+                    tests.join(", ")
+                ));
+                out.push(String::new());
+                notes.push(format!(
+                    "FIXME: meson.build defines tests ({}); add %check with %meson_test",
+                    tests.join(", ")
+                ));
+            }
+            current = Some(s.to_string());
+            if s == "%files" && !listed_installs && !installs.is_empty() {
+                listed_installs = true;
+                out.extend(install_comment(&installs));
+                notes.push(format!(
+                    "listed the {} things meson.build installs above %files",
+                    installs.len()
+                ));
+            }
+        }
+        // A BuildRequires no meson.build mentions.
+        if trimmed.starts_with("BuildRequires:") {
+            for name in br_names(&trimmed) {
+                let subject = br_subject(&name);
+                // A word the BuildRequires provides counts as it, as for
+                // dependencies: sqlite-devel for `sqlite3`.
+                if BUILD_TOOLS.contains(&name.as_str())
+                    || name.contains('%')
+                    || mentioned(&subject)
+                    || mentioned(&stem(&name))
+                    || words.iter().any(|w| provides(&name, w))
+                {
+                    continue;
+                }
+                out.push(format!(
+                    "# FIXME specport: no meson.build mentions {subject}; drop {name} unless \
+                     the build still needs it"
+                ));
+                notes.push(format!(
+                    "FIXME: BuildRequires: {name}: no meson.build mentions {subject}"
+                ));
+            }
+        }
+        // A %doc or %license file the new source does not have.
+        if matches!(current.as_deref(), Some("%files"))
+            && (trimmed.starts_with("%doc") || trimmed.starts_with("%license"))
+            && !source.top.is_empty()
+        {
+            for name in trimmed.split_whitespace().skip(1) {
+                if name.contains(['%', '/', '*', '?']) || source.top.iter().any(|t| t == name) {
+                    continue;
+                }
+                let base = name.rsplit_once('.').map_or(name, |(b, _)| b);
+                let like: Vec<&str> = source
+                    .top
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|t| t.rsplit_once('.').map_or(*t, |(b, _)| b) == base)
+                    .collect();
+                let hint = match like.as_slice() {
+                    [] => String::new(),
+                    l => format!(" (it has {})", l.join(", ")),
+                };
+                out.push(format!(
+                    "# FIXME specport: the new source has no {name}{hint}"
+                ));
+                notes.push(format!("FIXME: %files: the new source has no {name}{hint}"));
+            }
+        }
+        let is_meson_br = br_names(&trimmed).iter().any(|n| n == "meson");
+        out.push(line);
+        if is_meson_br && !added_deps {
+            added_deps = true;
+            let pad: String = trimmed
+                .strip_prefix("BuildRequires:")
+                .unwrap_or("")
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            if !required.is_empty() {
+                out.push("# specport: required by meson.build's dependency() calls".into());
+                for br in &required {
+                    out.push(format!("BuildRequires:{pad}{br}"));
+                }
+                notes.push(format!("added BuildRequires: {}", required.join(" ")));
+            }
+            if !optional.is_empty() {
+                out.push(format!(
+                    "# specport: optional in meson.build, add those the package wants: {}",
+                    optional.join(", ")
+                ));
+                notes.push(format!(
+                    "optional dependencies in meson.build: {}",
+                    optional.join(", ")
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// `spec` converted from autotools to Meson, using what `source` says
 /// about the new build.
 pub fn convert(spec: &str, source: &Source) -> Converted {
@@ -1035,6 +1396,9 @@ pub fn convert(spec: &str, source: &Source) -> Converted {
         notes.push("added BuildRequires: meson".to_string());
     }
 
+    // What the new meson.build files declare that the spec has to cover.
+    let result = with_meson_build(result, source, &mut notes);
+
     // One note per finding, though each invocation reports its own.
     let mut seen = BTreeSet::new();
     notes.retain(|n| seen.insert(n.clone()));
@@ -1054,6 +1418,7 @@ mod tests {
             options: parse(options).unwrap(),
             meson_build: "conf.set('SYSCONFDEFDIR', get_option('sysconfdir') / 'sysconfig')\n"
                 .to_string(),
+            ..Source::default()
         }
     }
 
@@ -1070,6 +1435,153 @@ option('hisi-ns-decode', type : 'feature')
 option('docs', type : 'boolean', value : false)
 option('db-path', type : 'string', value : '/var/lib/x.db')
 ";
+
+    #[test]
+    fn a_buildrequires_provides_a_dependency_by_name_not_by_accident() {
+        assert!(provides("pkgconfig(glib-2.0)", "glib-2.0"));
+        assert!(provides("glib2-devel", "glib-2.0"));
+        assert!(provides("sqlite-devel", "sqlite3"));
+        assert!(provides("libtraceevent-devel", "libtraceevent"));
+        assert!(provides("pkgconfig(libpci)", "libpci"));
+        assert!(!provides("gtk3-devel", "gtk4"));
+        assert!(!provides("gtk3-devel", "gtk"));
+        assert_eq!(stem("libX11-devel"), "x11");
+        assert_eq!(
+            br_names("BuildRequires: (foo or bar) pkgconfig(x) baz >= 2"),
+            ["pkgconfig(x)", "baz"]
+        );
+    }
+
+    /// A dependency gated on an option nothing sets follows the option's
+    /// default: a boolean `tests` on by default needs cmocka.
+    #[test]
+    fn an_unset_option_counts_as_its_default() {
+        let source = Source {
+            options: parse(
+                "option('tests', type: 'boolean', value: true)\n\
+                 option('docs', type: 'boolean', value: false)\n",
+            )
+            .unwrap(),
+            meson_files: vec![MesonFile {
+                path: "meson.build".into(),
+                text: "c = dependency('cmocka', required: get_option('tests'))\n\
+                       d = dependency('hotdoc', required: get_option('docs'))\n"
+                    .into(),
+            }],
+            ..Source::default()
+        };
+        let spec = "BuildRequires: gcc\n%build\n%configure\nmake\n";
+        let text = convert(spec, &source).spec;
+        assert!(
+            text.contains("BuildRequires: pkgconfig(cmocka)\n"),
+            "{text}"
+        );
+        assert!(!text.contains("hotdoc"), "{text}");
+    }
+
+    /// What rasdaemon 1.0.0's meson.build files say, against a spec
+    /// written for its autotools build.
+    #[test]
+    fn what_meson_build_declares_is_added_or_flagged() {
+        let mut source = source(OPTIONS);
+        source.meson_files = vec![
+            MesonFile {
+                path: "meson.build".into(),
+                text: "py = import('python').find_installation('python3')\n\
+                       dep = dependency('libtraceevent')\n\
+                       cmocka = dependency('cmocka', required: false)\n\
+                       pci = dependency('libpci', required: get_option('aer'))\n\
+                       sq = dependency('sqlite3')\n\
+                       pg = dependency('libpq', required: get_option('mysql'))\n\
+                       executable('rasdaemon', install: true, install_dir: get_option('sbindir'))\n\
+                       install_data('x.bash', install_dir: bash_compdir)\n"
+                    .into(),
+            },
+            MesonFile {
+                path: "tests/meson.build".into(),
+                text: "test('unit', exe)\n".into(),
+            },
+        ];
+        source.top = vec!["COPYING".into(), "README.rst".into(), "meson.build".into()];
+        let spec = "Name: x\n\
+                    BuildRequires: gcc\n\
+                    BuildRequires: gettext-devel\n\
+                    BuildRequires: libtraceevent-devel\n\
+                    BuildRequires: sqlite-devel\n\
+                    BuildRequires: autoconf\n\
+                    %build\n\
+                    %configure --enable-aer\n\
+                    make\n\
+                    %install\n\
+                    make install DESTDIR=%{buildroot}\n\
+                    %files\n\
+                    %license COPYING\n\
+                    %doc README.md\n";
+        let c = convert(spec, &source);
+        let text = &c.spec;
+        // Required and not there: added, after meson; aer is enabled.
+        assert!(
+            text.contains(
+                "BuildRequires: meson\n# specport: required by meson.build's dependency() \
+                 calls\nBuildRequires: pkgconfig(libpci)\nBuildRequires: python3-devel\n"
+            ),
+            "{text}"
+        );
+        // libtraceevent-devel covers libtraceevent; libpq's feature
+        // (mysql here) is turned off.
+        assert!(!text.contains("pkgconfig(libtraceevent)"), "{text}");
+        assert!(!text.contains("libpq"), "{text}");
+        assert!(
+            text.contains(
+                "# specport: optional in meson.build, add those the package wants: \
+                           pkgconfig(cmocka) (meson.build)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "# FIXME specport: no meson.build mentions gettext; drop gettext-devel unless \
+                 the build still needs it\nBuildRequires: gettext-devel\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("mentions gcc"), "{text}");
+        // sqlite-devel provides sqlite3: neither flagged nor added.
+        assert!(!text.contains("mentions sqlite"), "{text}");
+        assert!(!text.contains("pkgconfig(sqlite3)"), "{text}");
+        assert!(
+            text.contains(
+                "# FIXME specport: meson.build defines tests (tests/meson.build), \
+                           and there is no %%check"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("#   %%{_sbindir}: rasdaemon (meson.build)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("#   `bash_compdir` (a variable in meson.build): x.bash (meson.build)\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("# FIXME specport: the new source has no README.md (it has README.rst)\n%doc README.md"),
+            "{text}"
+        );
+        assert!(!text.contains("no COPYING"), "{text}");
+        assert!(
+            c.notes
+                .iter()
+                .any(|n| n.starts_with("FIXME: meson.build defines tests"))
+        );
+
+        // A spec with a %check, and a source with no meson.build files
+        // read: nothing added.
+        let with_check = spec.replace("%files\n", "%check\nmake check\n%files\n");
+        assert!(!convert(&with_check, &source).spec.contains("no %%check"));
+        let bare = convert(spec, &super::tests::source(OPTIONS));
+        assert!(!bare.spec.contains("pkgconfig(libpci)"));
+    }
 
     #[test]
     fn an_option_maps_by_its_type() {

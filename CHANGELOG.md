@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### specport checks a converted spec against what meson.build declares
+
+Converting rasdaemon 1.0.0's spec, specport left the person to find
+everything the new build implied beyond its options: `python3-devel`
+and the optional `cmocka` for the new tests, the autotools-era
+`gettext-devel` and `perl-generators` no longer used, a `%check` to run
+the tests, the logrotate, rsyslog and syslog-ng configs and Python
+modules Meson now installs, and `README.md` having become `README.rst`.
+`autotools-to-meson` now reads every `meson.build` of the new source:
+it adds the BuildRequires of the dependencies the build requires,
+lists the optional ones, flags BuildRequires no `meson.build`
+mentions, flags a missing `%check` when the project has tests, lists
+what the build installs above `%files`, and flags `%doc` and `%license`
+files the new source lacks.
+
 ### cbspkg builds a Facebook branch for CentOS Stream only, unless asked (breaking)
 
 `cbspkg build` on a Hyperscale Facebook branch built for its RHEL

@@ -89,9 +89,12 @@ fn read_source(path: &Path) -> Result<Source, String> {
         Some(text) => meson_options::parse(&text).map_err(|e| format!("Meson options: {e}"))?,
         None => Vec::new(),
     };
+    let (meson_files, top) = source::read_tree(path)?;
     Ok(Source {
         options,
         meson_build,
+        meson_files,
+        top,
     })
 }
 

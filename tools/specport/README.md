@@ -51,6 +51,33 @@ as `%%` so rpm leaves it alone, followed by:
   candidate Meson options and where `meson.build` mentions it;
 - the non-feature options left at their defaults, with their choices.
 
+It also reads every `meson.build` in the new source (outside
+`subprojects/`) for what the spec has to cover:
+
+- the `dependency()` calls: one the build requires and no
+  BuildRequires covers is added as `pkgconfig(<name>)` (a
+  `required: get_option('x')` one when the conversion enables `x`, or
+  nothing sets `x` and it defaults on), with `python3-devel` when
+  Meson's python module is used; the optional ones (`required: false`,
+  or an option whose value cannot be told) are listed in a comment, to
+  add those the package wants. Dependencies Meson finds without
+  pkg-config (boost, curses, a `method: 'cmake'` one) are left out;
+- a BuildRequires no `meson.build` mentions as a word gets a `FIXME`
+  (an autotools-era `gettext-devel` or `perl-generators`, say), to drop
+  unless the build still needs it; build tools such as `gcc` or
+  `pkgconf` are not flagged;
+- tests (`test()`, `benchmark()`) with no `%check` get a `FIXME` to add
+  one running `%meson_test`;
+- what the files install (`install_data`, `install_man`, a
+  `configure_file` with an `install_dir`, an `executable` or library
+  with `install: true`, in Meson's default directory when it names
+  none), listed by directory above `%files`, to check `%files` against
+  and to drop `%install` lines doing the same; a directory Meson
+  computes is named as a variable;
+- a `%doc` or `%license` file the new source does not have at its top
+  gets a `FIXME`, naming one with the same name and another extension
+  (`README.md` when it has `README.rst`).
+
 A spec with no `%configure` line to convert is left as it is.
 `--write` keeps the original next to the spec, as `<spec>.orig` (or
 `.orig.1` and on, never overwriting an earlier one).

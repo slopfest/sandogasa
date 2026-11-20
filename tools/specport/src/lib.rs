@@ -4,5 +4,6 @@
 //! tool; not a public API.
 
 pub mod autotools;
+pub mod meson_build;
 pub mod meson_options;
 pub mod source;
