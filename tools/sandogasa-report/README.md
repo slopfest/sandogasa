@@ -103,7 +103,7 @@ Four subcommands:
   forge instance used by the domains in the main config and prompts
   for the full credential set a report can need: your FAS username,
   Bugzilla email, git author emails (for Sourcehut commit
-  attribution), the notes directory (see [Notes](#notes)), then
+  attribution), the notes directories (see [Notes](#notes)), then
   per-instance usernames and API tokens for
   GitLab, GitHub, Forgejo/Gitea, and Sourcehut. Because it covers every
   domain in the config, one run sets you up for **any** `report -d`
@@ -273,8 +273,28 @@ directory, else
 ```toml
 [notes]
 dir = "~/Nextcloud/projects/notes/sandogasa-report"
+# dirs = ["~/team-notes"]           # more to read, after dir
+# private = ["~/src/embargoed/notes"]
 # unattached = "ask"   # include (default), exclude or ask
 ```
+
+Notes are read from `dir`, then `dirs`, then `private`. A private
+directory is one kept off any synced folder, for notes on work that must
+not be public yet, such as an embargoed security fix; `config` asks for
+them, comma-separated, and one inside a public directory, or holding
+one, is refused. Its notes show only in a report run with
+`--private`. `note --embargo <until>`, a day (YYYY-MM-DD) or
+`disclosed`, writes an `embargo: until <until>` header and puts the
+note in the first private directory, refusing a public one; `--dir`
+picks which configured directory a note goes in, the first public one
+by default.
+
+Once an embargo has lifted, its day having come or its header edited to
+`embargo: lifted <date>`, `notes --release` lists the notes in private
+directories that it covers and, after asking (`--yes` does not ask),
+moves them to the first public directory, the header saying
+`lifted <today>` unless it already says when. `report --notes` says how
+many such notes are still waiting.
 
 `report --notes` adds the notes dated in the report's period. Each note
 goes under the first item in the report that links its URL, or, for a
@@ -301,9 +321,9 @@ took it (`attached`), whatever `--unattached-notes` says.
 A report is made to be shared unless `--private` is given: a note then
 shows only under an item the printed report shows (so it is no more
 private than that item's line; with `--json`, under any item the JSON
-carries), and never one with an `embargo:` header whose value does not
-start with `lifted`. Notes about anything else, and those without a URL,
-are left out, so a shared report has no section of leftover notes, and
+carries), never one with an `embargo:` header unless it says `lifted`
+or `until` a day that has come, and never one from a private directory. Notes about
+anything else, and those without a URL, are left out, so a shared report has no section of leftover notes, and
 the count is printed on standard error. At the default detail no items
 are listed, so a shared report needs `--detailed --detailed` to carry
 notes. `--private` carries them all, for your own use such as a
@@ -320,9 +340,10 @@ period. The GitLab, Forgejo/Gitea, Sourcehut,
 Bugzilla, Bodhi and Koji sections include whatever your tokens can see,
 with or without `--private`.
 
-`notes` lists them oldest first, filtered with `--since`, `--until`
-and `--url`, or as JSON with `--json`. A file that cannot be read as
-a note is skipped with a warning.
+`notes` lists them oldest first, from every directory, marking those in
+a private one, filtered with `--since`, `--until` and `--url`, or as
+JSON with `--json` (with `private` for each). A file that cannot be
+read as a note is skipped with a warning.
 
 ## Configuration
 

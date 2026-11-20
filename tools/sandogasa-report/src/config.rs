@@ -64,6 +64,14 @@ pub struct NotesConfig {
     /// go under the data directory (`~/.local/share/sandogasa-report/notes`).
     #[serde(default)]
     pub dir: Option<String>,
+    /// More directories notes are read from, after `dir`.
+    #[serde(default)]
+    pub dirs: Vec<String>,
+    /// Directories kept local, for notes on embargoed work: their notes
+    /// go only in reports run with `--private`, and an embargoed note is
+    /// written only to one of them.
+    #[serde(default)]
+    pub private: Vec<String>,
     /// What `report --notes` does with the notes no item took
     /// (`include`, `exclude` or `ask`), unless `--unattached-notes`
     /// says; unset, `include`.

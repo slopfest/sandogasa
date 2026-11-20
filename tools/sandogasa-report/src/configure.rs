@@ -207,7 +207,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         // Where `note` writes notes, and `notes` and `report --notes` read
         // them (#167).
         // With --missing, a heading only over something asked.
-        if !(ask.missing && notes_dir_set(&overlay)) {
+        if !(ask.missing && notes_dir_set(&overlay) && notes_private_set(&overlay)) {
             eprintln!("\nNotes:");
         }
         let notes_dir = ask.field(
@@ -230,6 +230,12 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
             &notes_dir,
         );
         changed |= notes_dir_changed;
+        changed |= prompt_private_dirs(
+            &mut overlay,
+            (&notes_dir, &merged.notes.dirs),
+            &merged.notes.private,
+            &mut ask,
+        )?;
         // The profile is saved before the tokens are asked for, so a token
         // that cannot be stored does not lose the answers above.
         if changed {
@@ -388,6 +394,66 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
 /// Whether the user's own file sets the notes directory.
 fn notes_dir_set(overlay: &toml::Value) -> bool {
     overlay_get_str(overlay, &["notes", "dir"]).is_some()
+}
+
+/// Whether the user's own file lists private notes directories, even
+/// none.
+fn notes_private_set(overlay: &toml::Value) -> bool {
+    overlay
+        .get("notes")
+        .and_then(|n| n.get("private"))
+        .is_some()
+}
+
+/// Ask for the private notes directories, comma-separated, and record
+/// them as `[notes] private`, an empty list for none. Each is checked
+/// against the public ones (`[notes] dir` as just answered, and
+/// `dirs`) as the commands reading them check it. Whether it changed.
+fn prompt_private_dirs(
+    overlay: &mut toml::Value,
+    (dir, more): (&str, &[String]),
+    current: &[String],
+    ask: &mut Asker<'_, '_>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let split = |answer: &str| -> Vec<String> {
+        answer
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    let check = |answer: &str| -> Result<(), String> {
+        let private = split(answer);
+        let private: Vec<&str> = private.iter().map(String::as_str).collect();
+        let more: Vec<&str> = more.iter().map(String::as_str).collect();
+        crate::notes::note_dirs(
+            Some(dir).filter(|d| !d.is_empty()),
+            &more,
+            &private,
+            dirs::home_dir(),
+            dirs::data_dir(),
+        )
+        .map(|_| ())
+    };
+    let answer = ask.field(
+        &Setting::new("notes", "private directories")
+            .optional()
+            .hint(
+                "Kept local, for notes on embargoed work, which only reports run \
+                 with --private show (comma-separated); empty for none",
+            )
+            .validated(&check),
+        &current.join(", "),
+        true,
+        notes_private_set(overlay),
+    )?;
+    let dirs = split(&answer);
+    // An empty list in the file is an answer too: none to keep.
+    if dirs == current && (notes_private_set(overlay) || !dirs.is_empty()) {
+        return Ok(false);
+    }
+    overlay_set_array(overlay, &["notes", "private"], &dirs);
+    Ok(true)
 }
 
 /// Prompt for every field of a user profile, writing into the
@@ -1754,13 +1820,16 @@ mod tests {
         };
         let asked = std::cell::RefCell::new(Vec::new());
         // Profile, FAS (keeping the profile's name), Bugzilla email,
-        // openSUSE's email, notes directory.
+        // openSUSE's email, notes directory, private notes directories
+        // (one inside the synced directory refused, then asked again).
         let answers = [
             "me",
             "",
             "me@example.com",
             "me@suse.example",
             "~/Nextcloud/notes",
+            "~/Nextcloud/notes/embargoed",
+            "~/src/embargoed/notes, /srv/private-notes",
         ];
         run_inner(&args, &mut scripted(&answers, &asked)).unwrap();
         let cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
@@ -1785,7 +1854,15 @@ mod tests {
             overlay_get_str(&saved, &["notes", "dir"]).as_deref(),
             Some("~/Nextcloud/notes")
         );
-        assert_eq!(asked.borrow().len(), 5, "{:?}", asked.borrow());
+        let private = saved["notes"]["private"].as_array().unwrap();
+        assert_eq!(
+            private
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>(),
+            ["~/src/embargoed/notes", "/srv/private-notes"]
+        );
+        assert_eq!(asked.borrow().len(), 7, "{:?}", asked.borrow());
         // One service and one thing asked per instance.
         assert_eq!(
             asked.borrow()[3],
@@ -1794,17 +1871,22 @@ mod tests {
 
         // The same answers again, empty ones keeping what is saved.
         let before = std::fs::read_to_string(cf.path()).unwrap();
-        run_inner(&args, &mut scripted(&["me", "", "", "", ""], &asked)).unwrap();
+        run_inner(&args, &mut scripted(&["me", "", "", "", "", ""], &asked)).unwrap();
         assert_eq!(std::fs::read_to_string(cf.path()).unwrap(), before);
 
-        // A relative directory is refused and asked again; `-` clears it.
+        // A relative directory is refused and asked again; `-` clears it,
+        // and leaves no private directory listed.
         run_inner(
             &args,
-            &mut scripted(&["me", "", "", "", "notes", "-"], &asked),
+            &mut scripted(
+                &["me", "", "", "", "notes", "-", "~/ok, embargoed", "-"],
+                &asked,
+            ),
         )
         .unwrap();
         let saved = parse_overlay(&std::fs::read_to_string(cf.path()).unwrap()).unwrap();
         assert_eq!(overlay_get_str(&saved, &["notes", "dir"]), None);
+        assert_eq!(saved["notes"]["private"].as_array().map(Vec::len), Some(0));
 
         // No profile named: nothing else asked, nothing written.
         asked.borrow_mut().clear();
@@ -1928,7 +2010,7 @@ mod tests {
             token: Default::default(),
         };
         let asked = std::cell::RefCell::new(Vec::new());
-        let answers = ["me", "", "me@example.com", "me@suse.example", "~/notes"];
+        let answers = ["me", "", "me@example.com", "me@suse.example", "~/notes", ""];
         run_inner(&args, &mut scripted(&answers, &asked)).unwrap();
 
         // Everything set, and one profile: nothing asked, not even its name.

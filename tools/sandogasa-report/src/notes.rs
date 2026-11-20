@@ -16,6 +16,13 @@
 //!
 //! Files live at `<dir>/<year>/<date>T<HHMM>-<host>.md`, in local
 //! time, with `-2`, `-3` appended on a clash within the same minute.
+//!
+//! Notes are read from several directories: the public ones, which
+//! may be synced, and private ones, kept local for notes on embargoed
+//! work. A report shows notes from a private directory only when it is
+//! not to be shared (`--private`), and an embargoed note is written
+//! only to a private directory, until `notes release` moves it out
+//! once the embargo has lifted.
 
 use std::path::{Path, PathBuf};
 
@@ -45,6 +52,8 @@ pub struct Note {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Stored {
     pub path: PathBuf,
+    /// Whether it is in a private directory.
+    pub private: bool,
     #[serde(flatten)]
     pub note: Note,
 }
@@ -84,6 +93,15 @@ pub struct Filter {
     pub since: Option<NaiveDate>,
     pub until: Option<NaiveDate>,
     pub url: Option<String>,
+}
+
+/// A directory notes are read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteDir {
+    pub path: PathBuf,
+    /// Kept local, for notes on embargoed work: its notes go only in
+    /// reports not to be shared.
+    pub private: bool,
 }
 
 /// `value` for the `name` header, which has to fit on one line.
@@ -209,15 +227,7 @@ pub fn notes_dir(
     data_dir: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
     match configured {
-        Some(dir) if dir == "~" || dir.starts_with("~/") => {
-            let home = home.ok_or(
-                "[notes] dir starts with ~, but there is no home directory ($HOME is unset)",
-            )?;
-            Ok(home.join(dir.trim_start_matches('~').trim_start_matches('/')))
-        }
-        Some(dir) => check_dir(dir)
-            .map(|()| PathBuf::from(dir))
-            .map_err(|e| format!("[notes] dir {e}")),
+        Some(dir) => expand_dir("[notes] dir", dir, home.as_deref()),
         None => data_dir
             .map(|d| d.join("sandogasa-report").join("notes"))
             .ok_or_else(|| {
@@ -226,6 +236,102 @@ pub fn notes_dir(
                     .into()
             }),
     }
+}
+
+/// Every directory notes are read from, in order: the public ones
+/// (`[notes] dir`, then `dirs`; the data directory's when neither is
+/// set), then the `private` ones. A directory may be listed once, and
+/// a private one may not be inside a public one, which may be synced,
+/// nor hold one.
+pub fn note_dirs(
+    dir: Option<&str>,
+    more: &[&str],
+    private: &[&str],
+    home: Option<PathBuf>,
+    data_dir: Option<PathBuf>,
+) -> Result<Vec<NoteDir>, String> {
+    let mut dirs = Vec::new();
+    if dir.is_some() || more.is_empty() {
+        dirs.push(NoteDir {
+            path: notes_dir(dir, home.clone(), data_dir)?,
+            private: false,
+        });
+    }
+    for (key, list, private) in [
+        ("[notes] dirs", more, false),
+        ("[notes] private", private, true),
+    ] {
+        for d in list {
+            dirs.push(NoteDir {
+                path: expand_dir(key, d, home.as_deref())?,
+                private,
+            });
+        }
+    }
+    for (i, d) in dirs.iter().enumerate() {
+        if dirs[..i].iter().any(|e| e.path == d.path) {
+            return Err(format!(
+                "{} is listed twice in [notes]; list a directory once, under \
+                 private if it is",
+                d.path.display()
+            ));
+        }
+    }
+    for p in dirs.iter().filter(|d| d.private) {
+        if let Some(public) = dirs
+            .iter()
+            .filter(|d| !d.private)
+            .find(|d| p.path.starts_with(&d.path) || d.path.starts_with(&p.path))
+        {
+            return Err(format!(
+                "the private notes directory {} and the public one {} are one \
+                 inside the other; keep private notes out of a directory that \
+                 may be synced",
+                p.path.display(),
+                public.path.display()
+            ));
+        }
+    }
+    Ok(dirs)
+}
+
+/// The directory `note` writes to: `chosen` (as `--dir` gives it),
+/// which has to be one of `dirs`, else the first private one for an
+/// embargoed note and the first public one for any other. An embargoed
+/// note goes only to a private directory, so it is never synced.
+pub fn write_dir<'a>(
+    dirs: &'a [NoteDir],
+    chosen: Option<&str>,
+    embargoed: bool,
+    home: Option<&Path>,
+) -> Result<&'a NoteDir, String> {
+    let dir = match chosen {
+        Some(chosen) => {
+            let path = expand_dir("--dir", chosen, home)?;
+            dirs.iter().find(|d| d.path == path).ok_or_else(|| {
+                format!(
+                    "--dir {chosen} is not a notes directory; the config lists {}",
+                    list_paths(dirs)
+                )
+            })?
+        }
+        None if embargoed => dirs.iter().find(|d| d.private).ok_or(
+            "an embargoed note goes in a private directory, and [notes] private \
+             lists none",
+        )?,
+        None => dirs
+            .iter()
+            .find(|d| !d.private)
+            .ok_or("[notes] lists no public directory")?,
+    };
+    if embargoed && !dir.private {
+        return Err(format!(
+            "{} is not a private directory; an embargoed note goes in one of \
+             [notes] private, so it is never synced",
+            dir.path.display()
+        ));
+    }
+    Ok(dir)
 }
 
 /// The file a note written at `now` on `host` goes to, the first one
@@ -339,9 +445,31 @@ pub fn load_all(dir: &Path) -> (Vec<Stored>, Vec<String>) {
             .map_err(|e| e.to_string())
             .and_then(|t| parse(&t))
         {
-            Ok(note) => found.push(Stored { path, note }),
+            Ok(note) => found.push(Stored {
+                path,
+                private: false,
+                note,
+            }),
             Err(e) => warnings.push(format!("skipping {}: {e}", path.display())),
         }
+    }
+    found.sort_by(|a, b| (a.note.date, &a.path).cmp(&(b.note.date, &b.path)));
+    (found, warnings)
+}
+
+/// Every note in `dirs`, oldest first, each marked private when its
+/// directory is, and a warning for each file that could not be read
+/// as one.
+pub fn load_dirs(dirs: &[NoteDir]) -> (Vec<Stored>, Vec<String>) {
+    let mut found = Vec::new();
+    let mut warnings = Vec::new();
+    for dir in dirs {
+        let (notes, w) = load_all(&dir.path);
+        found.extend(notes.into_iter().map(|s| Stored {
+            private: dir.private,
+            ..s
+        }));
+        warnings.extend(w);
     }
     found.sort_by(|a, b| (a.note.date, &a.path).cmp(&(b.note.date, &b.path)));
     (found, warnings)
@@ -362,8 +490,9 @@ pub fn select(notes: Vec<Stored>, filter: &Filter) -> Vec<Stored> {
         .collect()
 }
 
-/// Notes as `notes` prints them: the date and URL, then the text
-/// indented, with who wrote it.
+/// Notes as `notes` prints them: the date and URL, marked when the
+/// note is in a private directory, then the text indented, with who
+/// wrote it.
 pub fn format_list(notes: &[Stored]) -> String {
     let mut out = String::new();
     for (i, s) in notes.iter().enumerate() {
@@ -371,10 +500,14 @@ pub fn format_list(notes: &[Stored]) -> String {
             out.push('\n');
         }
         let n = &s.note;
-        match &n.url {
-            Some(url) => out.push_str(&format!("{} {url}\n", n.date)),
-            None => out.push_str(&format!("{}\n", n.date)),
+        out.push_str(&n.date.to_string());
+        if let Some(url) = &n.url {
+            out.push_str(&format!(" {url}"));
         }
+        if s.private {
+            out.push_str(" (private)");
+        }
+        out.push('\n');
         for line in n.text.lines() {
             if line.trim().is_empty() {
                 out.push('\n');
@@ -697,24 +830,122 @@ pub fn attach(markdown: &str, notes: &[Stored]) -> (String, Vec<usize>) {
     (out, unplaced)
 }
 
-/// Whether `note` is under an embargo not lifted yet: an `embargo:`
-/// header (any case) whose value does not start with the word
-/// `lifted`.
-pub fn embargoed(note: &Note) -> bool {
+/// The `embargo:` header value for `--embargo`: `until <date>` for a
+/// date (YYYY-MM-DD), `until disclosed` for `disclosed`, with or
+/// without the leading `until`.
+pub fn embargo_value(given: &str) -> Result<String, String> {
+    let given = given.trim();
+    let rest = given.strip_prefix("until ").unwrap_or(given).trim();
+    if rest.eq_ignore_ascii_case("disclosed") {
+        return Ok("until disclosed".into());
+    }
+    NaiveDate::parse_from_str(rest, "%Y-%m-%d")
+        .map(|d| format!("until {}", d.format("%Y-%m-%d")))
+        .map_err(|_| {
+            format!("--embargo {given:?}: give the day it ends (YYYY-MM-DD) or `disclosed`")
+        })
+}
+
+/// Whether `note`'s embargo has lifted by `today`: its `embargo:`
+/// header says `lifted`, or `until` a day that has come.
+pub fn lifted(note: &Note, today: NaiveDate) -> bool {
     note.headers.iter().any(|(k, v)| {
-        k.eq_ignore_ascii_case("embargo")
-            && !v
-                .split_whitespace()
+        if !k.eq_ignore_ascii_case("embargo") {
+            return false;
+        }
+        let mut words = v.split_whitespace();
+        match words.next() {
+            Some(w) if w.eq_ignore_ascii_case("lifted") => true,
+            Some(w) if w.eq_ignore_ascii_case("until") => words
                 .next()
-                .is_some_and(|w| w.eq_ignore_ascii_case("lifted"))
+                .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+                .is_some_and(|d| d <= today),
+            _ => false,
+        }
     })
+}
+
+/// Move `stored`, whose embargo has lifted, to the same year directory
+/// under `to`, its header saying `lifted <today>` unless it already
+/// says when, so a shared report may carry it. The note is written
+/// before the old file is removed, never over an existing one, and is
+/// left only where it was when either step fails.
+pub fn release(stored: &Stored, to: &Path, today: NaiveDate) -> Result<PathBuf, String> {
+    use std::io::Write;
+    let mut note = stored.note.clone();
+    for (k, v) in &mut note.headers {
+        let said = v
+            .split_whitespace()
+            .next()
+            .is_some_and(|w| w.eq_ignore_ascii_case("lifted"));
+        if k.eq_ignore_ascii_case("embargo") && !said {
+            *v = format!("lifted {}", today.format("%Y-%m-%d"));
+        }
+    }
+    let (Some(name), Some(year)) = (
+        stored.path.file_name(),
+        stored.path.parent().and_then(Path::file_name),
+    ) else {
+        return Err(format!("{}: not a note file", stored.path.display()));
+    };
+    let year_dir = to.join(year);
+    std::fs::create_dir_all(&year_dir)
+        .map_err(|e| format!("cannot create {}: {e}", year_dir.display()))?;
+    // Under the same name, or the next free one (`-2`, `-3`) when a
+    // public note was written on the same host in the same minute.
+    let stem = Path::new(name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut n = 1;
+    let (dest, mut f) = loop {
+        let dest = match n {
+            1 => year_dir.join(name),
+            n => year_dir.join(format!("{stem}-{n}.md")),
+        };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+        {
+            Ok(f) => break (dest, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(format!("cannot write {}: {e}", dest.display())),
+        }
+    };
+    if let Err(e) = f
+        .write_all(render(&note).as_bytes())
+        .and_then(|()| f.sync_all())
+    {
+        let _ = std::fs::remove_file(&dest);
+        return Err(format!("cannot write {}: {e}", dest.display()));
+    }
+    // Never in both directories: if the old file stays, so does only it.
+    if let Err(e) = std::fs::remove_file(&stored.path) {
+        let _ = std::fs::remove_file(&dest);
+        return Err(format!(
+            "cannot remove {}: {e}; left it where it was",
+            stored.path.display()
+        ));
+    }
+    Ok(dest)
+}
+
+/// Whether `note` is under an embargo not lifted by `today`: an
+/// `embargo:` header (any case) that does not say `lifted`, nor
+/// `until` a day that has come.
+pub fn embargoed(note: &Note, today: NaiveDate) -> bool {
+    note.headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("embargo"))
+        && !lifted(note, today)
 }
 
 /// The notes a report to share may carry, and how many it leaves out:
 /// only those that go under an item `listed` (the report as it will
 /// be read) shows, so a note is never more private than the line it
 /// sits under, and never an embargoed one.
-pub fn shareable(notes: Vec<Stored>, listed: &str) -> (Vec<Stored>, usize) {
+pub fn shareable(notes: Vec<Stored>, listed: &str, today: NaiveDate) -> (Vec<Stored>, usize) {
     let (_, unlisted) = attach(listed, &notes);
     let mut keep = vec![true; notes.len()];
     for i in unlisted {
@@ -724,7 +955,7 @@ pub fn shareable(notes: Vec<Stored>, listed: &str) -> (Vec<Stored>, usize) {
     let kept: Vec<Stored> = notes
         .into_iter()
         .zip(keep)
-        .filter(|(s, keep)| *keep && !embargoed(&s.note))
+        .filter(|(s, keep)| *keep && !embargoed(&s.note, today))
         .map(|(s, _)| s)
         .collect();
     let left_out = total - kept.len();
@@ -778,6 +1009,28 @@ pub fn format_section(notes: &[&Stored], detail: u8) -> String {
         out.push('\n');
     }
     out
+}
+
+/// `dir`, from the config key or flag `key`, with `~/` expanded
+/// against `home`; absolute otherwise.
+fn expand_dir(key: &str, dir: &str, home: Option<&Path>) -> Result<PathBuf, String> {
+    if dir == "~" || dir.starts_with("~/") {
+        let home = home.ok_or_else(|| {
+            format!("{key} {dir} starts with ~, but there is no home directory ($HOME is unset)")
+        })?;
+        return Ok(home.join(dir.trim_start_matches('~').trim_start_matches('/')));
+    }
+    check_dir(dir)
+        .map(|()| PathBuf::from(dir))
+        .map_err(|e| format!("{key} {e}"))
+}
+
+/// The directories' paths, joined by commas.
+fn list_paths(dirs: &[NoteDir]) -> String {
+    dirs.iter()
+        .map(|d| d.path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The host `url` points at, as [`url_key`] reads it (so `rhbz#N`
@@ -1015,6 +1268,7 @@ mod tests {
     fn real_notes() -> Vec<Stored> {
         let stored = |url: Option<&str>, text: &str| Stored {
             path: PathBuf::from("n.md"),
+            private: false,
             note: Note {
                 url: url.map(String::from),
                 date: day("2026-11-18"),
@@ -1237,7 +1491,7 @@ mod tests {
 
         // The forge ticket, a commit to an unlisted repository, the
         // URL-less note and the embargoed one stay out.
-        let (shared, left_out) = shareable(notes, listed);
+        let (shared, left_out) = shareable(notes, listed, day("2026-11-20"));
         assert_eq!(
             texts(&shared),
             [
@@ -1256,14 +1510,37 @@ mod tests {
             n.headers = vec![(k.into(), v.into())];
             n
         };
-        assert!(embargoed(&with("Embargo", "until disclosed")));
-        assert!(embargoed(&with("EMBARGO", "until 2026-12-01")));
-        assert!(embargoed(&with("embargo", "liftedness unknown")));
-        assert!(embargoed(&with("embargo", "")));
-        assert!(!embargoed(&with("embargo", "Lifted 2026-12-01")));
-        assert!(!embargoed(&with("embargo", "lifted")));
-        assert!(!embargoed(&with("other", "until disclosed")));
-        assert!(!embargoed(&note(None, "2026-11-18", "x")));
+        assert!(embargoed(
+            &with("Embargo", "until disclosed"),
+            day("2026-11-20")
+        ));
+        assert!(embargoed(
+            &with("EMBARGO", "until 2026-12-01"),
+            day("2026-11-20")
+        ));
+        assert!(embargoed(
+            &with("embargo", "liftedness unknown"),
+            day("2026-11-20")
+        ));
+        assert!(embargoed(&with("embargo", ""), day("2026-11-20")));
+        assert!(!embargoed(
+            &with("embargo", "Lifted 2026-12-01"),
+            day("2026-11-20")
+        ));
+        assert!(!embargoed(&with("embargo", "lifted"), day("2026-11-20")));
+        // Its day has come.
+        assert!(!embargoed(
+            &with("embargo", "until 2026-11-20"),
+            day("2026-11-20")
+        ));
+        assert!(!embargoed(
+            &with("other", "until disclosed"),
+            day("2026-11-20")
+        ));
+        assert!(!embargoed(
+            &note(None, "2026-11-18", "x"),
+            day("2026-11-20")
+        ));
     }
 
     #[test]
@@ -1529,6 +1806,7 @@ mod tests {
         let b = note(None, "2026-11-19", "Meeting.");
         let stored = |note| Stored {
             path: PathBuf::from("p"),
+            private: false,
             note,
         };
         assert_eq!(
@@ -1542,6 +1820,7 @@ mod tests {
     fn json_carries_the_path_and_every_field() {
         let s = Stored {
             path: PathBuf::from("/n/2026/x.md"),
+            private: false,
             note: note(Some("https://x/1"), "2026-11-18", "Why."),
         };
         let v = serde_json::to_value(&s).unwrap();
@@ -1554,5 +1833,204 @@ mod tests {
         n.headers = vec![("embargo".into(), "until disclosed".into())];
         let v = serde_json::to_value(&n).unwrap();
         assert_eq!(v["headers"]["embargo"], "until disclosed");
+    }
+    #[test]
+    fn notes_are_read_from_the_public_then_the_private_directories() {
+        let home = Some(PathBuf::from("/home/u"));
+        let data = Some(PathBuf::from("/home/u/.local/share"));
+        let dir = |p: &str, private| NoteDir {
+            path: PathBuf::from(p),
+            private,
+        };
+        assert_eq!(
+            note_dirs(
+                Some("~/Nextcloud/notes"),
+                &["/srv/team"],
+                &["~/src/embargoed/notes"],
+                home.clone(),
+                data.clone()
+            )
+            .unwrap(),
+            [
+                dir("/home/u/Nextcloud/notes", false),
+                dir("/srv/team", false),
+                dir("/home/u/src/embargoed/notes", true),
+            ]
+        );
+        // No public one set: the data directory's, still first.
+        assert_eq!(
+            note_dirs(None, &[], &["/p"], home.clone(), data.clone()).unwrap(),
+            [
+                dir("/home/u/.local/share/sandogasa-report/notes", false),
+                dir("/p", true)
+            ]
+        );
+        let err =
+            note_dirs(Some("~/n"), &[], &["/home/u/n"], home.clone(), data.clone()).unwrap_err();
+        assert!(err.contains("listed twice"), "{err}");
+        // A private directory inside a public one, or holding one.
+        for (public, private) in [("~/sync", "~/sync/embargoed"), ("~/sync/x", "~/sync")] {
+            let err =
+                note_dirs(Some(public), &[], &[private], home.clone(), data.clone()).unwrap_err();
+            assert!(err.contains("one inside the other"), "{err}");
+        }
+        // Each entry's own key in its error.
+        let err = note_dirs(Some("notes"), &[], &[], home.clone(), data.clone()).unwrap_err();
+        assert!(err.starts_with("[notes] dir "), "{err}");
+        let err = note_dirs(None, &["notes"], &[], home.clone(), data.clone()).unwrap_err();
+        assert!(err.starts_with("[notes] dirs "), "{err}");
+        let err = note_dirs(None, &[], &["private"], home, data).unwrap_err();
+        assert!(
+            err.contains("[notes] private") && err.contains("neither absolute"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_embargoed_note_is_written_only_to_a_private_directory() {
+        let home = Path::new("/home/u");
+        let dirs = [
+            NoteDir {
+                path: PathBuf::from("/home/u/synced"),
+                private: false,
+            },
+            NoteDir {
+                path: PathBuf::from("/home/u/local"),
+                private: true,
+            },
+        ];
+        let path = |r: Result<&NoteDir, String>| r.unwrap().path.clone();
+        assert_eq!(
+            path(write_dir(&dirs, None, false, Some(home))),
+            dirs[0].path
+        );
+        assert_eq!(path(write_dir(&dirs, None, true, Some(home))), dirs[1].path);
+        assert_eq!(
+            path(write_dir(&dirs, Some("~/local"), false, Some(home))),
+            dirs[1].path
+        );
+        let err = write_dir(&dirs, Some("~/synced"), true, Some(home)).unwrap_err();
+        assert!(err.contains("not a private directory"), "{err}");
+        let err = write_dir(&dirs, Some("/elsewhere"), false, Some(home)).unwrap_err();
+        assert!(err.contains("/home/u/synced, /home/u/local"), "{err}");
+        let err = write_dir(&dirs[..1], None, true, Some(home)).unwrap_err();
+        assert!(err.contains("lists none"), "{err}");
+        let err = write_dir(&dirs[1..], None, false, Some(home)).unwrap_err();
+        assert!(err.contains("no public directory"), "{err}");
+    }
+
+    #[test]
+    fn notes_from_several_directories_merge_by_date() {
+        let public = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        save(
+            public.path(),
+            &note(None, "2026-11-19", "later"),
+            at("2026-11-19 10:00"),
+            "box",
+        )
+        .unwrap();
+        save(
+            private.path(),
+            &note(None, "2026-11-18", "earlier"),
+            at("2026-11-18 10:00"),
+            "box",
+        )
+        .unwrap();
+        let dirs = [
+            NoteDir {
+                path: public.path().into(),
+                private: false,
+            },
+            NoteDir {
+                path: private.path().into(),
+                private: true,
+            },
+        ];
+        let (found, warnings) = load_dirs(&dirs);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let seen: Vec<_> = found
+            .iter()
+            .map(|s| (s.note.text.as_str(), s.private))
+            .collect();
+        assert_eq!(seen, [("earlier", true), ("later", false)]);
+        assert!(format_list(&found).starts_with("2026-11-18 (private)\n"));
+        assert_eq!(serde_json::to_value(&found[0]).unwrap()["private"], true);
+    }
+
+    #[test]
+    fn an_embargo_is_given_as_a_day_or_disclosed() {
+        assert_eq!(embargo_value("2026-12-01").unwrap(), "until 2026-12-01");
+        assert_eq!(
+            embargo_value("until 2026-12-01").unwrap(),
+            "until 2026-12-01"
+        );
+        assert_eq!(embargo_value("disclosed").unwrap(), "until disclosed");
+        assert_eq!(embargo_value("until Disclosed").unwrap(), "until disclosed");
+        for bad in ["", "soon", "2026-13-01", "until"] {
+            assert!(embargo_value(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_embargo_lifts_on_its_day_or_when_marked() {
+        let today = day("2026-12-01");
+        let with = |v: &str| Note {
+            headers: vec![("Embargo".into(), v.into())],
+            ..note(None, "2026-11-18", "x")
+        };
+        assert!(lifted(&with("until 2026-12-01"), today));
+        assert!(lifted(&with("until 2026-11-30"), today));
+        assert!(lifted(&with("lifted 2026-11-25"), today));
+        assert!(!lifted(&with("until 2026-12-02"), today));
+        assert!(!lifted(&with("until disclosed"), today));
+        assert!(!lifted(&note(None, "2026-11-18", "x"), today));
+    }
+
+    #[test]
+    fn a_released_note_moves_and_says_when_its_embargo_lifted() {
+        let private = tempfile::tempdir().unwrap();
+        let public = tempfile::tempdir().unwrap();
+        let mut n = note(Some("https://x/1"), "2026-11-18", "Fixed the CVE.");
+        n.headers = vec![("embargo".into(), "until 2026-12-01".into())];
+        let path = save(private.path(), &n, at("2026-11-18 10:32"), "box").unwrap();
+        let stored = Stored {
+            path: path.clone(),
+            private: true,
+            note: n,
+        };
+        let dest = release(&stored, public.path(), day("2026-12-02")).unwrap();
+        assert_eq!(
+            dest,
+            public.path().join("2026").join("2026-11-18T1032-box.md")
+        );
+        assert!(!path.exists());
+        let moved = parse(&std::fs::read_to_string(&dest).unwrap()).unwrap();
+        assert_eq!(
+            moved.headers,
+            [("embargo".to_string(), "lifted 2026-12-02".to_string())]
+        );
+        assert!(!embargoed(&moved, day("2026-12-02")));
+
+        // Never over an existing note: the next free name, its own
+        // header kept.
+        let mut again = stored.clone();
+        again.note.headers = vec![("embargo".into(), "lifted 2026-11-30".into())];
+        std::fs::write(&path, render(&again.note)).unwrap();
+        let dest = release(&again, public.path(), day("2026-12-02")).unwrap();
+        assert_eq!(
+            dest,
+            public.path().join("2026").join("2026-11-18T1032-box-2.md")
+        );
+        let moved = parse(&std::fs::read_to_string(&dest).unwrap()).unwrap();
+        assert_eq!(moved.headers[0].1, "lifted 2026-11-30");
+
+        // An old file that is gone already: nothing left behind.
+        let err = release(&again, public.path(), day("2026-12-02")).unwrap_err();
+        assert!(err.contains("left it where it was"), "{err}");
+        let left: Vec<_> = std::fs::read_dir(public.path().join("2026"))
+            .unwrap()
+            .collect();
+        assert_eq!(left.len(), 2);
     }
 }

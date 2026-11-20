@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### sandogasa-report reads notes from private directories too
+
+Notes on embargoed work, such as a security fix not disclosed yet, have
+to stay out of a synced folder, but `[notes] dir` named one directory,
+so notes kept in an unsynced one were never read: `notes` and
+`report --notes` did not show them. `[notes] dirs` adds more
+directories to read, and `[notes] private` lists private ones, which
+`config` asks for. A report shows notes from a private directory only
+with `--private`. `note --embargo <day|disclosed>` writes the
+`embargo:` header and puts the note in a private directory, refusing a
+public one; `note --dir` picks the directory. A private directory
+inside a public one, which may be synced, is refused. Once an embargo
+has lifted, `notes --release` moves those notes to the first public
+directory, marking them `lifted`, and `report --notes` says how many
+are still waiting. A shared report also takes a note whose
+`embargo: until <day>` has come, which it left out until now (2026-11-20)
+unless the header was edited to say `lifted` (Resolves #203).
+
 ### config messages name the keyring entry, not the command to read it
 
 Storing a token printed "check it with `secret-tool lookup …`", and

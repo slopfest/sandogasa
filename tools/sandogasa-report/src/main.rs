@@ -64,6 +64,17 @@ struct NoteArgs {
     #[arg(long)]
     date: Option<NaiveDate>,
 
+    /// The notes directory to write to, one of those configured
+    /// (default: the first public one, or for an embargoed note the
+    /// first private one).
+    #[arg(long, value_name = "PATH")]
+    dir: Option<String>,
+
+    /// Mark the note embargoed until a day (YYYY-MM-DD) or `disclosed`;
+    /// it goes only in a private notes directory.
+    #[arg(long, value_name = "UNTIL")]
+    embargo: Option<String>,
+
     /// The web page of the item the note is about (a PR, bug or Bodhi
     /// update); leave it out for work no report lists.
     #[arg(long)]
@@ -77,8 +88,13 @@ struct NoteArgs {
 #[derive(clap::Args)]
 struct NotesArgs {
     /// Output as JSON.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "release")]
     json: bool,
+
+    /// Move the notes in private directories whose embargo has lifted
+    /// to the first public one, after asking.
+    #[arg(long)]
+    release: bool,
 
     /// Only notes from this day on (YYYY-MM-DD).
     #[arg(long)]
@@ -91,6 +107,10 @@ struct NotesArgs {
     /// Only notes about this URL.
     #[arg(long)]
     url: Option<String>,
+
+    /// With --release, move them without asking.
+    #[arg(short, long, requires = "release")]
+    yes: bool,
 }
 
 /// An axis a report can be broken down along.
@@ -258,15 +278,36 @@ fn report_error(result: Result<(), String>) -> ExitCode {
     }
 }
 
-/// The notes directory, from the user's config.
-fn notes_dir() -> Result<std::path::PathBuf, String> {
-    let cfg = config::load_config(None)?;
-    notes::notes_dir(cfg.notes.dir.as_deref(), dirs::home_dir(), dirs::data_dir())
+/// The directories notes are read from, from `cfg`.
+fn note_dirs(cfg: &config::NotesConfig) -> Result<Vec<notes::NoteDir>, String> {
+    let more: Vec<&str> = cfg.dirs.iter().map(String::as_str).collect();
+    let private: Vec<&str> = cfg.private.iter().map(String::as_str).collect();
+    notes::note_dirs(
+        cfg.dir.as_deref(),
+        &more,
+        &private,
+        dirs::home_dir(),
+        dirs::data_dir(),
+    )
 }
 
 fn run_note(args: &NoteArgs) -> Result<(), String> {
     use std::io::IsTerminal;
-    let dir = notes_dir()?;
+    let cfg = config::load_config(None)?;
+    let dirs = note_dirs(&cfg.notes)?;
+    let home = dirs::home_dir();
+    let dir = &notes::write_dir(
+        &dirs,
+        args.dir.as_deref(),
+        args.embargo.is_some(),
+        home.as_deref(),
+    )?
+    .path;
+    let embargo = args
+        .embargo
+        .as_deref()
+        .map(notes::embargo_value)
+        .transpose()?;
     let host = notes::host()?;
     let text = notes::text_from(&args.text, &mut std::io::stdin())?;
     let now = chrono::Local::now().naive_local();
@@ -279,7 +320,7 @@ fn run_note(args: &NoteArgs) -> Result<(), String> {
         url: one_line("url", &args.url)?,
         date: args.date.unwrap_or(now.date()),
         by: one_line("by", &args.by)?,
-        headers: Vec::new(),
+        headers: embargo.map(|v| ("embargo".into(), v)).into_iter().collect(),
         text,
     };
     // The text may have come from standard input; then the answer is
@@ -304,7 +345,7 @@ fn run_note(args: &NoteArgs) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         Ok(notes::answered_yes(&answer))
     };
-    match notes::record(&dir, &note, now, &host, &mut confirm)? {
+    match notes::record(dir, &note, now, &host, &mut confirm)? {
         Some(path) => println!("{}", path.display()),
         None => eprintln!("Nothing written."),
     }
@@ -318,11 +359,15 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
         url: args.url.clone(),
     };
     notes::check_range(&filter)?;
-    let (found, warnings) = notes::load_all(&notes_dir()?);
+    let dirs = note_dirs(&config::load_config(None)?.notes)?;
+    let (found, warnings) = notes::load_dirs(&dirs);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
     let selected = notes::select(found, &filter);
+    if args.release {
+        return release_notes(&dirs, selected, args.yes);
+    }
     if args.json {
         let json = serde_json::to_string_pretty(&selected).map_err(|e| e.to_string())?;
         println!("{json}");
@@ -330,6 +375,63 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
         print!("{}", notes::format_list(&selected));
     }
     Ok(())
+}
+
+/// `notes --release`: move the notes among `selected` that are in a
+/// private directory and no longer embargoed to the first public
+/// directory, after asking unless `yes`.
+fn release_notes(
+    dirs: &[notes::NoteDir],
+    selected: Vec<notes::Stored>,
+    yes: bool,
+) -> Result<(), String> {
+    use std::io::IsTerminal;
+    let today = chrono::Local::now().date_naive();
+    let lifted: Vec<notes::Stored> = selected
+        .into_iter()
+        .filter(|s| s.private && notes::lifted(&s.note, today))
+        .collect();
+    if lifted.is_empty() {
+        eprintln!("No note in a private directory has had its embargo lifted.");
+        return Ok(());
+    }
+    let to = &dirs
+        .iter()
+        .find(|d| !d.private)
+        .ok_or("[notes] lists no public directory to move them to")?
+        .path;
+    print!("{}", notes::format_list(&lifted));
+    let question = format!("Move these {} note(s) to {}?", lifted.len(), to.display());
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            return Err(format!(
+                "{question} Moving is confirmed at a terminal; run it in one, or pass --yes"
+            ));
+        }
+        if !sandogasa_cli::confirm(&question, true).map_err(|e| e.to_string())? {
+            eprintln!("Nothing moved.");
+            return Ok(());
+        }
+    }
+    // Each note on its own: one that cannot be moved stays, and the
+    // rest still go.
+    let mut failed = 0;
+    for stored in &lifted {
+        match notes::release(stored, to, today) {
+            Ok(dest) => println!("{}", dest.display()),
+            Err(e) => {
+                eprintln!("error: {e}");
+                failed += 1;
+            }
+        }
+    }
+    match failed {
+        0 => Ok(()),
+        n => Err(format!(
+            "{n} of {} note(s) could not be moved, and stay where they were",
+            lifted.len()
+        )),
+    }
 }
 
 /// Whether to close the report with the `count` notes no item took:
@@ -357,8 +459,9 @@ fn include_unattached(
 }
 
 /// The notes a report carries: all of them with --private, otherwise
-/// only those under an item the report as read (`listed`) shows, with
-/// a count of the rest on standard error.
+/// only those under an item the report as read (`listed`) shows and
+/// not in a private directory, with a count of the rest on standard
+/// error.
 fn shared_notes(
     cli: &ReportArgs,
     found: Vec<notes::Stored>,
@@ -367,11 +470,17 @@ fn shared_notes(
     if cli.private || found.is_empty() {
         return found;
     }
-    let (kept, left_out) = notes::shareable(found, &listed());
+    let (public, private): (Vec<_>, Vec<_>) = found.into_iter().partition(|s| !s.private);
+    let (kept, left_out) = match public.is_empty() {
+        true => (public, 0),
+        false => notes::shareable(public, &listed(), chrono::Local::now().date_naive()),
+    };
+    let left_out = left_out + private.len();
     if left_out > 0 {
         eprintln!(
             "Left out {left_out} note(s) on items this report does not show, \
-             without a URL, or embargoed; --private includes them."
+             without a URL, embargoed, or from a private directory; --private \
+             includes them."
         );
     }
     kept
@@ -423,11 +532,22 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     // The notes first: reading them is cheap, and a notes directory
     // that cannot be resolved should fail before the queries.
     let period_notes = if cli.notes {
-        match notes::notes_dir(cfg.notes.dir.as_deref(), dirs::home_dir(), dirs::data_dir()) {
-            Ok(dir) => {
-                let (found, warnings) = notes::load_all(&dir);
+        match note_dirs(&cfg.notes) {
+            Ok(dirs) => {
+                let (found, warnings) = notes::load_dirs(&dirs);
                 for w in &warnings {
                     eprintln!("warning: {w}");
+                }
+                let today = chrono::Local::now().date_naive();
+                let waiting = found
+                    .iter()
+                    .filter(|s| s.private && notes::lifted(&s.note, today))
+                    .count();
+                if waiting > 0 {
+                    eprintln!(
+                        "{waiting} note(s) in a private directory are no longer \
+                         embargoed; `sandogasa-report notes --release` moves them."
+                    );
                 }
                 notes::select(
                     found,
@@ -973,24 +1093,109 @@ mod tests {
 
     use super::*;
 
+    fn report_args(extra: &[&str]) -> ReportArgs {
+        use clap::Parser;
+        let mut argv = vec![
+            "sandogasa-report",
+            "report",
+            "-d",
+            "x",
+            "--period",
+            "2026H2",
+        ];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv).unwrap().command {
+            Command::Report(args) => args,
+            _ => unreachable!(),
+        }
+    }
+
+    fn stored(url: &str, private: bool) -> notes::Stored {
+        notes::Stored {
+            path: "n.md".into(),
+            private,
+            note: notes::parse(&format!("url: {url}\ndate: 2026-11-18\n\nWhy.\n")).unwrap(),
+        }
+    }
+
+    #[test]
+    fn a_shared_report_leaves_out_notes_from_a_private_directory() {
+        let listed = "- [o/r#1](https://github.com/o/r/pull/1) x\n";
+        let found = vec![
+            stored("https://github.com/o/r/pull/1", false),
+            stored("https://github.com/o/r/pull/1", true),
+        ];
+        let kept = shared_notes(&report_args(&["--notes"]), found.clone(), || listed.into());
+        assert_eq!(kept, found[..1]);
+        let kept = shared_notes(
+            &report_args(&["--notes", "--private"]),
+            found.clone(),
+            || panic!("a private report shows every note"),
+        );
+        assert_eq!(kept, found);
+        // Only private notes: the report is not read for them.
+        let kept = shared_notes(&report_args(&["--notes"]), found[1..].to_vec(), || {
+            panic!("no public note to place")
+        });
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn release_moves_only_lifted_notes_from_private_directories() {
+        let public = tempfile::tempdir().unwrap();
+        let private = tempfile::tempdir().unwrap();
+        let dirs = [
+            notes::NoteDir {
+                path: public.path().into(),
+                private: false,
+            },
+            notes::NoteDir {
+                path: private.path().into(),
+                private: true,
+            },
+        ];
+        let write = |name: &str, embargo: &str| {
+            let year = private.path().join("2026");
+            std::fs::create_dir_all(&year).unwrap();
+            let path = year.join(name);
+            std::fs::write(
+                &path,
+                format!("date: 2026-11-18\nembargo: {embargo}\n\n{name}\n"),
+            )
+            .unwrap();
+            path
+        };
+        let lifted = write("a.md", "lifted 2026-11-19");
+        let held = write("b.md", "until disclosed");
+        let (found, _) = notes::load_dirs(&dirs);
+        release_notes(&dirs, found, true).unwrap();
+        assert!(!lifted.exists());
+        assert!(public.path().join("2026/a.md").exists());
+        assert!(held.exists());
+
+        // One that cannot be moved does not keep the rest.
+        let gone = write("d.md", "lifted 2026-11-19");
+        let next = write("e.md", "lifted 2026-11-19");
+        let (found, _) = notes::load_dirs(&dirs);
+        std::fs::remove_file(&gone).unwrap();
+        let err = release_notes(&dirs, found, true).unwrap_err();
+        assert!(err.starts_with("1 of 2 note(s)"), "{err}");
+        assert!(!next.exists());
+        assert!(public.path().join("2026/e.md").exists());
+        assert!(!public.path().join("2026/d.md").exists());
+
+        // Nothing left to move; no public directory to move to.
+        let (found, _) = notes::load_dirs(&dirs);
+        release_notes(&dirs, found, true).unwrap();
+        write("c.md", "lifted 2026-11-19");
+        let (found, _) = notes::load_dirs(&dirs[1..]);
+        let err = release_notes(&dirs[1..], found, true).unwrap_err();
+        assert!(err.contains("no public directory"), "{err}");
+    }
+
     #[test]
     fn unattached_notes_follow_the_flag_then_the_config() {
-        use clap::Parser;
-        let args = |extra: &[&str]| -> ReportArgs {
-            let mut argv = vec![
-                "sandogasa-report",
-                "report",
-                "-d",
-                "x",
-                "--period",
-                "2026H2",
-            ];
-            argv.extend_from_slice(extra);
-            match Cli::try_parse_from(argv).unwrap().command {
-                Command::Report(args) => args,
-                _ => unreachable!(),
-            }
-        };
+        let args = report_args;
         let no = |_: &str| -> bool { panic!("no question expected") };
         let plain = args(&["--notes"]);
         // Unset everywhere: included.

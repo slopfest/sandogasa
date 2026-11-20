@@ -35,7 +35,7 @@ Ask again only for the token kept for HOST (e.g. forge.fedoraproject.org, or its
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS sandogasa-report note
-\fBsandogasa\-report note\fR [\fB\-\-by\fR] [\fB\-\-date\fR] [\fB\-\-url\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITEXT\fR>
+\fBsandogasa\-report note\fR [\fB\-\-by\fR] [\fB\-\-date\fR] [\fB\-\-dir\fR] [\fB\-\-embargo\fR] [\fB\-\-url\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITEXT\fR>
 .PP
 Record a note on why a piece of work was done
 .TP
@@ -44,6 +44,12 @@ Who wrote the text, when not you (e.g. an assistant, as `Agent:model`)
 .TP
 \fB\-\-date\fR \fI<DATE>\fR
 The day the work was done (YYYY\-MM\-DD, default: today)
+.TP
+\fB\-\-dir\fR \fI<PATH>\fR
+The notes directory to write to, one of those configured (default: the first public one, or for an embargoed note the first private one)
+.TP
+\fB\-\-embargo\fR \fI<UNTIL>\fR
+Mark the note embargoed until a day (YYYY\-MM\-DD) or `disclosed`; it goes only in a private notes directory
 .TP
 \fB\-\-url\fR \fI<URL>\fR
 The web page of the item the note is about (a PR, bug or Bodhi update); leave it out for work no report lists
@@ -57,12 +63,15 @@ Print help
 <\fITEXT\fR>
 The note; `\-` reads it from standard input
 .SS sandogasa-report notes
-\fBsandogasa\-report notes\fR [\fB\-\-json\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-url\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-report notes\fR [\fB\-\-json\fR] [\fB\-\-release\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-url\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 List recorded notes
 .TP
 \fB\-\-json\fR
 Output as JSON
+.TP
+\fB\-\-release\fR
+Move the notes in private directories whose embargo has lifted to the first public one, after asking
 .TP
 \fB\-\-since\fR \fI<SINCE>\fR
 Only notes from this day on (YYYY\-MM\-DD)
@@ -72,6 +81,9 @@ Only notes up to this day (YYYY\-MM\-DD)
 .TP
 \fB\-\-url\fR \fI<URL>\fR
 Only notes about this URL
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+With \-\-release, move them without asking
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
