@@ -377,6 +377,32 @@ fn shared_notes(
     kept
 }
 
+/// Whether a source's error says its token was refused or lacks a
+/// scope: an HTTP 401 or 403, as the clients print a status with its
+/// reason, or Forgejo's "required scope(s)". Not the bare digits, which
+/// an issue number in the error could hold.
+fn token_refused(error: &str) -> bool {
+    ["401 Unauthorized", "403 Forbidden", "required scope"]
+        .iter()
+        .any(|sign| error.contains(sign))
+}
+
+/// Record that the source `what` failed with `error` and is left out of
+/// the report, saying so; for a source read with a token on
+/// `token_host` that was refused, how to replace it.
+fn leave_out(left_out: &mut Vec<String>, what: String, error: &str, token_host: Option<&str>) {
+    eprintln!("warning: {what}: {error} — left out of the report");
+    if let Some(host) = token_host
+        && token_refused(error)
+    {
+        eprintln!(
+            "  `sandogasa-report config --token {host}` replaces the token, and says \
+             what it needs"
+        );
+    }
+    left_out.push(format!("{what}: {error}"));
+}
+
 fn run_report(cli: &ReportArgs) -> ExitCode {
     let (since, until) = match resolve_date_range(cli) {
         Ok(range) => range,
@@ -481,6 +507,8 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     // shorthand, not a username on any service, so rendering it
     // would be misleading.
     let mut domain_reports: Vec<report::DomainReport> = Vec::new();
+    // Sources that failed: the rest is still reported, saying which.
+    let mut left_out: Vec<String> = Vec::new();
     // A user's GitLab activity, read once per instance for the domains
     // on it.
     let mut gitlab_activity = gitlab::Activity::default();
@@ -537,12 +565,10 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         // Bodhi (per-domain).
         if domain.bodhi && !cli.no_bodhi {
             if let Some(ref user) = fas_user {
+                eprintln!("Reading the Bodhi updates of {user}...");
                 match rt.block_on(bodhi::bodhi_report(user, domain, since, until, cli.verbose)) {
                     Ok(bodhi_report) => dr.bodhi = Some(bodhi_report),
-                    Err(e) => {
-                        eprintln!("error: bodhi: {e}");
-                        return ExitCode::FAILURE;
-                    }
+                    Err(e) => leave_out(&mut left_out, format!("bodhi ({name})"), &e, None),
                 }
             } else {
                 eprintln!("warning: --user required for Bodhi reporting, skipping");
@@ -551,12 +577,10 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
 
         // Koji CBS (per-domain).
         if !domain.koji_tags.is_empty() && !cli.no_koji {
+            eprintln!("Reading the builds in {name}'s Koji tags...");
             match koji::koji_report(domain, fas_user.as_deref(), since, until, cli.verbose) {
                 Ok(koji_report) => dr.koji = Some(koji_report),
-                Err(e) => {
-                    eprintln!("error: koji: {e}");
-                    return ExitCode::FAILURE;
-                }
+                Err(e) => leave_out(&mut left_out, format!("koji ({name})"), &e, None),
             }
         }
 
@@ -573,6 +597,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 .or_else(|| fas_user.clone());
             match resolved {
                 Some(user) => {
+                    eprintln!("Reading the GitLab activity of {user} on {host}...");
                     match gitlab::gitlab_report(
                         gl,
                         &user,
@@ -584,8 +609,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                     ) {
                         Ok(gl_report) => dr.gitlab = Some(gl_report),
                         Err(e) => {
-                            eprintln!("error: gitlab ({name}): {e}");
-                            return ExitCode::FAILURE;
+                            leave_out(&mut left_out, format!("gitlab ({name})"), &e, Some(&host))
                         }
                     }
                 }
@@ -608,6 +632,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 .or_else(|| fas_user.clone());
             match resolved {
                 Some(user) => {
+                    eprintln!("Reading the GitHub activity of {user} on {host}...");
                     match github::github_report(
                         gh,
                         &user,
@@ -619,8 +644,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                     ) {
                         Ok(gh_report) => dr.github = Some(gh_report),
                         Err(e) => {
-                            eprintln!("error: github ({name}): {e}");
-                            return ExitCode::FAILURE;
+                            leave_out(&mut left_out, format!("github ({name})"), &e, Some(&host))
                         }
                     }
                 }
@@ -664,8 +688,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 ) {
                     Ok(fj_report) => dr.forgejo = Some(fj_report),
                     Err(e) => {
-                        eprintln!("error: forgejo ({name}): {e}");
-                        return ExitCode::FAILURE;
+                        leave_out(&mut left_out, format!("forgejo ({name})"), &e, Some(&host))
                     }
                 }
             }
@@ -686,10 +709,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 Some(user) => match pagure::pagure_report(pg, user, since, until, &rt, cli.verbose)
                 {
                     Ok(pg_report) => dr.pagure = Some(pg_report),
-                    Err(e) => {
-                        eprintln!("error: pagure ({name}): {e}");
-                        return ExitCode::FAILURE;
-                    }
+                    Err(e) => leave_out(&mut left_out, format!("pagure ({name})"), &e, None),
                 },
                 None => {
                     eprintln!("warning: Pagure domain '{name}' has no user — set --user, skipping")
@@ -707,6 +727,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                      names no debian_emails — `sandogasa-report config --missing`, skipping"
                 );
             } else {
+                eprintln!("Reading the Debian bug tracker for your Debian addresses...");
                 match debbugs::bts_report(
                     debbugs::DEFAULT_INSTANCE,
                     &emails,
@@ -715,10 +736,12 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                     cli.verbose,
                 ) {
                     Ok(bts_report) => dr.bts = Some(bts_report),
-                    Err(e) => {
-                        eprintln!("error: Debian bug tracker ({name}): {e}");
-                        return ExitCode::FAILURE;
-                    }
+                    Err(e) => leave_out(
+                        &mut left_out,
+                        format!("Debian bug tracker ({name})"),
+                        &e,
+                        None,
+                    ),
                 }
             }
         }
@@ -733,6 +756,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 .or_else(|| fas_user.clone())
                 .unwrap_or_default();
             let owner_emails = profile.map(|p| p.git_emails.clone()).unwrap_or_default();
+            eprintln!("Reading the Sourcehut activity on {host}...");
             match sourcehut::sourcehut_report(
                 sh,
                 &user,
@@ -743,10 +767,12 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 cli.verbose,
             ) {
                 Ok(sh_report) => dr.sourcehut = Some(sh_report),
-                Err(e) => {
-                    eprintln!("error: sourcehut ({name}): {e}");
-                    return ExitCode::FAILURE;
-                }
+                Err(e) => leave_out(
+                    &mut left_out,
+                    format!("sourcehut ({name})"),
+                    &e,
+                    Some(&host),
+                ),
             }
         }
 
@@ -780,10 +806,11 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 let email = match email {
                     Ok(e) => e,
                     Err(e) => {
-                        eprintln!("error: {e}");
-                        return ExitCode::FAILURE;
+                        leave_out(&mut left_out, format!("bugzilla ({host})"), &e, None);
+                        continue;
                     }
                 };
+                eprintln!("Searching {host} for the bugs of {email}...");
                 match rt.block_on(bugzilla::bugzilla_report(
                     &agg.config,
                     &email,
@@ -801,10 +828,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                             block_cli_idx.iter().filter(|&&i| i <= agg.last_idx).count();
                         bugzilla.push(bz_report);
                     }
-                    Err(e) => {
-                        eprintln!("error: bugzilla ({host}): {e}");
-                        return ExitCode::FAILURE;
-                    }
+                    Err(e) => leave_out(&mut left_out, format!("bugzilla ({host})"), &e, None),
                 }
             }
         } else {
@@ -813,7 +837,10 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     }
 
     if domain_reports.is_empty() && bugzilla.is_empty() {
-        eprintln!("No data sources configured for the selected domain(s).");
+        match left_out.is_empty() {
+            true => eprintln!("No data sources configured for the selected domain(s)."),
+            false => eprintln!("Every source failed: nothing to report."),
+        }
         return ExitCode::FAILURE;
     }
 
@@ -824,6 +851,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         until,
         domains: domain_reports,
         bugzilla,
+        left_out: left_out.clone(),
     };
 
     // Format output. A breakdown is appended rather than replacing
@@ -896,11 +924,43 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         print!("{output}");
     }
 
+    // Written, but not whole: say so, and in the exit status.
+    if !left_out.is_empty() {
+        eprintln!(
+            "warning: {} source(s) left out after errors; the report lists them",
+            left_out.len()
+        );
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
 }
 
 #[cfg(test)]
 mod tests {
+    /// A failed source is recorded with its error, and a refused token
+    /// is told apart from other failures.
+    #[test]
+    fn a_failed_source_is_left_out_and_recorded() {
+        assert!(token_refused("HTTP 401 Unauthorized"));
+        assert!(token_refused(
+            "HTTP 403 Forbidden: token does not have at least one of required scope(s): [read:issue]"
+        ));
+        assert!(!token_refused("HTTP 502 Bad Gateway"));
+        assert!(!token_refused("issue #403 has no title"));
+        let mut left = Vec::new();
+        leave_out(
+            &mut left,
+            "forgejo (fedora)".into(),
+            "HTTP 403",
+            Some("forge.example"),
+        );
+        leave_out(&mut left, "bodhi (fedora)".into(), "timed out", None);
+        assert_eq!(
+            left,
+            ["forgejo (fedora): HTTP 403", "bodhi (fedora): timed out"]
+        );
+    }
+
     /// The committed man page is generated from this CLI; see
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
     #[test]

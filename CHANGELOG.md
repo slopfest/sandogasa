@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### sandogasa-report keeps the rest of a report when one source fails
+
+A Fedora Forge token without the `read:issue` scope ended the whole
+report with a 403, about 90 seconds in, and everything gathered until
+then was lost; any other source's error did the same. A failing source
+is now left out with a warning, and the report is still written: it
+lists what was left out, with each error, under its header (and in the
+JSON as `left_out`), and the run exits with status 1. For a token a
+forge refused, the warning says that
+`sandogasa-report config --token <HOST>` replaces it.
+
+Each source also says what it is reading as it starts, without `-v`:
+the Forgejo searches, Bugzilla, Bodhi, Koji, GitLab, GitHub, Sourcehut
+and the Debian bug tracker ran for minutes without a word. And a
+Forgejo section reported with a token but no `--user` names the token's
+owner in the header, where it showed an empty name.
+
 ### sandogasa-report config --token asks for one instance's token again
 
 Replacing a token that worked but lacked a scope (a Fedora Forge token

@@ -394,6 +394,7 @@ mod tests {
                 bts: None,
             }],
             bugzilla: vec![],
+            left_out: vec![],
         };
         let rows = gather(&report);
         let shown: Vec<String> = rows

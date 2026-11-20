@@ -33,6 +33,10 @@ pub struct Report {
     /// domains that share it), in the order the domains introduce them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bugzilla: Vec<bugzilla::BugzillaReport>,
+    /// Sources that failed and are not in the report, each with its
+    /// error ("forgejo (fedora): …").
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<String>,
 }
 
 /// One domain's per-domain activity. Each service is present only
@@ -166,6 +170,13 @@ pub fn format_markdown(
         "**Period:** {} to {}\n\n",
         report.since, report.until
     ));
+    if !report.left_out.is_empty() {
+        out.push_str("**Left out after errors:**\n\n");
+        for what in &report.left_out {
+            out.push_str(&format!("- {what}\n"));
+        }
+        out.push('\n');
+    }
 
     // One section per domain, in CLI --domain order. Each Bugzilla
     // section is emitted after `after` blocks, so it lands right after
@@ -240,6 +251,7 @@ mod tests {
             until: NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
             domains,
             bugzilla: Vec::new(),
+            left_out: Vec::new(),
         }
     }
 
@@ -300,6 +312,17 @@ mod tests {
         assert!(md.contains("# Activity Report: fedora"));
         assert!(md.contains("**User:** `testuser`"));
         assert!(md.contains("**Period:** 2026-01-01 to 2026-03-31"));
+        assert!(!md.contains("Left out"), "{md}");
+        let mut partial = report(Some("testuser"), "fedora", vec![]);
+        partial.left_out.push("forgejo (fedora): HTTP 403".into());
+        let md = format_markdown(&partial, 0, &BTreeMap::new());
+        assert!(
+            md.contains(
+                "**Period:** 2026-01-01 to 2026-03-31\n\n\
+                 **Left out after errors:**\n\n- forgejo (fedora): HTTP 403\n\n"
+            ),
+            "{md}"
+        );
     }
 
     #[test]

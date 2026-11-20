@@ -139,6 +139,7 @@ pub fn forgejo_report(
         None => "the token owner".to_string(),
     };
 
+    eprintln!("Searching {base} for the pull requests and issues {whose} opened...");
     if verbose {
         eprintln!("[forgejo] {base}: searching pulls created by {whose}");
     }
@@ -216,7 +217,14 @@ pub fn forgejo_report(
     let feed_user = match by {
         Some(u) => Some(u.to_string()),
         None => match client.current_user() {
-            Ok(owner) => Some(owner.login),
+            Ok(owner) => {
+                // The token's owner is who the report is about, when
+                // no name was given.
+                if report.user.is_empty() {
+                    report.user = owner.login.clone();
+                }
+                Some(owner.login)
+            }
             Err(e) => {
                 eprintln!(
                     "warning: cannot tell whose token is used on {base} ({e}); issues \
@@ -975,7 +983,7 @@ mod tests {
         let day = |s| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
         let r = forgejo_report(
             &cfg,
-            "me",
+            "",
             day("2026-07-01"),
             day("2026-08-31"),
             &tokens,
@@ -998,7 +1006,10 @@ mod tests {
         assert!(r.not_listed.is_empty());
         let md = format_markdown(&r, 1);
         assert!(md.contains("- **Issues closed:** 1"), "{md}");
-        // A token the server refuses ends the run, not reads as quiet.
+        // No name given: the report is about the token's owner, and
+        // says so.
+        assert_eq!(r.user, "owner");
+        // A token the server refuses is an error, not a quiet period.
         let refused = rt.block_on(MockServer::start());
         rt.block_on(
             Mock::given(method("GET"))
