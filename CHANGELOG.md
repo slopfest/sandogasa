@@ -19,6 +19,19 @@ rewrite its table with the builds this run found, keeping its
 not-built line. Before, the table was rewritten only while the
 package was outdated.
 
+### sandogasa-cbs's tests pass on s390x, and its dependency check picks the ppc64le RPM on ppc64le
+
+Fedora's builds of sandogasa 0.29.0 failed on s390x alone, on
+2026-11-20: the test `the_hub_answers_become_builds_and_errors` used
+s390x as an architecture other than the host's, which on an s390x
+builder is the host's. It now picks one that is not.
+
+The same code chose which architecture's RPM to judge a build's
+Requires by from Rust's name for the host (`std::env::consts::ARCH`),
+which is `powerpc64` on ppc64le and `x86` on i686, so it never matched
+the RPM there and fell back to the first in the hub's list. It now
+uses the RPM names.
+
 ## v0.29.0
 
 ### cbspkg promote shows what its dependency check reads, and spaces the reports evenly
