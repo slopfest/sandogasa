@@ -47,9 +47,16 @@ value sets the corresponding ACL level.
 ```
 $ sandogasa-pkg-acl config
 No config found at /home/user/.config/sandogasa-pkg-acl/config.toml
-Enter dist-git API token: 
-Verifying token... OK (authenticated as salimma)
-dist-git API token: kept in the keyring, not the config file (check it with `secret-tool lookup application sandogasa service src.fedoraproject.org`).
+  Create a Fedora dist-git (Pagure) API token at
+    https://src.fedoraproject.org/settings/token/new
+  What to grant:
+  - sandogasa-pkg-acl (this tool): the "Modify an existing project" ACL
+  - poi-tracker: the "Modify an existing project" ACL
+  For all of them:
+    the "Modify an existing project" ACL
+Enter dist-git API token:
+Verifying API token... OK (authenticated as salimma)
+dist-git API token: kept in the desktop keyring, as "sandogasa: Pagure token" for src.fedoraproject.org, not in the config file.
 Saved to /home/user/.config/sandogasa-pkg-acl/config.toml
 ```
 

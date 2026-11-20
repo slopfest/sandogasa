@@ -401,8 +401,10 @@ pub fn keep_for_file(
     match keep(store, secret, &value) {
         Kept::Keyring => {
             eprintln!(
-                "{what}: kept in the keyring, not the config file (check it with `{}`).",
-                secret.lookup_command()
+                "{what}: kept in the desktop keyring, as \"{}\" for {}, not in the \
+                 config file.",
+                secret.label(),
+                secret.service()
             );
             String::new()
         }
@@ -840,14 +842,16 @@ fn kept_note(
     others: &[&str],
 ) -> Option<String> {
     store.lookup(secret).ok().flatten()?;
-    let who = if others.is_empty() {
-        String::new()
-    } else {
-        format!(", as {} here may use it", others.join(", "))
+    let who = match others {
+        [] => String::new(),
+        [one] => format!(", as {one} here may use it"),
+        [rest @ .., last] => format!(", as {} and {last} here may use it", rest.join(", ")),
     };
     Some(format!(
-        "{what}: off for {tool}; the keyring entry is kept{who}; to remove it: {}",
-        secret.clear_command()
+        "{what}: off for {tool}. Its keyring entry, \"{}\" for {}, is kept{who}; delete \
+         it in your keyring to remove it.",
+        secret.label(),
+        secret.service()
     ))
 }
 
@@ -1126,9 +1130,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             note,
-            "Bugzilla API key: off for fedora-cve-triage; the keyring entry is kept, as \
-             ebranch, poi-tracker here may use it; to remove it: secret-tool clear \
-             application sandogasa service bugzilla.redhat.com"
+            "Bugzilla API key: off for fedora-cve-triage. Its keyring entry, \
+             \"sandogasa: Bugzilla API key\" for bugzilla.redhat.com, is kept, as \
+             ebranch and poi-tracker here may use it; delete it in your keyring to \
+             remove it."
         );
         assert!(!note.contains("s3cr3t"), "the secret is never in the note");
     }

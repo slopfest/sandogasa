@@ -2086,8 +2086,9 @@ value as the default: Enter keeps it, a new value replaces it, and `-`
 clears an optional one. A saved secret is never shown. A secret cleared
 is turned off for ebranch (`api_key = "-"` in its file), so a cleared
 RPM Fusion key leaves ebranch reading RPM Fusion only; the keyring
-entry stays for the other tools, and `config` says which are set up
-here and how to remove it (`secret-tool clear …`).
+entry stays for the other tools, and `config` names it and says which
+are set up here ([docs/tokens.md](../../docs/tokens.md) shows how to
+remove an entry).
 
 `ebranch config` keeps the credentials — the Bugzilla, NVD and RPM
 Fusion Bugzilla API keys and the Forgejo token — in the desktop

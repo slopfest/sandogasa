@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### config messages name the keyring entry, not the command to read it
+
+Storing a token printed "check it with `secret-tool lookup …`", and
+turning one off printed "to remove it: `secret-tool clear …`", which
+reads as if managing tokens needed that command; KDE users keep them in
+KWallet. Both now name the entry as a keyring app shows it
+(`"sandogasa: Bugzilla API key" for bugzilla.redhat.com`), and
+fedora-review-digest's missing-key message no longer quotes a command.
+[docs/tokens.md](docs/tokens.md) says where the tokens are kept and
+gives both commands, `lookup` and `clear`, for use from a terminal.
+
 ### sandogasa-report keeps the rest of a report when one source fails
 
 A Fedora Forge token without the `read:issue` scope ended the whole

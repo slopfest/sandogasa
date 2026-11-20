@@ -372,13 +372,15 @@ pub fn token_help(label: &str, tool: &str, base: &str) -> String {
         || same_site(base, service.create)
     {
         true => format!(
-            "Create a {} {} at {}",
+            "Create {} {} {} at {}",
+            article(service.name).to_lowercase(),
             service.name,
             service.what,
             creation_url(service.create, base)
         ),
         false => format!(
-            "Create a {} {} in your settings on {}",
+            "Create {} {} {} in your settings on {}",
+            article(service.name).to_lowercase(),
             service.name,
             service.what,
             base.trim_end_matches('/')
@@ -424,12 +426,19 @@ pub fn markdown() -> String {
          # Tokens and logins\n\n\
          What each tool needs from each service, and where to set it up. Each \
          tool's `config` command says the same for its own tokens.\n\n\
-         A token or key is kept in the desktop keyring, one entry per service \
-         and host, shared by every tool that uses that service \
-         (`secret-tool lookup application sandogasa service <host>` shows one). \
-         Without a keyring it goes in the tool's own config file. A token one \
-         tool needs more from than another must grant the most any tool you \
-         run needs; if you run only one, grant what that one needs.\n\n\
+         A token or key is kept in the desktop keyring (GNOME Keyring, or \
+         KWallet with its Secret Service support), one entry per service and \
+         host, labeled \"sandogasa: <kind of token>\", and shared by every tool \
+         that uses that service. Without a keyring it goes in the tool's own \
+         config file. A token one tool needs more from than another must grant \
+         the most any tool you run needs; if you run only one, grant what that \
+         one needs.\n\n\
+         From a terminal:\n\n\
+         - `secret-tool lookup application sandogasa service <host>` shows an \
+         entry\n\
+         - `secret-tool clear application sandogasa service <host>` removes it, \
+         for every tool that uses it; to stop one tool using it, clear its token \
+         in that tool's `config` instead (enter `-`)\n\n\
          ## By tool\n\n\
          What each tool needs; the sections below say where to create each \
          token and what the other tools sharing it need.\n\n\
@@ -565,9 +574,17 @@ fn anchor(heading: &str) -> String {
 
 /// "A" or "An" before `word`.
 fn article(word: &str) -> &'static str {
-    match word.chars().next() {
-        Some(c) if "aeiouAEIOU".contains(c) => "An",
-        _ => "A",
+    let first = word.split_whitespace().next().unwrap_or("");
+    // An acronym is read letter by letter: "an NVD", "an API key".
+    let acronym = first.len() > 1 && first.chars().all(|c| c.is_ascii_uppercase());
+    let vowel_sound = match first.chars().next() {
+        Some(c) if acronym => "AEFHILMNORSX".contains(c),
+        Some(c) => "aeiouAEIOU".contains(c),
+        None => false,
+    };
+    match vowel_sound {
+        true => "An",
+        false => "A",
     }
 }
 
@@ -730,6 +747,9 @@ mod tests {
             assert!(l.tools.windows(2).all(|w| w[0] < w[1]), "{}", l.name);
         }
         assert_eq!(article("API key"), "An");
+        assert_eq!(article("NVD"), "An");
+        assert_eq!(article("GitHub"), "A");
+        assert_eq!(article("Bugzilla"), "A");
         assert!(same_site(
             "https://api.github.com",
             "https://github.com/settings"

@@ -4,7 +4,12 @@
 
 What each tool needs from each service, and where to set it up. Each tool's `config` command says the same for its own tokens.
 
-A token or key is kept in the desktop keyring, one entry per service and host, shared by every tool that uses that service (`secret-tool lookup application sandogasa service <host>` shows one). Without a keyring it goes in the tool's own config file. A token one tool needs more from than another must grant the most any tool you run needs; if you run only one, grant what that one needs.
+A token or key is kept in the desktop keyring (GNOME Keyring, or KWallet with its Secret Service support), one entry per service and host, labeled "sandogasa: <kind of token>", and shared by every tool that uses that service. Without a keyring it goes in the tool's own config file. A token one tool needs more from than another must grant the most any tool you run needs; if you run only one, grant what that one needs.
+
+From a terminal:
+
+- `secret-tool lookup application sandogasa service <host>` shows an entry
+- `secret-tool clear application sandogasa service <host>` removes it, for every tool that uses it; to stop one tool using it, clear its token in that tool's `config` instead (enter `-`)
 
 ## By tool
 

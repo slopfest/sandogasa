@@ -93,9 +93,8 @@ pub fn credentials(
                 Some(k) => k,
                 None => {
                     eprintln!(
-                        "No Bugzilla API key set (keyring: `{}`, config: {}, or \
-                         $BUGZILLA_API_KEY).",
-                        crate::secrets::bugzilla().lookup_command(),
+                        "No Bugzilla API key set: none in the desktop keyring, {} or \
+                         $BUGZILLA_API_KEY.",
                         file.path().display()
                     );
                     eprint!(
