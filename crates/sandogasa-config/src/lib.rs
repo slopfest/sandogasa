@@ -248,30 +248,50 @@ impl ConfigFile {
     /// was removed, for the caller to say so.
     /// [`save`](Self::save) never removes a key (it lays the struct over
     /// the file), so a secret moved to the keyring is taken out of the
-    /// file this way.
+    /// file this way. [`Self::remove_path`] reaches a nested key.
     pub fn remove(&self, table: &str, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        if !self.path.exists() {
+        self.remove_path(&[table, key])
+    }
+
+    /// Remove the key at `path` (`["users", "me", "bugzilla_email"]`) from
+    /// the user file, at any depth, written as a table or inline, and each
+    /// table on the path left empty, and the file when nothing is left in it;
+    /// nothing when the file or key is not there. Returns whether the file
+    /// was removed, for the caller to say so.
+    ///
+    /// Only that key goes: whatever else the file holds stays, edits made
+    /// since the caller read it included, with its comments. A comment
+    /// at the top of the file stays too when the first table goes, moving
+    /// to the table that is first after it.
+    pub fn remove_path(&self, path: &[&str]) -> Result<bool, Box<dyn std::error::Error>> {
+        if path.is_empty() || !self.path.exists() {
             return Ok(false);
         }
         self.edit(|doc| {
-            let emptied = match doc.get_mut(table).and_then(|t| t.as_table_like_mut()) {
-                Some(t) => {
-                    t.remove(key);
-                    t.is_empty()
-                }
-                None => false,
-            };
-            if emptied {
-                doc.remove(table);
+            let first = first_position(doc.as_table());
+            let mut dropped = Vec::new();
+            remove_nested(doc.as_table_mut(), path, &mut dropped);
+            // The comment above the first header opens the file, unless
+            // root keys come before it.
+            let lead = dropped
+                .into_iter()
+                .find(|(pos, _)| pos.is_some() && *pos == first)
+                .map(|(_, prefix)| prefix)
+                .filter(|p| p.contains('#'));
+            let root_values = doc.iter().any(|(_, item)| item.is_value());
+            if let (Some(lead), false) = (lead, root_values)
+                && let Some(next) = first_table_mut(doc.as_table_mut())
+            {
+                let rest = next
+                    .decor()
+                    .prefix()
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                next.decor_mut().set_prefix(format!("{lead}{rest}"));
             }
         })?;
-        // Nothing left at all, not even a comment: no file, rather than
-        // an empty one.
-        if std::fs::read_to_string(&self.path)?.trim().is_empty() {
-            std::fs::remove_file(&self.path)?;
-            return Ok(true);
-        }
-        Ok(false)
+        remove_if_empty(&self.path)
     }
 
     /// Change part of the **user** config file in place, keeping its
@@ -677,6 +697,85 @@ fn overlay_items(existing: &mut toml_edit::Table, new: &toml_edit::Table) {
     }
 }
 
+/// Remove the key at `path` below `table`, and each table on the path
+/// left empty, recording each table removed as its position and the decor
+/// above its header. Whether the key was there.
+fn remove_nested(
+    table: &mut dyn toml_edit::TableLike,
+    path: &[&str],
+    dropped: &mut Vec<(Option<isize>, String)>,
+) -> bool {
+    let Some((key, rest)) = path.split_first() else {
+        return false;
+    };
+    let note = |item: &toml_edit::Item, dropped: &mut Vec<(Option<isize>, String)>| {
+        if let Some(t) = item.as_table() {
+            let prefix = t.decor().prefix().and_then(|p| p.as_str()).unwrap_or("");
+            dropped.push((t.position(), prefix.to_string()));
+        }
+    };
+    if rest.is_empty() {
+        return match table.remove(key) {
+            Some(item) => {
+                note(&item, dropped);
+                true
+            }
+            None => false,
+        };
+    }
+    let Some(child) = table.get_mut(key).and_then(|i| i.as_table_like_mut()) else {
+        return false;
+    };
+    let found = remove_nested(child, rest, dropped);
+    // Emptied, or empty already: a table on the path goes either way, as
+    // `save` can leave one behind for a struct field with nothing set.
+    if child.is_empty()
+        && let Some(item) = table.remove(key)
+    {
+        note(&item, dropped);
+    }
+    found
+}
+
+/// The position of the first table header at or below `table`.
+fn first_position(table: &toml_edit::Table) -> Option<isize> {
+    table
+        .iter()
+        .filter_map(|(_, item)| item.as_table())
+        .flat_map(|t| {
+            let own = (!t.is_implicit()).then(|| t.position()).flatten();
+            [own, first_position(t)]
+        })
+        .flatten()
+        .min()
+}
+
+/// The table whose header comes first at or below `table`.
+fn first_table_mut(table: &mut toml_edit::Table) -> Option<&mut toml_edit::Table> {
+    let target = first_position(table)?;
+    let key = table.iter().find_map(|(key, item)| {
+        let t = item.as_table()?;
+        let own = !t.is_implicit() && t.position() == Some(target);
+        (own || first_position(t) == Some(target)).then(|| key.to_string())
+    })?;
+    let child = table.get_mut(&key)?.as_table_mut()?;
+    if !child.is_implicit() && child.position() == Some(target) {
+        Some(child)
+    } else {
+        first_table_mut(child)
+    }
+}
+
+/// Remove the file at `path` when nothing is left in it, not even a
+/// comment: no file, rather than an empty one. Whether it was removed.
+fn remove_if_empty(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+    if std::fs::read_to_string(path)?.trim().is_empty() {
+        std::fs::remove_file(path)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// The system layer's root: `/etc`, or `$SANDOGASA_ETC` when set —
 /// so a config a repository ships under `configs/<tool>/` can be
 /// tried beneath the real user file before it is installed
@@ -947,6 +1046,54 @@ mod tests {
         assert!(text.contains("non-voting = [\"jspaleta\"]"), "{text}");
         assert!(text.contains("[defaults.agenda]\nhistory = 20"), "{text}");
         assert!(text.starts_with("# hand-written"), "{text}");
+    }
+
+    /// `remove_path` takes out a nested key, written as a table or
+    /// inline, and each table that leaves empty, keeping everything else,
+    /// and the comment opening the file when the first table goes (#177).
+    #[test]
+    fn remove_path_takes_out_a_nested_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# my overlay\n[notes]\ndir = \"~/n\"\n\n\
+             [users.me]\nfas = \"me\"\n# my Bugzilla\nbugzilla_email = \"old@example.org\"\n\
+             forgejo = { \"codeberg.org\" = \"me-fj\" }\n\n\
+             [users.me.gitlab]\n\"gitlab.com\" = \"me-gl\"\n\n[domains.x]\n",
+        )
+        .unwrap();
+        let cf = ConfigFile::from_path(path.clone());
+        for p in [
+            &["users", "me", "bugzilla_email"][..],
+            &["users", "me", "gitlab", "gitlab.com"],
+            &["users", "me", "forgejo", "codeberg.org"],
+            &["notes", "dir"],
+            // Not there: nothing to do.
+            &["users", "you", "fas"],
+            &["notes"],
+        ] {
+            assert!(!cf.remove_path(p).unwrap(), "{p:?}");
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for gone in [
+            "old@example.org",
+            "gitlab",
+            "forgejo",
+            "notes",
+            "my Bugzilla",
+        ] {
+            assert!(!text.contains(gone), "{gone}: {text}");
+        }
+        assert!(text.starts_with("# my overlay\n"), "{text}");
+        assert!(text.contains("[users.me]\nfas = \"me\"\n"), "{text}");
+        // Empty to begin with: kept.
+        assert!(text.contains("[domains.x]"), "{text}");
+        // The last key gone, the file goes too.
+        cf.remove_path(&["users", "me", "fas"]).unwrap();
+        assert!(cf.remove_path(&["domains", "x"]).unwrap());
+        assert!(!path.exists());
+        assert!(!cf.remove_path(&["users"]).unwrap());
     }
 
     #[test]

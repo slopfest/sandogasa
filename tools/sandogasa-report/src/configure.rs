@@ -133,6 +133,8 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     } else {
         toml::Value::Table(Default::default())
     };
+    // As read, to tell which settings the answers clear.
+    let as_read = overlay.clone();
 
     eprintln!(
         "Configuring sandogasa-report overlay.\n\
@@ -219,13 +221,14 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     // that cannot be stored does not lose the answers above.
     let mut saved_profile = false;
     if changed {
-        let dir_cleared: Vec<(&str, String)> = if notes_dir_changed && notes_dir.is_empty() {
-            vec![("notes", "dir".to_string())]
+        if write_overlay(&overlay_cf, &as_read, &overlay, &[])? {
+            eprintln!(
+                "\nNothing left to keep in {}; removed it.",
+                overlay_path.display()
+            );
         } else {
-            Vec::new()
-        };
-        write_overlay(&overlay_cf, &overlay, &dir_cleared)?;
-        eprintln!("\nSaved the profile to {}", overlay_path.display());
+            eprintln!("\nSaved the profile to {}", overlay_path.display());
+        }
         saved_profile = true;
         changed = false;
     }
@@ -313,7 +316,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         return Ok(());
     }
 
-    if write_overlay(&overlay_cf, &overlay, &out_of_file)? {
+    if write_overlay(&overlay_cf, &as_read, &overlay, &out_of_file)? {
         eprintln!(
             "\nNothing else to keep in {}; removed it.",
             overlay_path.display()
@@ -942,17 +945,41 @@ fn instance_token_in(
     Ok(TokenOutcome::InOverlay)
 }
 
-/// Save `overlay` to `cf`, then take out the `(table, key)` tokens now
-/// in the keyring, which `save` (laying the overlay over the file)
-/// would leave there. Whether the file, left with nothing in it, was
-/// removed.
+/// The paths of the settings in `read` that `now` no longer has, the
+/// innermost one for each, under `prefix`.
+fn cleared_paths(read: &toml::Value, now: &toml::Value, prefix: &[String]) -> Vec<Vec<String>> {
+    let (Some(read), Some(now)) = (read.as_table(), now.as_table()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (key, value) in read {
+        let path: Vec<String> = prefix.iter().cloned().chain([key.clone()]).collect();
+        match now.get(key) {
+            None => out.push(path),
+            Some(kept) => out.extend(cleared_paths(value, kept, &path)),
+        }
+    }
+    out
+}
+
+/// Save `overlay` to `cf`, then take out of the file the settings the
+/// answers cleared, which `save` (laying the overlay over the file)
+/// would leave there: those in `read`, the overlay as it was read, that
+/// it no longer has. Then the `(table, key)` tokens now in the keyring.
+/// Only those go, so an edit made to the file meanwhile is kept. Whether
+/// the file, left with nothing in it, was removed.
 fn write_overlay(
     cf: &sandogasa_config::ConfigFile,
+    read: &toml::Value,
     overlay: &toml::Value,
     out_of_file: &[(&str, String)],
 ) -> Result<bool, Box<dyn std::error::Error>> {
     cf.save(overlay)?;
     let mut removed = false;
+    for path in cleared_paths(read, overlay, &[]) {
+        let path: Vec<&str> = path.iter().map(String::as_str).collect();
+        removed |= cf.remove_path(&path)?;
+    }
     for (table, key) in out_of_file {
         removed |= cf.remove(table, key)?;
     }
@@ -1104,6 +1131,53 @@ mod tests {
         ]
     }
 
+    /// A field cleared at its prompt leaves the file, not only the
+    /// overlay in memory, nested ones included, and the next report no
+    /// longer reads it (#177).
+    #[test]
+    #[serial_test::serial]
+    fn a_cleared_field_leaves_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let text = "[notes]\ndir = \"~/notes\"\n\n\
+            [users.me]\nfas = \"me\"\nbugzilla_email = \"old@example.org\"\n\n\
+            [users.me.gitlab]\n\"gitlab.com\" = \"me-gl\"\n";
+        let cf = write_user_overlay(text);
+        let mut overlay = parse_overlay(text).unwrap();
+        assert!(overlay_update(
+            &mut overlay,
+            &["users", "me", "bugzilla_email"],
+            Some("old@example.org"),
+            ""
+        ));
+        assert!(overlay_update(
+            &mut overlay,
+            &["users", "me", "gitlab", "gitlab.com"],
+            Some("me-gl"),
+            ""
+        ));
+        assert!(overlay_update(
+            &mut overlay,
+            &["notes", "dir"],
+            Some("~/notes"),
+            ""
+        ));
+        // Meanwhile, a table added to the file by hand: kept.
+        let mut edited = std::fs::read_to_string(cf.path()).unwrap();
+        edited.push_str("\n[defaults]\nexplain = true\n");
+        std::fs::write(cf.path(), edited).unwrap();
+        let read = parse_overlay(text).unwrap();
+        assert!(!write_overlay(&cf, &read, &overlay, &[]).unwrap());
+        let left = std::fs::read_to_string(cf.path()).unwrap();
+        assert!(!left.contains("old@example.org"), "{left}");
+        assert!(!left.contains("me-gl"), "{left}");
+        assert!(!left.contains("notes"), "{left}");
+        assert!(left.contains("fas = \"me\""), "{left}");
+        assert!(left.contains("[defaults]\nexplain = true"), "{left}");
+        let cfg: config::ReportConfig = cf.load_user().unwrap();
+        assert_eq!(cfg.users["me"].bugzilla_email, None);
+    }
+
     /// The tokens `config` keeps in the keyring are what a report then
     /// uses, the overlay is left without them, and the environment
     /// still wins.
@@ -1149,7 +1223,8 @@ mod tests {
             assert_eq!(outcome, TokenOutcome::InKeyring { was_in_file: true });
             out_of_file.push((kind.table, host));
         }
-        assert!(!write_overlay(&cf, &overlay, &out_of_file).unwrap());
+        let read = overlay.clone();
+        assert!(!write_overlay(&cf, &read, &overlay, &out_of_file).unwrap());
         let left = std::fs::read_to_string(cf.path()).unwrap();
         assert!(
             !left.contains("saved"),
@@ -1371,7 +1446,15 @@ mod tests {
         assert_eq!(outcome, TokenOutcome::InKeyring { was_in_file: true });
         // Word for word what `sandogasa_config::secret::fill` asks.
         assert_eq!(asked.into_inner(), [(QUESTION.to_string(), false)]);
-        assert!(!write_overlay(&cf, &overlay, &[("gitlab_tokens", host.to_string())]).unwrap());
+        assert!(
+            !write_overlay(
+                &cf,
+                &overlay.clone(),
+                &overlay,
+                &[("gitlab_tokens", host.to_string())]
+            )
+            .unwrap()
+        );
         let left = std::fs::read_to_string(cf.path()).unwrap();
         assert!(!left.contains("gitlab_tokens"), "{left}");
         let none = std::collections::BTreeMap::new();
@@ -1907,7 +1990,15 @@ mod tests {
             Ok(TokenChoice::KeepExisting)
         })
         .unwrap();
-        assert!(write_overlay(&cf, &overlay, &[("gitlab_tokens", host.to_string())]).unwrap());
+        assert!(
+            write_overlay(
+                &cf,
+                &overlay.clone(),
+                &overlay,
+                &[("gitlab_tokens", host.to_string())]
+            )
+            .unwrap()
+        );
         assert!(!cf.path().exists());
         crate::secrets::keyring()
             .clear(&crate::gitlab::secret(GITLAB_I))

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### sandogasa-report config removes a cleared field from the file
+
+Clearing a profile field at a `config` prompt (an empty answer, or `-`)
+printed that the overlay was saved, but the old value stayed in
+`~/.config/sandogasa-report/config.toml`, and the next report still
+used it. `config` laid its answers over the file, which never removes a
+key, and the only removal it had reached top-level keys, while profile
+fields sit under `users.<profile>`.
+
+`config` now takes out of the file each setting an answer cleared, at
+any depth, and a table that leaves empty, keeping everything else,
+including edits made to the file while `config` was asking, and
+comments. A comment opening the file stays when the first table goes.
+It also says when that leaves the file empty and removes it, rather
+than that the profile was saved. The new
+`sandogasa_config::ConfigFile::remove_path` removes a nested key this
+way; `ConfigFile::remove` now uses it. Other tools' `config` commands
+mark a turned-off token with `-` and keep it, rather than clearing a
+field, so they are not affected.
+
+Fixes #177
+
 ### sandogasa-report reads the Debian bug tracker
 
 Bugs a Debian contributor filed or wrote to appeared in no report, and
