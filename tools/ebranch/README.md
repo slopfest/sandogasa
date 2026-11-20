@@ -2083,7 +2083,11 @@ normally shipped `root:root 0644`.
 `ebranch config` asks only for settings that are missing, or whose saved
 value is not valid. `--all` asks for every setting again, with the saved
 value as the default: Enter keeps it, a new value replaces it, and `-`
-clears an optional one. A saved secret is never shown. A secret cleared
+clears an optional one. A saved secret is never shown. `--token <host>`
+(for example `--token bugzilla.redhat.com`) asks again only for the secret kept for
+that host, even though one is saved, and leaves the other settings
+alone; [docs/tokens.md](../../docs/tokens.md) lists what each token
+needs. A secret cleared
 is turned off for ebranch (`api_key = "-"` in its file), so a cleared
 RPM Fusion key leaves ebranch reading RPM Fusion only; the keyring
 entry stays for the other tools, and `config` names it and says which

@@ -433,6 +433,9 @@ pub fn markdown() -> String {
          config file. A token one tool needs more from than another must grant \
          the most any tool you run needs; if you run only one, grant what that \
          one needs.\n\n\
+         To replace one token, with one granting more or a new one: \
+         `<tool> config --token <host>` asks for it again, saying what to \
+         grant.\n\n\
          From a terminal:\n\n\
          - `secret-tool lookup application sandogasa service <host>` shows an \
          entry\n\

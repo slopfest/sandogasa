@@ -96,12 +96,15 @@ Show each step and its command without running anything
 \fB\-\-explain\fR
 Narrate each step and show its command, pausing before each
 .SS cbspkg config
-\fBcbspkg config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBcbspkg config\fR [\fB\-\-all\fR] [\fB\-\-token\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up the GitLab token
 .TP
 \fB\-\-all\fR
 Ask for every setting again, with the saved value as the default: Enter keeps it, a new value replaces it, and \- clears an optional one
+.TP
+\fB\-\-token\fR \fI<HOST>\fR
+Ask again only for the token kept for HOST (e.g. forge.fedoraproject.org, or its URL), even though one is saved; Enter keeps it. May be given more than once
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

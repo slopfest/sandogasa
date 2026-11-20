@@ -30,7 +30,7 @@ and the Debian bug tracker ran for minutes without a word. And a
 Forgejo section reported with a token but no `--user` names the token's
 owner in the header, where it showed an empty name.
 
-### sandogasa-report config --token asks for one instance's token again
+### config --token asks for one token again
 
 Replacing a token that worked but lacked a scope (a Fedora Forge token
 without `read:issue`, which ended the report with a 403) meant clearing
@@ -42,8 +42,15 @@ that instance's token, as if none were saved: Enter keeps the saved one,
 taken back from the keyring. A host the configuration has no instance
 for is refused, with the hosts it has, and so is `--token` with
 `--missing` or `--all`.
-The flag comes from sandogasa-cli's new `TokenArgs`, for the other
-tools' `config` commands to take up.
+Every other tool's `config` takes it too, through sandogasa-cli's
+`ConfigArgs` (new `TokenArgs`): cbspkg, cpu-sig-tracker, ebranch,
+fedora-cve-triage, fedora-review-digest, fesco-chair, hs-relmon,
+poi-tracker and sandogasa-pkg-acl ask only about the secrets kept for
+the hosts given, skip their other settings, and refuse a host they keep
+nothing for; cpu-sig-tracker asks for the Jira email with its token, as
+the two are checked as a pair. A secret named that is turned off is
+asked for anew, and none is asked about whether to use the keyring's
+entry again. `--token` is not taken with `--all`.
 
 ### config prompts say what each token needs, and docs/tokens.md lists them all
 

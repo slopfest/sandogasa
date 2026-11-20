@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH poi-tracker 1 2026-11-16 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH poi-tracker 1 2026-11-20 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 poi\-tracker \- Package\-of\-interest tracker for Fedora, EPEL, and CentOS SIGs
 .SH SYNOPSIS
@@ -218,7 +218,7 @@ Which [[closure]] of the workspace a walk subcommand works on (default: the firs
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS poi-tracker config
-\fBpoi\-tracker config\fR [\fB\-\-all\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBpoi\-tracker config\fR [\fB\-\-all\fR] [\fB\-i\fR|\fB\-\-inventory\fR] [\fB\-I\fR|\fB\-\-inventory\-dir\fR] [\fB\-\-token\fR] [\fB\-C\fR|\fB\-\-directory\fR] [\fB\-w\fR|\fB\-\-workspace\fR] [\fB\-\-closure\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Configure poi\-tracker (Bugzilla API key, etc.)
 .TP
@@ -230,6 +230,9 @@ Exactly these inventory TOML file(s) (repeatable) — the most specific of the t
 .TP
 \fB\-I\fR, \fB\-\-inventory\-dir\fR \fI<DIR>\fR
 Every *.toml in DIR as an inventory, roles unknown — for commands that treat inventories alike (show, find, validate, export). Use \-i to pick files, or a workspace to say which is which
+.TP
+\fB\-\-token\fR \fI<HOST>\fR
+Ask again only for the token kept for HOST (e.g. forge.fedoraproject.org, or its URL), even though one is saved; Enter keeps it. May be given more than once
 .TP
 \fB\-C\fR, \fB\-\-directory\fR \fI<DIR>\fR
 Run as if started in DIR (like `git \-C`): the workspace file, relative inventory paths and outputs are looked up there

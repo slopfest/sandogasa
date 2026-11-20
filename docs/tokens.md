@@ -6,6 +6,8 @@ What each tool needs from each service, and where to set it up. Each tool's `con
 
 A token or key is kept in the desktop keyring (GNOME Keyring, or KWallet with its Secret Service support), one entry per service and host, labeled "sandogasa: <kind of token>", and shared by every tool that uses that service. Without a keyring it goes in the tool's own config file. A token one tool needs more from than another must grant the most any tool you run needs; if you run only one, grant what that one needs.
 
+To replace one token, with one granting more or a new one: `<tool> config --token <host>` asks for it again, saying what to grant.
+
 From a terminal:
 
 - `secret-tool lookup application sandogasa service <host>` shows an entry

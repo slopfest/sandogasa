@@ -238,7 +238,8 @@ fesco-chair config
 ```
 
 Interactive setup: prompts for the Forgejo API token (hidden input;
-`--all` to replace a saved one), validates it against
+`--all`, or `--token forge.fedoraproject.org`, to replace a saved one),
+validates it against
 forge.fedoraproject.org, and keeps it in the desktop keyring (through
 `secret-tool`) as the forge.fedoraproject.org entry every sandogasa
 tool reads (`secret-tool lookup application sandogasa service

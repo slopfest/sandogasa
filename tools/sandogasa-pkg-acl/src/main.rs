@@ -277,10 +277,13 @@ fn saved_token(
     (std::mem::take(&mut config.dist_git.api_token), before)
 }
 
-/// Ask for the API token when there is none (with `all`, offering the
-/// saved one as the default), verify it, and save it with the account
+/// Ask for the API token when there is none (with `--all` or
+/// `--token src.fedoraproject.org`, offering the saved one as the
+/// default), verify it, and save it with the account
 /// it belongs to. A token dist-git refuses can be replaced on the spot.
 async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let host = crate::secrets::distgit().service().to_string();
+    args.token.check([host.as_str()])?;
     let cf = ConfigFile::for_tool(TOOL_NAME);
     let mut config = match cf.load_user::<AppConfig>() {
         Ok(config) => {
@@ -292,8 +295,8 @@ async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
             AppConfig::default()
         }
     };
-    let (mut token, before) = saved_token(&mut config, args.all, &sandogasa_cli::ask_to_reenable);
-    let mut review = args.all;
+    let mut review = args.review_secret(&host);
+    let (mut token, before) = saved_token(&mut config, review, &args.reenable());
     let hint = sandogasa_config::credentials::token_help(
         "sandogasa: Pagure token",
         "sandogasa-pkg-acl",
@@ -1149,6 +1152,27 @@ fn check_skip(
 
 #[cfg(test)]
 mod tests {
+    /// `--token` names src.fedoraproject.org, where the token is kept;
+    /// another host is refused before anything is asked.
+    #[tokio::test]
+    async fn config_token_names_dist_git() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args =
+            <Cli as clap::Parser>::parse_from(["sandogasa-pkg-acl", "--token", "gitlab.com"]);
+        assert_eq!(
+            super::cmd_config(&args.config)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "--token: no secret is kept for gitlab.com; this configuration has: \
+             src.fedoraproject.org"
+        );
+    }
+
     /// The committed man page is generated from this CLI; see
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
     #[test]

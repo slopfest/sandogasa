@@ -190,7 +190,7 @@ and the same code.
 ### `config`
 
 ```sh
-cbspkg config [--all]
+cbspkg config [--all | --token HOST]
 ```
 
 Asks for the GitLab token, checks it with GitLab, and keeps it in the
@@ -199,6 +199,8 @@ tool reads for that GitLab instance (`secret-tool lookup application
 sandogasa service gitlab.com`). Without a keyring to use it goes to
 `~/.config/cbspkg/config.toml` instead; a token found there is moved to
 the keyring the next time `config` runs. `GITLAB_TOKEN` overrides both.
+`--all` or `--token gitlab.com` asks for a saved token again;
+[docs/tokens.md](../../docs/tokens.md) lists what it needs.
 
 ### `mockbuild`
 

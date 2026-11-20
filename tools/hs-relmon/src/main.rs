@@ -1485,13 +1485,16 @@ fn run_prune_one(
 
 const GITLAB_BASE: &str = "https://gitlab.com";
 
-/// Ask for the GitLab token when there is none (with `all`, offering
-/// the saved one as the default), check it, and save it.
+/// Ask for the GitLab token when there is none (with `--all` or
+/// `--token gitlab.com`, offering the saved one as the default), check
+/// it, and save it.
 fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let cf = config::config_file();
     let secret = config::gitlab_token_secret();
-    let (saved, before) =
-        secret.saved(&cf, keyring(), args.all, &sandogasa_cli::ask_to_reenable)?;
+    let host = secret.entry.service().to_string();
+    args.token.check([host.as_str()])?;
+    let all = args.review_secret(&host);
+    let (saved, before) = secret.saved(&cf, keyring(), all, &args.reenable())?;
     let hint = sandogasa_config::credentials::token_help(
         "sandogasa: GitLab token",
         "hs-relmon",
@@ -1502,7 +1505,7 @@ fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
             .sensitive()
             .hint(hint.trim_end()),
         &saved,
-        args.all,
+        all,
     )?;
     let token =
         sandogasa_cli::credential::validated_key_blocking("GitLab", "token", existing, |token| {
@@ -1744,6 +1747,25 @@ fn reopen_issue(
 
 #[cfg(test)]
 mod tests {
+    /// `--token` names gitlab.com, where the token is kept; another
+    /// host is refused before anything is asked.
+    #[test]
+    fn config_token_names_gitlab_com() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args = <Cli as clap::Parser>::parse_from(["hs-relmon", "--token", "gitlab.example"]);
+        let err = super::configure_gitlab(&args.config)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "--token: no secret is kept for gitlab.example; this configuration has: gitlab.com"
+        );
+    }
+
     /// The committed man page is generated from this CLI; see
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
     #[test]

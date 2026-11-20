@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-pkg-acl 1 2026-11-16 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH sandogasa-pkg-acl 1 2026-11-20 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 sandogasa\-pkg\-acl \- View and manage Fedora package ACLs via the Pagure dist\-git API
 .SH SYNOPSIS
@@ -38,7 +38,7 @@ Path to TOML config file
 <\fIPACKAGES\fR>
 Package name(s)
 .SS sandogasa-pkg-acl config
-\fBsandogasa\-pkg\-acl config\fR [\fB\-\-all\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-pkg\-acl config\fR [\fB\-\-all\fR] [\fB\-\-json\fR] [\fB\-\-token\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Set up or verify stored API token
 .TP
@@ -47,6 +47,9 @@ Ask for every setting again, with the saved value as the default: Enter keeps it
 .TP
 \fB\-\-json\fR
 Output machine\-readable JSON
+.TP
+\fB\-\-token\fR \fI<HOST>\fR
+Ask again only for the token kept for HOST (e.g. forge.fedoraproject.org, or its URL), even though one is saved; Enter keeps it. May be given more than once
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

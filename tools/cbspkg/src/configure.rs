@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use crate::config;
 
 pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
-    match run_inner(args.all) {
+    match run_inner(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -17,13 +17,16 @@ pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
     }
 }
 
-/// Ask for the token when it is missing, or with `all` again with the
-/// saved one as the default, check it with GitLab, and save it.
-fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// Ask for the token when it is missing, or with `--all` or
+/// `--token <host>` again with the saved one as the default, check it
+/// with GitLab, and save it.
+fn run_inner(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
     let secret = config::gitlab_token_secret();
+    let host = secret.entry.service().to_string();
+    args.token.check([host.as_str()])?;
+    let all = args.review_secret(&host);
     let cf = config::config_file();
-    let (saved, before) =
-        secret.saved(&cf, config::keyring(), all, &sandogasa_cli::ask_to_reenable)?;
+    let (saved, before) = secret.saved(&cf, config::keyring(), all, &args.reenable())?;
     let hint = sandogasa_config::credentials::token_help(
         "sandogasa: GitLab token",
         "cbspkg",
@@ -74,6 +77,30 @@ fn report_saved(removed: bool, path: &std::path::Path) {
 mod tests {
     use super::*;
     use crate::test_support::EnvGuard;
+
+    /// `config`'s arguments, as the CLI parses `argv`.
+    fn args(argv: &[&str]) -> sandogasa_cli::ConfigArgs {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        <Cli as clap::Parser>::parse_from(argv).config
+    }
+
+    /// `--token` names the instance the token is kept for; another host
+    /// is refused before anything is asked.
+    #[test]
+    #[serial_test::serial]
+    fn token_names_the_gitlab_instance() {
+        let _env = EnvGuard::new(&[("CBSPKG_GITLAB_BASE", "https://gitlab.example.org")]);
+        let err = run_inner(&args(&["cbspkg", "--token", "gitlab.com"])).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--token: no secret is kept for gitlab.com; this configuration has: \
+             gitlab.example.org"
+        );
+    }
 
     /// A GitLab answering `status` for the token check, and the env
     /// pointing the tool and its config at it and a temp dir.
@@ -144,7 +171,7 @@ mod tests {
             .unwrap();
         std::fs::create_dir_all(tmp.path().join("cbspkg")).unwrap();
         std::fs::write(config::config_path(), "[gitlab]\naccess_token = \"old\"\n").unwrap();
-        run_inner(false).unwrap();
+        run_inner(&args(&["cbspkg"])).unwrap();
         assert!(!config::config_path().exists());
         assert_eq!(
             config::keyring()

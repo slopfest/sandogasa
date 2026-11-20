@@ -224,7 +224,10 @@ The key and the token go in the desktop keyring instead when
 there is one, as entries shared with other sandogasa tools that
 use the same service (`secret-tool lookup application sandogasa
 service bugzilla.redhat.com`, `… service src.fedoraproject.org`);
-without a keyring they stay in the config file.
+without a keyring they stay in the config file. `--token <host>`
+(`--token src.fedoraproject.org`) asks again only for the secret kept
+for that host and leaves the other settings alone;
+[docs/tokens.md](../../docs/tokens.md) lists what each needs.
 Lookup order at runtime: `--api-key` flag → `BUGZILLA_API_KEY`
 env var → keyring → config file (for the dist-git token:
 `--api-token` → `PAGURE_API_TOKEN` → keyring → config file).

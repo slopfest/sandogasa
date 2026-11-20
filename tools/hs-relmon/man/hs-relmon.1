@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-relmon 1 2026-11-18 "sandogasa 0.28.2" "Sandogasa Manual"
+.TH hs-relmon 1 2026-11-20 "sandogasa 0.28.2" "Sandogasa Manual"
 .SH NAME
 hs\-relmon \- Release monitoring tool for CentOS Hyperscale SIG packages
 .SH SYNOPSIS
@@ -163,12 +163,15 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fIMANIFEST\fR>
 Path to the TOML manifest file
 .SS hs-relmon config
-\fBhs\-relmon config\fR [\fB\-\-all\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBhs\-relmon config\fR [\fB\-\-all\fR] [\fB\-\-token\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 Configure GitLab authentication
 .TP
 \fB\-\-all\fR
 Ask for every setting again, with the saved value as the default: Enter keeps it, a new value replaces it, and \- clears an optional one
+.TP
+\fB\-\-token\fR \fI<HOST>\fR
+Ask again only for the token kept for HOST (e.g. forge.fedoraproject.org, or its URL), even though one is saved; Enter keeps it. May be given more than once
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

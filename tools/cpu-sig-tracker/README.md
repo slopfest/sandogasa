@@ -696,7 +696,11 @@ normally shipped `root:root 0644`.
 `cpu-sig-tracker config` asks only for settings that are missing, or whose saved
 value is not valid. `--all` asks for every setting again, with the saved
 value as the default: Enter keeps it, a new value replaces it, and `-`
-clears an optional one. A saved secret is never shown.
+clears an optional one. A saved secret is never shown. `--token <host>`
+(for example `--token gitlab.com`) asks again only for the secret kept for
+that host, even though one is saved, and leaves the other settings
+alone; [docs/tokens.md](../../docs/tokens.md) lists what each token
+needs.
 
 Credentials belong in the per-user file, which is 600, or in an
 environment variable — a token under `/etc` is readable by every local

@@ -57,8 +57,48 @@ pub struct ConfigArgs {
     /// Ask for every setting again, with the saved value as the
     /// default: Enter keeps it, a new value replaces it, and - clears
     /// an optional one.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "hosts")]
     pub all: bool,
+
+    #[command(flatten)]
+    pub token: TokenArgs,
+}
+
+impl ConfigArgs {
+    /// Whether the secret kept for `host` is asked for again, its saved
+    /// value the default: with `--all`, or `--token` naming it.
+    pub fn review_secret(&self, host: &str) -> bool {
+        self.all || self.token.again(host)
+    }
+
+    /// Whether only the secrets `--token` names are asked about, the
+    /// other settings kept as they are.
+    pub fn tokens_only(&self) -> bool {
+        self.token.given()
+    }
+
+    /// How to ask whether a secret turned off is to use the keyring's
+    /// entry again: [`ask_to_reenable`], or, with `--token`, no: a
+    /// secret it names is asked for anew rather than taken back, and
+    /// the others are not asked about.
+    pub fn reenable(&self) -> fn(&str, bool) -> bool {
+        fn decline(_question: &str, _default_yes: bool) -> bool {
+            false
+        }
+        match self.tokens_only() {
+            true => decline,
+            false => ask_to_reenable,
+        }
+    }
+
+    /// Make a secret `--token` names, and that is turned off
+    /// (`value` the off marker), blank, so its prompt asks for a new
+    /// one rather than offering the marker, which Enter would keep.
+    pub fn ask_anew(&self, host: &str, value: &mut String) {
+        if self.token.again(host) && value == sandogasa_config::secret::OFF {
+            value.clear();
+        }
+    }
 }
 
 /// `config --token HOST`: ask again for the token or key kept for
@@ -472,6 +512,37 @@ fn parse_list_answer(answer: &str, default_yes: bool) -> ListAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `config --token` asks only about the hosts given, so it is not
+    /// taken with `--all`; a token named is asked for again, and one
+    /// turned off is asked for anew.
+    #[test]
+    fn config_args_take_token_and_not_with_all() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: ConfigArgs,
+        }
+        use clap::Parser;
+        assert!(Cli::try_parse_from(["t", "--all", "--token", "gitlab.com"]).is_err());
+        let cli = Cli::try_parse_from(["t", "--token", "gitlab.com"]).unwrap();
+        assert!(cli.config.tokens_only());
+        assert!(cli.config.review_secret("gitlab.com"));
+        assert!(!cli.config.review_secret("codeberg.org"));
+        assert!(!(cli.config.reenable())("use it again?", true));
+        let mut off = sandogasa_config::secret::OFF.to_string();
+        cli.config.ask_anew("codeberg.org", &mut off);
+        assert_eq!(
+            off,
+            sandogasa_config::secret::OFF,
+            "not named: left as it is"
+        );
+        cli.config.ask_anew("gitlab.com", &mut off);
+        assert_eq!(off, "");
+        let all = Cli::try_parse_from(["t", "--all"]).unwrap();
+        assert!(!all.config.tokens_only());
+        assert!(all.config.review_secret("codeberg.org"));
+    }
 
     #[test]
     fn token_args_pick_hosts_and_refuse_unknown_ones() {

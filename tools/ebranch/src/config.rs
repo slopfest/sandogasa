@@ -560,128 +560,162 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         config.bugzilla.url = "https://bugzilla.redhat.com".to_string();
     }
     println!("Bugzilla URL: {}", config.bugzilla.url);
+    // With --token, only the secrets it names are asked about, again;
+    // everything else is kept as it is.
+    let bz_host = crate::secrets::bugzilla(&config.bugzilla.url)
+        .service()
+        .to_string();
+    let rpm_host = crate::secrets::bugzilla(&config.rpmfusion_bugzilla.url)
+        .service()
+        .to_string();
+    let nvd_host = crate::secrets::nvd().service().to_string();
+    let forge_host = crate::secrets::forgejo(&config.forgejo.url)
+        .service()
+        .to_string();
+    args.token.check([
+        bz_host.as_str(),
+        forge_host.as_str(),
+        nvd_host.as_str(),
+        rpm_host.as_str(),
+    ])?;
+    let asked = |host: &str| !args.tokens_only() || args.token.again(host);
     // Secrets kept in the keyring are the saved ones (#79), each read
     // for the instance its URL names: every URL is settled above, and
     // saving refuses a URL changed since.
-    let filled = secrets_from_keyring(&mut config, review, &sandogasa_cli::ask_to_reenable);
+    let filled = secrets_from_keyring(&mut config, review, &args.reenable());
+    args.ask_anew(&bz_host, &mut config.bugzilla.api_key);
+    args.ask_anew(&nvd_host, &mut config.nvd.api_key);
+    args.ask_anew(&forge_host, &mut config.forgejo.token);
+    args.ask_anew(&rpm_host, &mut config.rpmfusion_bugzilla.api_key);
 
-    // API key.
-    let hint = format!(
-        "\n{}",
-        sandogasa_config::credentials::token_help(
-            "sandogasa: Bugzilla API key",
-            "ebranch",
-            &config.bugzilla.url
+    if asked(&bz_host) {
+        // API key.
+        let hint = format!(
+            "\n{}",
+            sandogasa_config::credentials::token_help(
+                "sandogasa: Bugzilla API key",
+                "ebranch",
+                &config.bugzilla.url
+            )
+            .trim_end()
+        );
+        config.bugzilla.api_key = ask(
+            &Setting::new("Bugzilla", "API key").sensitive().hint(&hint),
+            &config.bugzilla.api_key,
+            args.review_secret(&bz_host),
         )
-        .trim_end()
-    );
-    config.bugzilla.api_key = ask(
-        &Setting::new("Bugzilla", "API key").sensitive().hint(&hint),
-        &config.bugzilla.api_key,
-        review,
-    )
-    .map_err(|e| format!("failed to read API key: {e}"))?;
+        .map_err(|e| format!("failed to read API key: {e}"))?;
 
-    let url = config.bugzilla.url.clone();
-    config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
-        "Bugzilla",
-        "API key",
-        config.bugzilla.api_key.clone(),
-        move |k| {
-            let url = url.clone();
-            Box::pin(async move {
-                let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(k) {
-                    Ok(bz) => bz,
-                    Err(e) => {
-                        return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
-                            "could not check: {e}"
-                        ));
-                    }
-                };
-                match bz.check_api_key().await {
-                    Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
-                        sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
-                    }
-                    Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
-                        sandogasa_cli::credential::KeyVerdict::Refused(format!("refused: {why}"))
-                    }
-                    Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
-                        sandogasa_cli::credential::KeyVerdict::Unknown(format!(
-                            "could not tell: {why}"
-                        ))
-                    }
-                    Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
-                        "could not tell.".to_string(),
-                    ),
-                    Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
-                        "could not check: {e}"
-                    )),
-                }
-            })
-        },
-    )
-    .await
-    .key;
-
-    // Bugzilla account: optional, and only ever used to assign a
-    // request the asker files about their own work to themselves.
-    config.bugzilla.email = ask(
-        &Setting::new(
+        let url = config.bugzilla.url.clone();
+        config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
             "Bugzilla",
-            "account e-mail (optional, to claim your own requests)",
+            "API key",
+            config.bugzilla.api_key.clone(),
+            move |k| {
+                let url = url.clone();
+                Box::pin(async move {
+                    let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(k) {
+                        Ok(bz) => bz,
+                        Err(e) => {
+                            return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                                "could not check: {e}"
+                            ));
+                        }
+                    };
+                    match bz.check_api_key().await {
+                        Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
+                            sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
+                        }
+                        Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
+                            sandogasa_cli::credential::KeyVerdict::Refused(format!(
+                                "refused: {why}"
+                            ))
+                        }
+                        Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
+                            sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                                "could not tell: {why}"
+                            ))
+                        }
+                        Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
+                            "could not tell.".to_string(),
+                        ),
+                        Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                            "could not check: {e}"
+                        )),
+                    }
+                })
+            },
         )
-        .optional()
-        .validated(&sandogasa_config::validate_email),
-        &config.bugzilla.email,
-        review,
-    )
-    .map_err(|e| format!("failed to read e-mail: {e}"))?;
-
-    // FAS: who is asking. Everything dist-git is asked about a
-    // package needs this, so it is worth having in the file rather
-    // than on every command line.
-    config.packager.fas = ask(
-        &Setting::new("FAS", "username (optional, the default for --fas)").optional(),
-        &config.packager.fas,
-        review,
-    )
-    .map_err(|e| format!("failed to read FAS username: {e}"))?;
-
-    // Provenpackager: looked up rather than asked cold, since few
-    // people think of themselves in those terms day to day. The
-    // lookup only sets the default; the answer is the packager's.
-    if !config.packager.fas.is_empty() {
-        print!("Checking provenpackager membership... ");
-        let found = looks_like_provenpackager(&config.packager.fas).await;
-        match found {
-            Some(true) => println!("{} is a provenpackager.", config.packager.fas),
-            Some(false) => println!("not a member."),
-            None => println!("could not ask dist-git."),
-        }
-        config.packager.provenpackager = sandogasa_cli::confirm(
-            "Note on build requests that you could build a branched package \
-             yourself in an emergency?",
-            found.unwrap_or(config.packager.provenpackager),
-        )
-        .map_err(|e| format!("failed to read answer: {e}"))?;
+        .await
+        .key;
     }
 
-    // NVD API key: optional, for judging CVE trackers against the
-    // fix NVD records.
-    config.nvd.api_key = ask(
-        &Setting::new("NVD", "API key (optional, empty to skip)")
-            .sensitive()
+    if !args.tokens_only() {
+        // Bugzilla account: optional, and only ever used to assign a
+        // request the asker files about their own work to themselves.
+        config.bugzilla.email = ask(
+            &Setting::new(
+                "Bugzilla",
+                "account e-mail (optional, to claim your own requests)",
+            )
             .optional()
-            .hint(&format!(
-                "\n  Empty to skip.\n{}",
-                sandogasa_config::credentials::token_help("sandogasa: NVD API key", "ebranch", "")
+            .validated(&sandogasa_config::validate_email),
+            &config.bugzilla.email,
+            review,
+        )
+        .map_err(|e| format!("failed to read e-mail: {e}"))?;
+
+        // FAS: who is asking. Everything dist-git is asked about a
+        // package needs this, so it is worth having in the file rather
+        // than on every command line.
+        config.packager.fas = ask(
+            &Setting::new("FAS", "username (optional, the default for --fas)").optional(),
+            &config.packager.fas,
+            review,
+        )
+        .map_err(|e| format!("failed to read FAS username: {e}"))?;
+
+        // Provenpackager: looked up rather than asked cold, since few
+        // people think of themselves in those terms day to day. The
+        // lookup only sets the default; the answer is the packager's.
+        if !config.packager.fas.is_empty() {
+            print!("Checking provenpackager membership... ");
+            let found = looks_like_provenpackager(&config.packager.fas).await;
+            match found {
+                Some(true) => println!("{} is a provenpackager.", config.packager.fas),
+                Some(false) => println!("not a member."),
+                None => println!("could not ask dist-git."),
+            }
+            config.packager.provenpackager = sandogasa_cli::confirm(
+                "Note on build requests that you could build a branched package \
+             yourself in an emergency?",
+                found.unwrap_or(config.packager.provenpackager),
+            )
+            .map_err(|e| format!("failed to read answer: {e}"))?;
+        }
+    }
+
+    if asked(&nvd_host) {
+        // NVD API key: optional, for judging CVE trackers against the
+        // fix NVD records.
+        config.nvd.api_key = ask(
+            &Setting::new("NVD", "API key (optional, empty to skip)")
+                .sensitive()
+                .optional()
+                .hint(&format!(
+                    "\n  Empty to skip.\n{}",
+                    sandogasa_config::credentials::token_help(
+                        "sandogasa: NVD API key",
+                        "ebranch",
+                        ""
+                    )
                     .trim_end()
-            )),
-        &config.nvd.api_key,
-        review,
-    )
-    .map_err(|e| format!("failed to read NVD API key: {e}"))?;
-    config.nvd.api_key = sandogasa_cli::credential::validated_key("NVD", "API key", config.nvd.api_key.clone(), |k| {
+                )),
+            &config.nvd.api_key,
+            args.review_secret(&nvd_host),
+        )
+        .map_err(|e| format!("failed to read NVD API key: {e}"))?;
+        config.nvd.api_key = sandogasa_cli::credential::validated_key("NVD", "API key", config.nvd.api_key.clone(), |k| {
             Box::pin(async move {
                 use sandogasa_cve::cache::KeyCheck;
                 match sandogasa_cve::cache::check_api_key(&k).await {
@@ -706,96 +740,107 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
             })
         })
         .await.key;
+    }
 
     // Fedora's Forgejo: only escalate's last step, the releng ticket
     // for a request nobody answered, needs it.
-    ask_forgejo_token(&mut config.forgejo, review).await?;
+    if asked(&forge_host) {
+        ask_forgejo_token(&mut config.forgejo, args.review_secret(&forge_host)).await?;
+    }
 
-    // RPM Fusion's Bugzilla: a separate instance with a separate
-    // account, asked for last because it is only needed by someone
-    // who maintains a package RPM Fusion also builds. Skipping it
-    // leaves check-update holding auto-push and filing nothing,
-    // which is the safe half of the guard.
-    let hint = format!(
-        "\n  RPM Fusion runs its own Bugzilla. A key there lets check-update \
+    if asked(&rpm_host) {
+        // RPM Fusion's Bugzilla: a separate instance with a separate
+        // account, asked for last because it is only needed by someone
+        // who maintains a package RPM Fusion also builds. Skipping it
+        // leaves check-update holding auto-push and filing nothing,
+        // which is the safe half of the guard.
+        let hint = format!(
+            "\n  RPM Fusion runs its own Bugzilla. A key there lets check-update \
          file the rebuild request for a counterpart (libheif -> \
          libheif-freeworld) instead of only holding the update's auto-push. \
          Empty to skip.\n{}",
-        sandogasa_config::credentials::token_help(
-            "sandogasa: Bugzilla API key",
-            "ebranch",
-            &config.rpmfusion_bugzilla.url
+            sandogasa_config::credentials::token_help(
+                "sandogasa: Bugzilla API key",
+                "ebranch",
+                &config.rpmfusion_bugzilla.url
+            )
+            .trim_end()
+        );
+        config.rpmfusion_bugzilla.api_key = ask(
+            &Setting::new("RPM Fusion Bugzilla", "API key (optional, empty to skip)")
+                .sensitive()
+                .optional()
+                .hint(&hint),
+            &config.rpmfusion_bugzilla.api_key,
+            args.review_secret(&rpm_host),
         )
-        .trim_end()
-    );
-    config.rpmfusion_bugzilla.api_key = ask(
-        &Setting::new("RPM Fusion Bugzilla", "API key (optional, empty to skip)")
-            .sensitive()
-            .optional()
-            .hint(&hint),
-        &config.rpmfusion_bugzilla.api_key,
-        review,
-    )
-    .map_err(|e| format!("failed to read RPM Fusion API key: {e}"))?;
-    // Two checks, because they catch different things. The shape
-    // check is local and names the actual mistake: a hidden prompt
-    // shows nothing when a paste lands twice, and the result is a key
-    // of exactly double length. The server check that follows is what
-    // the old one should have been — searching proves nothing on an
-    // instance that serves searches to anyone, which is how a key
-    // pasted three times was reported "valid".
-    let key = config.rpmfusion_bugzilla.api_key.trim().to_string();
-    // Not a key at all when off, so nothing to judge the shape of.
-    if sandogasa_config::secret::is_set(&key) && !sandogasa_bugzilla::looks_like_api_key(&key) {
-        eprintln!(
-            "warning: that does not look like a Bugzilla API key — they are 40 \
+        .map_err(|e| format!("failed to read RPM Fusion API key: {e}"))?;
+        // Two checks, because they catch different things. The shape
+        // check is local and names the actual mistake: a hidden prompt
+        // shows nothing when a paste lands twice, and the result is a key
+        // of exactly double length. The server check that follows is what
+        // the old one should have been — searching proves nothing on an
+        // instance that serves searches to anyone, which is how a key
+        // pasted three times was reported "valid".
+        let key = config.rpmfusion_bugzilla.api_key.trim().to_string();
+        // Not a key at all when off, so nothing to judge the shape of.
+        if sandogasa_config::secret::is_set(&key) && !sandogasa_bugzilla::looks_like_api_key(&key) {
+            eprintln!(
+                "warning: that does not look like a Bugzilla API key — they are 40 \
              alphanumeric characters, this is {}. A hidden prompt shows nothing \
              when a paste lands twice. Saving it anyway; rerun to replace it.",
-            key.len()
-        );
-    }
-    config.rpmfusion_bugzilla.api_key = key.clone();
-    let url = config.rpmfusion_bugzilla.url.clone();
-    let rest = config.rpmfusion_bugzilla.rest_path.clone();
-    config.rpmfusion_bugzilla.api_key =
-        sandogasa_cli::credential::validated_key("RPM Fusion Bugzilla", "API key", key, move |k| {
-            let (url, rest) = (url.clone(), rest.clone());
-            Box::pin(async move {
-                let bz = match sandogasa_bugzilla::BzClient::new(&url)
-                    .with_rest_path(&rest)
-                    .with_stock_auth()
-                    .with_api_key(k)
-                {
-                    Ok(bz) => bz,
-                    Err(e) => {
-                        return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                key.len()
+            );
+        }
+        config.rpmfusion_bugzilla.api_key = key.clone();
+        let url = config.rpmfusion_bugzilla.url.clone();
+        let rest = config.rpmfusion_bugzilla.rest_path.clone();
+        config.rpmfusion_bugzilla.api_key = sandogasa_cli::credential::validated_key(
+            "RPM Fusion Bugzilla",
+            "API key",
+            key,
+            move |k| {
+                let (url, rest) = (url.clone(), rest.clone());
+                Box::pin(async move {
+                    let bz = match sandogasa_bugzilla::BzClient::new(&url)
+                        .with_rest_path(&rest)
+                        .with_stock_auth()
+                        .with_api_key(k)
+                    {
+                        Ok(bz) => bz,
+                        Err(e) => {
+                            return sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                                "could not check: {e}"
+                            ));
+                        }
+                    };
+                    match bz.check_api_key().await {
+                        Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
+                            sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
+                        }
+                        Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
+                            sandogasa_cli::credential::KeyVerdict::Refused(format!(
+                                "refused: {why}"
+                            ))
+                        }
+                        Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
+                            sandogasa_cli::credential::KeyVerdict::Unknown(format!(
+                                "could not tell: {why}"
+                            ))
+                        }
+                        Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
+                            "could not tell.".to_string(),
+                        ),
+                        Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
                             "could not check: {e}"
-                        ));
+                        )),
                     }
-                };
-                match bz.check_api_key().await {
-                    Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
-                        sandogasa_cli::credential::KeyVerdict::Accepted("accepted.".to_string())
-                    }
-                    Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
-                        sandogasa_cli::credential::KeyVerdict::Refused(format!("refused: {why}"))
-                    }
-                    Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
-                        sandogasa_cli::credential::KeyVerdict::Unknown(format!(
-                            "could not tell: {why}"
-                        ))
-                    }
-                    Ok(_) => sandogasa_cli::credential::KeyVerdict::Unknown(
-                        "could not tell.".to_string(),
-                    ),
-                    Err(e) => sandogasa_cli::credential::KeyVerdict::Unknown(format!(
-                        "could not check: {e}"
-                    )),
-                }
-            })
-        })
+                })
+            },
+        )
         .await
         .key;
+    }
 
     // Into the keyring when there is one, out of the file then.
     if save_with_secrets(&cf, &mut config, &filled)? {
@@ -939,6 +984,30 @@ fn with_builtin_rooms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--token` names one of the hosts ebranch keeps a secret for;
+    /// another is refused, naming them, before anything is asked.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn config_token_names_a_host_ebranch_keeps_a_secret_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[(
+            "XDG_CONFIG_HOME",
+            &dir.path().to_string_lossy(),
+        )]);
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args = <Cli as clap::Parser>::parse_from(["ebranch", "--token", "gitlab.com"]);
+        assert_eq!(
+            cmd_config(&args.config).await.unwrap_err(),
+            "--token: no secret is kept for gitlab.com; this configuration has: \
+             bugzilla.redhat.com, bugzilla.rpmfusion.org, forge.fedoraproject.org, \
+             services.nvd.nist.gov"
+        );
+    }
 
     use sandogasa_config::secret::never;
 

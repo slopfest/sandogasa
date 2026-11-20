@@ -90,10 +90,14 @@ fn for_prompts(
 }
 
 /// Interactive config setup: prompt for the Forgejo token (again,
-/// with `all`), validate it against the instance, and save.
+/// with `--all` or `--token forge.fedoraproject.org`), validate it
+/// against the instance, and save.
 pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
+    let host = crate::secrets::forgejo().service().to_string();
+    args.token.check([host.as_str()])?;
+    let all = args.review_secret(&host);
     let cf = sandogasa_config::ConfigFile::for_tool("fesco-chair");
-    let (mut config, before) = for_prompts(&cf, args.all, &sandogasa_cli::ask_to_reenable);
+    let (mut config, before) = for_prompts(&cf, all, &args.reenable());
 
     println!("fesco-chair configuration\n");
     println!("Config file: {}\n", cf.path().display());
@@ -108,7 +112,7 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
             .sensitive()
             .hint(hint.trim_end()),
         &config.forgejo.token,
-        args.all,
+        all,
     )
     .map_err(|e| format!("failed to read token: {e}"))?;
 
@@ -146,6 +150,23 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--token` names forge.fedoraproject.org, where the token is
+    /// kept; another host is refused before anything is asked.
+    #[test]
+    fn config_token_names_the_forge() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args = <Cli as clap::Parser>::parse_from(["fesco-chair", "--token", "codeberg.org"]);
+        assert_eq!(
+            cmd_config(&args.config).unwrap_err(),
+            "--token: no secret is kept for codeberg.org; this configuration has: \
+             forge.fedoraproject.org"
+        );
+    }
 
     /// The prompt offers the keyring's token over a stale one in the
     /// file, and saving it again leaves the file without it.

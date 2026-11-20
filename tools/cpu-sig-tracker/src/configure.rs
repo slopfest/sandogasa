@@ -12,7 +12,7 @@ use crate::config::{self, Config, GitlabConfig, JiraConfig};
 use crate::utils::{gitlab_base, jira_base};
 
 pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
-    match run_inner(args.all) {
+    match run_inner(args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -21,12 +21,38 @@ pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
     }
 }
 
-/// Ask for what is missing, or with `all` for every setting with the
-/// saved value as the default, check the credentials, and save.
-fn run_inner(all: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let (existing, before) = saved(all, &sandogasa_cli::ask_to_reenable);
-    let gitlab_token = prompt_gitlab_token(existing.gitlab.as_ref(), all)?;
-    let jira = prompt_jira(existing.jira.as_ref(), all)?;
+/// Ask for what is missing, or with `--all` for every setting with the
+/// saved value as the default, check the credentials, and save. With
+/// `--token <host>`, only that instance's credentials are asked about,
+/// again; the other's are kept as they are, unchecked.
+fn run_inner(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let gitlab_host = crate::secrets::gitlab().service().to_string();
+    let jira_host = crate::secrets::jira(None).service().to_string();
+    args.token
+        .check([gitlab_host.as_str(), jira_host.as_str()])?;
+    let keep = |host: &str| args.tokens_only() && !args.token.again(host);
+    let (mut existing, before) = saved(args.all, &args.reenable());
+    if let Some(g) = existing.gitlab.as_mut() {
+        args.ask_anew(&gitlab_host, &mut g.access_token);
+    }
+    if let Some(j) = existing.jira.as_mut() {
+        args.ask_anew(&jira_host, &mut j.access_token);
+    }
+    let gitlab_token = match keep(&gitlab_host) {
+        true => existing
+            .gitlab
+            .as_ref()
+            .map(|g| g.access_token.clone())
+            .unwrap_or_default(),
+        false => prompt_gitlab_token(existing.gitlab.as_ref(), args.review_secret(&gitlab_host))?,
+    };
+    let jira = match keep(&jira_host) {
+        true => existing.jira.as_ref().map(|j| JiraConfig {
+            email: j.email.clone(),
+            access_token: j.access_token.clone(),
+        }),
+        false => prompt_jira(existing.jira.as_ref(), args.review_secret(&jira_host))?,
+    };
     let mut cfg = to_save(gitlab_token, jira, existing.jira);
     save(&mut cfg, &before)
 }
@@ -215,6 +241,29 @@ mod tests {
     use super::*;
     use crate::test_support::EnvGuard;
     use sandogasa_config::secret::{OFF, never};
+
+    /// `--token` names one of the instances the credentials are kept
+    /// for; another host is refused, naming both, before anything is
+    /// asked.
+    #[test]
+    #[serial_test::serial]
+    fn token_names_the_gitlab_or_jira_instance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _env = env(tmp.path());
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args =
+            <Cli as clap::Parser>::parse_from(["cpu-sig-tracker", "--token", "gitlab.example"]);
+        let err = run_inner(&args.config).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "--token: no secret is kept for gitlab.example; this configuration has: \
+             gitlab.configure.test, jira.configure.test"
+        );
+    }
 
     /// The config file in a temp dir, `/etc` an empty one beside it,
     /// and the keyring entries pointed at test hosts.

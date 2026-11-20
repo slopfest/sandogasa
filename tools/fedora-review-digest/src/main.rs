@@ -253,13 +253,14 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     let cf = ConfigFile::for_tool("fedora-review-digest");
     // The user file alone, so saving does not copy /etc's values into it.
     let mut cfg: config::Config = cf.load_user().unwrap_or_default();
+    // With --token, only the key is asked about, again.
+    let host = fedora_review_digest::secrets::bugzilla()
+        .service()
+        .to_string();
+    args.token.check([host.as_str()])?;
+    let review = args.review_secret(&host);
     // A key kept in the keyring is the saved one (#79).
-    let before = config::fill(
-        keyring(),
-        &mut cfg,
-        args.all,
-        &sandogasa_cli::ask_to_reenable,
-    );
+    let before = config::fill(keyring(), &mut cfg, review, &args.reenable());
     let hint = sandogasa_config::credentials::token_help(
         "sandogasa: Bugzilla API key",
         "fedora-review-digest",
@@ -270,15 +271,17 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
             .sensitive()
             .hint(hint.trim_end()),
         cfg.bugzilla.api_key.trim(),
-        args.all,
+        review,
     )
     .map_err(|e| e.to_string())?;
-    cfg.bugzilla.email = ask(
-        &Setting::new("Bugzilla", "email").validated(&sandogasa_config::validate_email),
-        cfg.bugzilla.email.trim(),
-        args.all,
-    )
-    .map_err(|e| e.to_string())?;
+    if !args.tokens_only() {
+        cfg.bugzilla.email = ask(
+            &Setting::new("Bugzilla", "email").validated(&sandogasa_config::validate_email),
+            cfg.bugzilla.email.trim(),
+            args.all,
+        )
+        .map_err(|e| e.to_string())?;
+    }
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let email = cfg.bugzilla.email.clone();
     // Checked against the address too (`key_verdict`).
@@ -1131,6 +1134,24 @@ fn read_line() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    /// `--token` names bugzilla.redhat.com, where the key is kept;
+    /// another host is refused before anything is asked.
+    #[test]
+    fn config_token_names_bugzilla() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args =
+            <Cli as clap::Parser>::parse_from(["fedora-review-digest", "--token", "gitlab.com"]);
+        assert_eq!(
+            super::cmd_config(&args.config).unwrap_err(),
+            "--token: no secret is kept for gitlab.com; this configuration has: \
+             bugzilla.redhat.com"
+        );
+    }
+
     /// The committed man page is generated from this CLI; see
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
     #[test]

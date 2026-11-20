@@ -153,6 +153,15 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         config.bugzilla.url = BugzillaConfig::DEFAULT_URL.to_string();
     }
     println!("Bugzilla URL: {}", config.bugzilla.url);
+    // With --token, only the secrets it names are asked about, again;
+    // everything else is kept as it is.
+    let bz_host = crate::secrets::bugzilla(&config.bugzilla.url)
+        .service()
+        .to_string();
+    let distgit_host = crate::secrets::distgit().service().to_string();
+    args.token
+        .check([bz_host.as_str(), distgit_host.as_str()])?;
+    let asked = |host: &str| !args.tokens_only() || args.token.again(host);
     // The keyring's secret is the saved one (#79), as reading takes it
     // first: a stale value an older run left in the file must not be
     // offered, and so saved back over the shared entry. See `fill` for
@@ -162,8 +171,10 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         env!("CARGO_PKG_NAME"),
         slots(&mut config),
         args.all,
-        &sandogasa_cli::ask_to_reenable,
+        &args.reenable(),
     );
+    args.ask_anew(&bz_host, &mut config.bugzilla.api_key);
+    args.ask_anew(&distgit_host, &mut config.dist_git.api_token);
 
     let hint = format!(
         "\n{}",
@@ -174,79 +185,87 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         )
         .trim_end()
     );
-    config.bugzilla.api_key = ask(
-        &Setting::new("Bugzilla", "API key").sensitive().hint(&hint),
-        &config.bugzilla.api_key,
-        args.all,
-    )
-    .map_err(|e| format!("failed to read API key: {e}"))?;
+    if asked(&bz_host) {
+        config.bugzilla.api_key = ask(
+            &Setting::new("Bugzilla", "API key").sensitive().hint(&hint),
+            &config.bugzilla.api_key,
+            args.review_secret(&bz_host),
+        )
+        .map_err(|e| format!("failed to read API key: {e}"))?;
+    }
 
     // Email is optional — it's only used by `triage-retired
     // --claim` to set `assigned_to` on closed bugs.
-    config.bugzilla.email = ask(
-        &Setting::new("Bugzilla", "email (optional, for --claim)")
-            .optional()
-            .validated(&sandogasa_config::validate_email),
-        &config.bugzilla.email,
-        args.all,
-    )
-    .map_err(|e| format!("failed to read e-mail: {e}"))?;
+    if !args.tokens_only() {
+        config.bugzilla.email = ask(
+            &Setting::new("Bugzilla", "email (optional, for --claim)")
+                .optional()
+                .validated(&sandogasa_config::validate_email),
+            &config.bugzilla.email,
+            args.all,
+        )
+        .map_err(|e| format!("failed to read e-mail: {e}"))?;
+    }
 
     // The dist-git token is optional — only `adopt` needs it.
-    config.dist_git.api_token = ask(
-        &Setting::new("dist-git", "API token (optional, empty to skip)")
-            .sensitive()
-            .optional()
-            .hint(&format!(
-                "\n  Optional: only adopt and act need it. Empty to skip.\n{}",
-                sandogasa_config::credentials::token_help(
-                    "sandogasa: Pagure token",
-                    "poi-tracker",
-                    ""
-                )
-                .trim_end()
-            )),
-        &config.dist_git.api_token,
-        args.all,
-    )
-    .map_err(|e| format!("failed to read token: {e}"))?;
+    if asked(&distgit_host) {
+        config.dist_git.api_token = ask(
+            &Setting::new("dist-git", "API token (optional, empty to skip)")
+                .sensitive()
+                .optional()
+                .hint(&format!(
+                    "\n  Optional: only adopt and act need it. Empty to skip.\n{}",
+                    sandogasa_config::credentials::token_help(
+                        "sandogasa: Pagure token",
+                        "poi-tracker",
+                        ""
+                    )
+                    .trim_end()
+                )),
+            &config.dist_git.api_token,
+            args.review_secret(&distgit_host),
+        )
+        .map_err(|e| format!("failed to read token: {e}"))?;
+    }
 
     // Checked by trying to use it, not by searching: Bugzilla serves
     // bug searches to anyone, so the old check passed for a key that
     // could never write. `api_key_accepted` asks to create a bug with
     // no fields, which the credential is checked before, and which
     // cannot create anything because every required field is absent.
-    let url = config.bugzilla.url.clone();
-    config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
-        "Bugzilla",
-        "API key",
-        std::mem::take(&mut config.bugzilla.api_key),
-        move |key| {
-            let url = url.clone();
-            Box::pin(async move {
-                use sandogasa_cli::credential::KeyVerdict;
-                let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(key) {
-                    Ok(bz) => bz,
-                    Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
-                };
-                match bz.check_api_key().await {
-                    Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
-                        KeyVerdict::Accepted("accepted.".to_string())
+    if asked(&bz_host) {
+        let url = config.bugzilla.url.clone();
+        config.bugzilla.api_key = sandogasa_cli::credential::validated_key(
+            "Bugzilla",
+            "API key",
+            std::mem::take(&mut config.bugzilla.api_key),
+            move |key| {
+                let url = url.clone();
+                Box::pin(async move {
+                    use sandogasa_cli::credential::KeyVerdict;
+                    let bz = match sandogasa_bugzilla::BzClient::new(&url).with_api_key(key) {
+                        Ok(bz) => bz,
+                        Err(e) => return KeyVerdict::Unknown(format!("could not check: {e}")),
+                    };
+                    match bz.check_api_key().await {
+                        Ok(sandogasa_bugzilla::KeyCheck::Accepted) => {
+                            KeyVerdict::Accepted("accepted.".to_string())
+                        }
+                        Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
+                            KeyVerdict::Refused(format!("refused: {why}"))
+                        }
+                        Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
+                            KeyVerdict::Unknown(format!("could not tell: {why}"))
+                        }
+                        Ok(_) => KeyVerdict::Unknown("could not tell.".to_string()),
+                        Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
                     }
-                    Ok(sandogasa_bugzilla::KeyCheck::Refused(why)) => {
-                        KeyVerdict::Refused(format!("refused: {why}"))
-                    }
-                    Ok(sandogasa_bugzilla::KeyCheck::Unclear(why)) => {
-                        KeyVerdict::Unknown(format!("could not tell: {why}"))
-                    }
-                    Ok(_) => KeyVerdict::Unknown("could not tell.".to_string()),
-                    Err(e) => KeyVerdict::Unknown(format!("could not check: {e}")),
-                }
-            })
-        },
-    )
-    .await
-    .key;
+                })
+            },
+        )
+        .await
+        .key;
+    }
 
     let removed = save_keeping_secrets(&cf, config, &before)
         .map_err(|e| format!("failed to save config: {e}"))?;
@@ -310,6 +329,29 @@ fn save_keeping_secrets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--token` names a host poi-tracker keeps a secret for; another
+    /// is refused, naming them, before anything is asked.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn config_token_names_a_host_poi_tracker_keeps_a_secret_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[(
+            "XDG_CONFIG_HOME",
+            &dir.path().to_string_lossy(),
+        )]);
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args = <Cli as clap::Parser>::parse_from(["poi-tracker", "--token", "gitlab.com"]);
+        assert_eq!(
+            cmd_config(&args.config).await.unwrap_err(),
+            "--token: no secret is kept for gitlab.com; this configuration has: \
+             bugzilla.redhat.com, src.fedoraproject.org"
+        );
+    }
     use sandogasa_config::test_support::EnvGuard;
 
     const PLAIN_TEXT: &str = "[bugzilla]\n\
