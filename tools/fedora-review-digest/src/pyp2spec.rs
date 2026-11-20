@@ -605,6 +605,28 @@ mod tests {
         assert_eq!(err.as_deref(), Some("no such release"));
     }
 
+    /// `run_program` on a fake just written, tried again while it is
+    /// "busy": another test thread that forked as the fake was being
+    /// written holds it open until its child execs, and running it then
+    /// fails with ETXTBSY (it failed CI on e5291cf1 so).
+    fn run_fake(
+        program: &Path,
+        package: &str,
+        version: &str,
+        declarative: bool,
+        dir: &Path,
+    ) -> Result<Generated, String> {
+        for _ in 0..50 {
+            match run_program(program, package, version, declarative, dir) {
+                Err(e) if e.contains("Text file busy") => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                done => return done,
+            }
+        }
+        run_program(program, package, version, declarative, dir)
+    }
+
     /// A fake pyp2spec at `dir/pyp2spec`: a shell script running `body`
     /// with its arguments, `$out` set to the `-o` value.
     fn fake_program(dir: &Path, body: &str) -> std::path::PathBuf {
@@ -628,7 +650,7 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         // It records its arguments and directory as the spec.
         let program = fake_program(bin.path(), r#"{ printf '%s\n' "$@"; pwd; } > "$out""#);
-        let g = run_program(&program, "-odd", "1.0", true, work.path()).unwrap();
+        let g = run_fake(&program, "-odd", "1.0", true, work.path()).unwrap();
         let out = work.path().join("generated.spec");
         let expected = format!(
             "-v\n1.0\n-o\n{}\n--declarative-buildsystem\n--\n-odd\n{}\n",
@@ -639,7 +661,7 @@ mod tests {
         // A #!/bin/sh script has no Python to ask for a version.
         assert_eq!(g.version, None);
         // Without the declarative form, no such flag.
-        let g = run_program(&program, "cstq", "0.0.20", false, work.path()).unwrap();
+        let g = run_fake(&program, "cstq", "0.0.20", false, work.path()).unwrap();
         assert!(!g.spec.contains("--declarative-buildsystem"));
     }
 
@@ -648,13 +670,13 @@ mod tests {
         let bin = tempfile::tempdir().unwrap();
         let work = tempfile::tempdir().unwrap();
         let program = fake_program(bin.path(), "echo 'No such release' >&2; exit 1");
-        let err = run_program(&program, "cstq", "9.9", false, work.path()).unwrap_err();
+        let err = run_fake(&program, "cstq", "9.9", false, work.path()).unwrap_err();
         assert_eq!(err, "pyp2spec cstq -v 9.9 failed: No such release");
         // Succeeds without writing the spec.
         let program = fake_program(bin.path(), "exit 0");
-        let err = run_program(&program, "cstq", "9.9", false, work.path()).unwrap_err();
+        let err = run_fake(&program, "cstq", "9.9", false, work.path()).unwrap_err();
         assert!(err.starts_with("reading pyp2spec's output"), "{err}");
-        let err = run_program(
+        let err = run_fake(
             &bin.path().join("missing"),
             "cstq",
             "9.9",
