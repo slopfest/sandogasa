@@ -22,9 +22,10 @@ ignoring case, so `reuben@` is not taken for `ben@`. A note linking
 a bug's long URL (`cgi-bin/bugreport.cgi?bug=N`) attaches to it as
 one linking `bugs.debian.org/N` does.
 
-mentors.debian.net uploads and nm.debian.org processes are not read:
-each is a one-off item for most people, and their notes are listed
-under their hosts among the notes on items not in the report.
+mentors.debian.net uploads and nm.debian.org processes are not read
+yet (#198, #199), nor are Debusine and Launchpad PPAs (#200, #201);
+notes on them are listed under their hosts among the notes on items not
+in the report.
 
 `config --missing` also prints a heading only over a setting it asks
 for, instead of every section's. A blank answer to its Debian emails
