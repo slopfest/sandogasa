@@ -115,6 +115,9 @@ instance = "https://gitlab.gnome.org"
 # --- Debian ---
 
 [domains.debian]
+# The Debian bug tracker: bugs filed and written to, by the profile's
+# debian_emails (`sandogasa-report config --missing` asks for them).
+bts = true
 [domains.debian.gitlab]
 instance = "https://salsa.debian.org"
 # No group filter — all user activity on salsa counts.

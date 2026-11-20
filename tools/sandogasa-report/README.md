@@ -67,6 +67,11 @@ packaging activity across multiple systems:
   the profile's login for the instance (`[users.<key>.pagure]`),
   else the FAS name; a pull request merged in the window counts if
   it was opened up to 180 days before it.
+- **Debian BTS** (bugs.debian.org, with `bts = true` on a domain):
+  bugs filed in the window, and bugs written to in it, by the
+  profile's `debian_emails`, through the tracker's SOAP interface. A
+  bug counts as written to when its log has a message from one of
+  those addresses dated in the window.
 - **Sourcehut** (sr.ht): patches sent / applied (lists.sr.ht — the
   patch-based PR analog), tickets opened / closed (todo.sr.ht), and
   commits in your own repos (git.sr.ht), split into yours vs third-party.

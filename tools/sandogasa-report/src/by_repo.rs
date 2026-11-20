@@ -391,6 +391,7 @@ mod tests {
                 forgejo: Some(fj),
                 sourcehut: None,
                 pagure: None,
+                bts: None,
             }],
             bugzilla: vec![],
         };

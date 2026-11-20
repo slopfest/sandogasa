@@ -424,6 +424,16 @@ pub fn url_key(url: &str) -> String {
     if let (true, Some(id)) = (path.ends_with("show_bug.cgi"), bug_id) {
         return format!("{host}/{path}?id={id}");
     }
+    // debbugs's long form of a bug's page, as its short one (`/N`); its
+    // links separate parameters with `;` as well as `&`.
+    if path == "cgi-bin/bugreport.cgi"
+        && let Some(n) = query
+            .split(['&', ';'])
+            .find_map(|kv| kv.strip_prefix("bug="))
+            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return format!("{host}/{n}");
+    }
     if host.starts_with("bugzilla.") && !path.is_empty() && path.bytes().all(|b| b.is_ascii_digit())
     {
         return format!("{host}/show_bug.cgi?id={path}");
@@ -960,6 +970,18 @@ mod tests {
             "bodhi.fedoraproject.org/updates/FEDORA-2026-abc"
         );
         assert_eq!(url_key("https://example.org"), "example.org");
+        for url in [
+            "https://bugs.debian.org/1018193",
+            "https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1018193",
+            "https://bugs.debian.org/cgi-bin/bugreport.cgi?msg=5;bug=1018193",
+            "https://bugs.debian.org/cgi-bin/bugreport.cgi?att=0&bug=1018193#10",
+        ] {
+            assert_eq!(url_key(url), "bugs.debian.org/1018193", "{url}");
+        }
+        assert_eq!(
+            url_key("https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=x"),
+            "bugs.debian.org/cgi-bin/bugreport.cgi?bug=x"
+        );
         for form in ["Rhbz#2575659", "RHBZ:2575659", "rhbz 2575659"] {
             assert_eq!(url_key(form), bug, "{form}");
         }

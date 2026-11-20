@@ -112,6 +112,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         .values()
         .filter_map(|d| d.pagure.as_ref().map(|p| p.instance.clone()))
         .collect();
+    let bts = merged.domains.values().any(|d| d.bts);
     // Bugzilla instances other than Red Hat's, whose email FASJSON
     // cannot supply.
     let bugzilla_instances: BTreeSet<String> = merged
@@ -178,6 +179,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         &mut overlay,
         &profile_key,
         existing_profile.as_ref(),
+        bts,
         &gitlab_instances,
         &github_instances,
         &forgejo_instances,
@@ -189,7 +191,10 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
 
     // Where `note` writes notes, and `notes` and `report --notes` read
     // them (#167).
-    eprintln!("\nNotes:");
+    // With --missing, a heading only over something asked.
+    if !(ask.missing && notes_dir_set(&overlay)) {
+        eprintln!("\nNotes:");
+    }
     let notes_dir = ask.field(
         &Setting::new("notes", "directory")
             .optional()
@@ -201,7 +206,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         merged.notes.dir.as_deref().unwrap_or(""),
         true,
         // Set in the user's own file: one from /etc is not theirs.
-        overlay_get_str(&overlay, &["notes", "dir"]).is_some(),
+        notes_dir_set(&overlay),
     )?;
     let notes_dir_changed = overlay_update(
         &mut overlay,
@@ -255,8 +260,11 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     let mut out_of_file: Vec<(&str, String)> = Vec::new();
 
     for (instances, heading, kind) in forges {
-        if !instances.is_empty() {
+        // With --missing, the heading waits for a token to ask for.
+        let mut headed = instances.is_empty() || ask.missing;
+        if !headed {
             eprintln!("\n{heading}");
+            headed = true;
         }
         for instance in instances {
             let host = (kind.host)(instance);
@@ -273,7 +281,12 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
                         ask.kept += 1;
                         Ok(TokenChoice::KeepExisting)
                     }
-                    _ => (kind.prompt)(instance, existing),
+                    _ => {
+                        if ask.missing && !std::mem::replace(&mut headed, true) {
+                            eprintln!("\n{heading}");
+                        }
+                        (kind.prompt)(instance, existing)
+                    }
                 },
             )?;
             match outcome {
@@ -311,6 +324,11 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
     Ok(())
 }
 
+/// Whether the user's own file sets the notes directory.
+fn notes_dir_set(overlay: &toml::Value) -> bool {
+    overlay_get_str(overlay, &["notes", "dir"]).is_some()
+}
+
 /// Prompt for every field of a user profile, writing into the
 /// overlay. Returns `true` if any value was changed.
 #[allow(clippy::too_many_arguments)]
@@ -318,6 +336,7 @@ fn prompt_profile(
     overlay: &mut toml::Value,
     profile_key: &str,
     existing: Option<&config::User>,
+    bts: bool,
     gitlab_instances: &BTreeSet<String>,
     github_instances: &BTreeSet<String>,
     forgejo_instances: &BTreeSet<String>,
@@ -465,7 +484,68 @@ fn prompt_profile(
             changed = true;
         }
     }
+
+    // The addresses the Debian bug tracker knows the person by; only
+    // when a domain reads it.
+    if bts {
+        changed |= prompt_email_list(
+            overlay,
+            profile_key,
+            "debian_emails",
+            existing
+                .map(|p| p.debian_emails.clone())
+                .unwrap_or_default(),
+            (
+                "Debian",
+                "emails, as in changelogs and bug reports (comma-separated)",
+            ),
+            ask,
+        )?;
+    }
     Ok(changed)
+}
+
+/// Ask for a comma-separated list of email addresses, each checked as
+/// one, and record it under `[users.<profile>] <key>`. Whether it
+/// changed.
+fn prompt_email_list(
+    overlay: &mut toml::Value,
+    profile_key: &str,
+    key: &str,
+    existing: Vec<String>,
+    (service, what): (&str, &str),
+    ask: &mut Asker<'_, '_>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let check = |answer: &str| -> Result<(), String> {
+        answer
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .try_for_each(sandogasa_config::validate_email)
+    };
+    let current = existing.join(", ");
+    // An empty list in the file is an answer too: none to give.
+    let recorded = overlay
+        .get("users")
+        .and_then(|u| u.get(profile_key))
+        .and_then(|p| p.get(key))
+        .is_some();
+    let answer = ask.field(
+        &Setting::new(service, what).optional().validated(&check),
+        &current,
+        true,
+        recorded || !existing.is_empty(),
+    )?;
+    let emails: Vec<String> = answer
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if emails == existing && (recorded || !emails.is_empty()) {
+        return Ok(false);
+    }
+    overlay_set_array(overlay, &["users", profile_key, key], &emails);
+    Ok(true)
 }
 
 /// Prompt for what a profile is on each instance of one service (a
@@ -1631,11 +1711,15 @@ mod tests {
             "me-pg",
             "me-sh",
             "me@example.com, *",
+            // Debian's, checked as emails: the bad one asked again.
+            "me@debian.example, not-an-email",
+            "me@debian.example, me@example.org",
         ];
         let changed = prompt_profile(
             &mut overlay,
             "me",
             None,
+            true,
             &set(&["https://gitlab.com"]),
             &set(&["https://api.github.com"]),
             &set(&["https://codeberg.org"]),
@@ -1686,6 +1770,55 @@ mod tests {
             overlay["users"]["me"]["git_emails"],
             toml::Value::Array(vec!["me@example.com".into(), "*".into()])
         );
+        assert_eq!(
+            overlay["users"]["me"]["debian_emails"],
+            toml::Value::Array(vec!["me@debian.example".into(), "me@example.org".into()])
+        );
+    }
+
+    /// A blank answer for a list of emails is written as an empty list,
+    /// so `--missing` takes it as answered and does not ask again.
+    #[test]
+    fn a_blank_email_list_is_recorded_as_answered() {
+        let mut overlay = toml::Value::Table(Default::default());
+        let asked = std::cell::RefCell::new(Vec::new());
+        let changed = prompt_email_list(
+            &mut overlay,
+            "me",
+            "debian_emails",
+            Vec::new(),
+            ("Debian", "emails"),
+            &mut Asker {
+                read: &mut scripted(&[""], &asked),
+                missing: false,
+                kept: 0,
+            },
+        )
+        .unwrap();
+        assert!(changed);
+        assert_eq!(
+            overlay["users"]["me"]["debian_emails"],
+            toml::Value::Array(Vec::new())
+        );
+        // Asked again with nothing to answer: kept, not asked.
+        let none = std::cell::RefCell::new(Vec::new());
+        let mut ask = Asker {
+            read: &mut scripted(&[], &none),
+            missing: true,
+            kept: 0,
+        };
+        let changed = prompt_email_list(
+            &mut overlay,
+            "me",
+            "debian_emails",
+            Vec::new(),
+            ("Debian", "emails"),
+            &mut ask,
+        )
+        .unwrap();
+        assert!(!changed);
+        assert_eq!(ask.kept, 1);
+        assert!(none.borrow().is_empty());
     }
 
     /// A new token is checked with the forge before it is kept: a valid

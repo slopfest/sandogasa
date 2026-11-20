@@ -136,6 +136,11 @@ pub struct User {
     /// treated as yours regardless.
     #[serde(default)]
     pub git_emails: Vec<String>,
+
+    /// The email addresses the person uses in Debian (changelogs, bug
+    /// reports), which the Debian bug tracker knows them by.
+    #[serde(default)]
+    pub debian_emails: Vec<String>,
 }
 
 impl User {
@@ -201,6 +206,11 @@ pub struct DomainConfig {
     /// Include Bodhi queries.
     #[serde(default)]
     pub bodhi: bool,
+
+    /// Include the Debian bug tracker (bugs.debian.org): bugs filed and
+    /// written to, by the profile's `debian_emails`.
+    #[serde(default)]
+    pub bts: bool,
 
     /// Bodhi release name patterns (e.g. "F*", "EPEL-*").
     #[serde(default)]

@@ -11,6 +11,7 @@ mod bugzilla;
 mod by_repo;
 mod config;
 mod configure;
+mod debbugs;
 mod forge;
 mod forgejo;
 mod github;
@@ -133,6 +134,10 @@ struct ReportArgs {
     /// Skip Bodhi queries.
     #[arg(long, help_heading = "Sources")]
     no_bodhi: bool,
+
+    /// Skip Debian bug tracker queries.
+    #[arg(long, help_heading = "Sources")]
+    no_bts: bool,
 
     /// Skip Bugzilla queries.
     #[arg(long, help_heading = "Sources")]
@@ -526,6 +531,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             forgejo: None,
             sourcehut: None,
             pagure: None,
+            bts: None,
         };
 
         // Bodhi (per-domain).
@@ -687,6 +693,32 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                 },
                 None => {
                     eprintln!("warning: Pagure domain '{name}' has no user — set --user, skipping")
+                }
+            }
+        }
+
+        // The Debian bug tracker (per-domain), by the profile's Debian
+        // addresses.
+        if domain.bts && !cli.no_bts {
+            let emails = profile.map(|p| p.debian_emails.clone()).unwrap_or_default();
+            if emails.is_empty() {
+                eprintln!(
+                    "warning: domain '{name}' reads the Debian bug tracker, but the profile \
+                     names no debian_emails — `sandogasa-report config --missing`, skipping"
+                );
+            } else {
+                match debbugs::bts_report(
+                    debbugs::DEFAULT_INSTANCE,
+                    &emails,
+                    since,
+                    until,
+                    cli.verbose,
+                ) {
+                    Ok(bts_report) => dr.bts = Some(bts_report),
+                    Err(e) => {
+                        eprintln!("error: Debian bug tracker ({name}): {e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
             }
         }
@@ -955,6 +987,7 @@ mod tests {
             since: None,
             until: None,
             period: None,
+            no_bts: false,
             no_bugzilla: false,
             no_bodhi: false,
             no_koji: false,
@@ -984,6 +1017,7 @@ mod tests {
             since: None,
             until: None,
             period: Some("2026Q1".into()),
+            no_bts: false,
             no_bugzilla: false,
             no_bodhi: false,
             no_koji: false,

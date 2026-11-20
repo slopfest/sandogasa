@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### sandogasa-report reads the Debian bug tracker
+
+Bugs a Debian contributor filed or wrote to appeared in no report, and
+`--notes` notes about them were left over.
+
+A new Debian BTS section, turned on with `bts = true` on a domain (the
+shipped config's `debian` domain has it), lists the bugs filed in the
+window and those written to in it, by the profile's `debian_emails`,
+which `config` asks for. It reads bugs.debian.org's SOAP interface:
+`get_bugs` by submitter and by correspondent, one `get_status` call for
+up to 200 bugs' titles and dates, and, since a correspondent search does
+not say when, the logs of the bugs changed in the window, eight at a
+time, for a message from one of those addresses dated in it.
+`--no-bts` skips it.
+
+A message counts when its `From:` address is one of them exactly,
+ignoring case, so `reuben@` is not taken for `ben@`. A note linking
+a bug's long URL (`cgi-bin/bugreport.cgi?bug=N`) attaches to it as
+one linking `bugs.debian.org/N` does.
+
+mentors.debian.net uploads and nm.debian.org processes are not read:
+each is a one-off item for most people, and their notes are listed
+under their hosts among the notes on items not in the report.
+
+`config --missing` also prints a heading only over a setting it asks
+for, instead of every section's. A blank answer to its Debian emails
+question is saved as an empty list, so it is not asked again.
+
+Resolves #192
+
 ### cbspkg scratch-builds an SRPM, and gains scratch-build
 
 A scratch build of a change not committed or pushed yet, or of an SRPM
