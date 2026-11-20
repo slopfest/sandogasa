@@ -70,11 +70,13 @@ trajectory-test: ## Test the trajectory report's script
 
 .PHONY: cov
 cov: ## Report test coverage, failing under 85% lines
+	$(CARGO) llvm-cov clean --workspace
 	$(CARGO) cov
 
 .PHONY: cov-crate
 cov-crate: ## Per-file line coverage of one crate (CRATE=<name>)
 	@test -n "$(CRATE)" || { echo "usage: make cov-crate CRATE=<name>" >&2; exit 2; }
+	$(CARGO) llvm-cov clean --workspace
 	$(CARGO) llvm-cov test -p $(CRATE) --summary-only --ignore-filename-regex 'src/main\.rs$$'
 
 .PHONY: cov-diff

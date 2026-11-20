@@ -42,6 +42,11 @@ echo "Measuring ${#files[@]} changed file(s) in: ${crates[*]}" >&2
 
 json=$(mktemp)
 trap 'rm -f "$json"' EXIT
+# Coverage data left by earlier runs, of other builds of the same files,
+# gets merged in and matched against the current source, reporting lines
+# that ran as missed: on 2026-11-20 sandogasa-config read 57-76% that
+# way, against 89-99% from a clean run. So start from none.
+cargo llvm-cov clean --workspace
 cargo llvm-cov test --json --summary-only \
   --ignore-filename-regex 'src/main\.rs$' \
   $(printf -- '-p %s ' "${crates[@]}") >"$json"
