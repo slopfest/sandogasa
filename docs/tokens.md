@@ -12,7 +12,7 @@ What each tool needs; the sections below say where to create each token and what
 
 | Tool | Tokens and API keys | Logins |
 | --- | --- | --- |
-| cbspkg | [GitLab](#gitlab): api, and the Maintainer role in the SIG's group for sig-repo | CentOS Build System certificate |
+| cbspkg | [GitLab](#gitlab): api; Maintainer in the SIG's group for sig-repo | CentOS Build System certificate |
 | cpu-sig-tracker | [GitLab](#gitlab): api, in a legacy (not fine-grained) token<br>[Jira](#jira): read:jira-user, read:jira-work; write:jira-work to file issues | CentOS Build System certificate<br>centpkg token |
 | dbranch | none | Debusine<br>glab |
 | ebranch | [Bugzilla](#bugzilla): an API key (Red Hat's; RPM Fusion's for its rebuild requests)<br>[Forgejo](#forgejo): issue Read and Write, organization Read<br>[GitHub](#github): no scopes<br>[NVD](#nvd): an API key | bodhi CLI session<br>copr-cli<br>fedpkg |
@@ -45,15 +45,26 @@ An API key, created at `https://<instance>/userprefs.cgi?tab=apikey`. A Bugzilla
 | fedora-review-digest | an API key, for --post | comments on review bugs and sets their fedora-review flag |
 | poi-tracker | an API key, for the triage commands | closes and comments on bugs, changes their priority |
 
+For all of these tools:
+
+- an API key for each Bugzilla you use (Red Hat's; RPM Fusion's for ebranch)
+
 ### Forgejo
 
-An access token, created at `https://<instance>/user/settings/applications`. Forgejo scopes are categories, each No access, Read, or Read and Write, for the whole account.
+An access token, created at `https://<instance>/user/settings/applications`. Each scope is a category, set to No access, Read, or Read and Write.
 
 | Tool | Needs | For |
 | --- | --- | --- |
 | ebranch | issue Read and Write, organization Read | escalate files releng tickets with the tracker's labels |
 | fesco-chair | issue Read and Write, repository Read, user Read | reads the agenda, comments on, labels and closes tickets |
 | sandogasa-report | issue Read, repository Read, user Read | searches your pull requests and issues, reads your activity feed |
+
+For all of these tools:
+
+- issue: Read and Write
+- organization: Read
+- repository: Read
+- user: Read
 
 ### GitHub
 
@@ -65,20 +76,29 @@ A personal access token, created at <https://github.com/settings/personal-access
 | fedora-cve-triage | no scopes | looks up security advisories and repository languages |
 | sandogasa-report | no scopes; repo (classic) for --private | reads your pull requests, issues and events; --private counts private repositories |
 
+For all of these tools:
+
+- no scopes
+- repo (classic), to report on private repositories
+
 ### GitLab
 
 A personal access token, created at `https://<instance>/-/user_settings/personal_access_tokens`.
 
 | Tool | Needs | For |
 | --- | --- | --- |
-| cbspkg | api, and the Maintainer role in the SIG's group for sig-repo | creates SIG repositories, comments on and labels tracking issues |
+| cbspkg | api; Maintainer in the SIG's group for sig-repo | creates SIG repositories, comments on and labels tracking issues |
 | cpu-sig-tracker | api, in a legacy (not fine-grained) token | files, labels and comments on tracking issues, opens merge requests |
 | hs-relmon | api | files, labels and comments on issues, archives retired projects |
 | sandogasa-report | read_api | reads your events, merge requests, issues, tags and releases |
 
+For all of these tools:
+
+- api, in a legacy (not fine-grained) token
+
 ### Jira
 
-An Atlassian API token, created at <https://id.atlassian.com/manage-profile/security/api-tokens>. Entered with the email of the Atlassian account it belongs to. Public issues read without one.
+An Atlassian API token, created at <https://id.atlassian.com/manage-profile/security/api-tokens>. Entered with your Atlassian email; public issues read without one.
 
 | Tool | Needs | For |
 | --- | --- | --- |
@@ -93,6 +113,10 @@ An API key, created at <https://nvd.nist.gov/developers/request-an-api-key>. Opt
 | ebranch | an API key | check-update judges CVE bugs by their NVD records |
 | fedora-cve-triage | an API key | reads NVD records for the CVEs it triages |
 
+For all of these tools:
+
+- an API key
+
 ### Fedora dist-git (Pagure)
 
 An API token, created at <https://src.fedoraproject.org/settings/token/new>.
@@ -101,6 +125,10 @@ An API token, created at <https://src.fedoraproject.org/settings/token/new>.
 | --- | --- | --- |
 | poi-tracker | the "Modify an existing project" ACL | adopt takes orphaned packages; act orphans or gives them away |
 | sandogasa-pkg-acl | the "Modify an existing project" ACL | sets and removes access, gives and takes packages |
+
+For all of these tools:
+
+- the "Modify an existing project" ACL
 
 ### Sourcehut
 

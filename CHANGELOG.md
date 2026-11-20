@@ -32,9 +32,10 @@ different pages; and ebranch's Bugzilla prompt named Red Hat's even for
 another Bugzilla.
 
 A token's keyring entry is shared by every tool that uses the service,
-so each `config` prompt now says where to create the token, what this
-tool needs and why, and what each other tool sharing the entry needs,
-so someone who runs only one tool can grant less. The prompts come from
+so each `config` prompt now says where to create the token and lists
+what to grant: what this tool needs, what each other tool sharing the
+entry needs, so someone who runs only one tool can grant less, and,
+one per line, what a token needs for all of them. The prompts come from
 one table, `sandogasa_config::credentials`, which also generates
 [docs/tokens.md](docs/tokens.md) (`make tokens`), linked from the
 README. It opens with a table by tool, for someone setting up one

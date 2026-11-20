@@ -24,9 +24,17 @@ pub struct Service {
     pub what: &'static str,
     /// Where one is created; `{base}` stands for the instance's root URL.
     pub create: &'static str,
+    /// Whether other instances of the service (GitHub Enterprise, a
+    /// self-hosted sr.ht) keep their tokens elsewhere, so a fixed
+    /// `create` page holds only for the service's own host; Jira's,
+    /// NVD's and Fedora's pages serve every user.
+    pub hosted: bool,
     /// What applies to every tool: how scopes work there, or that the
     /// secret is optional.
     pub note: &'static str,
+    /// What one secret must grant to serve every tool using it, one
+    /// scope or permission per item; empty when one tool does.
+    pub all: &'static [&'static str],
     /// What each tool needs, sorted by tool.
     pub uses: &'static [Use],
 }
@@ -62,7 +70,9 @@ pub const SERVICES: &[Service] = &[
         name: "Bugzilla",
         what: "API key",
         create: "{base}/userprefs.cgi?tab=apikey",
+        hosted: false,
         note: "A Bugzilla API key has no scopes: it can do whatever your account can.",
+        all: &["an API key for each Bugzilla you use (Red Hat's; RPM Fusion's for ebranch)"],
         uses: &[
             Use {
                 tool: "ebranch",
@@ -91,8 +101,14 @@ pub const SERVICES: &[Service] = &[
         name: "Forgejo",
         what: "access token",
         create: "{base}/user/settings/applications",
-        note: "Forgejo scopes are categories, each No access, Read, or Read and Write, \
-               for the whole account.",
+        hosted: false,
+        note: "Each scope is a category, set to No access, Read, or Read and Write.",
+        all: &[
+            "issue: Read and Write",
+            "organization: Read",
+            "repository: Read",
+            "user: Read",
+        ],
         uses: &[
             Use {
                 tool: "ebranch",
@@ -116,9 +132,14 @@ pub const SERVICES: &[Service] = &[
         name: "GitHub",
         what: "personal access token",
         create: "https://github.com/settings/personal-access-tokens",
+        hosted: true,
         note: "No tool writes to GitHub. A token with no scopes raises the rate limit \
                (60 to 5000 requests an hour); classic tokens are at \
                https://github.com/settings/tokens.",
+        all: &[
+            "no scopes",
+            "repo (classic), to report on private repositories",
+        ],
         uses: &[
             Use {
                 tool: "ebranch",
@@ -144,11 +165,13 @@ pub const SERVICES: &[Service] = &[
         name: "GitLab",
         what: "personal access token",
         create: "{base}/-/user_settings/personal_access_tokens",
+        hosted: false,
         note: "",
+        all: &["api, in a legacy (not fine-grained) token"],
         uses: &[
             Use {
                 tool: "cbspkg",
-                needs: "api, and the Maintainer role in the SIG's group for sig-repo",
+                needs: "api; Maintainer in the SIG's group for sig-repo",
                 why: "creates SIG repositories, comments on and labels tracking issues",
             },
             Use {
@@ -173,8 +196,9 @@ pub const SERVICES: &[Service] = &[
         name: "Jira",
         what: "Atlassian API token",
         create: "https://id.atlassian.com/manage-profile/security/api-tokens",
-        note: "Entered with the email of the Atlassian account it belongs to. \
-               Public issues read without one.",
+        hosted: false,
+        note: "Entered with your Atlassian email; public issues read without one.",
+        all: &[],
         uses: &[Use {
             tool: "cpu-sig-tracker",
             needs: "read:jira-user, read:jira-work; write:jira-work to file issues",
@@ -186,7 +210,9 @@ pub const SERVICES: &[Service] = &[
         name: "NVD",
         what: "API key",
         create: "https://nvd.nist.gov/developers/request-an-api-key",
+        hosted: false,
         note: "Optional: a key raises the rate limit from 5 to 50 requests per 30 s.",
+        all: &["an API key"],
         uses: &[
             Use {
                 tool: "ebranch",
@@ -205,7 +231,9 @@ pub const SERVICES: &[Service] = &[
         name: "Fedora dist-git (Pagure)",
         what: "API token",
         create: "https://src.fedoraproject.org/settings/token/new",
+        hosted: false,
         note: "",
+        all: &["the \"Modify an existing project\" ACL"],
         uses: &[
             Use {
                 tool: "poi-tracker",
@@ -224,7 +252,9 @@ pub const SERVICES: &[Service] = &[
         name: "Sourcehut",
         what: "personal access token",
         create: "https://meta.sr.ht/oauth2/personal-token",
+        hosted: true,
         note: "Tick \"read-only access token\": every grant is then read-only.",
+        all: &[],
         uses: &[Use {
             tool: "sandogasa-report",
             needs: "read-only; all services, or git.sr.ht, lists.sr.ht, todo.sr.ht and meta.sr.ht",
@@ -324,10 +354,12 @@ pub fn service(label: &str) -> Option<&'static Service> {
 
 /// What a `config` prompt says before asking `tool` for the secret
 /// kept under `label` on the instance at `base`: where to create one,
-/// what this tool needs and why, and, since the keyring entry is
-/// shared, what each other tool using it needs, so someone who runs
-/// only this tool can grant less. One line per item, each indented by
-/// two spaces, ending in a newline; empty for a label not in the table.
+/// and what to grant, as a list: what this tool needs, then, since the
+/// keyring entry is shared, what each other tool using it needs, and
+/// what one secret needs for all of them, so someone who runs only this
+/// tool can grant less. The reasons are on the docs page. One line per
+/// item, each indented by two spaces, ending in a newline; empty for a
+/// label not in the table.
 pub fn token_help(label: &str, tool: &str, base: &str) -> String {
     let Some(service) = service(label) else {
         return String::new();
@@ -335,7 +367,10 @@ pub fn token_help(label: &str, tool: &str, base: &str) -> String {
     let mut out = String::new();
     // A page on the service's own host says nothing about another
     // instance of it (GitHub Enterprise, a self-hosted sr.ht).
-    let create = match service.create.contains("{base}") || same_site(base, service.create) {
+    let create = match !service.hosted
+        || service.create.contains("{base}")
+        || same_site(base, service.create)
+    {
         true => format!(
             "Create a {} {} at {}",
             service.name,
@@ -353,33 +388,30 @@ pub fn token_help(label: &str, tool: &str, base: &str) -> String {
     if !service.note.is_empty() {
         wrap(&mut out, service.note, "  ", "  ");
     }
+    // This tool first, then the others sharing the keyring entry, then
+    // what one token needs for all of them.
+    out.push_str("  What to grant:\n");
     if let Some(own) = service.uses.iter().find(|u| u.tool == tool) {
         wrap(
             &mut out,
-            &format!("{tool} needs: {}", own.needs),
+            &format!("- {tool} (this tool): {}", own.needs),
             "  ",
-            "      ",
+            "    ",
         );
-        wrap(&mut out, &format!("for: {}", own.why), "    ", "      ");
     }
-    let others: Vec<&Use> = service.uses.iter().filter(|u| u.tool != tool).collect();
-    if !others.is_empty() {
-        out.push_str("  Other tools share this keyring entry and need:\n");
-        for u in &others {
-            wrap(
-                &mut out,
-                &format!("{}: {}", u.tool, u.needs),
-                "    ",
-                "        ",
-            );
-            wrap(&mut out, &format!("for: {}", u.why), "      ", "        ");
-        }
+    for u in service.uses.iter().filter(|u| u.tool != tool) {
         wrap(
             &mut out,
-            &format!("If you run only {tool}, what it needs is enough."),
+            &format!("- {}: {}", u.tool, u.needs),
             "  ",
-            "  ",
+            "    ",
         );
+    }
+    if !service.all.is_empty() && service.uses.len() > 1 {
+        out.push_str("  For all of them:\n");
+        for item in service.all {
+            wrap(&mut out, item, "    ", "      ");
+        }
     }
     out
 }
@@ -444,6 +476,12 @@ pub fn markdown() -> String {
         out.push_str("\n\n| Tool | Needs | For |\n| --- | --- | --- |\n");
         for u in s.uses {
             out.push_str(&format!("| {} | {} | {} |\n", u.tool, u.needs, u.why));
+        }
+        if !s.all.is_empty() {
+            out.push_str("\nFor all of these tools:\n\n");
+            for item in s.all {
+                out.push_str(&format!("- {item}\n"));
+            }
         }
     }
     out.push_str(
@@ -571,26 +609,57 @@ mod tests {
             ),
             "{help}"
         );
+        // This tool first, then the others, then what all of them need.
         assert!(
-            help.contains("  sandogasa-report needs: read_api\n    for: reads"),
+            help.ends_with(
+                "  What to grant:\n\
+                 \x20 - sandogasa-report (this tool): read_api\n\
+                 \x20 - cbspkg: api; Maintainer in the SIG's group for sig-repo\n\
+                 \x20 - cpu-sig-tracker: api, in a legacy (not fine-grained) token\n\
+                 \x20 - hs-relmon: api\n\
+                 \x20 For all of them:\n\
+                 \x20   api, in a legacy (not fine-grained) token\n"
+            ),
             "{help}"
         );
         assert!(help.lines().all(|l| l.chars().count() <= 78), "{help}");
-        assert!(
-            help.contains("    cbspkg: api, and the Maintainer role"),
-            "{help}"
-        );
-        assert!(!help.contains("    sandogasa-report:"), "{help}");
-        assert!(help.ends_with("If you run only sandogasa-report, what it needs is enough.\n"));
         // One user only: no others to list.
         let jira = token_help(
             "sandogasa: Jira API token",
             "cpu-sig-tracker",
             "https://redhat.atlassian.net",
         );
-        assert!(!jira.contains("Other tools"), "{jira}");
-        assert!(jira.contains("Public issues"), "{jira}");
+        assert!(!jira.contains("For all of them"), "{jira}");
+        // Atlassian's page serves every site, whichever one is asked about.
+        assert!(
+            jira.starts_with(
+                "  Create a Jira Atlassian API token at\n    \
+                 https://id.atlassian.com/manage-profile/security/api-tokens\n"
+            ),
+            "{jira}"
+        );
         assert_eq!(token_help("sandogasa: nothing", "x", "https://x"), "");
+    }
+
+    /// A secret several tools share says what one token needs for all
+    /// of them; one only one tool keeps does not.
+    #[test]
+    fn a_shared_secret_says_what_all_its_tools_need() {
+        for s in SERVICES {
+            assert_eq!(s.uses.len() > 1, !s.all.is_empty(), "{}", s.label);
+        }
+        let help = token_help(
+            "sandogasa: Forgejo token",
+            "sandogasa-report",
+            "https://forge.example",
+        );
+        assert!(
+            help.ends_with(
+                "  For all of them:\n    issue: Read and Write\n    organization: Read\n    \
+                 repository: Read\n    user: Read\n"
+            ),
+            "{help}"
+        );
     }
 
     /// `docs/tokens.md` is this table, when the crate is built in a
