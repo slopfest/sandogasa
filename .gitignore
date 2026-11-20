@@ -61,3 +61,6 @@ crates/*/Cargo.lock
 # keep in git.
 *.pdf
 *.html
+
+# The trajectory report's build output (scripts/build-trajectory.sh).
+/reports/trajectory/*.json

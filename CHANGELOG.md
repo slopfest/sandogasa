@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Each release carries a report of the project's development trajectory
+
+There was no record of how sandogasa grew from release to release: its
+size, how fast, and when its commits were made. A one-off COCOMO run
+said $7.4M of estimated effort on 2026-11-19, against about $3M in
+September, with nothing to show how it got there.
+
+`make trajectory` measures every release tag (lines by language, Rust
+code and tests apart, crates and tools, commits and lines changed, days
+between releases, a basic COCOMO estimate, and the shares of commits
+made at the weekend, in the evening and at night) and draws them into a
+PDF, which `.github/workflows/trajectory.yml` attaches to each release.
+COCOMO's figure is labeled as what it is here: a measure of pace, not of
+value. Commit times are normalized per author and day, asking about
+commits whose time zone is not their author's that day; the weekday x
+hour heatmap is built only with `PRIVATE=1`, never for a release. See
+`reports/trajectory/README.md`.
+
+Resolves #20
+
 ### New tool: timebook
 
 Fedora's shared meeting rooms are booked in Fedora Calendar, but a

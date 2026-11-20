@@ -51,6 +51,14 @@ findings: ## Render FINDINGS to HTML and PDF (SRC=... for another file)
 talks: ## Compile the talks under talks/ to PDF (TALK=talks/<name> for one)
 	scripts/build-talks.sh $(TALK)
 
+.PHONY: trajectory
+trajectory: ## Build the per-release trajectory report (UNTIL=<tag>, HEAD=1, PRIVATE=1)
+	UNTIL=$(UNTIL) HEAD=$(HEAD) PRIVATE=$(PRIVATE) scripts/build-trajectory.sh
+
+.PHONY: trajectory-test
+trajectory-test: ## Test the trajectory report's script
+	python3 -B -m unittest discover -s reports/trajectory
+
 .PHONY: cov
 cov: ## Report test coverage, failing under 85% lines
 	$(CARGO) cov
@@ -127,6 +135,7 @@ check: ## Everything a pull request should pass
 	$(MAKE) test
 	$(MAKE) check-non-exhaustive
 	$(MAKE) spell
+	$(MAKE) trajectory-test
 	$(MAKE) packaging-test
 
 .PHONY: release-checks

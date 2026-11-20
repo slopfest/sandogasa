@@ -38,6 +38,10 @@ jobs:
       - run: make clippy
       - run: make test
       - run: make check-non-exhaustive
+      # The trajectory report's script, its whole build path included
+      # with the line counter stubbed; the test that counts a real tree
+      # needs tokei, which this runner lacks, and is skipped here.
+      - run: make trajectory-test
 
   packaging:
     name: packaging sandbox

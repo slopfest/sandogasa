@@ -1,0 +1,7 @@
+# Offsets to read commits in, for commits whose recorded offset
+# differs from the one most of their author's commits carry that day
+# (reports/trajectory/trajectory.py asks, and keeps the answer here).
+
+[commits]
+"2588ca93224ad2f50ac477366bd35b11697994a4" = "+0000"
+"870eb917a42be6ac6429e23381f964bbbd855d13" = "+0000"
