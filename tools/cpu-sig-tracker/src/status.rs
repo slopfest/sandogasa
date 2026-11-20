@@ -2088,6 +2088,8 @@ mod tests {
     }
 
     #[test]
+    // Reads the Jira base URL, which env-setting tests change.
+    #[serial_test::serial]
     fn a_body_with_two_jira_lines_is_read_and_rewritten_with_both() {
         let body = "- **MR**: [t](https://example/-/merge_requests/1) — opened\n\
                     - **JIRA**: [RHEL-303720](https://example/browse/RHEL-303720) — New\n\
@@ -2239,6 +2241,8 @@ mod tests {
     }
 
     #[test]
+    // Reads the Jira base URL, which env-setting tests change.
+    #[serial_test::serial]
     fn refreshed_body_without_jira_uses_placeholder() {
         let out = refreshed_body(RefreshedBodyArgs {
             original_body: "",
@@ -2726,6 +2730,8 @@ name = "PackageKit"
     }
 
     #[test]
+    // Reads the Jira base URL, which env-setting tests change.
+    #[serial_test::serial]
     fn refresh_adds_cve_lines_under_jira_and_keeps_existing_ones() {
         let jira = [JiraState {
             key: "RHEL-303721".into(),
@@ -2763,6 +2769,8 @@ name = "PackageKit"
     }
 
     #[test]
+    // Reads the Jira base URL, which env-setting tests change.
+    #[serial_test::serial]
     fn a_declined_cve_is_recorded_and_kept() {
         let jira = vec![JiraState {
             key: "RHEL-303721".into(),
@@ -2851,6 +2859,8 @@ name = "PackageKit"
     }
 
     #[test]
+    // Reads the Jira base URL, which env-setting tests change.
+    #[serial_test::serial]
     fn refresh_fills_unknown_build_lines_from_the_evidence() {
         let jira = [JiraState {
             key: "RHEL-303721".into(),
