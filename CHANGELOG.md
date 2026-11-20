@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.29.0
 
 ### cbspkg promote shows what its dependency check reads, and spaces the reports evenly
 
