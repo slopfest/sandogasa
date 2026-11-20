@@ -97,7 +97,7 @@ impl HubBuilds {
             // architecture's packages (x86_64's glibc symbol versions
             // do not exist on aarch64).
             let rank = |rpm: &str| match rpm.rsplit_once('.').map(|(_, a)| a) {
-                Some(a) if a == std::env::consts::ARCH => 0,
+                Some(a) if a == host_rpm_arch() => 0,
                 Some("noarch") => 1,
                 _ => 2,
             };
@@ -320,6 +320,23 @@ impl RepoQuery for BuildsView {
     }
 }
 
+/// The RPM name of a Rust `arch` with the given byte order, for
+/// [`host_rpm_arch`].
+fn rpm_arch(arch: &'static str, little_endian: bool) -> &'static str {
+    match arch {
+        "powerpc64" if little_endian => "ppc64le",
+        "powerpc64" => "ppc64",
+        "x86" => "i686",
+        other => other,
+    }
+}
+
+/// The host's architecture as RPM names it, which is what fedrq
+/// answers for: Rust says `powerpc64` for ppc64le and `x86` for i686.
+fn host_rpm_arch() -> &'static str {
+    rpm_arch(std::env::consts::ARCH, cfg!(target_endian = "little"))
+}
+
 /// `name-version-release` split into its name and `version-release`.
 fn split_nvr(nvr: &str) -> (&str, &str) {
     let mut parts = nvr.rsplitn(3, '-');
@@ -421,15 +438,31 @@ mod tests {
         );
         assert!(short.errors["bar-1-1.el10"].ends_with("no answer"));
         // One the check does not use, for another architecture, does not.
-        let host = format!("bar-1-1.el10.{}", std::env::consts::ARCH);
+        let host = format!("bar-1-1.el10.{}", host_rpm_arch());
+        // Any architecture but the host's: the test runs on s390x too.
+        let away = if host_rpm_arch() == "s390x" {
+            "aarch64"
+        } else {
+            "s390x"
+        };
         let other = HubBuilds::from_parts(
             &s(&["bar-1-1.el10"]),
-            vec![Ok(vec!["bar-1-1.el10.s390x".to_string(), host])],
+            vec![Ok(vec![format!("bar-1-1.el10.{away}"), host])],
             &[Err("fault".to_string()), Ok(s(&["bar = 1-1.el10"]))],
             &[Ok(vec![]), Ok(vec![])],
         );
         assert!(other.errors.is_empty(), "{:?}", other.errors);
         assert_eq!(other.binaries("bar-1-1.el10"), ["bar"]);
+    }
+
+    #[test]
+    fn rust_arch_names_become_rpm_ones() {
+        assert_eq!(rpm_arch("powerpc64", true), "ppc64le");
+        assert_eq!(rpm_arch("powerpc64", false), "ppc64");
+        assert_eq!(rpm_arch("x86", true), "i686");
+        assert_eq!(rpm_arch("s390x", false), "s390x");
+        assert_eq!(rpm_arch("x86_64", true), "x86_64");
+        assert_eq!(rpm_arch("aarch64", true), "aarch64");
     }
 
     #[test]
