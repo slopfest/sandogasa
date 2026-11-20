@@ -96,6 +96,17 @@ instance = "https://gitlab.com"
 group = "CentOS/infra"
 extra_groups = ["CentOS/common"]
 
+# --- GNOME ---
+
+# GNOME's GitLab (merge requests and issues in GNOME and World projects,
+# such as phosh). A domain of its own, since a domain takes one GitLab
+# instance. Needs a token for gitlab.gnome.org (`sandogasa-report
+# config`), and the GNOME login under [users.<key>.gitlab] when it is
+# not the FAS name.
+[domains.gnome]
+[domains.gnome.gitlab]
+instance = "https://gitlab.gnome.org"
+
 # --- Debian ---
 
 [domains.debian]
