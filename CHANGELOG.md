@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### cbspkg scratch-builds an SRPM, and gains scratch-build
+
+A scratch build of a change not committed or pushed yet, or of an SRPM
+made some other way, had to be run by hand as `cbs build --scratch
+<target> <srpm>`, working out the SIG's build target again, the very
+part cbspkg works out from the branch. Fedora has `fedpkg scratch-build
+--srpm` for it.
+
+`cbspkg build --scratch --srpm [SRPM]` builds that SRPM in the branch's
+targets, or, with no path, SRPMs built first as `cbspkg srpm` builds
+them, skipping the steps only a build from git needs (the push check,
+the Release check, the lookaside upload). Without `--scratch` it is
+refused before anything is read. `cbspkg scratch-build` is `build
+--scratch` under fedpkg's name, the same options and the same code.
+
+Resolves #196
+
 ### Each release carries a report of the project's development trajectory
 
 There was no record of how sandogasa grew from release to release: its

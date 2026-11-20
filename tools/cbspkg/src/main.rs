@@ -76,6 +76,10 @@ enum Command {
     /// -release, untagging it from -testing)
     Promote(PromoteArgs),
 
+    /// Scratch-build the checked-out SIG branch in CBS, or an SRPM
+    /// (--srpm), in the branch's targets: `build --scratch`
+    ScratchBuild(BuildArgs),
+
     /// Make sure the SIG has its repo for a package, a pull mirror of
     /// CentOS Stream's, and push a merge request's change to it
     SigRepo(SigRepoArgs),
@@ -107,6 +111,12 @@ fn main() -> ExitCode {
         Command::Mockbuild(args) => local::run_mockbuild(&args),
         Command::NewSources(args) => new_sources::run(&args),
         Command::Promote(args) => promote::run(&args),
+        // The same arguments and the same code as `build`, scratch set,
+        // so the two cannot drift.
+        Command::ScratchBuild(mut args) => {
+            args.scratch = true;
+            build::run(&args)
+        }
         Command::SigRepo(args) => sig_repo::run(&args),
         Command::Srpm(args) => local::run_srpm(&args),
         Command::Untag(args) => untag::run(&args),
@@ -119,6 +129,28 @@ fn main() -> ExitCode {
 mod tests {
     /// The committed man page is generated from this CLI; see
     /// `sandogasa_cli::man` and `scripts/gen-man.sh`.
+    #[test]
+    fn scratch_build_takes_builds_arguments_and_an_optional_srpm() {
+        use super::{Cli, Command};
+        use clap::Parser;
+        let parse = |argv: &[&str]| match Cli::try_parse_from(argv).unwrap().command {
+            Command::ScratchBuild(args) | Command::Build(args) => args,
+            _ => unreachable!(),
+        };
+        let bare = parse(&["cbspkg", "scratch-build", "--srpm"]);
+        assert_eq!(bare.srpm, Some(None));
+        let given = parse(&[
+            "cbspkg",
+            "scratch-build",
+            "--srpm",
+            "x.src.rpm",
+            "--variant",
+            "main",
+        ]);
+        assert_eq!(given.srpm, Some(Some("x.src.rpm".into())));
+        assert_eq!(parse(&["cbspkg", "build", "--scratch"]).srpm, None);
+    }
+
     #[test]
     fn man_page_matches_cli() {
         sandogasa_cli::man::check::<super::Cli>(

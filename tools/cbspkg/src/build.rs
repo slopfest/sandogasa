@@ -56,6 +56,11 @@ pub struct BuildArgs {
     #[arg(long, help_heading = "Building")]
     pub scratch: bool,
 
+    /// Build this SRPM instead of the branch's commit, scratch builds
+    /// only; with no path, build one per target first, as `srpm` does
+    #[arg(long, value_name = "SRPM", num_args = 0..=1, help_heading = "Building")]
+    pub srpm: Option<Option<PathBuf>>,
+
     /// Show each step and its command without running anything
     #[arg(long, help_heading = "Writing")]
     pub dry_run: bool,
@@ -308,35 +313,24 @@ fn promote_next(
     Some((what, command, by_hand))
 }
 
-fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let ui = Ui {
-        explain: args.explain,
-        dry_run: args.dry_run,
-        quiet: false,
-    };
-    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
-    let mut tools = vec![
-        ("git", "sudo dnf install git-core", Some("--version")),
-        ("koji", "sudo dnf install koji", Some("--help")),
-        // The Release check (#152).
-        ("rpmspec", "sudo dnf install rpm-build", Some("--version")),
-    ];
-    if !args.dry_run {
-        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
-    }
-    sandogasa_cli::require_tools(&tools)?;
-    let checkout = resolve(&repo, args.branch.as_deref(), None, Some(&args.variants))?;
+/// The SIG repo's URL at the branch's commit, for `build` to build
+/// from, once it is pushed, its Release checked, its sources uploaded
+/// and, for a real build, the package listed: `None` when a step was
+/// declined. The commit too, for the tracking issue.
+fn from_git(
+    args: &BuildArgs,
+    ui: &Ui,
+    repo: &Path,
+    checkout: &Checkout,
+    ready: &dyn Fn() -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(Option<String>, String), Box<dyn std::error::Error>> {
     let (branch, package) = (&checkout.branch, &checkout.package);
-    // A Stream collection's build is compared with stock's (#152).
-    if checkout.collections.iter().any(|c| c.stream) {
-        sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--help"))])?;
-    }
     let Located {
         remote,
         url,
         sig_path,
         commit,
-    } = locate(&checkout, &repo)?;
+    } = locate(checkout, repo)?;
     let host = remote_host(&url).ok_or_else(|| format!("cannot tell the host of {url}"))?;
 
     // Whether the SIG's repo has the commit: CBS fetches it from there.
@@ -347,9 +341,9 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     let show = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     ui.show_command(&show(&["git", "rev-parse", branch]));
     ui.show_command(&show(&["git", "fetch", &remote]));
-    git(&repo, &["fetch", "--quiet", &remote])?;
+    git(repo, &["fetch", "--quiet", &remote])?;
     let containing = git(
-        &repo,
+        repo,
         &[
             "branch",
             "--remotes",
@@ -371,41 +365,132 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // The cheap checks first: the CBS login and a terminal to confirm
     // at, before the Release check, the uploads and any GitLab request.
-    if !args.dry_run {
-        sandogasa_cbs::login::ensure_login("cbspkg", true, args.explain)?;
-        if !std::io::stdin().is_terminal() {
-            return Err("building in CBS is confirmed at a terminal; run it in one".into());
-        }
-    }
+    ready()?;
     // A Release that lags the changelog, or a build that sorts below
     // stock's, is caught before CBS builds it (#152).
     if !crate::release_check::check(
-        &ui,
-        &repo,
+        ui,
+        repo,
         package,
         &commit,
         &checkout.collections,
         args.scratch,
         std::io::stdin().is_terminal(),
     )? {
-        return Ok(());
+        return Ok((None, commit));
     }
 
     // CBS fetches the sources from the SIG lookaside, scratch builds
     // too (#99).
-    if !crate::upload_sources::upload_missing(&ui, &repo, &checkout, &remote, &commit)? {
-        return Ok(());
+    if !crate::upload_sources::upload_missing(ui, repo, checkout, &remote, &commit)? {
+        return Ok((None, commit));
     }
     if !args.scratch
         && !list_missing(
-            &ui,
-            &repo,
+            ui,
+            repo,
             &checkout.collections,
             package,
             args.owner.as_deref(),
         )?
     {
-        return Ok(());
+        return Ok((None, commit));
+    }
+    Ok((Some(scm), commit))
+}
+
+fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let ui = Ui {
+        explain: args.explain,
+        dry_run: args.dry_run,
+        quiet: false,
+    };
+    let repo = args.repo.clone().unwrap_or_else(|| PathBuf::from("."));
+    let mut tools = vec![
+        ("git", "sudo dnf install git-core", Some("--version")),
+        ("koji", "sudo dnf install koji", Some("--help")),
+        // The Release check (#152).
+        ("rpmspec", "sudo dnf install rpm-build", Some("--version")),
+    ];
+    if !args.dry_run {
+        tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
+    }
+    sandogasa_cli::require_tools(&tools)?;
+    // An SRPM is for looking at a change, not for shipping it: a real
+    // SIG build comes from the SIG's git repo, and Koji lets only admins
+    // build from an SRPM. Said before anything is read.
+    if args.srpm.is_some() && !args.scratch {
+        return Err(
+            "--srpm builds scratch builds only: a SIG build comes from the \
+                    SIG's git repo; add --scratch, or use `cbspkg scratch-build`"
+                .into(),
+        );
+    }
+    let checkout = resolve(&repo, args.branch.as_deref(), None, Some(&args.variants))?;
+    let (branch, package) = (&checkout.branch, &checkout.package);
+    // The cheap checks before the expensive ones: the CBS login and a
+    // terminal to confirm at.
+    let ready = || -> Result<(), Box<dyn std::error::Error>> {
+        if !args.dry_run {
+            sandogasa_cbs::login::ensure_login("cbspkg", true, args.explain)?;
+            if !std::io::stdin().is_terminal() {
+                return Err("building in CBS is confirmed at a terminal; run it in one".into());
+            }
+        }
+        Ok(())
+    };
+    // What each collection is built from, what the builds are called,
+    // and the commit, for the tracking issue (none for an SRPM).
+    // A Stream collection's build from git is compared with stock's
+    // (#152): checked before anything else is done.
+    if args.srpm.is_none() && checkout.collections.iter().any(|c| c.stream) {
+        sandogasa_cli::require_tools(&[("fedrq", "sudo dnf install fedrq", Some("--help"))])?;
+    }
+    let (sources, title, commit): (Vec<String>, String, String) = match &args.srpm {
+        Some(given) => {
+            ready()?;
+            let srpms: Vec<PathBuf> = match given {
+                Some(path) => {
+                    if !args.dry_run && !path.is_file() {
+                        return Err(format!("no SRPM at {}", path.display()).into());
+                    }
+                    vec![path.clone(); checkout.collections.len()]
+                }
+                None => crate::local::srpms(&ui, &repo, args.branch.as_deref(), &args.variants)?,
+            };
+            let names: Vec<String> = srpms
+                .iter()
+                .map(|p| {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            (
+                srpms.iter().map(|p| p.display().to_string()).collect(),
+                format!("{package} {branch} from {}:", names.join(", ")),
+                String::new(),
+            )
+        }
+        None => {
+            let (scm, commit) = from_git(args, &ui, &repo, &checkout, &ready)?;
+            let Some(scm) = scm else {
+                return Ok(());
+            };
+            let title = format!("{package} {branch} at {}:", &commit[..12.min(commit.len())]);
+            (vec![scm; checkout.collections.len()], title, commit)
+        }
+    };
+    // One source per collection, or a target would go unbuilt unsaid.
+    if sources.len() != checkout.collections.len() {
+        return Err(format!(
+            "{} SRPM(s) for {} target(s); nothing built",
+            sources.len(),
+            checkout.collections.len()
+        )
+        .into());
     }
     // The tracking issue is told of a build cbspkg waits for, which it
     // knows by its task.
@@ -422,7 +507,8 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
     let builds: Vec<(&Collection, Vec<String>)> = checkout
         .collections
         .iter()
-        .map(|c| (c, build_argv(&c.target(), &scm, flags)))
+        .zip(&sources)
+        .map(|(c, source)| (c, build_argv(&c.target(), source, flags)))
         .collect();
     let kind = if args.scratch {
         "a scratch build"
@@ -483,13 +569,7 @@ fn run_inner(args: &BuildArgs) -> Result<(), Box<dyn std::error::Error>> {
         let color = sandogasa_cli::style::stderr_color();
         eprint!(
             "\n{}",
-            crate::plan::build(
-                &format!("{package} {branch} at {}:", &commit[..12.min(commit.len())]),
-                &commands,
-                &preview,
-                token.is_some(),
-                color,
-            )
+            crate::plan::build(&title, &commands, &preview, token.is_some(), color,)
         );
         if !sandogasa_cli::confirm(&format!("Start {kind}?"), true)? {
             eprintln!("Nothing built.");
@@ -674,6 +754,7 @@ mod tests {
             nowait: false,
             owner: None,
             scratch: false,
+            srpm: None,
             dry_run: false,
             explain: false,
         };
@@ -747,6 +828,7 @@ mod tests {
             nowait: false,
             owner: None,
             scratch: false,
+            srpm: None,
             dry_run: true,
             explain: false,
         }
@@ -773,6 +855,32 @@ mod tests {
         };
         run_inner(&args).unwrap();
         assert_eq!(run(&args), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn an_srpm_is_scratch_built_without_the_git_steps() {
+        let f = Fixture::proposed("c10s-proposed-RHEL-1", &[]);
+        // koji only answers --help, and the branch is not pushed: an SRPM
+        // build reads neither the tags nor the SIG repo.
+        let srpm = f.repo.join("rsync-3.4.1-1.el10.src.rpm");
+        let args = BuildArgs {
+            scratch: true,
+            srpm: Some(Some(srpm)),
+            ..dry_run(None, &f)
+        };
+        run_inner(&args).unwrap();
+        // Not without --scratch: a real build comes from git.
+        let err = run_inner(&BuildArgs {
+            scratch: false,
+            ..args
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("--srpm builds scratch builds only"),
+            "{err}"
+        );
     }
 
     #[test]

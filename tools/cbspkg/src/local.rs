@@ -407,6 +407,24 @@ pub fn run_srpm(args: &SrpmArgs) -> ExitCode {
     )
 }
 
+/// The SRPMs of `repo`'s branch, one per collection its variants
+/// build for, in the order `resolve` lists them: what `srpm` builds,
+/// for `build --srpm` to scratch-build.
+pub(crate) fn srpms(
+    ui: &Ui,
+    repo: &Path,
+    branch: Option<&str>,
+    variants: &VariantArgs,
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let target = Target {
+        repo: repo.to_path_buf(),
+        branch,
+        variants,
+    };
+    let built = prepare(ui, &target).and_then(|p| srpm(ui, &p))?;
+    Ok(built.into_iter().map(|b| b.srpm).collect())
+}
+
 pub fn run_mockbuild(args: &MockbuildArgs) -> ExitCode {
     exit(mockbuild(args))
 }

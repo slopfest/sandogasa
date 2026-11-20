@@ -118,7 +118,8 @@ pauses before each; `--dry-run` shows them without changing anything.
 
 ```sh
 cbspkg build [-C DIR] [--branch BRANCH] [--variant VARIANT]… [--rhel VARIANT]… \
-    [--scratch] [--background] [--nowait] [--owner USER] [--explain] [--dry-run]
+    [--scratch [--srpm [SRPM]]] [--background] [--nowait] [--owner USER] \
+    [--explain] [--dry-run]
 ```
 
 Builds the checked-out branch (or `--branch`, which may exist only on
@@ -168,6 +169,23 @@ build is done, as for `promote` below. To name the build in the comment,
 `cbs watch-task`, then reads the build's NVR from its task; the comment
 is posted with that NVR once the build has succeeded. Builds left
 running with `--nowait`, and scratch builds, get no comment.
+
+`--srpm` scratch-builds an SRPM instead of the branch's commit, in the
+same targets: `cbs build --scratch <target> <file>.src.rpm`, the file
+uploaded. With no path it builds one per target first, as `srpm` does,
+for a change that is not committed or pushed yet. It skips what only a
+build from git needs (the push check, the Release check, the lookaside
+upload), and is refused without `--scratch`: a SIG build comes from the
+SIG's git repo.
+
+### `scratch-build`
+
+```sh
+cbspkg scratch-build [--srpm [SRPM]] …
+```
+
+`build --scratch`, under the name fedpkg gives it: the same options,
+and the same code.
 
 ### `config`
 
