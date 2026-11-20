@@ -22,14 +22,16 @@ with the `cbs` profile.
 ```
 hs-relmon check-latest <package> [--distros <list>] [--track <distro>]
     [--repology-name <project>] [--json] [--file-issue [<url>]]
-hs-relmon check-manifest <manifest> [--json]
+hs-relmon check-manifest <manifest> [--package <list>] [--json]
+    [--distros <list>] [--track <distro>]
     [--issue-status <status>] [--issue-assignee <username>]
 hs-relmon check-repos <manifest> [--package <list>] [--gitlab-group <url>]
     [--apply] [--yes] [--json] [--verbose]
 hs-relmon check-stock <manifest> [--repositories <list>] [--skip <list>]
     [--verbose]
 hs-relmon check-unbuilt <manifest> [--package <list>] [--gitlab-group <url>]
-    [--grace-days <N>] [--json] [--verbose]
+    [--grace-days <N>] [--update-issues [--yes]] [--all-commits] [--json]
+    [--verbose]
 hs-relmon config
 hs-relmon dupe-subpkgs [--repositories <list>] [--release <list>]
     [--package <list>] [--fix] [--json] [--verbose]
@@ -136,7 +138,9 @@ the newest of them over three days old, the issue also says so on a
 [Finding merged commits that were never built](#finding-merged-commits-that-were-never-built)),
 which goes once they are built. Only builds still in a Hyperscale
 `-candidate`, `-testing` or `-release` tag count. When it cannot be
-told, the issue keeps the line it had.
+told, the issue keeps the line it had. `check-latest` also shows them
+after its table, with or without `--file-issue` (`unbuilt` with
+`--json`).
 
 Override the project URL:
 
@@ -151,6 +155,12 @@ Check all packages listed in a TOML manifest file:
 ```
 $ hs-relmon check-manifest packages.toml
 ```
+
+`--package` checks only the packages listed. `--distros` and `--track`
+replace every package's own for the run: `--distros hs --track none`
+shows the Hyperscale columns alone and asks Repology nothing, for when
+it is unavailable. A run with either files, updates and closes no
+issue, since a narrowed check is not what the issue is about.
 
 The manifest uses `[defaults]` for shared settings and `[[package]]` entries
 for each package:
@@ -354,16 +364,29 @@ says which branch to compare: an `hs+fb.elN` build is compared with
 `cNs-hs+fb` if that branch holds the commit, else `cNs-hs` (a package
 built for both the main repository and a flavor builds both from the
 main branch), else the old `cNs-sig-hyperscale`. Each branch with unbuilt commits is listed
-with their count, the day of the newest, and each commit with the
-merge request that merged it:
+in a table, with their count and the day of the newest, then each
+commit with the merge request that merged it:
 
 ```console
 $ hs-relmon check-unbuilt packages.toml --package openssh
-openssh c9s-hs+fb: 9 commit(s) merged since openssh-9.9p1-16.1.hs+fb.el9 (55ea23169e5c) was built, the newest from 2026-11-10
-  2026-10-29 50fd979035e5 Fix CVE-2026-106552
-  …
+2 branch(es) with merged commits not built:
+
+  PACKAGE  BRANCH      COMMITS  NEWEST      BUILT FROM
+  openssh  c9s-hs+fb         9  2026-11-10  openssh-9.9p1-16.1.hs+fb.el9
+  openssh  c10s-hs+fb       16  2026-11-10  openssh-9.9p1-30.1.hs+fb.el10
+
+openssh c9s-hs+fb, since 55ea23169e5c:
   2026-11-10 ba5701fb91ea Merge c9s release 17 into c9s-hs+fb
+  …
+  2026-10-29 50fd979035e5 Fix CVE-2026-106552
+…
+4 build(s): 2 branch(es) not built, 0 with commits from the last 3 day(s) only
 ```
+
+Each branch lists its newest ten commits, newest first, and counts the
+rest; `--all-commits` lists them all. Builds that were not compared are
+summed up after, one line per reason naming their packages; `-v` lists
+each build.
 
 Several dist tags can come from one branch (an `hsx` build and an `hs`
 one both from `c9s-hs`); the branch counts as built once any of them is
@@ -378,6 +401,18 @@ period, the builds without a commit or a branch (`unsourced`,
 `unplaced`) and those that could not be checked. A build that could not
 be checked, GitLab or the hub failing, is reported on standard error
 and fails the run, as does a `--package` the manifest does not list.
+
+`--update-issues` writes the result into each package's open
+`rfe::new-version` issue, read in one listing of the group, as its
+`- **Not built**:` line, or takes the line out once its branches are
+built; each change is shown and asked about, `--yes` makes them all,
+and without a terminal they are only shown. It files, reopens and
+closes no issue, and leaves the line of a package it cannot tell about
+as it is: one with a build that could not be checked or records no
+commit, or none compared at all, as `--file-issue` does. A build on no
+branch, an old one usually, does not count against it. It writes with
+the default `--grace-days`, the one `--file-issue` uses, and refuses
+another.
 
 ### Configuration
 

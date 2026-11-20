@@ -292,29 +292,77 @@ pub fn find(
     Ok(check(targets, &built, repo, cutoff))
 }
 
-/// One branch as text: a line saying how many commits its newest build
-/// lacks and the day of the newest, then each commit with its day and
-/// merge request.
-pub fn render(u: &Unbuilt) -> String {
-    let mut out = format!(
-        "{} {}: {} commit(s) merged since {} ({}) was built",
-        u.package,
-        u.branch,
-        u.commits.len(),
-        u.nvr,
-        short(&u.built)
-    );
-    if let Some(d) = newest(&u.commits) {
-        out.push_str(&format!(", the newest from {}", day(d)));
+/// How many of a branch's unbuilt commits [`render`] lists by default.
+pub const SHOWN: usize = 10;
+
+/// The branches found, as a table: package, branch, how many commits
+/// are not built, the newest's day, and the build they are measured
+/// from. Empty for none.
+pub fn table<'a>(found: impl IntoIterator<Item = &'a Unbuilt>) -> String {
+    let rows: Vec<[String; 5]> = found
+        .into_iter()
+        .map(|u| {
+            [
+                u.package.clone(),
+                u.branch.clone(),
+                u.commits.len().to_string(),
+                newest(&u.commits).map_or("", day).to_string(),
+                u.nvr.clone(),
+            ]
+        })
+        .collect();
+    if rows.is_empty() {
+        return String::new();
     }
-    out.push('\n');
-    for c in &u.commits {
+    let head = ["PACKAGE", "BRANCH", "COMMITS", "NEWEST", "BUILT FROM"];
+    let width: Vec<usize> = (0..5)
+        .map(|i| {
+            rows.iter()
+                .map(|r| r[i].chars().count())
+                .chain([head[i].len()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let line = |cells: [&str; 5]| {
+        let text = format!(
+            "  {:<w0$}  {:<w1$}  {:>w2$}  {:<w3$}  {}",
+            cells[0],
+            cells[1],
+            cells[2],
+            cells[3],
+            cells[4],
+            w0 = width[0],
+            w1 = width[1],
+            w2 = width[2],
+            w3 = width[3],
+        );
+        format!("{}\n", text.trim_end())
+    };
+    let mut out = line(head);
+    for r in &rows {
+        out.push_str(&line([&r[0], &r[1], &r[2], &r[3], &r[4]]));
+    }
+    out
+}
+
+/// One branch's unbuilt commits: a heading naming the branch and the
+/// commit its build was made from, then the commits newest first, each
+/// with its day and merge request, at most `limit` of them (`None` for
+/// all) and a line counting the rest.
+pub fn render(u: &Unbuilt, limit: Option<usize>) -> String {
+    let mut out = format!("{} {}, since {}:\n", u.package, u.branch, short(&u.built));
+    let shown = limit.unwrap_or(usize::MAX).min(u.commits.len());
+    for c in u.commits.iter().rev().take(shown) {
         let day = c.committed.as_deref().map_or("", day);
         out.push_str(&format!("  {day} {} {}", short(&c.id), c.title));
         if let Some(mr) = &c.merge_request {
             out.push_str(&format!(" ({mr})"));
         }
         out.push('\n');
+    }
+    if shown < u.commits.len() {
+        out.push_str(&format!("  and {} older\n", u.commits.len() - shown));
     }
     out
 }
@@ -392,6 +440,27 @@ pub fn paragraph(branch: &str, commits: Vec<RepoCommit>) -> Option<String> {
         }
     }
     Some(text)
+}
+
+/// Whether `outcome`, a check of `targets`, can tell about `package`:
+/// at least one of its builds was compared, and none could not be
+/// checked or has no commit recorded (its branch may be behind). A
+/// build no branch holds, an old one usually, counts for neither.
+pub fn told(outcome: &Outcome, targets: &[Target], package: &str) -> bool {
+    let mentions = |list: &[String], t: &Target| {
+        list.iter()
+            .any(|e| e == &t.nvr || e.starts_with(&format!("{}: {}: ", t.package, t.nvr)))
+    };
+    let mine: Vec<&Target> = targets.iter().filter(|t| t.package == package).collect();
+    let compared = mine.iter().any(|t| {
+        !mentions(&outcome.problems, t)
+            && !mentions(&outcome.unsourced, t)
+            && !mentions(&outcome.unplaced, t)
+    });
+    compared
+        && !mine
+            .iter()
+            .any(|t| mentions(&outcome.problems, t) || mentions(&outcome.unsourced, t))
 }
 
 /// Why a build was not compared.
@@ -696,13 +765,25 @@ mod tests {
             out.unplaced
         );
 
-        let text = render(&out.unbuilt[0]);
+        let text = render(&out.unbuilt[0], None);
         assert_eq!(
             text,
-            "openssh c9s-hs+fb: 2 commit(s) merged since openssh-1-1.hs+fb.el9 (55ea2316) \
-             was built, the newest from 2026-11-10\n  2026-10-11 c1 Rebase on c9s release 17\n  \
-             2026-11-10 c2aaaaaaaaaa Merge branch 'x' (g/openssh!7)\n"
+            "openssh c9s-hs+fb, since 55ea2316:\n  2026-11-10 c2aaaaaaaaaa Merge branch 'x' \
+             (g/openssh!7)\n  2026-10-11 c1 Rebase on c9s release 17\n"
         );
+        assert_eq!(
+            render(&out.unbuilt[0], Some(1)),
+            "openssh c9s-hs+fb, since 55ea2316:\n  2026-11-10 c2aaaaaaaaaa Merge branch 'x' \
+             (g/openssh!7)\n  and 1 older\n"
+        );
+        assert_eq!(
+            table(&out.unbuilt),
+            "  PACKAGE  BRANCH              COMMITS  NEWEST      BUILT FROM\n\
+             \x20 openssh  c9s-hs+fb                 2  2026-11-10  openssh-1-1.hs+fb.el9\n\
+             \x20 legacy   c9s-sig-hyperscale        1  2026-10-01  legacy-1-1.hs+fb.el9\n"
+        );
+        assert_eq!(table(&[]), "");
+        assert_eq!(table(Vec::<&Unbuilt>::new()), "");
     }
 
     #[test]

@@ -1760,9 +1760,17 @@ fn print_human(rows: &[Row]) {
     let unbuilt: Vec<&sandogasa_cbs::unbuilt::Unbuilt> =
         rows.iter().flat_map(|r| &r.unbuilt).collect();
     if !unbuilt.is_empty() {
-        println!("\nMerged but not built:");
-        for u in unbuilt {
-            print!("{}", sandogasa_cbs::unbuilt::render(u));
+        let owned: Vec<sandogasa_cbs::unbuilt::Unbuilt> =
+            unbuilt.iter().map(|u| (*u).clone()).collect();
+        print!(
+            "\nMerged but not built:\n\n{}",
+            sandogasa_cbs::unbuilt::table(&owned)
+        );
+        for u in &owned {
+            print!(
+                "\n{}",
+                sandogasa_cbs::unbuilt::render(u, Some(sandogasa_cbs::unbuilt::SHOWN))
+            );
         }
     }
     let recent = rows.iter().map(|r| r.unbuilt_recent.len()).sum::<usize>();

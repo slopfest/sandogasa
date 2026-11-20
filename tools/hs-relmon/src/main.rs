@@ -117,6 +117,11 @@ Valid names:
         /// Path to the TOML manifest file.
         manifest: PathBuf,
 
+        /// Comma-separated distros to check for every package, in place
+        /// of each one's (e.g. `hs` for the Hyperscale columns alone).
+        #[arg(long, value_name = "LIST")]
+        distros: Option<String>,
+
         /// Only show packages whose issue is assigned to this user.
         #[arg(
             long,
@@ -149,6 +154,16 @@ Default statuses:
         /// Output as JSON instead of tables.
         #[arg(long)]
         json: bool,
+
+        /// Comma-separated packages to check (default: all).
+        #[arg(long, value_name = "LIST")]
+        package: Option<String>,
+
+        /// What to compare every package's builds with, in place of each
+        /// one's; `none` compares nothing, so with `--distros hs` Repology
+        /// is not asked at all.
+        #[arg(long, value_name = "REF")]
+        track: Option<String>,
     },
 
     /// Check every manifest package's GitLab repo against the SIG's
@@ -235,25 +250,52 @@ stock. The repository is the segment between
         manifest: PathBuf,
 
         /// GitLab group the packages' repos live under.
-        #[arg(long, default_value = retire::DEFAULT_GITLAB_GROUP, value_name = "URL")]
+        #[arg(
+            long,
+            default_value = retire::DEFAULT_GITLAB_GROUP,
+            value_name = "URL",
+            help_heading = "Selection"
+        )]
         gitlab_group: String,
+
+        /// Comma-separated packages to check (default: all).
+        #[arg(long, value_name = "LIST", help_heading = "Selection")]
+        package: Option<String>,
 
         /// Days a merged commit may wait for its build before it is
         /// flagged; branches with only newer ones are counted, not
         /// listed.
-        #[arg(long, default_value_t = unbuilt::DEFAULT_GRACE_DAYS, value_name = "DAYS")]
+        #[arg(
+            long,
+            default_value_t = unbuilt::DEFAULT_GRACE_DAYS,
+            value_name = "DAYS",
+            help_heading = "Checks"
+        )]
         grace_days: u32,
 
+        /// Write the result into each package's open rfe::new-version
+        /// issue as its `Not built` line, or take the line out once
+        /// built, asking per issue; no issue is filed, reopened or
+        /// closed.
+        #[arg(long, help_heading = "Writing")]
+        update_issues: bool,
+
+        /// With --update-issues, update them without asking.
+        #[arg(short, long, requires = "update_issues", help_heading = "Writing")]
+        yes: bool,
+
+        /// List every commit not built, not only the newest ten of each
+        /// branch.
+        #[arg(long, help_heading = "Output")]
+        all_commits: bool,
+
         /// Output as JSON instead of human-readable.
-        #[arg(long)]
+        #[arg(long, help_heading = "Output")]
         json: bool,
 
-        /// Comma-separated packages to check (default: all).
-        #[arg(long, value_name = "LIST")]
-        package: Option<String>,
-
-        /// Print progress to stderr.
-        #[arg(short, long)]
+        /// Print progress to stderr, and list each build not compared
+        /// rather than their packages.
+        #[arg(short, long, help_heading = "Output")]
         verbose: bool,
     },
 
@@ -694,6 +736,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &distros,
                 &track,
             )?;
+            // What the package's branches have merged since their newest
+            // builds, from the builds just read: shown, and written to an
+            // issue that is filed or updated.
+            check_unbuilt_into(&mut result);
 
             if let Some(url_override) = &file_issue {
                 let project_url = if url_override.is_empty() {
@@ -724,7 +770,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .into());
                 } else {
                     if result.is_outdated() {
-                        let issue_ref = maybe_file_issue(&package, &result, &project_url)?;
+                        let issue_ref = maybe_file_issue(&package, &mut result, &project_url)?;
                         result.issue = Some(issue_ref);
                     } else {
                         result.issue = lookup_issue(&project_url)?;
@@ -750,16 +796,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 check_latest::print_json(&result)?;
             } else {
                 check_latest::print_table(&result);
+                if let Some(outcome) = &result.unbuilt
+                    && !outcome.unbuilt.is_empty()
+                {
+                    print!(
+                        "\nMerged but not built:\n\n{}",
+                        sandogasa_cbs::unbuilt::table(&outcome.unbuilt)
+                    );
+                    for u in &outcome.unbuilt {
+                        print!(
+                            "\n{}",
+                            sandogasa_cbs::unbuilt::render(u, Some(sandogasa_cbs::unbuilt::SHOWN))
+                        );
+                    }
+                }
             }
         }
         Command::CheckManifest {
             manifest,
+            distros,
             json,
             issue_status,
             issue_assignee,
+            package,
+            track,
         } => {
             let m = manifest::Manifest::load(&manifest)?;
-            let packages = m.resolve()?;
+            let mut packages = m.resolve()?;
+            let only: Vec<String> = package
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let unknown: Vec<&str> = only
+                .iter()
+                .filter(|o| !packages.iter().any(|p| &&p.name == o))
+                .map(String::as_str)
+                .collect();
+            if !unknown.is_empty() {
+                return Err(
+                    format!("not in {}: {}", manifest.display(), unknown.join(", ")).into(),
+                );
+            }
+            packages.retain(|p| only.is_empty() || only.contains(&p.name));
+            // The run-wide overrides, in place of each package's own.
+            let distros = distros.as_deref().map(Distros::parse).transpose()?;
+            let track = track.as_deref().map(TrackRef::parse).transpose()?;
+            // A narrowed check is not the issue's: one distro up to date
+            // is not every one released, and another reference is not the
+            // package's. Such a run writes no issue.
+            let overridden = distros.is_some() || track.is_some();
+            if overridden {
+                eprintln!("note: with --distros or --track, no issue is filed, updated or closed");
+            }
+            for p in &mut packages {
+                if let Some(d) = &distros {
+                    p.distros = d.clone();
+                }
+                if let Some(t) = &track {
+                    p.track = t.clone();
+                }
+                if overridden {
+                    p.file_issue = false;
+                }
+            }
             let filtering = issue_status.is_some() || issue_assignee.is_some();
 
             let repology_client = repology::Client::new();
@@ -811,7 +914,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         errors += 1;
                     } else {
                         if result.is_outdated() && !filtering {
-                            match maybe_file_issue(&pkg.name, &result, &project_url) {
+                            match maybe_file_issue(&pkg.name, &mut result, &project_url) {
                                 Ok(issue_ref) => {
                                     result.issue = Some(issue_ref);
                                 }
@@ -843,7 +946,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     issue_assignee.as_deref(),
                                 )
                             {
-                                match maybe_file_issue(&pkg.name, &result, &project_url) {
+                                match maybe_file_issue(&pkg.name, &mut result, &project_url) {
                                     Ok(issue_ref) => {
                                         result.issue = Some(issue_ref);
                                     }
@@ -1283,11 +1386,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::CheckUnbuilt {
             manifest: path,
+            all_commits,
             gitlab_group,
             grace_days,
             json,
             package,
+            update_issues,
             verbose,
+            yes,
         } => {
             let m = manifest::Manifest::load(&path)?;
             let only: Vec<String> = package
@@ -1305,6 +1411,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             if !unknown.is_empty() {
                 return Err(format!("not in {}: {}", path.display(), unknown.join(", ")).into());
+            }
+            // The issue line is also written by --file-issue, with the
+            // default grace period; another here would keep flipping it.
+            if update_issues && grace_days != unbuilt::DEFAULT_GRACE_DAYS {
+                return Err(format!(
+                    "--update-issues writes with the default --grace-days ({}), as --file-issue \
+                     does",
+                    unbuilt::DEFAULT_GRACE_DAYS
+                )
+                .into());
             }
             // The token and the group before the long tag scan.
             let token = gitlab::load_token(keyring())?;
@@ -1333,37 +1449,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for p in &outcome.problems {
                 eprintln!("warning: {p}");
             }
-            if !outcome.unsourced.is_empty() {
-                eprintln!(
-                    "note: CBS records no commit for {} (built from an uploaded SRPM?), \
-                     so they were not compared",
-                    outcome.unsourced.join(", ")
-                );
-            }
-            for u in &outcome.unplaced {
-                eprintln!("note: {u}; not compared");
-            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&outcome)?);
             } else {
-                for u in &outcome.unbuilt {
-                    print!("{}", sandogasa_cbs::unbuilt::render(u));
-                }
-                println!(
-                    "{} build(s): {} branch(es) with merged commits not built, {} with only \
-                     commits from the last {grace_days} day(s){}{}",
-                    targets.len(),
-                    outcome.unbuilt.len(),
-                    outcome.recent.len(),
-                    match outcome.unsourced.len() + outcome.unplaced.len() {
-                        0 => String::new(),
-                        n => format!("; {n} with no commit to compare"),
-                    },
-                    match outcome.problems.len() {
-                        0 => String::new(),
-                        n => format!("; {n} could not be checked"),
-                    }
+                print!(
+                    "{}",
+                    unbuilt::report(&outcome, targets.len(), grace_days, all_commits, verbose)
                 );
+            }
+            if update_issues {
+                update_not_built_lines(&gitlab_group, &outcome, &targets, yes)?;
             }
             if !outcome.problems.is_empty() {
                 std::process::exit(1);
@@ -1764,7 +1859,7 @@ fn maybe_close_issue(
 
 fn maybe_file_issue(
     package: &str,
-    result: &check_latest::CheckResult,
+    result: &mut check_latest::CheckResult,
     project_url: &str,
 ) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
     let ref_ver = result
@@ -1772,55 +1867,163 @@ fn maybe_file_issue(
         .ok_or("no reference version available")?;
     let title = format!("{package}-{ref_ver} is available");
     let table = format!("```\n{}```", check_latest::format_table(result));
-    let not_built = not_built_line(package, &result.builds);
+    let not_built = not_built_line(result);
     file_or_update_issue(project_url, &title, &table, not_built)
 }
 
-/// The issue's line for `package`'s merged commits its newest builds
-/// lack, past the grace period (#205): `Some(None)` when there are
-/// none, `None` when it cannot be told (warned about), which keeps the
-/// issue's line. Of `builds`, every one CBS has, only those still in a
-/// Hyperscale `-candidate`, `-testing` or `-release` tag count, read in
-/// one call, as `check-unbuilt` counts them; the package's repo is in
-/// the SIG's group, whatever project the issue is filed in.
-fn not_built_line(package: &str, builds: &[cbs::Build]) -> Option<Option<String>> {
-    use sandogasa_cbs::unbuilt as shared;
-    let found = (|| -> Result<shared::Outcome, Box<dyn std::error::Error>> {
-        let ids: Vec<i64> = builds.iter().map(|b| b.build_id).collect();
-        let tags = cbs::Client::new().list_tags_multi(&ids)?;
-        let tagged = builds
-            .iter()
-            .zip(tags)
-            .filter(|(_, t)| t.iter().any(|t| unbuilt::counts_as_built(t)))
-            .map(|(b, _)| b.clone());
-        let targets = unbuilt::targets(package, tagged);
-        if targets.is_empty() {
-            return Ok(shared::Outcome::default());
+/// `check-unbuilt --update-issues`: the open `rfe::new-version` issues
+/// under `group`, read in one listing, each given the `Not built` line
+/// `outcome` says for its package ([`unbuilt::line_changes`]), shown
+/// and asked about one by one unless `yes`. Nothing is filed, reopened
+/// or closed.
+fn update_not_built_lines(
+    group: &str,
+    outcome: &sandogasa_cbs::unbuilt::Outcome,
+    targets: &[sandogasa_cbs::unbuilt::Target],
+    yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::IsTerminal;
+    let client = gitlab::group_client_from_group_url(keyring(), group)?;
+    let issues: Vec<unbuilt::OpenIssue> = client
+        .list_issues(ISSUE_LABEL, Some("opened"))?
+        .into_iter()
+        .filter_map(|i| {
+            let path = gitlab::project_path_from_issue_url(&i.web_url)?;
+            Some(unbuilt::OpenIssue {
+                package: path.rsplit('/').next()?.to_string(),
+                project: path.to_string(),
+                iid: i.iid,
+                web_url: i.web_url.clone(),
+                description: i.description.clone().unwrap_or_default(),
+            })
+        })
+        .collect();
+    let changes = unbuilt::line_changes(outcome, targets, &issues);
+    if changes.is_empty() {
+        eprintln!("No open {ISSUE_LABEL} issue's Not built line needs changing.");
+        return Ok(());
+    }
+    let show = |c: &unbuilt::LineChange| {
+        eprintln!("\n{} ({}):", c.web_url, c.package);
+        if let Some(old) = &c.old {
+            eprintln!("  - {old}");
         }
-        let token = gitlab::load_token(keyring())?;
-        let (base, group) = sandogasa_gitlab::parse_project_url(retire::DEFAULT_GITLAB_GROUP)?;
-        let repo = shared::GitLab::new(&base, &group, &token);
-        let cutoff = chrono::Utc::now() - chrono::Duration::days(shared::DEFAULT_GRACE_DAYS.into());
-        Ok(shared::find(
-            sandogasa_cbs::HUB_URL,
-            &targets,
-            &repo,
-            cutoff,
-        )?)
-    })();
-    match found {
-        Ok(outcome) if outcome.problems.is_empty() => Some(shared::body_line(&outcome.unbuilt)),
-        Ok(outcome) => {
+        match &c.new {
+            Some(new) => eprintln!("  + {new}"),
+            None => eprintln!("  (line removed: everything merged is built)"),
+        }
+    };
+    // Without a terminal to ask at, the changes are shown, not made.
+    if !yes && !std::io::stdin().is_terminal() {
+        changes.iter().for_each(show);
+        eprintln!(
+            "\n{} issue(s) not updated: that is confirmed at a terminal, or pass --yes",
+            changes.len()
+        );
+        return Ok(());
+    }
+    let mut failed = 0;
+    for c in &changes {
+        show(c);
+        if !yes && !sandogasa_cli::confirm("Update this issue?", true)? {
+            continue;
+        }
+        let (base, _) = sandogasa_gitlab::parse_project_url(group)?;
+        let project = format!("{base}/{}", c.project);
+        let updates = gitlab::IssueUpdate {
+            description: Some(c.description.clone()),
+            ..Default::default()
+        };
+        match gitlab::client_from_project_url(keyring(), &project)
+            .and_then(|cl| cl.edit_issue(c.iid, &updates))
+        {
+            Ok(_) => eprintln!("Updated {}", c.web_url),
+            Err(e) => {
+                eprintln!("error: {}: {e}", c.web_url);
+                failed += 1;
+            }
+        }
+    }
+    match failed {
+        0 => Ok(()),
+        n => Err(format!("{n} issue(s) could not be updated").into()),
+    }
+}
+
+/// What `package`'s newest builds lack of their branches (#205), and
+/// the builds checked: of `builds`, every one CBS has, only those still
+/// in a Hyperscale `-candidate`, `-testing` or `-release` tag count,
+/// read in one call, as `check-unbuilt` counts them. The package's repo
+/// is in the SIG's group, whatever project its issue is filed in, and is
+/// read anonymously without a GitLab token, as it is public.
+fn package_unbuilt(
+    package: &str,
+    builds: &[cbs::Build],
+) -> Result<
+    (
+        sandogasa_cbs::unbuilt::Outcome,
+        Vec<sandogasa_cbs::unbuilt::Target>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    use sandogasa_cbs::unbuilt as shared;
+    let ids: Vec<i64> = builds.iter().map(|b| b.build_id).collect();
+    let tags = cbs::Client::new().list_tags_multi(&ids)?;
+    let tagged = builds
+        .iter()
+        .zip(tags)
+        .filter(|(_, t)| t.iter().any(|t| unbuilt::counts_as_built(t)))
+        .map(|(b, _)| b.clone());
+    let targets = unbuilt::targets(package, tagged);
+    if targets.is_empty() {
+        return Ok((shared::Outcome::default(), targets));
+    }
+    let token = gitlab::load_token(keyring()).unwrap_or_default();
+    let (base, group) = sandogasa_gitlab::parse_project_url(retire::DEFAULT_GITLAB_GROUP)?;
+    let repo = shared::GitLab::new(&base, &group, &token);
+    let cutoff = chrono::Utc::now() - chrono::Duration::days(shared::DEFAULT_GRACE_DAYS.into());
+    let outcome = shared::find(sandogasa_cbs::HUB_URL, &targets, &repo, cutoff)?;
+    Ok((outcome, targets))
+}
+
+/// Check `result`'s package's unbuilt commits into it, once: warned
+/// about what could not be checked, and marked checked even when the
+/// check failed, so nothing asks again.
+fn check_unbuilt_into(result: &mut check_latest::CheckResult) {
+    if result.unbuilt_checked || result.builds.is_empty() {
+        return;
+    }
+    result.unbuilt_checked = true;
+    eprintln!(
+        "Comparing {}'s newest builds with their branches",
+        result.package
+    );
+    match package_unbuilt(&result.package, &result.builds) {
+        Ok((outcome, targets)) => {
             for p in &outcome.problems {
                 eprintln!("warning: {p}");
             }
-            None
+            result.unbuilt = Some(outcome);
+            result.unbuilt_targets = targets;
         }
-        Err(e) => {
-            eprintln!("warning: {package}: cannot tell what is merged but not built ({e})");
-            None
-        }
+        Err(e) => eprintln!(
+            "warning: {}: cannot tell what is merged but not built ({e})",
+            result.package
+        ),
     }
+}
+
+/// The issue's line for `result`'s package's merged commits its newest
+/// builds lack, past the grace period: `Some(None)` when there are
+/// none, `None` when it cannot be told ([`sandogasa_cbs::unbuilt::told`]),
+/// which keeps the issue's line, as `check-unbuilt --update-issues`
+/// does.
+fn not_built_line(result: &mut check_latest::CheckResult) -> Option<Option<String>> {
+    use sandogasa_cbs::unbuilt as shared;
+    check_unbuilt_into(result);
+    let outcome = result.unbuilt.as_ref()?;
+    shared::told(outcome, &result.unbuilt_targets, &result.package)
+        .then(|| shared::body_line(&outcome.unbuilt))
 }
 
 /// `table` as an issue's description, with the not-built line

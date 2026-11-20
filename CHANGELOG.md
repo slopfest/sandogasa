@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### hs-relmon reports unbuilt commits more readably, and can tell the issues
+
+`check-unbuilt` printed every note first, a long sentence per build,
+then every commit of every branch, 120 of them for qemu, so the three
+branches that mattered were hard to find. It now starts with a table of
+the branches (package, branch, how many commits, the newest's day, the
+build they are measured from), lists each branch's newest ten commits
+newest first (`--all-commits` for all), and sums up the builds not
+compared in a line per reason, naming their packages (`-v` for each
+build); cpu-sig-tracker's `status` uses the same table. `check-latest`
+shows its package's unbuilt branches after its table. With Repology
+refusing the network, nothing told an issue that a package needs
+building, since `--file-issue` depends on Repology's versions:
+`check-unbuilt --update-issues` writes the `Not built` line into each
+package's open `rfe::new-version` issue, read in one listing, asking per
+issue, and takes it out once built; it files, reopens and closes
+nothing. `check-manifest` gains `--package`, and `--distros` and
+`--track` to replace every package's own for a run, which then writes
+no issue; with nothing tracked and only the Hyperscale columns shown,
+Repology is no longer asked at all (Refs #205, #209).
+
 ### hs-relmon carries on when Repology refuses the network
 
 On 2026-11-20 Repology began answering a home broadband connection with

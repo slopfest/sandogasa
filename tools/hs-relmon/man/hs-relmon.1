@@ -67,9 +67,12 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fIPACKAGE\fR>
 Source package name (e.g. ethtool)
 .SS hs-relmon check-manifest
-\fBhs\-relmon check\-manifest\fR [\fB\-\-issue\-assignee\fR] [\fB\-\-issue\-status\fR] [\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR>
+\fBhs\-relmon check\-manifest\fR [\fB\-\-distros\fR] [\fB\-\-issue\-assignee\fR] [\fB\-\-issue\-status\fR] [\fB\-\-json\fR] [\fB\-\-package\fR] [\fB\-\-track\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR>
 .PP
 Check all packages listed in a manifest file
+.TP
+\fB\-\-distros\fR \fI<LIST>\fR
+Comma\-separated distros to check for every package, in place of each one\*(Aqs (e.g. `hs` for the Hyperscale columns alone)
 .TP
 \fB\-\-issue\-assignee\fR \fI<USERNAME>\fR
 Only show packages whose GitLab issue is assigned
@@ -90,6 +93,12 @@ Default statuses:
 .TP
 \fB\-\-json\fR
 Output as JSON instead of tables
+.TP
+\fB\-\-package\fR \fI<LIST>\fR
+Comma\-separated packages to check (default: all)
+.TP
+\fB\-\-track\fR \fI<REF>\fR
+What to compare every package\*(Aqs builds with, in place of each one\*(Aqs; `none` compares nothing, so with `\-\-distros hs` Repology is not asked at all
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
@@ -163,30 +172,43 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 <\fIMANIFEST\fR>
 Path to the TOML manifest file
 .SS hs-relmon check-unbuilt
-\fBhs\-relmon check\-unbuilt\fR [\fB\-\-gitlab\-group\fR] [\fB\-\-grace\-days\fR] [\fB\-\-json\fR] [\fB\-\-package\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR>
+\fBhs\-relmon check\-unbuilt\fR [\fB\-\-gitlab\-group\fR] [\fB\-\-package\fR] [\fB\-\-grace\-days\fR] [\fB\-\-update\-issues\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-all\-commits\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMANIFEST\fR>
 .PP
 Find Hyperscale branches with merged commits that were never built: each branch\*(Aqs newest build (in any candidate, testing or release tag) against the branch head
-.TP
-\fB\-\-gitlab\-group\fR \fI<URL>\fR [default: https://gitlab.com/CentOS/Hyperscale/rpms]
-GitLab group the packages\*(Aq repos live under
-.TP
-\fB\-\-grace\-days\fR \fI<DAYS>\fR [default: 3]
-Days a merged commit may wait for its build before it is flagged; branches with only newer ones are counted, not listed
-.TP
-\fB\-\-json\fR
-Output as JSON instead of human\-readable
-.TP
-\fB\-\-package\fR \fI<LIST>\fR
-Comma\-separated packages to check (default: all)
-.TP
-\fB\-v\fR, \fB\-\-verbose\fR
-Print progress to stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
 <\fIMANIFEST\fR>
 Path to the TOML manifest file
+.SH SELECTION
+.TP
+\fB\-\-gitlab\-group\fR \fI<URL>\fR [default: https://gitlab.com/CentOS/Hyperscale/rpms]
+GitLab group the packages\*(Aq repos live under
+.TP
+\fB\-\-package\fR \fI<LIST>\fR
+Comma\-separated packages to check (default: all)
+.SH CHECKS
+.TP
+\fB\-\-grace\-days\fR \fI<DAYS>\fR [default: 3]
+Days a merged commit may wait for its build before it is flagged; branches with only newer ones are counted, not listed
+.SH WRITING
+.TP
+\fB\-\-update\-issues\fR
+Write the result into each package\*(Aqs open rfe::new\-version issue as its `Not built` line, or take the line out once built, asking per issue; no issue is filed, reopened or closed
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+With \-\-update\-issues, update them without asking
+.SH OUTPUT
+.TP
+\fB\-\-all\-commits\fR
+List every commit not built, not only the newest ten of each branch
+.TP
+\fB\-\-json\fR
+Output as JSON instead of human\-readable
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Print progress to stderr, and list each build not compared rather than their packages
 .SS hs-relmon config
 \fBhs\-relmon config\fR [\fB\-\-all\fR] [\fB\-\-token\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
