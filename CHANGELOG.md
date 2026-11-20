@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### hs-relmon leaves an issue open until it reaches the version it asks for, and refreshes its table when closing
+
+On 2026-11-20, `hs-relmon check-manifest --package openssh` closed
+the tracking issue "openssh-10.6p2 is available" as released, although
+no Hyperscale build had reached 10.6p2, and left the issue's version
+table showing the builds from before. openssh is tracked against
+CentOS Stream, whose 9.9p1 every Hyperscale build already had, so the
+check took the package as released; the issue had been filed against
+upstream.
+
+`check-manifest` and `check-latest` now leave an issue open while a
+release build is older than the version its title asks for, and say
+so. When they close an issue, or leave it open for that reason, they
+rewrite its table with the builds this run found, keeping its
+not-built line. Before, the table was rewritten only while the
+package was outdated.
+
 ## v0.29.0
 
 ### cbspkg promote shows what its dependency check reads, and spaces the reports evenly

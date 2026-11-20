@@ -1807,11 +1807,17 @@ fn maybe_set_in_progress(
     }
 }
 
+/// `result`'s table as it goes in an issue description.
+fn issue_table(result: &check_latest::CheckResult) -> String {
+    format!("```\n{}```", check_latest::format_table(result))
+}
+
 /// Close an open issue with a comment linking to the
-/// CBS release build(s).
+/// CBS release build(s), refreshing its table in the same edit.
 ///
 /// No-op when there is no issue or the issue is already
-/// closed.
+/// closed. An issue whose title asks for a newer version than a
+/// release build has stays open, with its table refreshed.
 fn maybe_close_issue(
     result: &mut check_latest::CheckResult,
     project_url: &str,
@@ -1833,17 +1839,53 @@ fn maybe_close_issue(
             return;
         }
     };
+    let iid = issue.iid;
+    let current = match client.issue(iid) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("{package}: reading issue #{iid}: {e}");
+            *errors += 1;
+            return;
+        }
+    };
+    // The table this run computed, so the issue does not keep the
+    // builds from before (closed or left open, it is read later).
+    let description = issue_description(
+        &issue_table(result),
+        &not_built_line(result),
+        current.description.as_deref(),
+    );
+    let refreshed =
+        (current.description.as_deref() != Some(description.as_str())).then(|| description.clone());
+    if let Some(why) = result.short_of_request(&current.title) {
+        eprintln!("Left issue #{iid} open: {why}: {}", current.web_url);
+        if let Some(description) = refreshed {
+            let updates = gitlab::IssueUpdate {
+                description: Some(description),
+                ..Default::default()
+            };
+            match client.edit_issue(iid, &updates) {
+                Ok(u) => eprintln!("Updated issue #{}: {}", u.iid, u.web_url),
+                Err(e) => {
+                    eprintln!("{package}: updating issue: {e}");
+                    *errors += 1;
+                }
+            }
+        }
+        return;
+    }
     let comment = result.close_comment();
-    if let Err(e) = client.add_note(issue.iid, &comment) {
+    if let Err(e) = client.add_note(iid, &comment) {
         eprintln!("{package}: adding comment: {e}");
         *errors += 1;
         return;
     }
     let updates = gitlab::IssueUpdate {
+        description: refreshed,
         state_event: Some("close".to_string()),
         ..Default::default()
     };
-    match client.edit_issue(issue.iid, &updates) {
+    match client.edit_issue(iid, &updates) {
         Ok(closed) => {
             eprintln!("Closed issue #{}: {}", closed.iid, closed.web_url);
             if let Some(ref mut issue) = result.issue {
@@ -1866,7 +1908,7 @@ fn maybe_file_issue(
         .ref_version()
         .ok_or("no reference version available")?;
     let title = format!("{package}-{ref_ver} is available");
-    let table = format!("```\n{}```", check_latest::format_table(result));
+    let table = issue_table(result);
     let not_built = not_built_line(result);
     file_or_update_issue(project_url, &title, &table, not_built)
 }

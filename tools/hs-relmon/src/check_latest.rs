@@ -297,6 +297,25 @@ impl CheckResult {
             .collect()
     }
 
+    /// Why an issue titled `title` stays open although every
+    /// Hyperscale release build is up to date: the title asks for a
+    /// newer version than some release build has, as when the issue
+    /// was filed against upstream and the package now tracks CentOS
+    /// Stream. `None` when the title names no version, or every
+    /// release build has reached it.
+    pub fn short_of_request(&self, title: &str) -> Option<String> {
+        let asked = sandogasa_cbs::tracking::requested_version(title, &self.package)?;
+        let short: Vec<String> = [("Hyperscale 9", &self.hs9), ("Hyperscale 10", &self.hs10)]
+            .iter()
+            .filter_map(|(label, r)| {
+                let b = r.as_ref()?.summary.release.as_ref()?;
+                (crate::rpmvercmp::rpmvercmp(&b.version, asked) == std::cmp::Ordering::Less)
+                    .then(|| format!("{label} has {}", b.version))
+            })
+            .collect();
+        (!short.is_empty()).then(|| format!("it asks for {asked}, {}", short.join(", ")))
+    }
+
     /// Format a closing comment for a released package.
     ///
     /// Lists CBS build page links for each up-to-date
@@ -1749,6 +1768,17 @@ mod tests {
              - Hyperscale 10: https://cbs.centos.org/\
              koji/buildinfo?buildID=200"
         );
+        // An issue filed for a newer version, against another
+        // reference, is not answered by these builds.
+        let ethtool = result;
+        assert_eq!(
+            ethtool.short_of_request("ethtool-6.14 is available"),
+            Some("it asks for 6.14, Hyperscale 9 has 6.11, Hyperscale 10 has 6.11".into())
+        );
+        assert_eq!(ethtool.short_of_request("ethtool-6.11 is available"), None);
+        assert_eq!(ethtool.short_of_request("ethtool-6.9 is available"), None);
+        // A title naming no version leaves closing to the reference.
+        assert_eq!(ethtool.short_of_request("ethtool needs a rebuild"), None);
     }
 
     #[test]
