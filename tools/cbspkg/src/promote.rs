@@ -122,7 +122,19 @@ fn run_inner(args: &PromoteArgs) -> Result<(), Box<dyn std::error::Error>> {
         tools.push(("cbs", "sudo dnf install centos-packager", Some("--help")));
     }
     sandogasa_cli::require_tools(&tools)?;
-    let checkout = resolve(&repo, args.branch.as_deref(), None, Some(&args.variants))?;
+    let mut checkout = resolve(&repo, args.branch.as_deref(), None, Some(&args.variants))?;
+    // A build named outright is looked for in the RHEL collections too:
+    // the branch builds for them only when asked (--rhel), but a RHEL
+    // build named is the one to promote, wherever it is.
+    if args.nvr.is_some() {
+        let rhel: Vec<_> = checkout
+            .collections
+            .iter()
+            .filter_map(|c| c.rhel_variant())
+            .filter(|r| !checkout.collections.contains(r))
+            .collect();
+        checkout.collections.extend(rhel);
+    }
     let package = &checkout.package;
 
     // Which build, where it is, and what promoting it takes, per

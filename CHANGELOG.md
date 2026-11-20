@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### cbspkg builds a Facebook branch for CentOS Stream only, unless asked (breaking)
+
+`cbspkg build` on a Hyperscale Facebook branch built for its RHEL
+collection as well as its CentOS Stream one, and offered to list the
+package in the RHEL collection's tags when it was not there. On
+2026-11-20 that put openssh, never built for RHEL before, one answer
+away from a RHEL build replacing RHEL's own ssh. Whether a package goes
+to RHEL is a choice per package that nothing records yet (#208), so the
+default is now the Stream collection alone, for `build`, `add-pkg`,
+`promote`, `srpm`, `mockbuild` and `verrel`.
+
+What changed: a Facebook branch no longer adds
+`hyperscale<N>-packages-facebook` by itself. To keep building a package
+for RHEL, pass `--rhel facebook`, or set it in
+`~/.config/cbspkg/config.toml` for packages that always go there:
+
+```toml
+[packages.perf]
+rhel = ["facebook"]
+```
+
+`promote <NVR>` still finds a named build in the RHEL collection.
+
 ### hs-relmon reports unbuilt commits more readably, and can tell the issues
 
 `check-unbuilt` printed every note first, a long sentence per build,

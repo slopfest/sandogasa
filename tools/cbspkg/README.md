@@ -27,7 +27,7 @@ lookaside in your name: see
 
 A Hyperscale branch builds into the variant its suffix names:
 
-| Variant | Branch suffix | Also against RHEL |
+| Variant | Branch suffix | Can build against RHEL (`--rhel`) |
 |---|---|---|
 | main | `hs` (or the older `sig-hyperscale`) | |
 | spin | `hs-spin` (or `sig-hyperscale-spin`) | |
@@ -95,8 +95,8 @@ cbspkg add-pkg [PACKAGE] [-C DIR] [--branch BRANCH] [--variant VARIANT]… \
 Lists a package in the CBS tags its branch builds through, which a
 package's first build needs: `-candidate` (where its build target puts
 a build), `-testing` and `-release`, for the collection the branch
-builds into. A Hyperscale Facebook branch also lists it in the
-matching RHEL collection. The branch is the one checked out, or
+builds into, and with `--rhel facebook` in a Hyperscale Facebook
+branch's RHEL collection too. The branch is the one checked out, or
 `--branch`; the package is the one the checkout's CentOS Stream or SIG
 remote is for, or the argument. A branch no SIG names, such as Stream's
 `c9s` or a work branch `c10s-CVE-…`, is taken as Proposed Updates' for
@@ -138,8 +138,10 @@ there first: `build` fetches the SIG remote and stops with the
 package listed in the collection's tags; when it is not, `build` lists
 it as `add-pkg` does, after asking. `--scratch` builds without keeping
 the result, which needs no listing. A Hyperscale Facebook branch is
-built for its RHEL collection too, and `--variant` and `--rhel` choose
-the variants (see [Hyperscale variants](#hyperscale-variants)).
+built for its CentOS Stream collection; `--rhel facebook`, or `rhel` in
+the package's config, builds it against RHEL as well, and `--variant`
+and `--rhel` choose the variants (see
+[Hyperscale variants](#hyperscale-variants)).
 
 Several builds run at once: each is started with `cbs build --nowait`,
 and one `cbs watch-task <task>…` waits for them all. `--nowait` leaves
@@ -256,8 +258,11 @@ cbspkg promote [NVR] [-C DIR] [--branch BRANCH] [--variant VARIANT]… \
 Moves a build to its collection's next stage: from `-candidate` to
 `-testing`, from `-testing` to `-release`. The build is the NVR given,
 or the package's newest in `-candidate` for each collection the branch
-(checked out, or `--branch`) builds into; `--to` names the stage when it
-is not the next one, such as `--to release` straight from `-candidate`.
+(checked out, or `--branch`) builds into; a build named is also looked
+for in a Facebook branch's RHEL collection, which the branch otherwise
+builds and promotes only with `--rhel facebook`. `--to` names the stage
+when it is not the next one, such as `--to release` straight from
+`-candidate`.
 
 A build is checked before it moves, by the check ebranch's
 `check-update` runs, and reported the same way. Its Provides and

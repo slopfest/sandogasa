@@ -1185,9 +1185,9 @@ mod tests {
             assert!(err.starts_with("mock failed"), "{err}");
         }
 
-        /// Facebook's Stream branch also builds for RHEL, which mock has
-        /// no config for: that collection is skipped, the Stream one
-        /// built.
+        /// Facebook's Stream branch built for RHEL too (--rhel facebook),
+        /// which mock has no config for: that collection is skipped, the
+        /// Stream one built.
         #[test]
         #[serial_test::serial]
         fn a_collection_mock_cannot_build_is_skipped() {
@@ -1212,9 +1212,28 @@ mod tests {
             );
             f.fake("rpmbuild", &[("--version", "")]);
             f.fake("mock", &[("--version", "")]);
-            let p = prepare(&ui(false), &target(&f)).unwrap();
+            static RHEL: std::sync::OnceLock<VariantArgs> = std::sync::OnceLock::new();
+            let rhel = RHEL.get_or_init(|| VariantArgs {
+                rhel: vec!["facebook".into()],
+                ..VariantArgs::default()
+            });
+            let p = prepare(
+                &ui(false),
+                &Target {
+                    variants: rhel,
+                    ..target(&f)
+                },
+            )
+            .unwrap();
             assert_eq!(p.collections.len(), 2, "Stream and RHEL");
-            mockbuild(&mockbuild_args(&f, "x86_64", true)).unwrap();
+            // Without --rhel, Stream alone.
+            assert_eq!(
+                prepare(&ui(false), &target(&f)).unwrap().collections.len(),
+                1
+            );
+            let mut args = mockbuild_args(&f, "x86_64", true);
+            args.variants = rhel.clone();
+            mockbuild(&args).unwrap();
             // asahi has no mock config at all: nothing to build.
             let f = Fixture::hyperscale("mesa", "c10s-hs+asahi");
             f.fake(

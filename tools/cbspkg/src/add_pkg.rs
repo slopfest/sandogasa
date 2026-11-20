@@ -101,8 +101,12 @@ impl Checkout {
     }
 }
 
-/// The collections a branch builds into: its own, and the RHEL variant
-/// Facebook's Stream branches also build for. A branch no SIG names,
+/// The collections a branch builds into: its own CentOS Stream one. A
+/// Facebook branch can also build against RHEL
+/// ([`Collection::rhel_variant`]), but only when asked (`--rhel
+/// facebook`, or `rhel` in the package's config): a RHEL build of a
+/// package that replaces one of RHEL's own is a choice per package, which
+/// nothing records yet. A branch no SIG names,
 /// such as Stream's `c9s` or a work branch `c10s-CVE-…`, is taken as
 /// Proposed Updates' when the checkout's remotes point at that SIG's
 /// repo and no other (`sigs`): its collection depends only on the
@@ -125,8 +129,7 @@ pub fn collections_for(branch: &str, sigs: &[Sig]) -> Result<Vec<Collection>, St
             }
         },
     };
-    let rhel = collection.rhel_variant();
-    Ok(std::iter::once(collection).chain(rhel).collect())
+    Ok(vec![collection])
 }
 
 pub fn run(args: &AddPkgArgs) -> ExitCode {
@@ -449,13 +452,8 @@ mod tests {
             prefixes("c10s-proposed-RHEL-303721"),
             ["proposed_updates10s-packages-main"]
         );
-        assert_eq!(
-            prefixes("c9s-hs+fb"),
-            [
-                "hyperscale9s-packages-facebook",
-                "hyperscale9-packages-facebook"
-            ]
-        );
+        // Stream only: a RHEL build is asked for (--rhel facebook).
+        assert_eq!(prefixes("c9s-hs+fb"), ["hyperscale9s-packages-facebook"]);
         let err = collections_for("c10s", &[]).unwrap_err();
         assert!(
             err.contains("c10s is not") && err.contains("--branch"),
