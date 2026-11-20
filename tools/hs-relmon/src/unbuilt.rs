@@ -30,6 +30,18 @@ pub fn branches_for(release: u32, suffix: &str) -> Vec<String> {
     branches
 }
 
+/// Whether a build in `tag` counts as built from its branch: a
+/// Hyperscale collection's `-candidate`, `-testing` or `-release` tag,
+/// as [`crate::prune_tags::TagIndex::load_built`] reads them. A build
+/// untagged from all of them, rejected say, does not.
+pub fn counts_as_built(tag: &str) -> bool {
+    tag.starts_with("hyperscale")
+        && tag.contains("-packages-")
+        && ["-candidate", "-testing", "-release"]
+            .iter()
+            .any(|s| tag.ends_with(s))
+}
+
 /// `package`'s newest build per Hyperscale branch among `builds`
 /// (the highest build id, wherever it is tagged), as targets to check.
 pub fn targets(package: &str, builds: impl IntoIterator<Item = Build>) -> Vec<Target> {
@@ -67,6 +79,18 @@ mod tests {
             release: release.into(),
             nvr: format!("{name}-9.9p1-{release}"),
         }
+    }
+
+    #[test]
+    fn only_a_collections_tags_count_as_built() {
+        assert!(counts_as_built("hyperscale9s-packages-facebook-testing"));
+        assert!(counts_as_built("hyperscale10s-packages-main-candidate"));
+        assert!(counts_as_built("hyperscale9-packages-main-release"));
+        assert!(!counts_as_built("hyperscale9s-packages-main-el9s-build"));
+        assert!(!counts_as_built("trash"));
+        assert!(!counts_as_built(
+            "proposed_updates10s-packages-main-release"
+        ));
     }
 
     #[test]

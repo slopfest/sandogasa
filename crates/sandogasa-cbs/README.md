@@ -162,8 +162,12 @@ commit, the first entry naming any of them picks those to compare
 unbuilt commit is older than the cutoff is in `unbuilt`, a newer one in
 `recent`; a build without a recorded commit is in `unsourced`, and one
 that could not be checked in `problems`. `unbuilt::render` prints one
-branch, and `unbuilt::bounded` runs other remote calls with no batch
-form the same few at a time.
+branch, `unbuilt::body_line` gives the `- **Not built**:` line a
+tracking issue carries for them and `unbuilt::with_body_line` sets or
+removes it in a body, and `unbuilt::bounded` runs other remote calls
+with no batch form the same few at a time. `notify::plan` adds
+`unbuilt::paragraph` to a build's comment when its branch has commits
+the build lacks.
 
 ## Reviews
 

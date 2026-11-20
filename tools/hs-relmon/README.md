@@ -130,6 +130,14 @@ default project `https://gitlab.com/CentOS/Hyperscale/rpms/ethtool`.
 If a closed issue with the same title already exists, it is reopened
 and labeled `reopened` instead of creating a duplicate.
 
+When the package's branches have merged commits its newest builds lack,
+the newest of them over three days old, the issue also says so on a
+`- **Not built**:` line (see
+[Finding merged commits that were never built](#finding-merged-commits-that-were-never-built)),
+which goes once they are built. Only builds still in a Hyperscale
+`-candidate`, `-testing` or `-release` tag count. When it cannot be
+told, the issue keeps the line it had.
+
 Override the project URL:
 
 ```
@@ -342,10 +350,10 @@ per dist tag, from every Hyperscale `-candidate`, `-testing` and
 `-release` tag (so a build waiting in testing counts as built), reads
 the commit CBS says it was built from, and asks GitLab which branches
 hold that commit and which commits each has gained since. The dist tag
-says which branch to compare: `hs+fb` is `c9s-hs+fb` if that branch
-holds the commit, else `c9s-hs` (a package built for both the main
-repository and a flavor builds both from the main branch), else the
-old `c9s-sig-hyperscale`. Each branch with unbuilt commits is listed
+says which branch to compare: an `hs+fb.elN` build is compared with
+`cNs-hs+fb` if that branch holds the commit, else `cNs-hs` (a package
+built for both the main repository and a flavor builds both from the
+main branch), else the old `cNs-sig-hyperscale`. Each branch with unbuilt commits is listed
 with their count, the day of the newest, and each commit with the
 merge request that merged it:
 

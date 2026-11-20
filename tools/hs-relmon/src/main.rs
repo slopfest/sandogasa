@@ -1759,8 +1759,75 @@ fn maybe_file_issue(
         .ref_version()
         .ok_or("no reference version available")?;
     let title = format!("{package}-{ref_ver} is available");
-    let description = format!("```\n{}```", check_latest::format_table(result));
-    file_or_update_issue(project_url, &title, &description)
+    let table = format!("```\n{}```", check_latest::format_table(result));
+    let not_built = not_built_line(package, &result.builds);
+    file_or_update_issue(project_url, &title, &table, not_built)
+}
+
+/// The issue's line for `package`'s merged commits its newest builds
+/// lack, past the grace period (#205): `Some(None)` when there are
+/// none, `None` when it cannot be told (warned about), which keeps the
+/// issue's line. Of `builds`, every one CBS has, only those still in a
+/// Hyperscale `-candidate`, `-testing` or `-release` tag count, read in
+/// one call, as `check-unbuilt` counts them; the package's repo is in
+/// the SIG's group, whatever project the issue is filed in.
+fn not_built_line(package: &str, builds: &[cbs::Build]) -> Option<Option<String>> {
+    use sandogasa_cbs::unbuilt as shared;
+    let found = (|| -> Result<shared::Outcome, Box<dyn std::error::Error>> {
+        let ids: Vec<i64> = builds.iter().map(|b| b.build_id).collect();
+        let tags = cbs::Client::new().list_tags_multi(&ids)?;
+        let tagged = builds
+            .iter()
+            .zip(tags)
+            .filter(|(_, t)| t.iter().any(|t| unbuilt::counts_as_built(t)))
+            .map(|(b, _)| b.clone());
+        let targets = unbuilt::targets(package, tagged);
+        if targets.is_empty() {
+            return Ok(shared::Outcome::default());
+        }
+        let token = gitlab::load_token(keyring())?;
+        let (base, group) = sandogasa_gitlab::parse_project_url(retire::DEFAULT_GITLAB_GROUP)?;
+        let repo = shared::GitLab::new(&base, &group, &token);
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(shared::DEFAULT_GRACE_DAYS.into());
+        Ok(shared::find(
+            sandogasa_cbs::HUB_URL,
+            &targets,
+            &repo,
+            cutoff,
+        )?)
+    })();
+    match found {
+        Ok(outcome) if outcome.problems.is_empty() => Some(shared::body_line(&outcome.unbuilt)),
+        Ok(outcome) => {
+            for p in &outcome.problems {
+                eprintln!("warning: {p}");
+            }
+            None
+        }
+        Err(e) => {
+            eprintln!("warning: {package}: cannot tell what is merged but not built ({e})");
+            None
+        }
+    }
+}
+
+/// `table` as an issue's description, with the not-built line
+/// `not_built` gives, or for `None` (not told) the one `existing`
+/// (the issue's current description) has.
+fn issue_description(
+    table: &str,
+    not_built: &Option<Option<String>>,
+    existing: Option<&str>,
+) -> String {
+    let line = match not_built {
+        Some(line) => line.clone(),
+        None => existing.and_then(|d| {
+            d.lines()
+                .find(|l| l.trim_start().starts_with(sandogasa_cbs::unbuilt::LINE))
+                .map(|l| l.trim().to_string())
+        }),
+    };
+    sandogasa_cbs::unbuilt::with_body_line(table, line.as_deref())
 }
 
 const ISSUE_LABEL: &str = "rfe::new-version";
@@ -1787,24 +1854,33 @@ fn lookup_issue(
 fn file_or_update_issue(
     project_url: &str,
     title: &str,
-    description: &str,
+    table: &str,
+    not_built: Option<Option<String>>,
 ) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
     let client = gitlab::client_from_project_url(keyring(), project_url)?;
+    let description = |existing: Option<&gitlab::Issue>| {
+        issue_description(
+            table,
+            &not_built,
+            existing.and_then(|e| e.description.as_deref()),
+        )
+    };
 
     // Check for an existing open issue first.
     let open_issues = client.list_issues(ISSUE_LABEL, Some("opened"))?;
     if let Some(existing) = open_issues.first() {
-        return update_existing_issue(&client, existing, title, description);
+        return update_existing_issue(&client, existing, title, &description(Some(existing)));
     }
 
     // Check for a closed issue with the same title that we can reopen.
     let closed_issues = client.list_issues(ISSUE_LABEL, Some("closed"))?;
     if let Some(existing) = closed_issues.iter().find(|i| i.title == title) {
-        return reopen_issue(&client, existing, title, description);
+        return reopen_issue(&client, existing, title, &description(Some(existing)));
     }
 
     // No existing issue — create a new one.
-    let issue = client.create_issue(title, Some(description), Some(ISSUE_LABEL))?;
+    let description = description(None);
+    let issue = client.create_issue(title, Some(&description), Some(ISSUE_LABEL))?;
     eprintln!("Created issue #{}: {}", issue.iid, issue.web_url);
     resolve_issue_ref(&client, &issue)
 }
@@ -1863,6 +1939,25 @@ fn reopen_issue(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_issue_keeps_its_not_built_line_when_it_cannot_be_told() {
+        let table = "```\nethtool 7.1\n```";
+        let existing = "```\nold\n```\n\n- **Not built**: 9 commit(s) on `c9s-hs`";
+        assert_eq!(
+            super::issue_description(table, &None, Some(existing)),
+            format!("{table}\n\n- **Not built**: 9 commit(s) on `c9s-hs`")
+        );
+        assert_eq!(
+            super::issue_description(table, &Some(None), Some(existing)),
+            table
+        );
+        assert_eq!(
+            super::issue_description(table, &Some(Some("- **Not built**: 1".into())), None),
+            format!("{table}\n\n- **Not built**: 1")
+        );
+        assert_eq!(super::issue_description(table, &None, None), table);
+    }
+
     /// `--token` names gitlab.com, where the token is kept; another
     /// host is refused before anything is asked.
     #[test]

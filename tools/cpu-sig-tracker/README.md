@@ -475,7 +475,7 @@ it to; otherwise you are asked. Who "you" are comes from the token
 ```sh
 cpu-sig-tracker status -i inventory.toml \
     [--release cNs] [--package PKG,...] \
-    [--refresh] [--include-closed] [--unbuilt] [--json]
+    [--refresh] [--include-closed] [--no-unbuilt] [--json]
 ```
 
 Per-package report of every active tracking issue in the inventory's
@@ -541,16 +541,20 @@ matches.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
 
-`--unbuilt` also checks each SIG build against its branch: the commit
-CBS says the newest build (in `-release`, `-testing` or `-candidate`,
-so a build waiting there counts) was made from, the
-`<release>-proposed-*` branches whose history holds it, and the commits
-each has gained since. A branch whose newest unbuilt commit is over
-three days old is listed after the table, with the count, the day of
-the newest and each commit, and in the row's `unbuilt` with `--json`;
-one with only newer commits is counted (`unbuilt_recent`). A build that
-cannot be checked is reported on standard error, and the table prints
-even when CBS cannot be asked.
+Each SIG build is also checked against its branch, unless
+`--no-unbuilt`: the commit CBS says the newest build (in `-release`,
+`-testing` or `-candidate`, so a build waiting there counts) was made
+from, the `<release>-proposed-*` branches whose history holds it, and
+the commits each has gained since. A branch whose newest unbuilt commit
+is over three days old is listed after the table, with the count, the
+day of the newest and each commit, and in the row's `unbuilt` with
+`--json`; one with only newer commits is counted (`unbuilt_recent`).
+`--refresh` writes it into the tracking issue as a `- **Not built**:`
+line, for the issue's own branch (`<release>-proposed-<RHEL key>`, when
+a package has one issue per change), and takes the line out once the
+branch is built or the build is untagged. A build that
+cannot be checked is reported on standard error, its issue's line left
+as it is, and the table prints even when CBS cannot be asked.
 
 ### `sync-updates`
 

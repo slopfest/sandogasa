@@ -73,11 +73,13 @@ pub struct StatusArgs {
     #[arg(long, help_heading = "Writing")]
     pub refresh: bool,
 
-    /// Also check each SIG build against its branch: the commits on
+    /// Skip checking each SIG build against its branch: the commits on
     /// its `<release>-proposed-*` branch merged since it was built and
-    /// never built, once the newest has waited three days.
+    /// never built, which are otherwise shown, and with --refresh
+    /// written into the tracking issue, once the newest has waited
+    /// three days.
     #[arg(long, help_heading = "Checks")]
-    pub unbuilt: bool,
+    pub no_unbuilt: bool,
 
     /// Emit JSON instead of grouped text.
     #[arg(long, help_heading = "Output")]
@@ -117,11 +119,10 @@ pub struct Row {
     /// untag and retire judge it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub landed: Option<String>,
-    /// With --unbuilt, the branches with commits the SIG's build lacks.
+    /// The branches with commits the SIG's build lacks.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unbuilt: Vec<sandogasa_cbs::unbuilt::Unbuilt>,
-    /// With --unbuilt, those whose newest such commit is from the last
-    /// three days.
+    /// Those whose newest such commit is from the last three days.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unbuilt_recent: Vec<sandogasa_cbs::unbuilt::Unbuilt>,
 }
@@ -247,6 +248,17 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             eprintln!("[cpu-sig-tracker] fetching Stream NVRs for {release}");
         }
         let stream_nvrs = fetch_stream_nvrs(release, &tracked_packages, args.verbose);
+
+        // Merged commits the SIG's builds lack (#205), before the issues,
+        // so a refresh can write them into each.
+        let not_built = if args.no_unbuilt {
+            HashMap::new()
+        } else {
+            let mut packages = tracked_packages.clone();
+            packages.sort();
+            packages.dedup();
+            unbuilt_for_release(release, &packages, &pu_nvrs, &testing_nvrs, args.verbose)
+        };
 
         for issue in active {
             let Some(package) = gitlab::package_from_issue_url(&issue.web_url) else {
@@ -486,6 +498,9 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         new_cve_lines: new_cve_lines.as_deref(),
                         new_not_fixed: &settled.declined,
                         builds: (affected_build.as_deref(), expected_build.as_deref()),
+                        not_built: not_built.get(package).map(|n| {
+                            sandogasa_cbs::unbuilt::body_line(&n.for_issue(release, &jira).found)
+                        }),
                     });
                     if changed {
                         eprintln!("refreshed {}: rewrote body", issue.web_url);
@@ -530,6 +545,10 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                 continue;
             }
 
+            let found = not_built
+                .get(package)
+                .map(|n| n.for_issue(release, &jira))
+                .unwrap_or_default();
             rows.push(Row {
                 release: release.to_string(),
                 package: package.to_string(),
@@ -543,26 +562,26 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                 stream_nvr,
                 suggestion,
                 landed: landed_note,
-                unbuilt: Vec::new(),
-                unbuilt_recent: Vec::new(),
+                unbuilt: found.found,
+                unbuilt_recent: found.recent,
             });
         }
     }
 
     rows.sort_by(|a, b| a.release.cmp(&b.release).then(a.package.cmp(&b.package)));
-    if args.unbuilt {
-        add_unbuilt(&mut rows, args.verbose);
-    }
     Ok(rows)
 }
 
-/// The SIG's newest build in `row`, or `candidate` (its build in the
-/// `-candidate` tag) when that is newer: what the branch's merged
-/// commits are compared with, so a build not yet offered for testing
-/// counts as built.
-fn newest_sig_build(row: &Row, candidate: Option<&str>) -> Option<String> {
-    let released = row.proposed_updates_nvr.as_deref();
-    let testing = row.proposed_updates_testing_nvr.as_deref();
+/// The SIG's newest build of a package: the one in `-testing` when it
+/// is the current one ([`testing_is_current`]), else the one in
+/// `-release`, or the one in `-candidate` when that is newer still, so a
+/// build not yet offered for testing counts as built. What the branch's
+/// merged commits are compared with.
+fn newest_sig_build(
+    released: Option<&str>,
+    testing: Option<&str>,
+    candidate: Option<&str>,
+) -> Option<String> {
     let tagged = match testing_is_current(released, testing) {
         true => testing,
         false => released,
@@ -575,37 +594,68 @@ fn newest_sig_build(row: &Row, candidate: Option<&str>) -> Option<String> {
     .map(str::to_string)
 }
 
-/// Fill each row's `unbuilt` and `unbuilt_recent`: the SIG's newest
-/// build, its commit read for every row at once, and the
-/// `<release>-proposed-*` branches holding it compared with it
-/// ([`sandogasa_cbs::unbuilt::check`]). The table still prints when
-/// this fails: it only warns.
-fn add_unbuilt(rows: &mut [Row], verbose: bool) {
-    let releases: std::collections::BTreeSet<String> =
-        rows.iter().map(|r| r.release.clone()).collect();
-    let candidates: HashMap<String, HashMap<String, String>> = releases
-        .into_iter()
-        .map(|release| {
-            let nvrs = match crate::dump_inventory::proposed_updates_candidate_tag(&release) {
-                Ok(tag) => fetch_koji_nvrs(&tag, verbose),
-                Err(_) => HashMap::new(),
-            };
-            (release, nvrs)
-        })
-        .collect();
-    let builds: Vec<(usize, String)> = rows
+/// A package's branches with commits its SIG build lacks: past the
+/// grace period, and within it.
+#[derive(Debug, Default, Clone)]
+struct NotBuilt {
+    found: Vec<sandogasa_cbs::unbuilt::Unbuilt>,
+    recent: Vec<sandogasa_cbs::unbuilt::Unbuilt>,
+}
+
+impl NotBuilt {
+    /// The branches of one tracking issue: a package can have one per
+    /// proposed change, each on its own `<release>-proposed-<RHEL key>`
+    /// branch, so an issue naming RHEL issues gets only theirs; one
+    /// naming none gets them all.
+    fn for_issue(&self, release: &str, jira: &[JiraState]) -> NotBuilt {
+        if jira.is_empty() {
+            return self.clone();
+        }
+        let branches: Vec<String> = jira
+            .iter()
+            .map(|j| format!("{release}-proposed-{}", j.key))
+            .collect();
+        let mine = |v: &[sandogasa_cbs::unbuilt::Unbuilt]| {
+            v.iter()
+                .filter(|u| branches.contains(&u.branch))
+                .cloned()
+                .collect()
+        };
+        NotBuilt {
+            found: mine(&self.found),
+            recent: mine(&self.recent),
+        }
+    }
+}
+
+/// What [`fill_unbuilt`] finds for `release`'s `packages`, their builds
+/// read from the tags (`released`, `testing`, and here `-candidate`)
+/// and their commits from the hub at once. A package left out could not
+/// be checked; a failure only warns, so the status still prints.
+fn unbuilt_for_release(
+    release: &str,
+    packages: &[String],
+    released: &HashMap<String, String>,
+    testing: &HashMap<String, String>,
+    verbose: bool,
+) -> HashMap<String, NotBuilt> {
+    let candidate = match crate::dump_inventory::proposed_updates_candidate_tag(release) {
+        Ok(tag) => fetch_koji_nvrs(&tag, verbose),
+        Err(_) => HashMap::new(),
+    };
+    let builds: Vec<(String, String)> = packages
         .iter()
-        .enumerate()
-        .filter_map(|(i, r)| {
-            let candidate = candidates
-                .get(&r.release)
-                .and_then(|m| m.get(&r.package))
-                .map(String::as_str);
-            newest_sig_build(r, candidate).map(|nvr| (i, nvr))
+        .filter_map(|p| {
+            newest_sig_build(
+                released.get(p).map(String::as_str),
+                testing.get(p).map(String::as_str),
+                candidate.get(p).map(String::as_str),
+            )
+            .map(|nvr| (p.clone(), nvr))
         })
         .collect();
     eprintln!(
-        "Checking {} SIG build(s) against their branches",
+        "Checking {} {release} SIG build(s) against their branches",
         builds.len()
     );
     let nvrs: Vec<String> = builds.iter().map(|(_, n)| n.clone()).collect();
@@ -615,7 +665,7 @@ fn add_unbuilt(rows: &mut [Row], verbose: bool) {
             eprintln!(
                 "warning: cannot read what the SIG's builds were made from ({e}); not checked"
             );
-            return;
+            return HashMap::new();
         }
     };
     let mut repo = sandogasa_cbs::unbuilt::GitLab::new(
@@ -628,46 +678,65 @@ fn add_unbuilt(rows: &mut [Row], verbose: bool) {
     }
     let cutoff = chrono::Utc::now()
         - chrono::Duration::days(sandogasa_cbs::unbuilt::DEFAULT_GRACE_DAYS.into());
-    for w in fill_unbuilt(rows, &builds, &commits, &repo, cutoff) {
+    let (mut found, warnings) = fill_unbuilt(release, &builds, &commits, &repo, cutoff);
+    for w in warnings {
         eprintln!("warning: {w}");
     }
+    // A package with no SIG build has nothing unbuilt to say: its issue's
+    // line, from a build since untagged, goes.
+    for p in packages {
+        if !builds.iter().any(|(b, _)| b == p) {
+            found.insert(p.clone(), NotBuilt::default());
+        }
+    }
+    found
 }
 
-/// [`add_unbuilt`] once each build's commit is known (`commits`, one
-/// per entry of `builds`, which pairs a row with its SIG's build),
-/// asking `repo`. The warnings, for what could not be checked.
+/// [`unbuilt_for_release`] once each package's build (`builds`, as
+/// `(package, nvr)`) and its commit (`commits`) are known, asking
+/// `repo`: per package checked, its branches with commits not built.
+/// A package that could not be checked is left out, and the warnings
+/// say why.
 fn fill_unbuilt(
-    rows: &mut [Row],
-    builds: &[(usize, String)],
+    release: &str,
+    builds: &[(String, String)],
     commits: &[Option<String>],
     repo: &dyn sandogasa_cbs::unbuilt::Repository,
     cutoff: chrono::DateTime<chrono::Utc>,
-) -> Vec<String> {
+) -> (HashMap<String, NotBuilt>, Vec<String>) {
     use sandogasa_cbs::unbuilt::{self, Target};
     let targets: Vec<Target> = builds
         .iter()
-        .map(|(i, nvr)| Target {
-            package: rows[*i].package.clone(),
-            branches: vec![format!("{}-proposed-*", rows[*i].release)],
+        .map(|(package, nvr)| Target {
+            package: package.clone(),
+            branches: vec![format!("{release}-proposed-*")],
             nvr: nvr.clone(),
         })
         .collect();
     let outcome = unbuilt::check(&targets, commits, repo, cutoff);
-    let row_of = |u: &unbuilt::Unbuilt| {
-        targets
+    // Every package checked gets an entry, empty once everything is built.
+    let failed = |p: &str| {
+        outcome
+            .problems
             .iter()
-            .zip(builds)
-            .find(|(t, _)| t.nvr == u.nvr && t.package == u.package)
-            .map(|(_, (i, _))| *i)
+            .any(|e| e.starts_with(&format!("{p}: ")))
+            || targets
+                .iter()
+                .any(|t| t.package == p && outcome.unsourced.contains(&t.nvr))
     };
+    let mut found: HashMap<String, NotBuilt> = builds
+        .iter()
+        .filter(|(p, _)| !failed(p))
+        .map(|(p, _)| (p.clone(), NotBuilt::default()))
+        .collect();
     for u in outcome.unbuilt {
-        if let Some(i) = row_of(&u) {
-            rows[i].unbuilt.push(u);
+        if let Some(n) = found.get_mut(&u.package) {
+            n.found.push(u);
         }
     }
     for u in outcome.recent {
-        if let Some(i) = row_of(&u) {
-            rows[i].unbuilt_recent.push(u);
+        if let Some(n) = found.get_mut(&u.package) {
+            n.recent.push(u);
         }
     }
     let mut warnings = outcome.problems;
@@ -677,7 +746,7 @@ fn fill_unbuilt(
             .iter()
             .map(|nvr| format!("CBS records no commit for {nvr}, so it was not compared")),
     );
-    warnings
+    (found, warnings)
 }
 
 /// One RHEL issue of an update, as Jira reports it now.
@@ -1148,6 +1217,9 @@ struct RefreshCtx<'a> {
     new_not_fixed: &'a [String],
     /// The affected and expected builds, for lines that say unknown.
     builds: (Option<&'a str>, Option<&'a str>),
+    /// The not-built line: `Some(None)` when everything is built, `None`
+    /// when it could not be told, which keeps the body's own.
+    not_built: Option<Option<String>>,
 }
 
 /// The labels an issue filed before #98 lacks: `security` when the
@@ -1224,6 +1296,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
         new_cve_lines: ctx.new_cve_lines,
         new_not_fixed: ctx.new_not_fixed,
         builds: ctx.builds,
+        not_built: ctx.not_built.as_ref().map(|l| l.as_deref()),
     });
     // GitLab strips trailing whitespace/newlines from stored
     // descriptions, so compare trimmed values — otherwise the
@@ -1269,6 +1342,9 @@ struct RefreshedBodyArgs<'a> {
     new_not_fixed: &'a [String],
     /// What fills unknown build lines (#101).
     builds: (Option<&'a str>, Option<&'a str>),
+    /// The not-built line (#205): `Some(None)` drops the body's,
+    /// `None` keeps it.
+    not_built: Option<Option<&'a str>>,
 }
 
 /// Build a standardized body, preserving the original prose
@@ -1296,9 +1372,15 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
             t.starts_with("- **Affected build**:")
                 || t.starts_with("- **Expected fix**:")
                 || t.starts_with("- **Stock fix**:")
+                || (a.not_built.is_none() && t.starts_with(sandogasa_cbs::unbuilt::LINE))
         })
         .map(|l| format!("{}\n", l.trim_end()))
         .collect();
+    // The not-built line, as just checked; kept above when it could not be.
+    let kept = match a.not_built {
+        Some(Some(line)) => format!("{kept}{line}\n"),
+        _ => kept,
+    };
     // CVE lines (#98) sit under the JIRA ones, as file-issue writes
     // them: the body's own, sorted by CVE, else the ones to add.
     let cves: String = match a.new_cve_lines {
@@ -1373,6 +1455,7 @@ fn is_metadata_line(line: &str) -> bool {
         "- **Stock fix**:",
         "- **CVE**:",
         "- **Not fixed here**:",
+        "- **Not built**:",
         "- **Status**:",
         "* Stream MR:",
         "* Affected",
@@ -1832,36 +1915,26 @@ mod tests {
 
     #[test]
     fn the_newest_sig_build_is_compared() {
-        let r = pu_row(
-            "c10s",
-            "blktrace",
-            Some("blktrace-1.3.0-13~proposed.el10"),
-            Some("blktrace-1.3.0-14~proposed.el10"),
-        );
+        let released = Some("blktrace-1.3.0-13~proposed.el10");
+        let testing = Some("blktrace-1.3.0-14~proposed.el10");
         assert_eq!(
-            newest_sig_build(&r, None).as_deref(),
-            Some("blktrace-1.3.0-14~proposed.el10")
+            newest_sig_build(released, testing, None).as_deref(),
+            testing
         );
         // A newer build waiting in -candidate counts as built.
+        let candidate = Some("blktrace-1.3.0-15~proposed.el10");
         assert_eq!(
-            newest_sig_build(&r, Some("blktrace-1.3.0-15~proposed.el10")).as_deref(),
-            Some("blktrace-1.3.0-15~proposed.el10")
+            newest_sig_build(released, testing, candidate).as_deref(),
+            candidate
         );
+        let older = Some("blktrace-1.3.0-12~proposed.el10");
         assert_eq!(
-            newest_sig_build(&r, Some("blktrace-1.3.0-12~proposed.el10")).as_deref(),
-            Some("blktrace-1.3.0-14~proposed.el10")
+            newest_sig_build(released, testing, older).as_deref(),
+            testing
         );
-        let r = pu_row("c10s", "git", Some("git-2.52.1-1~proposed.el10"), None);
-        assert_eq!(
-            newest_sig_build(&r, None).as_deref(),
-            Some("git-2.52.1-1~proposed.el10")
-        );
-        let none = pu_row("c10s", "x", None, None);
-        assert_eq!(newest_sig_build(&none, None), None);
-        assert_eq!(
-            newest_sig_build(&none, Some("x-1-1~proposed.el10")).as_deref(),
-            Some("x-1-1~proposed.el10")
-        );
+        assert_eq!(newest_sig_build(released, None, None).as_deref(), released);
+        assert_eq!(newest_sig_build(None, None, None), None);
+        assert_eq!(newest_sig_build(None, None, older).as_deref(), older);
     }
 
     /// Proposed Updates' repositories, answered from tables.
@@ -1871,13 +1944,13 @@ mod tests {
         fn containing(
             &self,
             t: &sandogasa_cbs::unbuilt::Target,
-            sha: &str,
+            _: &str,
         ) -> Result<Vec<String>, String> {
-            match (t.package.as_str(), sha) {
-                ("git", "a879194") => Ok(vec!["c10s".into(), "c10s-proposed-RHEL-306261".into()]),
-                ("git", _) => Ok(vec!["c9s-proposed-RHEL-306262".into()]),
-                ("rsync", _) => Ok(vec!["c10s-proposed-RHEL-1".into()]),
-                ("fresh", _) => Ok(vec!["c10s-proposed-RHEL-2".into()]),
+            match t.package.as_str() {
+                "git" => Ok(vec!["c10s".into(), "c10s-proposed-RHEL-306261".into()]),
+                "rsync" => Ok(vec!["c10s-proposed-RHEL-1".into()]),
+                "fresh" => Ok(vec!["c10s-proposed-RHEL-2".into()]),
+                "tpm2" => Ok(vec!["c10s-proposed-RHEL-3".into()]),
                 _ => Ok(vec!["c10s".into()]),
             }
         }
@@ -1885,7 +1958,7 @@ mod tests {
             &self,
             _: &sandogasa_cbs::unbuilt::Target,
             sha: &str,
-            branch: &str,
+            _: &str,
         ) -> Result<Vec<sandogasa_gitlab::RepoCommit>, String> {
             let one = |date: &str| {
                 serde_json::from_value(serde_json::json!({
@@ -1893,46 +1966,47 @@ mod tests {
                 }))
                 .unwrap()
             };
-            match (sha, branch) {
-                ("a879194", "c10s-proposed-RHEL-306261") => Ok(vec![one("2026-11-01T00:00:00Z")]),
-                ("f00", _) => Ok(vec![one("2026-11-19T00:00:00Z")]),
-                ("5e5704e", _) => Err("502 Bad Gateway".into()),
+            match sha {
+                "a879194" => Ok(vec![one("2026-11-01T00:00:00Z")]),
+                "f00" => Ok(vec![one("2026-11-19T00:00:00Z")]),
+                "5e5704e" => Err("502 Bad Gateway".into()),
                 _ => Ok(vec![]),
             }
         }
     }
 
     #[test]
-    fn merged_commits_never_built_are_added_to_their_row() {
-        let mut rows = vec![
-            pu_row("c10s", "git", Some("git-2.52.1-1~proposed.el10"), None),
-            pu_row("c9s", "git", Some("git-2.52.1-1~proposed.el9"), None),
-            pu_row("c10s", "rsync", Some("rsync-3.5.0-2~proposed.el10"), None),
-            pu_row("c10s", "mesa", Some("mesa-1-1~proposed.el10"), None),
-            pu_row("c10s", "lost", Some("lost-1-1~proposed.el10"), None),
-            pu_row("c10s", "fresh", Some("fresh-1-1~proposed.el10"), None),
+    fn merged_commits_never_built_are_found_per_package() {
+        let build = |p: &str| (p.to_string(), format!("{p}-1-1~proposed.el10"));
+        let builds = vec![
+            build("git"),
+            build("rsync"),
+            build("mesa"),
+            build("lost"),
+            build("fresh"),
+            build("tpm2"),
         ];
-        let builds: Vec<(usize, String)> = rows
-            .iter()
-            .enumerate()
-            .filter_map(|(i, r)| newest_sig_build(r, None).map(|n| (i, n)))
-            .collect();
         let commits = vec![
             Some("a879194".to_string()),
-            Some("eb8d270".to_string()),
             Some("5e5704e".to_string()),
             None,
             Some("0ld".to_string()),
             Some("f00".to_string()),
+            Some("head".to_string()),
         ];
         let cutoff = chrono::DateTime::parse_from_rfc3339("2026-11-17T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let warnings = fill_unbuilt(&mut rows, &builds, &commits, &FakeRepo, cutoff);
-        assert_eq!(rows[0].unbuilt.len(), 1);
-        assert_eq!(rows[0].unbuilt[0].branch, "c10s-proposed-RHEL-306261");
-        assert_eq!(rows[5].unbuilt_recent.len(), 1);
-        assert!(rows[1..5].iter().all(|r| r.unbuilt.is_empty()));
+        let (found, warnings) = fill_unbuilt("c10s", &builds, &commits, &FakeRepo, cutoff);
+        assert_eq!(found["git"].found.len(), 1);
+        assert_eq!(found["git"].found[0].branch, "c10s-proposed-RHEL-306261");
+        assert_eq!(found["fresh"].recent.len(), 1);
+        // Checked and built: an entry, empty, so a refresh drops the line.
+        assert!(found["tpm2"].found.is_empty() && found["tpm2"].recent.is_empty());
+        // Not checked: no entry, so a refresh keeps what the body says.
+        for p in ["rsync", "mesa", "lost"] {
+            assert!(!found.contains_key(p), "{p}");
+        }
         assert_eq!(warnings.len(), 3, "{warnings:?}");
         assert!(warnings[0].contains("502"), "{warnings:?}");
         assert!(
@@ -1943,15 +2017,91 @@ mod tests {
             warnings[2].contains("no commit for mesa-1-1"),
             "{warnings:?}"
         );
-        // In the row's JSON.
-        let json = serde_json::to_value(&rows[0]).unwrap();
+    }
+
+    #[test]
+    fn each_tracking_issue_gets_its_own_branch() {
+        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-11-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let builds = vec![("git".to_string(), "git-1-1~proposed.el10".to_string())];
+        let (found, _) = fill_unbuilt(
+            "c10s",
+            &builds,
+            &[Some("a879194".to_string())],
+            &FakeRepo,
+            cutoff,
+        );
+        let git = &found["git"];
+        let issue = |key: &str| {
+            vec![JiraState {
+                key: key.into(),
+                status: None,
+                resolution: None,
+                resolved: false,
+                verdict: None,
+            }]
+        };
+        assert_eq!(git.for_issue("c10s", &issue("RHEL-306261")).found.len(), 1);
+        assert!(git.for_issue("c10s", &issue("RHEL-9")).found.is_empty());
+        assert_eq!(git.for_issue("c10s", &[]).found.len(), 1);
+    }
+
+    #[test]
+    fn a_rows_unbuilt_branches_are_in_its_json() {
+        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-11-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let builds = vec![("git".to_string(), "git-1-1~proposed.el10".to_string())];
+        let (mut found, _) = fill_unbuilt(
+            "c10s",
+            &builds,
+            &[Some("a879194".to_string())],
+            &FakeRepo,
+            cutoff,
+        );
+        let mut row = pu_row("c10s", "git", Some("git-1-1~proposed.el10"), None);
+        row.unbuilt = found.remove("git").unwrap().found;
+        let json = serde_json::to_value(&row).unwrap();
         assert_eq!(json["unbuilt"][0]["commits"][0]["id"], "c0ffee");
+        assert!(json.get("unbuilt_recent").is_none());
+        let built = pu_row("c10s", "rsync", Some("rsync-1-1~proposed.el10"), None);
         assert!(
-            serde_json::to_value(&rows[1])
+            serde_json::to_value(&built)
                 .unwrap()
                 .get("unbuilt")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_refresh_writes_the_not_built_line_and_drops_it_once_built() {
+        let body = "- **MR**: [t](https://gitlab.com/redhat/centos-stream/rpms/git/-/merge_requests/1)\n\
+                    - **JIRA**: [RHEL-1](https://issues.redhat.com/browse/RHEL-1) — New\n\
+                    - **Release**: c10s\n\
+                    - **Not built**: 1 commit(s) on `c10s-proposed-RHEL-1` since git-1-1~proposed.el10\n";
+        let args = |not_built| RefreshedBodyArgs {
+            original_body: body,
+            release: "c10s",
+            mr_url: "https://gitlab.com/redhat/centos-stream/rpms/git/-/merge_requests/1",
+            mr_title: "t",
+            mr_state: None,
+            jira: &[],
+            new_cve_lines: None,
+            new_not_fixed: &[],
+            builds: (None, None),
+            not_built,
+        };
+        let kept = refreshed_body(args(None));
+        assert!(kept.contains("- **Not built**: 1 commit(s)"), "{kept}");
+        let replaced = refreshed_body(args(Some(Some("- **Not built**: 2 commit(s) on x"))));
+        assert!(
+            replaced.ends_with("- **Not built**: 2 commit(s) on x\n"),
+            "{replaced}"
+        );
+        assert!(!replaced.contains("1 commit(s)"), "{replaced}");
+        let dropped = refreshed_body(args(Some(None)));
+        assert!(!dropped.contains("Not built"), "{dropped}");
     }
 
     #[test]
@@ -2371,6 +2521,7 @@ mod tests {
             new_cve_lines: None,
             new_not_fixed: &[],
             builds: (None, None),
+            not_built: None,
         });
         assert!(out.starts_with("Legacy context paragraph.\n\n- **MR**:"));
         assert!(out.contains(
@@ -2430,6 +2581,7 @@ mod tests {
             new_cve_lines: None,
             new_not_fixed: &[],
             builds: (None, None),
+            not_built: None,
         });
         assert!(out.contains("[RHEL-303720]("), "{out}");
         assert!(out.contains("[RHEL-303900]("), "{out}");
@@ -2559,6 +2711,7 @@ mod tests {
             new_cve_lines: None,
             new_not_fixed: &[],
             builds: (None, None),
+            not_built: None,
         });
         assert!(out.contains("- **JIRA**: _(not found in MR; set with `--jira`)_"));
         // MR state suffix omitted when unknown.
@@ -2852,7 +3005,7 @@ name = "PackageKit"
             json: false,
             refresh: false,
             include_closed: false,
-            unbuilt: false,
+            no_unbuilt: true,
             verbose: false,
         };
         let rows = build_rows(&args).expect("build_rows");
@@ -3038,7 +3191,7 @@ name = "PackageKit"
             json: false,
             refresh: true,
             include_closed: false,
-            unbuilt: false,
+            no_unbuilt: true,
             verbose: false,
         };
         let rows = build_rows(&args).expect("refresh build_rows");
@@ -3072,6 +3225,7 @@ name = "PackageKit"
             new_cve_lines: new,
             new_not_fixed: &[],
             builds: (None, None),
+            not_built: None,
         };
         let lines: &'static [String] = Box::leak(vec![line.clone()].into_boxed_slice());
         let out = refreshed_body(args(original, Some(lines)));
@@ -3106,6 +3260,7 @@ name = "PackageKit"
             new_cve_lines: None,
             new_not_fixed: declined,
             builds: (None, None),
+            not_built: None,
         };
         let original = "- **MR**: [t](https://example/-/merge_requests/90) — opened\n\
                         - **JIRA**: [RHEL-303721](https://x/browse/RHEL-303721) — New\n\
@@ -3201,6 +3356,7 @@ name = "PackageKit"
             new_cve_lines: None,
             new_not_fixed: &[],
             builds: (Some("rsync-3.5.0-1.el10"), Some("rsync-3.5.0-2.el10")),
+            not_built: None,
         });
         assert!(
             out.ends_with(

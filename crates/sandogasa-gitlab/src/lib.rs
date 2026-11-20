@@ -402,11 +402,14 @@ struct CompareResult {
     commits: Vec<serde::de::IgnoredAny>,
 }
 
-/// The same answer, with the commits read.
+/// The same answer, with the commits read, and whether any file
+/// differs.
 #[derive(Debug, Deserialize)]
 struct CompareCommits {
     #[serde(default)]
     commits: Vec<RepoCommit>,
+    #[serde(default)]
+    diffs: Vec<serde::de::IgnoredAny>,
 }
 
 /// A ref from `/repository/commits/:sha/refs`.
@@ -668,7 +671,9 @@ impl Client {
 
     /// The commits on `branch` that `sha` lacks, oldest first: what
     /// was merged since a build made from `sha`, say. Empty when `sha`
-    /// is the branch head or ahead of it.
+    /// is the branch head or ahead of it, and when the branch's files
+    /// are the same as `sha`'s, as after a merge commit merging the
+    /// very commit that was built.
     pub fn commits_between(
         &self,
         sha: &str,
@@ -686,7 +691,10 @@ impl Client {
             .send()?;
         let cmp: CompareCommits =
             blocking_json_ok(resp, &format!("GitLab compare {sha}..{branch}"))?;
-        Ok(cmp.commits)
+        Ok(match cmp.diffs.is_empty() {
+            true => Vec::new(),
+            false => cmp.commits,
+        })
     }
 
     /// The branches whose history contains `sha`, sorted.
@@ -2197,7 +2205,8 @@ mod tests {
             .with_body(
                 r#"{"commits": [{"id": "a1", "title": "Merge branch 'x'",
                     "message": "Merge branch 'x'\n\nSee merge request g/p!7",
-                    "committed_date": "2026-11-17T10:00:00.000+00:00"}], "diffs": []}"#,
+                    "committed_date": "2026-11-17T10:00:00.000+00:00"}],
+                    "diffs": [{"new_path": "x.spec"}]}"#,
             )
             .create();
         let client = Client::new(&server.url(), "g/p", "tok").unwrap();
@@ -2216,6 +2225,21 @@ mod tests {
             .create();
         let client = Client::new(&server.url(), "g/p", "tok").unwrap();
         assert!(client.commits_between("55ea231", "gone").is_err());
+
+        // A merge commit of the very commit built: no file differs.
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/api/v4/projects/g%2Fp/repository/compare")
+            .match_query(mockito::Matcher::Any)
+            .with_body(r#"{"commits": [{"id": "m1", "title": "Merge"}], "diffs": []}"#)
+            .create();
+        let client = Client::new(&server.url(), "g/p", "tok").unwrap();
+        assert!(
+            client
+                .commits_between("55ea231", "c9s-hs")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -291,6 +291,49 @@ impl Client {
         self.hub.hub_url()
     }
 
+    /// The tags of each build in `build_ids`, in one `system.multicall`
+    /// per two hundred builds; a build the hub faults on has none.
+    pub fn list_tags_multi(
+        &self,
+        build_ids: &[i64],
+    ) -> Result<Vec<Vec<String>>, Box<dyn std::error::Error>> {
+        const BATCH: usize = 200;
+        let mut out = Vec::with_capacity(build_ids.len());
+        for chunk in build_ids.chunks(BATCH) {
+            let calls: Vec<Value> = chunk
+                .iter()
+                .map(|id| {
+                    Value::Struct(HashMap::from([
+                        (
+                            "methodName".to_string(),
+                            Value::String("listTags".to_string()),
+                        ),
+                        ("params".to_string(), Value::Array(vec![Value::Int(*id)])),
+                    ]))
+                })
+                .collect();
+            let response = self.hub.call("system.multicall", &[Value::Array(calls)])?;
+            let results = response
+                .as_array()
+                .ok_or("expected multicall array response")?;
+            if results.len() != chunk.len() {
+                return Err(format!(
+                    "multicall returned {} results for {} calls",
+                    results.len(),
+                    chunk.len()
+                )
+                .into());
+            }
+            out.extend(results.iter().map(|item| {
+                item.as_array()
+                    .and_then(|wrapper| wrapper.first())
+                    .and_then(|v| tag_names_from(v).ok())
+                    .unwrap_or_default()
+            }));
+        }
+        Ok(out)
+    }
+
     /// List tag names for a given build ID.
     pub fn list_tags(&self, build_id: i64) -> Result<Vec<String>, Box<dyn std::error::Error>> {
         tag_names_from(&self.hub.call("listTags", &[Value::Int(build_id)])?)
@@ -564,6 +607,93 @@ mod tests {
     /// which is now `sandogasa-kojihub`'s rather than this file's.
     fn decoded(xml: &str) -> Value {
         sandogasa_kojihub::xmlrpc::parse_response(xml).expect("fixture decodes")
+    }
+
+    #[test]
+    fn a_packages_builds_are_read_by_its_id() {
+        let mut server = mockito::Server::new();
+        let reply = |value: &str| {
+            format!(
+                "<?xml version='1.0'?><methodResponse><params><param><value>{value}</value>\
+                 </param></params></methodResponse>"
+            )
+        };
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("(?s)getPackageID.*openssh".into()))
+            .with_body(reply("<int>42</int>"))
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("(?s)getPackageID.*nosuch".into()))
+            .with_body(reply("<nil/>"))
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("(?s)getPackageID.*odd".into()))
+            .with_body(reply("<string>x</string>"))
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("listBuilds".into()))
+            .with_body(reply(
+                "<array><data><value><struct>\
+                 <member><name>build_id</name><value><int>7</int></value></member>\
+                 <member><name>package_name</name><value><string>openssh</string></value></member>\
+                 <member><name>version</name><value><string>9.9p1</string></value></member>\
+                 <member><name>release</name><value><string>16.1.hs+fb.el9</string></value></member>\
+                 <member><name>nvr</name><value><string>openssh-9.9p1-16.1.hs+fb.el9</string></value></member>\
+                 </struct></value></data></array>",
+            ))
+            .create();
+        let client = Client::with_hub_url(&server.url());
+        assert_eq!(client.get_package_id("openssh").unwrap(), Some(42));
+        assert_eq!(client.get_package_id("nosuch").unwrap(), None);
+        assert!(client.get_package_id("odd").is_err());
+        let builds = client.list_builds(42).unwrap();
+        assert_eq!(builds.len(), 1);
+        assert_eq!(builds[0].name, "openssh");
+        assert_eq!(builds[0].build_id, 7);
+    }
+
+    #[test]
+    fn tags_of_many_builds_come_in_one_call() {
+        let mut server = mockito::Server::new();
+        let tag = |t: &str| {
+            format!(
+                "<value><struct><member><name>name</name><value><string>{t}</string>\
+                 </value></member></struct></value>"
+            )
+        };
+        let mock = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Regex("system.multicall".into()))
+            .with_body(format!(
+                "<?xml version='1.0'?><methodResponse><params><param><value><array><data>\
+                 <value><array><data><value><array><data>{}{}</data></array></value>\
+                 </data></array></value>\
+                 <value><struct><member><name>faultCode</name><value><int>1</int></value>\
+                 </member></struct></value>\
+                 </data></array></value></param></params></methodResponse>",
+                tag("hyperscale9s-packages-facebook-testing"),
+                tag("hyperscale9s-packages-facebook-candidate"),
+            ))
+            .expect(1)
+            .create();
+        let client = Client::with_hub_url(&server.url());
+        let tags = client.list_tags_multi(&[7, 8]).unwrap();
+        assert_eq!(
+            tags,
+            [
+                vec![
+                    "hyperscale9s-packages-facebook-testing".to_string(),
+                    "hyperscale9s-packages-facebook-candidate".to_string()
+                ],
+                Vec::new()
+            ]
+        );
+        mock.assert();
+        assert!(client.list_tags_multi(&[]).unwrap().is_empty());
     }
 
     #[test]

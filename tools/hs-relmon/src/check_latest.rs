@@ -159,6 +159,10 @@ pub struct CheckResult {
     /// Reference version for tracking (not included in JSON).
     #[serde(skip)]
     ref_version: Option<String>,
+    /// The package's CBS builds, read for the Hyperscale columns: what
+    /// an issue update compares with the branches (not in JSON).
+    #[serde(skip)]
+    pub builds: Vec<crate::cbs::Build>,
 }
 
 /// Reference to a GitLab issue.
@@ -356,6 +360,7 @@ pub fn check(
         hs10: None,
         issue: None,
         ref_version: None,
+        builds: Vec::new(),
     };
 
     // Fetch Repology data if needed for display or for tracking reference.
@@ -411,8 +416,8 @@ pub fn check(
             .get_package_id(package)?
             .map(|id| cbs_client.list_builds(id))
             .transpose()?;
-        let empty = Vec::new();
-        let builds = builds.as_deref().unwrap_or(&empty);
+        result.builds = builds.unwrap_or_default();
+        let builds = result.builds.as_slice();
 
         if distros.hyperscale_9 {
             let summary = cbs_client.hyperscale_summary(builds, 9)?;
@@ -844,6 +849,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 5);
@@ -868,6 +874,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 2);
@@ -892,6 +899,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 1);
@@ -913,6 +921,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows.len(), 1);
@@ -935,6 +944,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("6.19".into()),
+            builds: Vec::new(),
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows[1].status, "outdated");
@@ -956,6 +966,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("6.15".into()),
+            builds: Vec::new(),
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows[0].status, "newest");
@@ -977,6 +988,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("260".into()),
+            builds: Vec::new(),
         };
         let rows = result_to_rows(&result);
         assert_eq!(rows[0].distro, "Hyperscale 9 (release)");
@@ -1063,6 +1075,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["package"], "ethtool");
@@ -1090,6 +1103,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("6.19".into()),
+            builds: Vec::new(),
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["hs9"]["newest_version"], false);
@@ -1116,6 +1130,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(result.is_outdated());
         assert_eq!(result.ref_version(), Some("2.0"));
@@ -1139,6 +1154,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(!result.is_outdated());
     }
@@ -1155,6 +1171,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         assert!(!result.is_outdated());
         assert_eq!(result.ref_version(), None);
@@ -1184,6 +1201,7 @@ mod tests {
             }),
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(result.is_outdated());
     }
@@ -1206,6 +1224,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(result.is_outdated());
     }
@@ -1228,6 +1247,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         assert!(!result.is_outdated());
     }
@@ -1250,6 +1270,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(result.is_in_testing());
     }
@@ -1272,6 +1293,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(result.is_in_testing());
         assert!(result.is_outdated());
@@ -1295,6 +1317,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(!result.is_in_testing());
     }
@@ -1317,6 +1340,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         assert!(!result.is_in_testing());
     }
@@ -1339,6 +1363,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(!result.is_in_testing());
     }
@@ -1361,6 +1386,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(result.is_released());
         assert_eq!(result.release_builds(), vec![("Hyperscale 9", 1)]);
@@ -1390,6 +1416,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(!result.is_released());
         assert!(result.release_builds().is_empty());
@@ -1413,6 +1440,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(!result.is_released());
     }
@@ -1429,6 +1457,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         assert!(!result.is_released());
     }
@@ -1458,6 +1487,7 @@ mod tests {
             }),
             issue: None,
             ref_version: Some("2.0".into()),
+            builds: Vec::new(),
         };
         assert!(!result.is_released());
         // Only hs9 has a release build
@@ -1488,6 +1518,7 @@ mod tests {
             }),
             issue: None,
             ref_version: Some("6.11".into()),
+            builds: Vec::new(),
         };
         assert!(result.is_released());
         assert_eq!(
@@ -1519,6 +1550,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("6.19".into()),
+            builds: Vec::new(),
         };
         let table = format_table(&result);
         assert!(table.contains("ethtool"));
@@ -1541,6 +1573,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: Some("6.19".into()),
+            builds: Vec::new(),
         };
         let mut buf = Vec::new();
         write_table(&result, &mut buf).unwrap();
@@ -1567,6 +1600,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let mut buf = Vec::new();
         write_table(&result, &mut buf).unwrap();
@@ -1589,6 +1623,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let mut buf = Vec::new();
         write_table(&result, &mut buf).unwrap();
@@ -1607,6 +1642,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let mut buf = Vec::new();
         write_json(&result, &mut buf).unwrap();
@@ -1634,6 +1670,7 @@ mod tests {
                 assignees: vec!["alice".into()],
             }),
             ref_version: None,
+            builds: Vec::new(),
         };
         let mut buf = Vec::new();
         write_json(&result, &mut buf).unwrap();
@@ -1657,6 +1694,7 @@ mod tests {
                 hs10: None,
                 issue: None,
                 ref_version: None,
+                builds: Vec::new(),
             },
             CheckResult {
                 package: "b".into(),
@@ -1674,6 +1712,7 @@ mod tests {
                     assignees: vec![],
                 }),
                 ref_version: None,
+                builds: Vec::new(),
             },
         ];
         let mut buf = Vec::new();
@@ -1706,6 +1745,7 @@ mod tests {
             hs10: None,
             issue: None,
             ref_version: None,
+            builds: Vec::new(),
         };
         let json = serde_json::to_value(&result).unwrap();
         // newest_version should be absent when None
@@ -1730,6 +1770,7 @@ mod tests {
                 assignees: vec!["alice".into()],
             }),
             ref_version: None,
+            builds: Vec::new(),
         };
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["issue"]["iid"], 42);
@@ -1769,6 +1810,7 @@ mod tests {
                 hs10: None,
                 issue: None,
                 ref_version: None,
+                builds: Vec::new(),
             },
             CheckResult {
                 package: "b".into(),
@@ -1780,6 +1822,7 @@ mod tests {
                 hs10: None,
                 issue: None,
                 ref_version: None,
+                builds: Vec::new(),
             },
         ];
         let json = serde_json::to_value(&results).unwrap();
@@ -1828,6 +1871,7 @@ mod tests {
             hs10: None,
             issue,
             ref_version: None,
+            builds: Vec::new(),
         }
     }
 

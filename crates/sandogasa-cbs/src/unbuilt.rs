@@ -292,6 +292,81 @@ pub fn render(u: &Unbuilt) -> String {
     out
 }
 
+/// How the line an issue body carries for unbuilt commits starts.
+pub const LINE: &str = "- **Not built**:";
+
+/// The line a tracking issue's body carries while `found` (branches
+/// past the grace period) have commits not built:
+/// `- **Not built**: 9 commit(s) on c9s-hs+fb since <nvr>, the newest
+/// from 2026-11-10`, one clause per branch. `None` when there are none,
+/// so a body that had the line loses it.
+pub fn body_line(found: &[Unbuilt]) -> Option<String> {
+    if found.is_empty() {
+        return None;
+    }
+    let clauses: Vec<String> = found
+        .iter()
+        .map(|u| {
+            let mut c = format!(
+                "{} commit(s) on `{}` since {}",
+                u.commits.len(),
+                u.branch,
+                u.nvr
+            );
+            if let Some(d) = newest(&u.commits) {
+                c.push_str(&format!(", the newest from {}", day(d)));
+            }
+            c
+        })
+        .collect();
+    Some(format!("{LINE} {}", clauses.join("; ")))
+}
+
+/// `body` with its [`LINE`] replaced by `line`, added at the end when it
+/// had none, or removed for `None`.
+pub fn with_body_line(body: &str, line: Option<&str>) -> String {
+    let mut out: Vec<&str> = body
+        .lines()
+        .filter(|l| !l.trim_start().starts_with(LINE))
+        .collect();
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    let mut text = out.join("\n");
+    if let Some(line) = line {
+        text.push_str(if text.is_empty() { "" } else { "\n\n" });
+        text.push_str(line);
+    }
+    text
+}
+
+/// What a comment on a build of `branch` says about `commits`, the
+/// branch's commits the build lacks: how many, the newest's day, and
+/// each one's title, so whoever moves the build sees what it does not
+/// carry. It does not say they are unbuilt: a newer build, in testing
+/// say, may have them. `None` when there are none.
+pub fn paragraph(branch: &str, commits: Vec<RepoCommit>) -> Option<String> {
+    if commits.is_empty() {
+        return None;
+    }
+    let commits: Vec<Pending> = commits.into_iter().map(pending).collect();
+    let mut text = format!(
+        "`{branch}` has {} commit(s) this build does not",
+        commits.len()
+    );
+    if let Some(d) = newest(&commits) {
+        text.push_str(&format!(", the newest from {}", day(d)));
+    }
+    text.push_str(":\n");
+    for c in &commits {
+        text.push_str(&format!("\n- {} {}", short(&c.id), c.title));
+        if let Some(mr) = &c.merge_request {
+            text.push_str(&format!(" ({mr})"));
+        }
+    }
+    Some(text)
+}
+
 /// One target: each branch it picks among those holding `sha`, with the
 /// commits it gained since, those with none left out.
 fn one(target: &Target, sha: &str, repo: &dyn Repository) -> Result<Vec<Unbuilt>, String> {
@@ -367,6 +442,76 @@ mod tests {
 
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    fn unbuilt(branch: &str, n: usize) -> Unbuilt {
+        Unbuilt {
+            package: "openssh".into(),
+            branch: branch.into(),
+            nvr: "openssh-9.9p1-16.1.hs+fb.el9".into(),
+            built: "55ea2316".into(),
+            commits: (0..n)
+                .map(|i| pending(commit(&format!("c{i}"), "2026-11-10T10:00:00Z", "Fix")))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn an_issue_body_carries_one_line_while_commits_wait() {
+        let line = body_line(&[unbuilt("c9s-hs+fb", 9), unbuilt("c9s-hs", 1)]).unwrap();
+        assert_eq!(
+            line,
+            "- **Not built**: 9 commit(s) on `c9s-hs+fb` since openssh-9.9p1-16.1.hs+fb.el9, \
+             the newest from 2026-11-10; 1 commit(s) on `c9s-hs` since \
+             openssh-9.9p1-16.1.hs+fb.el9, the newest from 2026-11-10"
+        );
+        assert_eq!(body_line(&[]), None);
+        let body = "- **MR**: x\n- **Release**: c9s\n";
+        let with = with_body_line(body, Some("- **Not built**: 1"));
+        assert_eq!(
+            with,
+            "- **MR**: x\n- **Release**: c9s\n\n- **Not built**: 1"
+        );
+        // Replaced, then removed once built.
+        assert_eq!(
+            with_body_line(&with, Some("- **Not built**: 2")),
+            "- **MR**: x\n- **Release**: c9s\n\n- **Not built**: 2"
+        );
+        assert_eq!(
+            with_body_line(&with, None),
+            "- **MR**: x\n- **Release**: c9s"
+        );
+        assert_eq!(
+            with_body_line("", Some("- **Not built**: 1")),
+            "- **Not built**: 1"
+        );
+    }
+
+    #[test]
+    fn a_build_comment_lists_what_its_branch_has_since() {
+        assert_eq!(paragraph("c9s-hs", vec![]), None);
+        let text = paragraph(
+            "c9s-hs+fb",
+            vec![
+                commit(
+                    "aaaaaaaaaaaaaaaa",
+                    "2026-10-29T00:00:00Z",
+                    "Fix CVE-2026-106552",
+                ),
+                commit(
+                    "bbbb",
+                    "2026-11-10T00:00:00Z",
+                    "Merge c9s release 17\nSee merge request g/openssh!7",
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            text,
+            "`c9s-hs+fb` has 2 commit(s) this build does not, the newest from 2026-11-10:\
+             \n\n- aaaaaaaaaaaa Fix CVE-2026-106552\n- bbbb Merge c9s release 17 \
+             (g/openssh!7)"
+        );
     }
 
     #[test]
@@ -564,7 +709,10 @@ mod tests {
                 "/api/v4/projects/g%2Frpms%2Fopenssh/repository/compare",
             )
             .match_query(mockito::Matcher::Any)
-            .with_body(r#"{"commits": [{"id": "c1", "committed_date": "2026-11-01T00:00:00Z"}]}"#)
+            .with_body(
+                r#"{"commits": [{"id": "c1", "committed_date": "2026-11-01T00:00:00Z"}],
+                    "diffs": [{"new_path": "x.spec"}]}"#,
+            )
             .create();
         let repo = GitLab::new(&format!("{}/", server.url()), "/g/rpms/", "").logged("test");
         let t = target("openssh", &["c9s-hs+fb"]);

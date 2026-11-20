@@ -12,14 +12,20 @@ CVE fixes included; stock's newer builds sort above them, so hs+fb
 hosts get stock's openssh. `hs-relmon check-unbuilt <manifest>` takes
 each package's newest build per dist tag, in any `-candidate`,
 `-testing` or `-release` tag, reads the commit CBS says it was built
-from, finds the branch holding it (`c9s-hs+fb`, else `c9s-hs`, which
-packages built for both the main repository and a flavor build from),
+from, finds the branch holding it (`cNs-hs+fb` for an `hs+fb.elN`
+build, else `cNs-hs`, which packages built for both the main repository
+and a flavor build from),
 and lists the commits the branch gained since, with their count, the
 day of the newest and the merge request each merged; a branch whose
 newest commit is within `--grace-days` (3) is only counted.
-`cpu-sig-tracker status --unbuilt` does the same for Proposed Updates,
-against the `<release>-proposed-*` branches holding the SIG build's
-commit. The check is sandogasa-cbs's new `unbuilt` module;
+`cpu-sig-tracker status` does the same for Proposed Updates, against
+the `<release>-proposed-*` branches holding the SIG build's commit,
+unless `--no-unbuilt`. Where the tools already update an issue, they
+say so there: `status --refresh` and hs-relmon's `--file-issue` keep a
+`- **Not built**:` line in it, dropped once the branch is built, and
+cbspkg's comment on a build or promotion lists the commits its branch
+has that the build lacks. The check is sandogasa-cbs's new `unbuilt`
+module;
 sandogasa-gitlab's `Client` gains `commits_between` and
 `branches_containing` (Resolves #205).
 

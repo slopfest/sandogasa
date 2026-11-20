@@ -256,6 +256,10 @@ pub fn plan(
         Vec::new()
     };
     let mut notices = Vec::new();
+    let mut compared: std::collections::HashMap<
+        String,
+        Result<Vec<sandogasa_gitlab::RepoCommit>, ()>,
+    > = std::collections::HashMap::new();
     for ((nvr, stage, changes), commit) in pending.into_iter().zip(&commits) {
         // A Hyperscale build older than the version its issue asks for
         // (an rc, or a fix to the version in -release) is still told
@@ -311,6 +315,25 @@ pub fn plan(
         };
         if let Some(v) = older {
             notice.mark_older(v);
+        }
+        // What the branch has gained since this build, which whoever
+        // moves it should know it does not carry (#205); asked once per
+        // commit, builds of one commit sharing the answer.
+        if let Some(commit) = commit {
+            let since = compared.entry(commit.clone()).or_insert_with(|| {
+                client.commits_between(commit, on.branch).map_err(|e| {
+                    eprintln!(
+                        "warning: cannot compare {nvr} with {} ({e}); the comment cannot say \
+                         what the branch has since",
+                        on.branch
+                    )
+                })
+            });
+            if let Ok(commits) = since
+                && let Some(p) = crate::unbuilt::paragraph(on.branch, commits.clone())
+            {
+                notice.add_paragraph(&p);
+            }
         }
         notices.push(notice);
     }
@@ -1124,6 +1147,67 @@ mod tests {
             &UntagReason::Rejected,
         );
         assert!(again.is_empty());
+    }
+
+    /// A build behind its branch: the comment lists what the branch has
+    /// gained since, still to build (#205).
+    #[test]
+    fn a_comment_says_what_the_branch_has_that_the_build_lacks() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", format!("{PATH}/issues").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_body(
+                serde_json::json!([{"iid": 1, "title": "git c10s", "state": "opened",
+                    "web_url": "u1", "labels": ["c10s", "cpu-sig-tracker"],
+                    "description": "- **JIRA**: [RHEL-306261](j) — New"}])
+                .to_string(),
+            )
+            .create();
+        server
+            .mock("GET", format!("{PATH}/issues/1/notes").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_body("[]")
+            .create();
+        let compare = server
+            .mock("GET", format!("{PATH}/repository/compare").as_str())
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("from".into(), "a879194".into()),
+                mockito::Matcher::UrlEncoded("to".into(), "c10s-proposed-RHEL-306261".into()),
+            ]))
+            .with_body(
+                r#"{"commits": [{"id": "c0ffee", "title": "Fix CVE-2026-2",
+                    "committed_date": "2026-11-18T00:00:00Z"}], "diffs": [{"new_path": "git.spec"}]}"#,
+            )
+            .expect(1)
+            .create();
+        let steps = [(
+            NVR.to_string(),
+            Stage::Testing,
+            vec![TagChange::tag(
+                "proposed_updates10s-packages-main-testing",
+                NVR,
+            )],
+        )];
+        let built = |nvrs: &[String]| -> Result<Vec<Option<String>>, String> {
+            Ok(vec![Some("a879194".to_string()); nvrs.len()])
+        };
+        let notices = plan(
+            &server.url(),
+            Some("t"),
+            &on(Sig::ProposedUpdates, "c10s-proposed-RHEL-306261"),
+            &steps,
+            &built,
+        );
+        compare.assert();
+        assert!(
+            notices[0].note.contains(
+                "`c10s-proposed-RHEL-306261` has 1 commit(s) this build does not, the newest \
+                 from 2026-11-18:\n\n- c0ffee Fix CVE-2026-2"
+            ),
+            "{}",
+            notices[0].note
+        );
     }
 
     /// A rejected update's next build: reaching a stage takes
