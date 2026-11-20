@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### sandogasa-report hides embargoed notes unless asked
+
+`notes` and `report --notes --private` printed an embargoed note in
+full: its link, which names the project, and its text. Shown by
+accident on a shared screen, in a recording or in a pasted log, that
+could not be taken back the way a leaked token is rotated. An embargoed
+note's link and text are now replaced by a line saying they are
+hidden, in text and JSON, while its date, directory, author and
+`embargo:` header still show; a report still places it under its item.
+The list `notes --release` asks about gives each note's date and file.
+`--show-embargoed`, on `notes` and on a `--private` report, prints them
+(Resolves #204).
+
 ### sandogasa-report reads notes from private directories too
 
 Notes on embargoed work, such as a security fix not disclosed yet, have

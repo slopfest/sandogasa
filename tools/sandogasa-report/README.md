@@ -296,6 +296,17 @@ moves them to the first public directory, the header saying
 `lifted <today>` unless it already says when. `report --notes` says how
 many such notes are still waiting.
 
+An embargoed note is printed without its link, which names the
+project, and its text, replaced by a line saying they are hidden, in
+`notes` and in `report --notes --private` (Markdown and JSON), so a
+shared screen, a recording or a pasted log does not give the issue
+away; its date, directory, author and `embargo:` header still show. A
+report still places it under the item it is about, or under
+"Embargoed" among the notes no item took; with `--json` it has no
+`key`. The list `notes --release` asks about gives each note's date and
+file. `--show-embargoed` prints them in full (with `report`, it needs
+`--private`).
+
 `report --notes` adds the notes dated in the report's period. Each note
 goes under the first item in the report that links its URL, or, for a
 commit or a repository's own URL, under the repository's line in that

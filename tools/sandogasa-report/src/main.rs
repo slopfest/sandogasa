@@ -87,30 +87,35 @@ struct NoteArgs {
 
 #[derive(clap::Args)]
 struct NotesArgs {
-    /// Output as JSON.
-    #[arg(long, conflicts_with = "release")]
-    json: bool,
-
-    /// Move the notes in private directories whose embargo has lifted
-    /// to the first public one, after asking.
-    #[arg(long)]
-    release: bool,
-
     /// Only notes from this day on (YYYY-MM-DD).
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     since: Option<NaiveDate>,
 
     /// Only notes up to this day (YYYY-MM-DD).
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     until: Option<NaiveDate>,
 
     /// Only notes about this URL.
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     url: Option<String>,
 
+    /// Move the notes in private directories whose embargo has lifted
+    /// to the first public one, after asking.
+    #[arg(long, help_heading = "Writing")]
+    release: bool,
+
     /// With --release, move them without asking.
-    #[arg(short, long, requires = "release")]
+    #[arg(short, long, requires = "release", help_heading = "Writing")]
     yes: bool,
+
+    /// Output as JSON.
+    #[arg(long, conflicts_with = "release", help_heading = "Output")]
+    json: bool,
+
+    /// Print the link and text of embargoed notes, which are otherwise
+    /// hidden so a screen or a pasted log does not give the issue away.
+    #[arg(long, help_heading = "Output")]
+    show_embargoed: bool,
 }
 
 /// An axis a report can be broken down along.
@@ -225,6 +230,12 @@ struct ReportArgs {
     /// projects your tokens can see either way.
     #[arg(long, help_heading = "Output")]
     private: bool,
+
+    /// With --notes and --private, print the link and text of embargoed
+    /// notes, which are otherwise hidden so a screen or a pasted log
+    /// does not give the issue away.
+    #[arg(long, requires_all = ["notes", "private"], help_heading = "Output")]
+    show_embargoed: bool,
 
     /// With --notes and --private, what the Markdown report does with
     /// the notes no item took (default: [notes] unattached in the
@@ -366,8 +377,15 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
     }
     let selected = notes::select(found, &filter);
     if args.release {
-        return release_notes(&dirs, selected, args.yes);
+        return release_notes(&dirs, selected, args.yes, args.show_embargoed);
     }
+    let selected: Vec<notes::Stored> = match args.show_embargoed {
+        true => selected,
+        false => notes::hide_embargoed(selected, chrono::Local::now().date_naive())
+            .iter()
+            .map(notes::shown)
+            .collect(),
+    };
     if args.json {
         let json = serde_json::to_string_pretty(&selected).map_err(|e| e.to_string())?;
         println!("{json}");
@@ -377,13 +395,28 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
     Ok(())
 }
 
+/// The notes `notes --release` asks about: in full with `show`,
+/// otherwise each by its date and file, since they were secret until
+/// now and the file's name gives nothing away.
+fn release_list(lifted: &[notes::Stored], show: bool) -> String {
+    match show {
+        true => notes::format_list(lifted),
+        false => lifted
+            .iter()
+            .map(|s| format!("{} {}\n", s.note.date, s.path.display()))
+            .collect(),
+    }
+}
+
 /// `notes --release`: move the notes among `selected` that are in a
 /// private directory and no longer embargoed to the first public
-/// directory, after asking unless `yes`.
+/// directory, after asking unless `yes`. The list asked about hides
+/// their links and text unless `show`: they were secret until now.
 fn release_notes(
     dirs: &[notes::NoteDir],
     selected: Vec<notes::Stored>,
     yes: bool,
+    show: bool,
 ) -> Result<(), String> {
     use std::io::IsTerminal;
     let today = chrono::Local::now().date_naive();
@@ -400,7 +433,7 @@ fn release_notes(
         .find(|d| !d.private)
         .ok_or("[notes] lists no public directory to move them to")?
         .path;
-    print!("{}", notes::format_list(&lifted));
+    print!("{}", release_list(&lifted, show));
     let question = format!("Move these {} note(s) to {}?", lifted.len(), to.display());
     if !yes {
         if !std::io::stdin().is_terminal() {
@@ -484,6 +517,20 @@ fn shared_notes(
         );
     }
     kept
+}
+
+/// The notes a report carries ([`shared_notes`]), with the embargoed
+/// ones among them hidden unless --show-embargoed.
+fn report_notes(
+    cli: &ReportArgs,
+    found: Vec<notes::Stored>,
+    listed: impl FnOnce() -> String,
+) -> Vec<notes::Stored> {
+    let carried = shared_notes(cli, found, listed);
+    match cli.show_embargoed {
+        true => carried,
+        false => notes::hide_embargoed(carried, chrono::Local::now().date_naive()),
+    }
 }
 
 /// Whether a source's error says its token was refused or lacks a
@@ -993,9 +1040,10 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             if by_repo {
                 listed.push_str(&by_repo::format_markdown(&by_repo::gather(&unified)));
             }
-            let period_notes = shared_notes(cli, period_notes, || listed.clone());
+            let period_notes = report_notes(cli, period_notes, || listed.clone());
             let (_, rest) = notes::attach(&listed, &period_notes);
-            let notes: Vec<notes::ReportNote> = period_notes
+            let printed: Vec<notes::Stored> = period_notes.iter().map(notes::shown).collect();
+            let notes: Vec<notes::ReportNote> = printed
                 .iter()
                 .enumerate()
                 .map(|(i, stored)| notes::ReportNote {
@@ -1015,9 +1063,13 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         // Last, so each note sits under its item and the rest close
         // the report.
         if cli.notes {
-            let period_notes = shared_notes(cli, period_notes, || md.clone());
+            let period_notes = report_notes(cli, period_notes, || md.clone());
             let (attached, rest) = notes::attach(&md, &period_notes);
-            let rest: Vec<&notes::Stored> = rest.iter().map(|&i| &period_notes[i]).collect();
+            let rest: Vec<notes::Stored> = rest
+                .iter()
+                .map(|&i| notes::shown(&period_notes[i]))
+                .collect();
+            let rest: Vec<&notes::Stored> = rest.iter().collect();
             md = attached;
             let at_terminal = {
                 use std::io::IsTerminal;
@@ -1114,6 +1166,7 @@ mod tests {
         notes::Stored {
             path: "n.md".into(),
             private,
+            hidden: false,
             note: notes::parse(&format!("url: {url}\ndate: 2026-11-18\n\nWhy.\n")).unwrap(),
         }
     }
@@ -1138,6 +1191,54 @@ mod tests {
             panic!("no public note to place")
         });
         assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn a_report_hides_embargoed_notes_unless_asked() {
+        let mut held = stored("https://github.com/o/secret/pull/1", true);
+        held.note.headers = vec![("embargo".into(), "until disclosed".into())];
+        let found = vec![held, stored("https://github.com/o/r/pull/1", false)];
+        let no_listing = || -> String { panic!("a private report shows every note") };
+        let carried = report_notes(
+            &report_args(&["--notes", "--private"]),
+            found.clone(),
+            no_listing,
+        );
+        assert!(carried[0].hidden && !carried[1].hidden);
+        assert_eq!(carried[0].note.text, notes::HIDDEN_TEXT);
+        let carried = report_notes(
+            &report_args(&["--notes", "--private", "--show-embargoed"]),
+            found,
+            no_listing,
+        );
+        assert!(!carried[0].hidden);
+        assert_eq!(carried[0].note.text, "Why.");
+    }
+
+    #[test]
+    fn show_embargoed_needs_a_private_report() {
+        use clap::Parser;
+        let argv = [
+            "sandogasa-report",
+            "report",
+            "-d",
+            "x",
+            "--period",
+            "2026H2",
+        ];
+        let with =
+            |extra: &[&str]| Cli::try_parse_from(argv.iter().chain(extra).copied()).map(|_| ());
+        assert!(with(&["--notes", "--show-embargoed"]).is_err());
+        assert!(with(&["--notes", "--private", "--show-embargoed"]).is_ok());
+    }
+
+    #[test]
+    fn release_lists_notes_by_their_files_unless_asked() {
+        let mut s = stored("https://github.com/o/secret/pull/1", true);
+        s.path = "/e/2026/2026-11-18T1032-box.md".into();
+        let list = release_list(std::slice::from_ref(&s), false);
+        assert_eq!(list, "2026-11-18 /e/2026/2026-11-18T1032-box.md\n");
+        assert!(release_list(&[s], true).contains("o/secret"));
     }
 
     #[test]
@@ -1168,7 +1269,7 @@ mod tests {
         let lifted = write("a.md", "lifted 2026-11-19");
         let held = write("b.md", "until disclosed");
         let (found, _) = notes::load_dirs(&dirs);
-        release_notes(&dirs, found, true).unwrap();
+        release_notes(&dirs, found, true, false).unwrap();
         assert!(!lifted.exists());
         assert!(public.path().join("2026/a.md").exists());
         assert!(held.exists());
@@ -1178,7 +1279,7 @@ mod tests {
         let next = write("e.md", "lifted 2026-11-19");
         let (found, _) = notes::load_dirs(&dirs);
         std::fs::remove_file(&gone).unwrap();
-        let err = release_notes(&dirs, found, true).unwrap_err();
+        let err = release_notes(&dirs, found, true, false).unwrap_err();
         assert!(err.starts_with("1 of 2 note(s)"), "{err}");
         assert!(!next.exists());
         assert!(public.path().join("2026/e.md").exists());
@@ -1186,10 +1287,10 @@ mod tests {
 
         // Nothing left to move; no public directory to move to.
         let (found, _) = notes::load_dirs(&dirs);
-        release_notes(&dirs, found, true).unwrap();
+        release_notes(&dirs, found, true, false).unwrap();
         write("c.md", "lifted 2026-11-19");
         let (found, _) = notes::load_dirs(&dirs[1..]);
-        let err = release_notes(&dirs[1..], found, true).unwrap_err();
+        let err = release_notes(&dirs[1..], found, true, false).unwrap_err();
         assert!(err.contains("no public directory"), "{err}");
     }
 
@@ -1264,6 +1365,7 @@ mod tests {
             detailed: 0,
             json: false,
             notes: false,
+            show_embargoed: false,
             unattached_notes: None,
             output: None,
             private: false,
@@ -1294,6 +1396,7 @@ mod tests {
             detailed: 0,
             json: false,
             notes: false,
+            show_embargoed: false,
             unattached_notes: None,
             output: None,
             private: false,

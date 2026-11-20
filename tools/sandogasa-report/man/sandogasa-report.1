@@ -63,15 +63,13 @@ Print help
 <\fITEXT\fR>
 The note; `\-` reads it from standard input
 .SS sandogasa-report notes
-\fBsandogasa\-report notes\fR [\fB\-\-json\fR] [\fB\-\-release\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-url\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-report notes\fR [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-url\fR] [\fB\-\-release\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-\-show\-embargoed\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 List recorded notes
 .TP
-\fB\-\-json\fR
-Output as JSON
-.TP
-\fB\-\-release\fR
-Move the notes in private directories whose embargo has lifted to the first public one, after asking
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SELECTION
 .TP
 \fB\-\-since\fR \fI<SINCE>\fR
 Only notes from this day on (YYYY\-MM\-DD)
@@ -81,14 +79,22 @@ Only notes up to this day (YYYY\-MM\-DD)
 .TP
 \fB\-\-url\fR \fI<URL>\fR
 Only notes about this URL
+.SH WRITING
+.TP
+\fB\-\-release\fR
+Move the notes in private directories whose embargo has lifted to the first public one, after asking
 .TP
 \fB\-y\fR, \fB\-\-yes\fR
 With \-\-release, move them without asking
+.SH OUTPUT
 .TP
-\fB\-h\fR, \fB\-\-help\fR
-Print help
+\fB\-\-json\fR
+Output as JSON
+.TP
+\fB\-\-show\-embargoed\fR
+Print the link and text of embargoed notes, which are otherwise hidden so a screen or a pasted log does not give the issue away
 .SS sandogasa-report report
-\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bts\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-pagure\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-\-notes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-private\fR] [\fB\-\-unattached\-notes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
+\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bts\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-pagure\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-\-notes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-private\fR] [\fB\-\-show\-embargoed\fR] [\fB\-\-unattached\-notes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
 .PP
 Generate an activity report across one or more domains
 .TP
@@ -168,6 +174,9 @@ Write output to file instead of stdout
 .TP
 \fB\-\-private\fR
 Make a report for your own use: include GitHub work in private repositories and, with \-\-notes, the notes on items the report does not show, those without a URL, and embargoed ones. Without it, the GitHub section keeps to public repositories and a note shows only under an item the report shows (with \-\-json, any item it carries). The other forges\*(Aq sections include private projects your tokens can see either way
+.TP
+\fB\-\-show\-embargoed\fR
+With \-\-notes and \-\-private, print the link and text of embargoed notes, which are otherwise hidden so a screen or a pasted log does not give the issue away
 .TP
 \fB\-\-unattached\-notes\fR \fI<WHAT>\fR
 With \-\-notes and \-\-private, what the Markdown report does with the notes no item took (default: [notes] unattached in the config, or include). \-\-json keeps them, marked unattached

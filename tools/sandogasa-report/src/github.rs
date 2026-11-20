@@ -1965,6 +1965,7 @@ mod tests {
         let note = crate::notes::Stored {
             path: "n.md".into(),
             private: false,
+            hidden: false,
             note: crate::notes::parse(
                 "url: https://github.com/o/b/issues/3#issuecomment-9\ndate: 2026-02-03\n\nAsked for the reporter's logs.\n",
             )

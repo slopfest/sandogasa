@@ -54,6 +54,10 @@ pub struct Stored {
     pub path: PathBuf,
     /// Whether it is in a private directory.
     pub private: bool,
+    /// Whether its URL and text are withheld from what is printed,
+    /// for an embargoed note (see [`hide_embargoed`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     #[serde(flatten)]
     pub note: Note,
 }
@@ -448,6 +452,7 @@ pub fn load_all(dir: &Path) -> (Vec<Stored>, Vec<String>) {
             Ok(note) => found.push(Stored {
                 path,
                 private: false,
+                hidden: false,
                 note,
             }),
             Err(e) => warnings.push(format!("skipping {}: {e}", path.display())),
@@ -941,6 +946,45 @@ pub fn embargoed(note: &Note, today: NaiveDate) -> bool {
         && !lifted(note, today)
 }
 
+/// What a hidden note says in place of its text.
+pub const HIDDEN_TEXT: &str = "(embargoed: link and text hidden; --show-embargoed shows them)";
+
+/// `stored` with its text withheld, and its URL too once it is
+/// [`shown`]; it is still placed under its item by the URL, which no
+/// printed output carries.
+pub fn hide(stored: Stored) -> Stored {
+    Stored {
+        hidden: true,
+        note: Note {
+            text: HIDDEN_TEXT.into(),
+            ..stored.note
+        },
+        ..stored
+    }
+}
+
+/// `notes` with each note still embargoed by `today` [`hide`]n: the
+/// project its URL names, or what its text says, could give the issue
+/// away on a screen or in a pasted log.
+pub fn hide_embargoed(notes: Vec<Stored>, today: NaiveDate) -> Vec<Stored> {
+    notes
+        .into_iter()
+        .map(|s| match embargoed(&s.note, today) {
+            true => hide(s),
+            false => s,
+        })
+        .collect()
+}
+
+/// `stored` as it is printed: a hidden note without its URL.
+pub fn shown(stored: &Stored) -> Stored {
+    let mut s = stored.clone();
+    if s.hidden {
+        s.note.url = None;
+    }
+    s
+}
+
 /// The notes a report to share may carry, and how many it leaves out:
 /// only those that go under an item `listed` (the report as it will
 /// be read) shows, so a note is never more private than the line it
@@ -985,8 +1029,10 @@ pub fn format_section(notes: &[&Stored], detail: u8) -> String {
     out.push_str("\n\n");
     let mut by_host: std::collections::BTreeMap<String, Vec<&Stored>> = Default::default();
     let mut other: Vec<&Stored> = Vec::new();
+    let mut hidden: Vec<&Stored> = Vec::new();
     for s in notes {
         match s.note.url.as_deref().and_then(url_host) {
+            _ if s.hidden => hidden.push(s),
             Some(host) => by_host.entry(host).or_default().push(s),
             None => other.push(s),
         }
@@ -1000,9 +1046,12 @@ pub fn format_section(notes: &[&Stored], detail: u8) -> String {
         }
         out.push('\n');
     }
-    if !other.is_empty() {
-        out.push_str("### Without a link\n\n");
-        for s in other {
+    for (heading, notes) in [("Without a link", other), ("Embargoed", hidden)] {
+        if notes.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("### {heading}\n\n"));
+        for s in notes {
             out.push_str(&format!("- {}\n", s.note.date));
             out.push_str(&quoted(&s.note, 2));
         }
@@ -1269,6 +1318,7 @@ mod tests {
         let stored = |url: Option<&str>, text: &str| Stored {
             path: PathBuf::from("n.md"),
             private: false,
+            hidden: false,
             note: Note {
                 url: url.map(String::from),
                 date: day("2026-11-18"),
@@ -1807,6 +1857,7 @@ mod tests {
         let stored = |note| Stored {
             path: PathBuf::from("p"),
             private: false,
+            hidden: false,
             note,
         };
         assert_eq!(
@@ -1821,6 +1872,7 @@ mod tests {
         let s = Stored {
             path: PathBuf::from("/n/2026/x.md"),
             private: false,
+            hidden: false,
             note: note(Some("https://x/1"), "2026-11-18", "Why."),
         };
         let v = serde_json::to_value(&s).unwrap();
@@ -1997,6 +2049,7 @@ mod tests {
         let stored = Stored {
             path: path.clone(),
             private: true,
+            hidden: false,
             note: n,
         };
         let dest = release(&stored, public.path(), day("2026-12-02")).unwrap();
@@ -2032,5 +2085,55 @@ mod tests {
             .unwrap()
             .collect();
         assert_eq!(left.len(), 2);
+    }
+
+    #[test]
+    fn an_embargoed_note_is_printed_without_its_link_or_text() {
+        let today = day("2026-11-20");
+        let mut held = note(
+            Some("https://github.com/o/secret/pull/1"),
+            "2026-11-18",
+            "The fix.",
+        );
+        held.headers = vec![("embargo".into(), "until disclosed".into())];
+        let mut past = held.clone();
+        past.headers = vec![("embargo".into(), "until 2026-11-19".into())];
+        let stored = |note| Stored {
+            path: PathBuf::from("p"),
+            private: true,
+            hidden: false,
+            note,
+        };
+        let notes = hide_embargoed(vec![stored(held), stored(past)], today);
+        assert!(notes[0].hidden && !notes[1].hidden);
+        assert_eq!(notes[0].note.text, HIDDEN_TEXT);
+        // Still placed under its item by the URL.
+        let listed = "- [o/secret#1](https://github.com/o/secret/pull/1) x\n";
+        let (md, rest) = attach(listed, &notes[..1]);
+        assert!(rest.is_empty() && md.contains(HIDDEN_TEXT), "{md}");
+        assert!(!md.contains("The fix."), "{md}");
+        // Printed without it, in text and JSON.
+        let printed: Vec<Stored> = notes.iter().map(shown).collect();
+        let text = format_list(&printed[..1]);
+        assert!(
+            !text.contains("secret") && !text.contains("The fix."),
+            "{text}"
+        );
+        assert!(
+            text.contains("embargo") || text.contains(HIDDEN_TEXT),
+            "{text}"
+        );
+        let json = serde_json::to_value(&printed[0]).unwrap();
+        assert_eq!(json["hidden"], true);
+        assert!(json.get("url").is_none_or(|u| u.is_null()), "{json}");
+        assert!(!json.to_string().contains("secret"), "{json}");
+        // Nor in the section of notes no item took.
+        let section = format_section(&[&printed[0]], 2);
+        assert!(
+            !section.contains("secret") && section.contains(HIDDEN_TEXT),
+            "{section}"
+        );
+        // One whose day has come is printed in full.
+        assert!(format_list(&printed[1..]).contains("The fix."));
     }
 }
