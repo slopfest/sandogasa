@@ -196,6 +196,36 @@ fixtures for a model deserialize the JSON the API would return
 (`serde_json::from_value(json!({ … }))`), which is also the path the
 real data takes; the workspace's own tests all do this now.
 
+## Extensible APIs before 1.0
+
+After 1.0, a change that breaks a library crate's callers is a major
+release. Today many public types still break when they grow: enums
+without `#[non_exhaustive]`, which a new variant breaks, structs that
+callers build with literals, functions whose next option is another
+positional parameter, and errors returned as `String`, which can only
+become a typed error by breaking callers. #216 lists them, with a
+census from 2026-11-22.
+
+Fixing these is itself breaking, so it costs a minor bump while the
+workspace is pre-1.0. Rather than spend a release on it, the work rides
+along with releases that need a minor bump for another reason: when
+`cargo semver-checks` reports a break, or a breaking change is planned,
+some of #216's items go into the same release. The workspace shares one
+version, so one break anywhere already pays for this in every crate.
+
+Every crate and tool keeps sharing one version through 1.0 and after,
+and goes to 1.0 together. Fedora and EPEL package the workspace as one
+source and update it as one, so separate version lines would only add
+bookkeeping. (Debian is planned to get dbranch and the crates it needs,
+at the same shared version.) The cost is that a break in one crate
+bumps the major version of all of them after 1.0, which is one more
+reason to finish #216 before then.
+
+New code avoids adding to the backlog: a new public enum is
+`#[non_exhaustive]` unless it is closed by nature (say why in a
+comment), a struct callers fill in has a constructor or `Default`, and
+a function that might grow options takes an options struct.
+
 ## The MSRV is 1.95, and EPEL waits for RHEL's rust to catch up
 
 `sandogasa-0.24.1` failed to build for EPEL 9 with `` `if let` guards
