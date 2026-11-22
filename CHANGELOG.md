@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### fedora-cve-triage's claim prompt calls only the bugs it closes closed
+
+On 2026-11-22, `fedora-cve-triage` moved 8 misfiled bugs from epel10
+to epel9, closing none of them, and then asked "Also claim ownership
+of the 8 bug(s) being closed?". The `bodhi-check` check also counted a
+late-filed bug twice when it closed it as well.
+
+The offer to claim still covers every bug written, open or closed.
+When some stay open, the prompt now says "the 8 bug(s) being
+updated", adding how many of them are closed, and counts each bug
+once. A run that only asks questions with needinfo offers no claim.
+
 ### hs-relmon leaves an issue open until it reaches the version it asks for, and refreshes its table when closing
 
 On 2026-11-20, `hs-relmon check-manifest --package openssh` closed
