@@ -20,6 +20,16 @@ GitHub's reason. sandogasa-github gains `current_repo_names`, the
 batched lookup. `notes --url` still matches the URL as written.
 Refs #217.
 
+### koji-diff fetches build logs with a timeout and its user agent
+
+koji-diff downloaded build logs from the packages tree with a bare
+request: no timeout, so a stalled server could hang it, and no user
+agent. It also left the TLS provider to whatever code ran before it.
+The binary installs that provider at startup, but in the tests it
+depended on their order, and CI failed on 890a9937 with "No provider
+set". The download now goes through the shared HTTP client builder,
+which sets all three.
+
 ### sandogasa-report lists Launchpad PPA uploads
 
 Source packages uploaded to Launchpad PPAs appeared in no report, so a

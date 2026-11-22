@@ -10,7 +10,7 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
-sandogasa-cli = { workspace = true }
+sandogasa-cli = { workspace = true, features = ["http"] }
 sandogasa-kojihub = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

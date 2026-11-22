@@ -290,8 +290,20 @@ fn build_log_url(topurl: &str, build: &BuildInfo, arch: &str, filename: &str) ->
 
 /// The body of `url`, retrying transient failures.
 fn fetch_text(url: &str) -> Result<String, Error> {
+    // The shared builder installs the TLS provider, which a bare
+    // `reqwest::blocking::get` would leave to whichever code ran first,
+    // and sets the user agent and timeout.
+    let client = sandogasa_cli::http::blocking_builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .build()
+    .map_err(|e| Error::Parse(format!("HTTP client setup: {e}")))?;
     retry(DEFAULT_RETRIES, || {
-        let response = reqwest::blocking::get(url)
+        let response = client
+            .get(url)
+            .send()
             .map_err(|e| Error::Parse(format!("failed to fetch {url}: {e}")))?;
         if !response.status().is_success() {
             return Err(Error::Parse(format!("{url}: HTTP {}", response.status())));
