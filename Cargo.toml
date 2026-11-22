@@ -65,7 +65,7 @@ edition = "2024"
 # builds wait for their rust rebase — see DEVELOPMENT.md.
 rust-version = "1.95"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/slopfest/sandogasa"
+repository = "https://github.com/michel-slm/sandogasa"
 # Cargo treats this as optional, but a crate without it gives
 # packagers nothing to put in a copyright file: debcargo writes
 # `Copyright: UNKNOWN-AUTHORS` and leaves a FIXME for every crate.

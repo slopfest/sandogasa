@@ -55,7 +55,7 @@ cargo binstall dbranch
 
 That still needs cargo, since `binstall` is a cargo subcommand. With no
 Rust installed at all, download the archive for your architecture from
-the [releases page](https://github.com/slopfest/sandogasa/releases) and
+the [releases page](https://github.com/michel-slm/sandogasa/releases) and
 put `dbranch` on your `PATH`.
 
 The binaries are statically linked against musl, for x86_64 and

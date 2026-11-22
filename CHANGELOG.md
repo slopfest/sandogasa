@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### The repository moved to michel-slm/sandogasa
+
+On 2026-11-22 the repository moved from the slopfest organization to
+https://github.com/michel-slm/sandogasa. GitHub redirects the old
+URLs, including clones and pushes, as long as no new repository takes
+the old name. The crates' `repository` field, the READMEs, the release
+check's and fedora-review-digest's user agents, and the links in
+CONTRIBUTING.md now name the new location; crates.io shows it from the
+next publish. Packagers should update a spec's `URL:` and `Source:` to
+match.
+
 ### sandogasa-report keeps notes attached after a repository moves
 
 A note written before its repository moved to another owner, such as

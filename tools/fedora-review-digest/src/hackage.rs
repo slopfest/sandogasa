@@ -12,7 +12,7 @@ pub fn hackage_argv(name: &str) -> Vec<String> {
         "curl".into(),
         "-sf".into(),
         "-A".into(),
-        "fedora-review-digest (https://github.com/slopfest/sandogasa)".into(),
+        "fedora-review-digest (https://github.com/michel-slm/sandogasa)".into(),
         "-H".into(),
         "Accept: application/json".into(),
         format!("https://hackage.haskell.org/package/{name}/preferred"),

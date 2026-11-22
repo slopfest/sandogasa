@@ -28,7 +28,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-UA="${CRATES_IO_USER_AGENT:-sandogasa-release-check (https://github.com/slopfest/sandogasa)}"
+UA="${CRATES_IO_USER_AGENT:-sandogasa-release-check (https://github.com/michel-slm/sandogasa)}"
 
 # Publishable workspace members, and the version to look for. Taken
 # from cargo metadata rather than a directory listing so a crate

@@ -13,7 +13,7 @@ pub fn pypi_argv(name: &str) -> Vec<String> {
         // -L: PyPI redirects a name that is not the canonical one.
         "-sfL".into(),
         "-A".into(),
-        "fedora-review-digest (https://github.com/slopfest/sandogasa)".into(),
+        "fedora-review-digest (https://github.com/michel-slm/sandogasa)".into(),
         format!("https://pypi.org/pypi/{name}/json"),
     ]
 }

@@ -561,14 +561,14 @@ nothing installed. Published ones
 are attached to a `koji-lag-store-*` release of this repository, since a
 gigabyte belongs on a release rather than in a checkout:
 
-<https://github.com/slopfest/sandogasa/releases>
+<https://github.com/michel-slm/sandogasa/releases>
 
 `fetch-store.sh` does the whole job — download, verify, decompress — if you
 have it:
 
 ```sh
 scripts/fetch-store.sh \
-  https://github.com/slopfest/sandogasa/releases/download/koji-lag-store-2026-08-19/lag-2024-12-24-to-2026-08-19-schema2.sqlite.zst
+  https://github.com/michel-slm/sandogasa/releases/download/koji-lag-store-2026-08-19/lag-2024-12-24-to-2026-08-19-schema2.sqlite.zst
 ```
 
 **It is not shipped by `cargo install`**, which places binaries and nothing
@@ -577,7 +577,7 @@ distribution package may install it under a name of its own; check what your
 package provides. With neither, the four commands it wraps are no harder:
 
 ```sh
-BASE=https://github.com/slopfest/sandogasa/releases/download/koji-lag-store-2026-08-19
+BASE=https://github.com/michel-slm/sandogasa/releases/download/koji-lag-store-2026-08-19
 NAME=lag-2024-12-24-to-2026-08-19-schema2.sqlite.zst
 curl -LO "$BASE/$NAME" && curl -LO "$BASE/$NAME.sha256"
 sha256sum --check "$NAME.sha256" && zstd -d "$NAME" -o lag.sqlite

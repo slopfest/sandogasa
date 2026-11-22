@@ -14,7 +14,7 @@ pub fn crates_io_argv(name: &str) -> Vec<String> {
         "curl".into(),
         "-sf".into(),
         "-A".into(),
-        "fedora-review-digest (https://github.com/slopfest/sandogasa)".into(),
+        "fedora-review-digest (https://github.com/michel-slm/sandogasa)".into(),
         format!("https://crates.io/api/v1/crates/{name}"),
     ]
 }

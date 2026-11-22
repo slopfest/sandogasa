@@ -8,7 +8,7 @@ activity-tracking crates useful more broadly. Library crates live in
 `crates/`, binaries in `tools/`. Contributions are welcome under the
 terms below.
 
-Issues and pull requests: <https://github.com/slopfest/sandogasa>.
+Issues and pull requests: <https://github.com/michel-slm/sandogasa>.
 
 ## Work from a specific issue
 
