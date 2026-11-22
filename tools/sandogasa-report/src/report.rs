@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use crate::{bodhi, bugzilla, debbugs, forgejo, github, gitlab, koji, pagure, sourcehut};
+use crate::{
+    bodhi, bugzilla, debbugs, forgejo, github, gitlab, koji, launchpad, pagure, sourcehut,
+};
 
 /// Full activity report.
 ///
@@ -69,6 +71,9 @@ pub struct DomainReport {
     /// Debian bug tracker section for this domain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bts: Option<debbugs::BtsReport>,
+    /// Launchpad PPA uploads for this domain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launchpad: Option<launchpad::LaunchpadReport>,
 }
 
 impl DomainReport {
@@ -83,6 +88,7 @@ impl DomainReport {
             || self.sourcehut.is_some()
             || self.pagure.is_some()
             || self.bts.is_some()
+            || self.launchpad.is_some()
     }
 }
 
@@ -232,6 +238,9 @@ fn format_domain(
     if let Some(ref bts_report) = dr.bts {
         body.push_str(&debbugs::format_markdown(bts_report, detail));
     }
+    if let Some(ref lp_report) = dr.launchpad {
+        body.push_str(&launchpad::format_markdown(lp_report, detail));
+    }
     if body.is_empty() {
         return String::new();
     }
@@ -266,6 +275,7 @@ mod tests {
             sourcehut: None,
             pagure: None,
             bts: None,
+            launchpad: None,
         }
     }
 
@@ -352,6 +362,23 @@ mod tests {
         let pu_pos = md.find("## proposed_updates").unwrap();
         let hs_pos = md.find("## hyperscale").unwrap();
         assert!(pu_pos < hs_pos, "blocks follow CLI order, not alphabetical");
+    }
+
+    #[test]
+    fn a_domain_with_launchpad_uploads_shows_them() {
+        let mut ubuntu = domain("ubuntu");
+        assert!(!ubuntu.has_content());
+        ubuntu.launchpad = Some(launchpad::LaunchpadReport {
+            user: "me".to_string(),
+            ..Default::default()
+        });
+        assert!(ubuntu.has_content());
+        let r = report(None, "ubuntu", vec![ubuntu]);
+        let md = format_markdown(&r, 1, &BTreeMap::new());
+        assert!(
+            md.contains("## ubuntu\n\n### Launchpad PPAs (~me)\n\nNo PPA uploads.\n"),
+            "{md}"
+        );
     }
 
     #[test]

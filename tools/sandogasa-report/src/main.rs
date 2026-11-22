@@ -17,6 +17,7 @@ mod forgejo;
 mod github;
 mod gitlab;
 mod koji;
+mod launchpad;
 mod notes;
 mod pagure;
 mod report;
@@ -183,6 +184,10 @@ struct ReportArgs {
     /// Skip Koji queries.
     #[arg(long, help_heading = "Sources")]
     no_koji: bool,
+
+    /// Skip Launchpad queries.
+    #[arg(long, help_heading = "Sources")]
+    no_launchpad: bool,
 
     /// Skip Pagure queries.
     #[arg(long, help_heading = "Sources")]
@@ -727,6 +732,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             sourcehut: None,
             pagure: None,
             bts: None,
+            launchpad: None,
         };
 
         // Bodhi (per-domain).
@@ -910,6 +916,32 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
                         None,
                     ),
                 }
+            }
+        }
+
+        // Launchpad (per-domain): the PPA uploads of the profile's
+        // Launchpad login, read anonymously.
+        if domain.reads_launchpad() && !cli.no_launchpad {
+            match profile.and_then(|p| p.launchpad.clone()) {
+                None if profile.is_none() => eprintln!(
+                    "warning: domain '{name}' reads Launchpad, which needs a profile \
+                     (--user) with a launchpad login, skipping"
+                ),
+                None => eprintln!(
+                    "warning: domain '{name}' reads Launchpad, but the profile names no \
+                     launchpad login — `sandogasa-report config --missing`, skipping"
+                ),
+                Some(login) => match launchpad::launchpad_report(
+                    launchpad::DEFAULT_INSTANCE,
+                    &login,
+                    &domain.launchpad_ppas,
+                    since,
+                    until,
+                    cli.verbose,
+                ) {
+                    Ok(lp_report) => dr.launchpad = Some(lp_report),
+                    Err(e) => leave_out(&mut left_out, format!("launchpad ({name})"), &e, None),
+                },
             }
         }
 
@@ -1357,6 +1389,7 @@ mod tests {
             no_bugzilla: false,
             no_bodhi: false,
             no_koji: false,
+            no_launchpad: false,
             no_gitlab: false,
             no_pagure: false,
             no_github: false,
@@ -1388,6 +1421,7 @@ mod tests {
             no_bugzilla: false,
             no_bodhi: false,
             no_koji: false,
+            no_launchpad: false,
             no_gitlab: false,
             no_pagure: false,
             no_github: false,

@@ -122,6 +122,15 @@ bts = true
 instance = "https://salsa.debian.org"
 # No group filter — all user activity on salsa counts.
 
+# --- Ubuntu ---
+
+[domains.ubuntu]
+# Launchpad: the source packages uploaded to the profile's own PPAs, by
+# its launchpad login (`sandogasa-report config --missing` asks for it).
+# Team PPAs you upload to are read too when listed, e.g.
+# launchpad_ppas = ["~team/ubuntu/name"]
+launchpad = true
+
 # --- Upstream forges (GitHub + Forgejo + Sourcehut) ---
 
 # All your github.com PR / commit / review activity, any owner.

@@ -392,6 +392,7 @@ mod tests {
                 sourcehut: None,
                 pagure: None,
                 bts: None,
+                launchpad: None,
             }],
             bugzilla: vec![],
             left_out: vec![],

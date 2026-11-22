@@ -115,6 +115,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         .filter_map(|d| d.pagure.as_ref().map(|p| p.instance.clone()))
         .collect();
     let bts = merged.domains.values().any(|d| d.bts);
+    let launchpad = merged.domains.values().any(|d| d.reads_launchpad());
     // Bugzilla instances other than Red Hat's, whose email FASJSON
     // cannot supply.
     let bugzilla_instances: BTreeSet<String> = merged
@@ -195,6 +196,7 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
             &profile_key,
             existing_profile.as_ref(),
             bts,
+            launchpad,
             &gitlab_instances,
             &github_instances,
             &forgejo_instances,
@@ -464,6 +466,7 @@ fn prompt_profile(
     profile_key: &str,
     existing: Option<&config::User>,
     bts: bool,
+    launchpad: bool,
     gitlab_instances: &BTreeSet<String>,
     github_instances: &BTreeSet<String>,
     forgejo_instances: &BTreeSet<String>,
@@ -628,6 +631,37 @@ fn prompt_profile(
             ),
             ask,
         )?;
+    }
+
+    // The Launchpad login whose PPA uploads are listed; only when a
+    // domain reads Launchpad.
+    if launchpad {
+        let current = existing
+            .and_then(|p| p.launchpad.clone())
+            .unwrap_or_default();
+        let check = |answer: &str| -> Result<(), String> {
+            let login = answer.trim().trim_start_matches('~');
+            if login.is_empty() || crate::launchpad::valid_login(login) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{login}` is not a Launchpad login (lowercase letters, digits, + . -)"
+                ))
+            }
+        };
+        let answer = ask.field(
+            &Setting::new("Launchpad", "login, without the ~")
+                .optional()
+                .validated(&check),
+            &current,
+            true,
+            !current.is_empty(),
+        )?;
+        let login = answer.trim().trim_start_matches('~');
+        if !login.is_empty() && login != current {
+            overlay_set_str(overlay, &["users", profile_key, "launchpad"], login);
+            changed = true;
+        }
     }
     Ok(changed)
 }
@@ -2071,11 +2105,15 @@ mod tests {
             // Debian's, checked as emails: the bad one asked again.
             "me@debian.example, not-an-email",
             "me@debian.example, me@example.org",
+            // A URL is not a login: asked again.
+            "https://launchpad.net/~me",
+            "~me-lp",
         ];
         let changed = prompt_profile(
             &mut overlay,
             "me",
             None,
+            true,
             true,
             &set(&["https://gitlab.com"]),
             &set(&["https://api.github.com"]),
@@ -2131,6 +2169,7 @@ mod tests {
             overlay["users"]["me"]["debian_emails"],
             toml::Value::Array(vec!["me@debian.example".into(), "me@example.org".into()])
         );
+        assert_eq!(get(&["users", "me", "launchpad"]).as_deref(), Some("me-lp"));
     }
 
     /// A blank answer for a list of emails is written as an empty list,

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### sandogasa-report lists Launchpad PPA uploads
+
+Source packages uploaded to Launchpad PPAs appeared in no report, so a
+status update covering Ubuntu packaging work had to be written from
+memory or from the PPA pages.
+
+A domain with `launchpad = true` now gets a Launchpad section: the
+source packages uploaded in the window to the PPAs of the profile's new
+`launchpad` login, by PPA, with each upload's version, series, date and,
+when it is no longer published, its status. One `--detailed` gives each
+package's versions and the series they were built for, so one release
+built for three series reads as one version. Launchpad has no call
+listing every archive a person uploaded to, so team PPAs are named in
+the domain's `launchpad_ppas` (`~team/ubuntu/name`). In any PPA only the
+uploads the person signed or copied count, since an owner can give
+others upload rights to a personal PPA too. Everything is read
+anonymously from Launchpad's API, a few PPAs at a time; a private PPA,
+or one that does not answer, is left out and named with the reason, and
+the rest are reported. The by-repository view does not list PPA uploads,
+a PPA not being a repository. `sandogasa-report config` asks for the
+login when a domain reads Launchpad, `--no-launchpad` skips it, and the
+example config gains an `ubuntu` domain. Resolves #201.
+
 ### timebook supports monthly recurrence, with a new add command
 
 Fedora Calendar repeats an entry every 7, 14, 21 or 28 days only, so the

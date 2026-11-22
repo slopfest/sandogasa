@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH sandogasa-report 1 2026-11-20 "sandogasa 0.29.0" "Sandogasa Manual"
+.TH sandogasa-report 1 2026-11-22 "sandogasa 0.29.0" "Sandogasa Manual"
 .SH NAME
 sandogasa\-report \- Activity reporting for Fedora, EPEL, and CentOS SIG packaging work
 .SH SYNOPSIS
@@ -94,7 +94,7 @@ Output as JSON
 \fB\-\-show\-embargoed\fR
 Print the link and text of embargoed notes, which are otherwise hidden so a screen or a pasted log does not give the issue away
 .SS sandogasa-report report
-\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bts\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-pagure\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-\-notes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-private\fR] [\fB\-\-show\-embargoed\fR] [\fB\-\-unattached\-notes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
+\fBsandogasa\-report report\fR [\fB\-\-period\fR] [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-u\fR|\fB\-\-user\fR] [\fB\-c\fR|\fB\-\-config\fR] [\fB\-\-no\-bodhi\fR] [\fB\-\-no\-bts\fR] [\fB\-\-no\-bugzilla\fR] [\fB\-\-no\-forgejo\fR] [\fB\-\-no\-github\fR] [\fB\-\-no\-gitlab\fR] [\fB\-\-no\-koji\fR] [\fB\-\-no\-launchpad\fR] [\fB\-\-no\-pagure\fR] [\fB\-\-no\-sourcehut\fR] [\fB\-\-by\fR] [\fB\-\-detailed\fR]... [\fB\-\-json\fR] [\fB\-\-notes\fR] [\fB\-o\fR|\fB\-\-output\fR] [\fB\-\-private\fR] [\fB\-\-show\-embargoed\fR] [\fB\-\-unattached\-notes\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-d\fR|\fB\-\-domain\fR>
 .PP
 Generate an activity report across one or more domains
 .TP
@@ -141,6 +141,9 @@ Skip GitLab queries
 .TP
 \fB\-\-no\-koji\fR
 Skip Koji queries
+.TP
+\fB\-\-no\-launchpad\fR
+Skip Launchpad queries
 .TP
 \fB\-\-no\-pagure\fR
 Skip Pagure queries

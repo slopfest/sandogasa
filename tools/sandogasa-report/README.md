@@ -72,6 +72,15 @@ packaging activity across multiple systems:
   profile's `debian_emails`, through the tracker's SOAP interface. A
   bug counts as written to when its log has a message from one of
   those addresses dated in the window.
+- **Launchpad** (with `launchpad = true` on a domain): the source
+  packages uploaded in the window to the PPAs of the profile's
+  `launchpad` login, listed by PPA with their version, series and
+  date. One `--detailed` sums each package up as its versions and
+  the series they were built for, so a release built for three
+  series counts once. Team PPAs are read as well when the domain lists them in
+  `launchpad_ppas` (`["~team/ubuntu/name"]`). Only the uploads the
+  person signed or copied count. Read anonymously, so a private PPA
+  is left out, by name, as is one that does not answer.
 - **Sourcehut** (sr.ht): patches sent / applied (lists.sr.ht — the
   patch-based PR analog), tickets opened / closed (todo.sr.ht), and
   commits in your own repos (git.sr.ht), split into yours vs third-party.

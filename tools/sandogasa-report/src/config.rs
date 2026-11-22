@@ -149,6 +149,11 @@ pub struct User {
     /// reports), which the Debian bug tracker knows them by.
     #[serde(default)]
     pub debian_emails: Vec<String>,
+
+    /// The person's Launchpad login (without the leading `~`), whose
+    /// PPA uploads the Launchpad section lists.
+    #[serde(default)]
+    pub launchpad: Option<String>,
 }
 
 impl User {
@@ -219,6 +224,16 @@ pub struct DomainConfig {
     /// written to, by the profile's `debian_emails`.
     #[serde(default)]
     pub bts: bool,
+
+    /// Include Launchpad: the source packages uploaded to the profile's
+    /// own PPAs in the window, by its `launchpad` login.
+    #[serde(default)]
+    pub launchpad: bool,
+
+    /// Team PPAs to read as well (`~team/ubuntu/name`), for the uploads
+    /// the person made to them; listing any turns Launchpad on.
+    #[serde(default)]
+    pub launchpad_ppas: Vec<String>,
 
     /// Bodhi release name patterns (e.g. "F*", "EPEL-*").
     #[serde(default)]
@@ -327,6 +342,12 @@ impl Default for BugzillaConfig {
 }
 
 impl DomainConfig {
+    /// Whether this domain reads Launchpad: `launchpad = true`, or any
+    /// team PPA listed.
+    pub fn reads_launchpad(&self) -> bool {
+        self.launchpad || !self.launchpad_ppas.is_empty()
+    }
+
     /// The Bugzilla this domain reports on, if any.
     pub fn bugzilla(&self) -> Option<BugzillaConfig> {
         match &self.bugzilla {
@@ -528,6 +549,30 @@ mod tests {
 
     fn toml_table(input: &str) -> toml::Value {
         toml::from_str(input).unwrap()
+    }
+
+    #[test]
+    fn launchpad_is_read_when_asked_or_when_team_ppas_are_listed() {
+        let cfg: ReportConfig = toml::from_str(
+            r#"
+[users.me]
+launchpad = "me-lp"
+
+[domains.own]
+launchpad = true
+
+[domains.teams]
+launchpad_ppas = ["~team/ubuntu/ppa"]
+
+[domains.none]
+bodhi = true
+"#,
+        )
+        .unwrap();
+        assert!(cfg.domains["own"].reads_launchpad());
+        assert!(cfg.domains["teams"].reads_launchpad());
+        assert!(!cfg.domains["none"].reads_launchpad());
+        assert_eq!(cfg.users["me"].launchpad.as_deref(), Some("me-lp"));
     }
 
     #[test]
