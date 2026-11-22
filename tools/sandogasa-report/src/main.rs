@@ -548,6 +548,7 @@ fn follow_moves(
     cfg: &config::ReportConfig,
     reads_github: bool,
     verbose: bool,
+    interactive: bool,
 ) -> Vec<notes::Stored> {
     notes::apply_moves(&mut found, &cfg.notes.moved);
     if !reads_github {
@@ -569,17 +570,35 @@ fn follow_moves(
     };
     let today = chrono::Local::now().date_naive();
     match notes::follow_github_moves(&mut found, listed, today, lookup) {
-        Ok(moves) => {
-            for (old, new) in &moves {
-                eprintln!(
-                    "{old} has moved to {new}; to match its notes without asking \
-                     GitHub, add under [notes.moved]: \"{old}\" = \"{new}\""
-                );
-            }
-        }
+        Ok(moves) if moves.is_empty() => {}
+        Ok(moves) => record_moves(&moves, interactive),
         Err(e) => eprintln!("warning: cannot check whether notes' repositories moved: {e}"),
     }
     found
+}
+
+/// Say which repositories GitHub found moved and, at a terminal, offer
+/// to add them to `[notes.moved]` in the user config, which keeps their
+/// notes matched even once GitHub no longer redirects the old name;
+/// otherwise print the lines to add.
+fn record_moves(moves: &[(String, String)], interactive: bool) {
+    for (old, new) in moves {
+        eprintln!("{old} has moved to {new}");
+    }
+    let cf = sandogasa_config::ConfigFile::for_tool("sandogasa-report");
+    let question = format!("Add to [notes.moved] in {}?", cf.path().display());
+    if interactive && sandogasa_cli::confirm(&question, true).unwrap_or(false) {
+        match notes::save_moves(&cf, moves) {
+            Ok(()) => eprintln!("Saved {} move(s) to {}.", moves.len(), cf.path().display()),
+            Err(e) => eprintln!("warning: {e}"),
+        }
+        return;
+    }
+    eprintln!("To match their notes without asking GitHub, add to the config:\n\n[notes.moved]");
+    for (old, new) in moves {
+        eprintln!("\"{old}\" = \"{new}\"");
+    }
+    eprintln!();
 }
 
 /// Whether a source's error says its token was refused or lacks a
@@ -1122,7 +1141,14 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             if by_repo {
                 listed.push_str(&by_repo::format_markdown(&by_repo::gather(&unified)));
             }
-            let period_notes = follow_moves(period_notes, &listed, &cfg, reads_github, cli.verbose);
+            let period_notes = follow_moves(
+                period_notes,
+                &listed,
+                &cfg,
+                reads_github,
+                cli.verbose,
+                false,
+            );
             let period_notes = report_notes(cli, period_notes, || listed.clone());
             let (_, rest) = notes::attach(&listed, &period_notes);
             let printed: Vec<notes::Stored> = period_notes.iter().map(notes::shown).collect();
@@ -1146,7 +1172,14 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         // Last, so each note sits under its item and the rest close
         // the report.
         if cli.notes {
-            let period_notes = follow_moves(period_notes, &md, &cfg, reads_github, cli.verbose);
+            let period_notes = follow_moves(
+                period_notes,
+                &md,
+                &cfg,
+                reads_github,
+                cli.verbose,
+                std::io::IsTerminal::is_terminal(&std::io::stdin()),
+            );
             let period_notes = report_notes(cli, period_notes, || md.clone());
             let (attached, rest) = notes::attach(&md, &period_notes);
             let rest: Vec<notes::Stored> = rest

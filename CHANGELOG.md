@@ -12,8 +12,10 @@ of a shared report. `[notes.moved]` in the config now maps an old URL
 prefix to its new one, on any forge, before notes are matched. When a
 report reads github.com, the github.com notes still unattached are
 checked with GitHub in one GraphQL request, which follows transfers
-and renames, and each move found is printed with the `[notes.moved]`
-line that matches its notes without the lookup. Notes from a private
+and renames. At a terminal, the moves found are offered for
+`[notes.moved]` in the user config, since the lookup only works while
+GitHub redirects the old name, which ends if a new repository takes
+it; otherwise the lines to add are printed. Notes from a private
 directory and embargoed notes are never sent, and a repository GitHub
 refuses to show, rather than does not find, fails the lookup with
 GitHub's reason. sandogasa-github gains `current_repo_names`, the

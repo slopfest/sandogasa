@@ -722,6 +722,24 @@ pub fn follow_github_moves(
     Ok(moves.into_iter().collect())
 }
 
+/// Add `moves` (old prefix, new prefix) to `[notes.moved]` in the
+/// user config `cf`, keeping everything else the file holds.
+pub fn save_moves(
+    cf: &sandogasa_config::ConfigFile,
+    moves: &[(String, String)],
+) -> Result<(), String> {
+    let moved: toml::Table = moves
+        .iter()
+        .map(|(old, new)| (old.clone(), toml::Value::String(new.clone())))
+        .collect();
+    let mut notes = toml::Table::new();
+    notes.insert("moved".into(), toml::Value::Table(moved));
+    let mut root = toml::Table::new();
+    root.insert("notes".into(), toml::Value::Table(notes));
+    cf.save(&toml::Value::Table(root))
+        .map_err(|e| format!("cannot write {}: {e}", cf.path().display()))
+}
+
 /// The bug number of a Red Hat Bugzilla short form: `rhbz#N`,
 /// `rhbz N`, `RHBZ:N`, any case.
 fn rhbz_id(url: &str) -> Option<&str> {
@@ -2406,6 +2424,49 @@ mod tests {
         assert_eq!(
             notes[0].note.url.as_deref(),
             Some("https://github.com/old/hansei")
+        );
+    }
+
+    #[test]
+    fn found_moves_are_added_to_the_config_and_nothing_else_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "# mine\n[notes]\ndir = \"~/notes\"\n\n[notes.moved]\n\
+             \"github.com/a/b\" = \"github.com/c/b\"\n\n[defaults]\nx = 1\n",
+        )
+        .unwrap();
+        let cf = sandogasa_config::ConfigFile::from_path(path.clone());
+        save_moves(
+            &cf,
+            &[(
+                "github.com/old/hansei".to_string(),
+                "github.com/new/hansei".to_string(),
+            )],
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let cfg: crate::config::ReportConfig = toml::from_str(&text).unwrap();
+        assert_eq!(
+            cfg.notes.moved["github.com/old/hansei"],
+            "github.com/new/hansei"
+        );
+        assert_eq!(cfg.notes.moved["github.com/a/b"], "github.com/c/b");
+        assert_eq!(cfg.notes.dir.as_deref(), Some("~/notes"));
+        assert!(text.starts_with("# mine\n"), "{text}");
+        assert!(text.contains("[defaults]\nx = 1"), "{text}");
+        // A file not there yet is created.
+        let fresh = sandogasa_config::ConfigFile::from_path(dir.path().join("new/config.toml"));
+        save_moves(
+            &fresh,
+            &[("github.com/x/y".into(), "github.com/z/y".into())],
+        )
+        .unwrap();
+        assert!(
+            std::fs::read_to_string(fresh.path())
+                .unwrap()
+                .contains("\"github.com/x/y\" = \"github.com/z/y\"")
         );
     }
 }

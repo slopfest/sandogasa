@@ -338,9 +338,11 @@ and is applied to each note's URL before matching; it matches whole
 path segments in any case, the longest prefix wins, and it covers
 GitHub API URLs too. When the report reads github.com, the github.com
 notes still unattached after that are checked with GitHub in one
-request, which follows transfers and renames; a moved repository is
-reported with the `[notes.moved]` line that matches its notes without
-the lookup. Notes from a private directory, and embargoed notes, are
+request, which follows transfers and renames. At a terminal, the
+moves found are offered for `[notes.moved]` in the user config, so
+their notes keep matching once GitHub stops redirecting the old name
+(when a new repository takes it); otherwise the lines to add are
+printed. Notes from a private directory, and embargoed notes, are
 never part of that request.
 
 Notes no item took close the report in a section of their own,
