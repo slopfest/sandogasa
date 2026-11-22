@@ -102,15 +102,20 @@ struct NotesArgs {
 
     /// Move the notes in private directories whose embargo has lifted
     /// to the first public one, after asking.
-    #[arg(long, help_heading = "Writing")]
+    #[arg(long, conflicts_with = "rewrite_moved", help_heading = "Writing")]
     release: bool,
 
-    /// With --release, move them without asking.
-    #[arg(short, long, requires = "release", help_heading = "Writing")]
+    /// Point the url: of notes on moved repositories at where they are
+    /// now, from [notes.moved] and GitHub, after asking.
+    #[arg(long, help_heading = "Writing")]
+    rewrite_moved: bool,
+
+    /// With --release or --rewrite-moved, write without asking.
+    #[arg(short, long, help_heading = "Writing")]
     yes: bool,
 
     /// Output as JSON.
-    #[arg(long, conflicts_with = "release", help_heading = "Output")]
+    #[arg(long, conflicts_with_all = ["release", "rewrite_moved"], help_heading = "Output")]
     json: bool,
 
     /// Print the link and text of embargoed notes, which are otherwise
@@ -375,7 +380,11 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
         url: args.url.clone(),
     };
     notes::check_range(&filter)?;
-    let dirs = note_dirs(&config::load_config(None)?.notes)?;
+    if args.yes && !(args.release || args.rewrite_moved) {
+        return Err("--yes goes with --release or --rewrite-moved".into());
+    }
+    let cfg = config::load_config(None)?;
+    let dirs = note_dirs(&cfg.notes)?;
     let (found, warnings) = notes::load_dirs(&dirs);
     for w in &warnings {
         eprintln!("warning: {w}");
@@ -383,6 +392,9 @@ fn run_notes(args: &NotesArgs) -> Result<(), String> {
     let selected = notes::select(found, &filter);
     if args.release {
         return release_notes(&dirs, selected, args.yes, args.show_embargoed);
+    }
+    if args.rewrite_moved {
+        return rewrite_notes(&cfg, selected, args.yes, args.show_embargoed);
     }
     let selected: Vec<notes::Stored> = match args.show_embargoed {
         true => selected,
@@ -410,6 +422,88 @@ fn release_list(lifted: &[notes::Stored], show: bool) -> String {
             .iter()
             .map(|s| format!("{} {}\n", s.note.date, s.path.display()))
             .collect(),
+    }
+}
+
+/// `notes --rewrite-moved`: point the `url:` of each note among
+/// `selected` on a moved repository at where it is now, from
+/// `[notes.moved]` and one GitHub lookup for the github.com
+/// repositories the notes name after the table's moves; after asking unless `yes`. Embargoed notes are
+/// counted rather than listed unless `show`, and are never part of the
+/// lookup. The moves GitHub found are offered for the config first, for
+/// notes written later from old links, whether or not the files are
+/// then rewritten.
+fn rewrite_notes(
+    cfg: &config::ReportConfig,
+    selected: Vec<notes::Stored>,
+    yes: bool,
+    show: bool,
+) -> Result<(), String> {
+    use std::io::IsTerminal;
+    let today = chrono::Local::now().date_naive();
+    let mut moved = cfg.notes.moved.clone();
+    // GitHub is asked where the notes' repositories are after the
+    // table's moves, so one that moved again since is followed too.
+    let mut resolved = selected.clone();
+    notes::apply_moves(&mut resolved, &moved);
+    let all: Vec<usize> = (0..resolved.len()).collect();
+    const GITHUB: &str = "https://api.github.com";
+    let lookup = |repos: &[String]| {
+        let token = github::find_token(GITHUB, &cfg.github_tokens)?;
+        eprintln!(
+            "Checking with GitHub whether {} repo(s) of notes moved...",
+            repos.len()
+        );
+        sandogasa_github::Client::new(GITHUB, &token)
+            .and_then(|c| c.current_repo_names(repos))
+            .map_err(|e| e.to_string())
+    };
+    let found = notes::github_moves(&resolved, &all, today, lookup).unwrap_or_else(|e| {
+        eprintln!("warning: GitHub not asked whether repositories moved: {e}");
+        Default::default()
+    });
+    moved.extend(found.clone());
+    let at_terminal = std::io::stdin().is_terminal();
+    // What GitHub found is worth keeping whatever happens to the files,
+    // so it is offered first.
+    if !found.is_empty() {
+        let found: Vec<(String, String)> = found.into_iter().collect();
+        record_moves(&found, at_terminal && !yes);
+    }
+    let plan = notes::planned_rewrites(&selected, &moved);
+    if plan.is_empty() {
+        eprintln!("No note names a moved repository.");
+        return Ok(());
+    }
+    print!("{}", notes::format_rewrites(&selected, &plan, today, show));
+    let question = format!("Rewrite the url: of these {} note(s)?", plan.len());
+    if !yes {
+        if !at_terminal {
+            return Err(format!(
+                "{question} Rewriting is confirmed at a terminal; run it in one, or pass --yes"
+            ));
+        }
+        if !sandogasa_cli::confirm(&question, true).map_err(|e| e.to_string())? {
+            eprintln!("Nothing rewritten.");
+            return Ok(());
+        }
+    }
+    // Each note on its own: one that cannot be rewritten stays, and the
+    // rest are still done.
+    let mut failed = 0;
+    for (i, new) in &plan {
+        let stored = &selected[*i];
+        match notes::rewrite_url(&stored.path, new) {
+            Ok(()) => println!("{}", stored.path.display()),
+            Err(e) => {
+                eprintln!("error: {e}");
+                failed += 1;
+            }
+        }
+    }
+    match failed {
+        0 => Ok(()),
+        n => Err(format!("{n} note(s) could not be rewritten")),
     }
 }
 
@@ -594,7 +688,10 @@ fn record_moves(moves: &[(String, String)], interactive: bool) {
         }
         return;
     }
-    eprintln!("To match their notes without asking GitHub, add to the config:\n\n[notes.moved]");
+    eprintln!(
+        "To match notes that name the old repositories without asking GitHub, add to the \
+         config:\n\n[notes.moved]"
+    );
     for (old, new) in moves {
         eprintln!("\"{old}\" = \"{new}\"");
     }
@@ -1356,6 +1453,54 @@ mod tests {
         let list = release_list(std::slice::from_ref(&s), false);
         assert_eq!(list, "2026-11-18 /e/2026/2026-11-18T1032-box.md\n");
         assert!(release_list(&[s], true).contains("o/secret"));
+    }
+
+    #[test]
+    fn rewrite_points_notes_on_moved_repositories_at_their_new_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = [notes::NoteDir {
+            path: dir.path().into(),
+            private: false,
+        }];
+        let year = dir.path().join("2026");
+        std::fs::create_dir_all(&year).unwrap();
+        let write = |name: &str, url: &str| {
+            let path = year.join(name);
+            std::fs::write(&path, format!("url: {url}\ndate: 2026-11-18\n\nWhy.\n")).unwrap();
+            path
+        };
+        let moved = write("a.md", "https://github.com/old/r/commit/abc");
+        // On GitLab, so GitHub is not asked about it.
+        let other = write("b.md", "https://gitlab.com/o/r/-/issues/1");
+        let cfg: config::ReportConfig =
+            toml::from_str("[notes.moved]\n\"github.com/old/r\" = \"github.com/new/r\"\n").unwrap();
+        let (found, _) = notes::load_dirs(&dirs);
+        rewrite_notes(&cfg, found, true, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&moved).unwrap(),
+            "url: https://github.com/new/r/commit/abc\ndate: 2026-11-18\n\nWhy.\n"
+        );
+        assert!(
+            std::fs::read_to_string(&other)
+                .unwrap()
+                .contains("gitlab.com/o/r")
+        );
+        // Nothing left to rewrite.
+        let (found, _) = notes::load_dirs(&dirs);
+        rewrite_notes(&cfg, found, true, false).unwrap();
+
+        // A note that cannot be rewritten does not keep the rest.
+        let gone = write("c.md", "https://github.com/old/r/pull/1");
+        let next = write("d.md", "https://github.com/old/r/pull/2");
+        let (found, _) = notes::load_dirs(&dirs);
+        std::fs::remove_file(&gone).unwrap();
+        let err = rewrite_notes(&cfg, found, true, false).unwrap_err();
+        assert_eq!(err, "1 note(s) could not be rewritten");
+        assert!(
+            std::fs::read_to_string(&next)
+                .unwrap()
+                .contains("github.com/new/r/pull/2")
+        );
     }
 
     #[test]

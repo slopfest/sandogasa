@@ -63,7 +63,7 @@ Print help
 <\fITEXT\fR>
 The note; `\-` reads it from standard input
 .SS sandogasa-report notes
-\fBsandogasa\-report notes\fR [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-url\fR] [\fB\-\-release\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-\-show\-embargoed\fR] [\fB\-h\fR|\fB\-\-help\fR]
+\fBsandogasa\-report notes\fR [\fB\-\-since\fR] [\fB\-\-until\fR] [\fB\-\-url\fR] [\fB\-\-release\fR] [\fB\-\-rewrite\-moved\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-\-show\-embargoed\fR] [\fB\-h\fR|\fB\-\-help\fR]
 .PP
 List recorded notes
 .TP
@@ -84,8 +84,11 @@ Only notes about this URL
 \fB\-\-release\fR
 Move the notes in private directories whose embargo has lifted to the first public one, after asking
 .TP
+\fB\-\-rewrite\-moved\fR
+Point the url: of notes on moved repositories at where they are now, from [notes.moved] and GitHub, after asking
+.TP
 \fB\-y\fR, \fB\-\-yes\fR
-With \-\-release, move them without asking
+With \-\-release or \-\-rewrite\-moved, write without asking
 .SH OUTPUT
 .TP
 \fB\-\-json\fR

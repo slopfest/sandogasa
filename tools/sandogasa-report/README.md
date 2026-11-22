@@ -345,6 +345,15 @@ their notes keep matching once GitHub stops redirecting the old name
 printed. Notes from a private directory, and embargoed notes, are
 never part of that request.
 
+`notes --rewrite-moved` changes the `url:` line of the note files
+themselves to where their repositories are now, from `[notes.moved]`
+and the same GitHub lookup, so the notes read correctly outside a
+report too. It lists each change (an embargoed note only counted,
+unless `--show-embargoed`) and asks first; without a terminal it needs
+`--yes`. The rest of each file is left as it is, its permissions
+included. `--since`, `--until`
+and `--url` narrow it to some notes.
+
 Notes no item took close the report in a section of their own,
 "Notes on items not in this report", grouped by the host their URL
 points at, those without a URL last, so the sources a report does not

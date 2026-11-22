@@ -19,8 +19,17 @@ it; otherwise the lines to add are printed. Notes from a private
 directory and embargoed notes are never sent, and a repository GitHub
 refuses to show, rather than does not find, fails the lookup with
 GitHub's reason. sandogasa-github gains `current_repo_names`, the
-batched lookup. `notes --url` still matches the URL as written.
-Refs #217.
+batched lookup.
+
+`notes --rewrite-moved` then changes the `url:` line of the note files
+themselves to the new location, from `[notes.moved]` and the same
+lookup, so the notes also read correctly outside a report and
+`notes --url` finds them by the new link. It lists every change, an
+embargoed note only counted unless `--show-embargoed`, and asks
+first, or needs `--yes` without a terminal; the rest of each file is
+kept byte for byte, with its permissions, and a symlinked note has the
+file it points to changed. A repository that moved twice is followed
+to where it is now. Resolves #217.
 
 ### koji-diff fetches build logs with a timeout and its user agent
 

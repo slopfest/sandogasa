@@ -642,22 +642,40 @@ pub fn moved_url(url: &str, moved: &BTreeMap<String, String>) -> Option<String> 
             let after = &rest[old.len()..];
             (!old.is_empty()
                 && head.eq_ignore_ascii_case(old)
-                && (after.is_empty() || after.starts_with(['/', '?', '#'])))
+                && (after.is_empty()
+                    || after.starts_with(['/', '?', '#'])
+                    || after.eq_ignore_ascii_case(".git")))
             .then_some((old.len(), bare_prefix(new)))
         })
         .max_by_key(|(len, _)| *len)?;
     Some(format!("{scheme}://{new}{}", &rest[old_len..]))
 }
 
+/// `url` after every move `moved` gives it, in turn, for an item that
+/// moved more than once (`a/r` to `b/r`, then `b/r` to `c/r`); `None`
+/// when no entry covers it. A loop of entries stops after ten steps.
+pub fn resolved_url(url: &str, moved: &BTreeMap<String, String>) -> Option<String> {
+    let mut now = moved_url(url, moved)?;
+    for _ in 0..10 {
+        match moved_url(&now, moved) {
+            Some(next) if next != now => now = next,
+            _ => break,
+        }
+    }
+    Some(now)
+}
+
 /// Point the notes `moved` covers at where their items are now (see
-/// [`moved_url`]); the number of notes changed.
+/// [`resolved_url`]); the number of notes changed.
 pub fn apply_moves(notes: &mut [Stored], moved: &BTreeMap<String, String>) -> usize {
     let mut changed = 0;
     for stored in notes.iter_mut() {
         let Some(url) = &stored.note.url else {
             continue;
         };
-        if let Some(new) = moved_url(url, moved) {
+        if let Some(new) = resolved_url(url, moved)
+            && new != *url
+        {
             stored.note.url = Some(new);
             changed += 1;
         }
@@ -690,11 +708,34 @@ pub fn github_repos(notes: &[Stored], indices: &[usize], today: NaiveDate) -> Ve
     repos
 }
 
+/// The moves of the github.com repositories the notes at `indices`
+/// link into, as `lookup` answers for all of them at once (`owner/repo`
+/// to its current name, `None` when not found), leaving out notes that
+/// are private or embargoed on `today`: old prefix to new prefix, as
+/// `[notes.moved]` takes them. `lookup` is not called when there is
+/// nothing to ask.
+pub fn github_moves(
+    notes: &[Stored],
+    indices: &[usize],
+    today: NaiveDate,
+    lookup: impl FnOnce(&[String]) -> Result<BTreeMap<String, Option<String>>, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let repos = github_repos(notes, indices, today);
+    if repos.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    Ok(lookup(&repos)?
+        .into_iter()
+        .filter_map(|(old, now)| {
+            let now = now?;
+            (!now.eq_ignore_ascii_case(&old))
+                .then(|| (format!("github.com/{old}"), format!("github.com/{now}")))
+        })
+        .collect())
+}
+
 /// Point the github.com notes no item in `listed` takes at where their
-/// repositories are now, as `lookup` answers for all of them at once
-/// (`owner/repo` to its current name, `None` when not found), leaving
-/// out notes that are private or embargoed on `today`; the moves
-/// found, as `[notes.moved]` entries (old prefix, new prefix).
+/// repositories are now (see [`github_moves`]); the moves found.
 pub fn follow_github_moves(
     notes: &mut [Stored],
     listed: &str,
@@ -702,24 +743,105 @@ pub fn follow_github_moves(
     lookup: impl FnOnce(&[String]) -> Result<BTreeMap<String, Option<String>>, String>,
 ) -> Result<Vec<(String, String)>, String> {
     let (_, rest) = attach(listed, notes);
-    let repos = github_repos(notes, &rest, today);
-    if repos.is_empty() {
-        return Ok(Vec::new());
-    }
-    let moves: BTreeMap<String, String> = lookup(&repos)?
-        .into_iter()
-        .filter_map(|(old, now)| {
-            let now = now?;
-            (!now.eq_ignore_ascii_case(&old))
-                .then(|| (format!("github.com/{old}"), format!("github.com/{now}")))
-        })
-        .collect();
+    let moves = github_moves(notes, &rest, today, lookup)?;
     let mut unplaced: Vec<Stored> = rest.iter().map(|&i| notes[i].clone()).collect();
     apply_moves(&mut unplaced, &moves);
     for (&i, moved) in rest.iter().zip(unplaced) {
         notes[i] = moved;
     }
     Ok(moves.into_iter().collect())
+}
+
+/// The notes among `notes` whose URL `moved` covers, with the URL
+/// each would get: (index, new URL).
+pub fn planned_rewrites(
+    notes: &[Stored],
+    moved: &BTreeMap<String, String>,
+) -> Vec<(usize, String)> {
+    notes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let url = s.note.url.as_deref()?;
+            let new = resolved_url(url, moved)?;
+            (new != url).then_some((i, new))
+        })
+        .collect()
+}
+
+/// The list `notes --rewrite-moved` asks about: per note, its date,
+/// file, and old and new URL, except that a note still embargoed on
+/// `today` is only counted unless `show`, since its URL names the
+/// project.
+pub fn format_rewrites(
+    notes: &[Stored],
+    plan: &[(usize, String)],
+    today: NaiveDate,
+    show: bool,
+) -> String {
+    let mut out = String::new();
+    let mut hidden = 0;
+    for (i, new) in plan {
+        let stored = &notes[*i];
+        if !show && embargoed(&stored.note, today) {
+            hidden += 1;
+            continue;
+        }
+        out.push_str(&format!(
+            "{} {}\n  {}\n  -> {new}\n",
+            stored.note.date,
+            stored.path.display(),
+            stored.note.url.as_deref().unwrap_or_default()
+        ));
+    }
+    if hidden > 0 {
+        out.push_str(&format!(
+            "{hidden} embargoed note(s) would change too; --show-embargoed lists them.\n"
+        ));
+    }
+    out
+}
+
+/// Change the `url:` header of the note file at `path` to `new`,
+/// keeping the rest of the file byte for byte, its permissions, and a
+/// symlink (the file it points to is changed). The header is found as
+/// [`parse`] reads it: the last `url` key among the lines before the
+/// first blank one. Written to a temporary file beside it and renamed
+/// over it, so a reader never sees half a note.
+pub fn rewrite_url(path: &Path, new: &str) -> Result<(), String> {
+    let path =
+        std::fs::canonicalize(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut offset = 0;
+    let mut span = None;
+    for line in text.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            break;
+        }
+        let body = line.trim_end_matches(['\n', '\r']);
+        if body
+            .split_once(':')
+            .is_some_and(|(key, _)| key.trim() == "url")
+        {
+            span = Some((offset, offset + body.len()));
+        }
+        offset += line.len();
+    }
+    let (start, end) = span.ok_or_else(|| format!("{}: no url: header", path.display()))?;
+    let out = format!("{}url: {new}{}", &text[..start], &text[end..]);
+    let permissions = std::fs::metadata(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+        .permissions();
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    let written = std::fs::write(&tmp, &out)
+        .and_then(|()| std::fs::set_permissions(&tmp, permissions))
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    written.map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("cannot rewrite {}: {e}", path.display())
+    })
 }
 
 /// Add `moves` (old prefix, new prefix) to `[notes.moved]` in the
@@ -2467,6 +2589,169 @@ mod tests {
             std::fs::read_to_string(fresh.path())
                 .unwrap()
                 .contains("\"github.com/x/y\" = \"github.com/z/y\"")
+        );
+    }
+
+    #[test]
+    fn a_rewrite_changes_only_the_url_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("n.md");
+        let text = "date: 2026-11-18\r\nurl: https://github.com/old/r/pull/1\r\nby: me\r\n\r\n\
+                    url: https://github.com/old/r in the text stays\r\n";
+        std::fs::write(&path, text).unwrap();
+        rewrite_url(&path, "https://github.com/new/r/pull/1").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            text.replacen("github.com/old/r/pull/1", "github.com/new/r/pull/1", 1)
+        );
+        assert!(!dir.path().join("n.md.tmp").exists());
+        // A url: line in the text is not a header.
+        let bare = dir.path().join("bare.md");
+        std::fs::write(&bare, "date: 2026-11-18\n\nurl: x\n").unwrap();
+        let err = rewrite_url(&bare, "y").unwrap_err();
+        assert!(err.contains("no url: header"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&bare).unwrap(),
+            "date: 2026-11-18\n\nurl: x\n"
+        );
+        assert!(rewrite_url(&dir.path().join("gone.md"), "y").is_err());
+    }
+
+    #[test]
+    fn rewrites_are_planned_from_the_moves_and_listed_without_embargoed_urls() {
+        let moved = BTreeMap::from([(
+            "github.com/old/r".to_string(),
+            "github.com/new/r".to_string(),
+        )]);
+        let held = Stored {
+            note: Note {
+                headers: vec![("embargo".into(), "until disclosed".into())],
+                ..note(
+                    Some("https://github.com/old/r/pull/9"),
+                    "2026-11-18",
+                    "Why.",
+                )
+            },
+            ..noted("x", true)
+        };
+        let notes = vec![
+            noted("https://github.com/old/r/pull/1", false),
+            noted("https://github.com/other/r", false),
+            held,
+        ];
+        let plan = planned_rewrites(&notes, &moved);
+        assert_eq!(
+            plan,
+            [
+                (0, "https://github.com/new/r/pull/1".to_string()),
+                (2, "https://github.com/new/r/pull/9".to_string())
+            ]
+        );
+        let list = format_rewrites(&notes, &plan, day("2026-11-22"), false);
+        assert_eq!(
+            list,
+            "2026-11-18 n.md\n  https://github.com/old/r/pull/1\n  \
+             -> https://github.com/new/r/pull/1\n\
+             1 embargoed note(s) would change too; --show-embargoed lists them.\n"
+        );
+        let shown = format_rewrites(&notes, &plan, day("2026-11-22"), true);
+        assert!(shown.contains("pull/9"), "{shown}");
+        assert!(!shown.contains("embargoed note(s)"), "{shown}");
+    }
+
+    #[test]
+    fn github_moves_skip_the_lookup_when_nothing_is_on_github() {
+        let notes = vec![noted("https://gitlab.com/o/r", false)];
+        let none = github_moves(&notes, &[0], day("2026-11-22"), |_: &[String]| {
+            panic!("asked without need")
+        })
+        .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn a_rewrite_finds_the_url_header_as_parse_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("n.md");
+        // A spaced key, a second url (parse keeps the last), and a
+        // separator line of spaces before a url: in the text.
+        let text = "url : https://x/first\ndate: 2026-11-18\nurl: https://x/last\n   \nurl: body\n";
+        std::fs::write(&path, text).unwrap();
+        rewrite_url(&path, "https://x/new").unwrap();
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            out,
+            "url : https://x/first\ndate: 2026-11-18\nurl: https://x/new\n   \nurl: body\n"
+        );
+        assert_eq!(parse(&out).unwrap().url.as_deref(), Some("https://x/new"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_keeps_the_mode_and_a_symlink_and_leaves_nothing_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.md");
+        std::fs::write(&target, "url: https://x/old\ndate: 2026-11-18\n\nWhy.\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.path().join("link.md");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        rewrite_url(&link, "https://x/new").unwrap();
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("https://x/new")
+        );
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    #[test]
+    fn moves_chain_skip_no_ops_and_cover_a_git_suffix() {
+        let moved = BTreeMap::from([
+            ("github.com/a/r".to_string(), "github.com/b/r".to_string()),
+            ("github.com/b/r".to_string(), "github.com/c/r".to_string()),
+            (
+                "github.com/Same/r".to_string(),
+                "github.com/same/r".to_string(),
+            ),
+            (
+                "github.com/x/loop".to_string(),
+                "github.com/y/loop".to_string(),
+            ),
+            (
+                "github.com/y/loop".to_string(),
+                "github.com/x/loop".to_string(),
+            ),
+        ]);
+        assert_eq!(
+            resolved_url("https://github.com/a/r/pull/1", &moved).as_deref(),
+            Some("https://github.com/c/r/pull/1")
+        );
+        assert_eq!(
+            moved_url("https://github.com/a/r.git", &moved).as_deref(),
+            Some("https://github.com/b/r.git")
+        );
+        // A loop ends.
+        assert!(resolved_url("https://github.com/x/loop", &moved).is_some());
+        let notes = vec![
+            noted("https://github.com/same/r/pull/2", false),
+            noted("https://github.com/a/r", false),
+        ];
+        assert_eq!(
+            planned_rewrites(&notes, &moved),
+            [(1, "https://github.com/c/r".to_string())]
         );
     }
 }
