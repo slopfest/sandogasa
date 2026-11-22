@@ -4901,11 +4901,19 @@ mod tests {
     /// a check that is only meant to get as far as resolving its
     /// input. Each query says "nothing here" rather than failing, the
     /// way an empty repo answers.
-    struct EmptyRepo;
+    #[derive(Default)]
+    struct EmptyRepo {
+        /// Why fedrq refuses the view, for a repository that cannot be
+        /// read at all.
+        refused: Option<String>,
+    }
 
     impl RepoQuery for EmptyRepo {
         fn repolist(&self) -> Result<Vec<String>, String> {
-            Ok(vec!["fixture".to_string()])
+            match &self.refused {
+                Some(why) => Err(why.clone()),
+                None => Ok(vec!["fixture".to_string()]),
+            }
         }
         fn src_nvrs(&self, _packages: &[String]) -> Result<Vec<String>, String> {
             Ok(vec![])
@@ -4950,6 +4958,9 @@ mod tests {
     #[derive(Default)]
     struct FakeRepos {
         asked: Mutex<Vec<(Option<String>, Option<String>)>>,
+        /// Set to make every view refuse, as fedrq does for a branch
+        /// it has no configuration for.
+        refused: Option<String>,
     }
 
     impl Repos for FakeRepos {
@@ -4962,7 +4973,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((branch.map(str::to_string), repo.map(str::to_string)));
-            Box::new(EmptyRepo)
+            Box::new(EmptyRepo {
+                refused: self.refused.clone(),
+            })
         }
     }
 
@@ -5552,5 +5565,99 @@ mod tests {
         assert_eq!(report.reverse_deps["tool"].status, "unknown");
         let out = render_report(&report, true);
         assert!(out.contains("tool"), "{out}");
+    }
+
+    #[test]
+    fn a_branch_fedrq_cannot_read_stops_the_check_with_where_to_get_it() {
+        // A CentOS Stream minor is defined by a config sandogasa
+        // ships; the error names it, and the repo class asked for.
+        let koji = FakeKoji::default();
+        let bodhi = FakeBodhi(update_info(None, &["et-6.2.13-1.el10_4"], Some("epel10.4")));
+        let repos = FakeRepos {
+            refused: Some("no such release".to_string()),
+            ..Default::default()
+        };
+        let err = check_update_with(
+            "FEDORA-EPEL-2026-e07539fe30",
+            &CheckUpdateOptions {
+                branch: Some("c10.3s".to_string()),
+                repo: Some("@epel".to_string()),
+                ..Default::default()
+            },
+            &Services {
+                koji: &koji,
+                bodhi: &bodhi,
+                repos: &repos,
+                update_repo: &NoDownload,
+            },
+        )
+        .expect_err("an unreadable branch stops the check");
+        assert!(
+            err.contains("fedrq cannot query c10.3s with -r @epel"),
+            "{err}"
+        );
+        assert!(err.contains("no such release"), "{err}");
+        assert!(err.contains("centos-stream-minor.toml"), "{err}");
+    }
+
+    #[test]
+    fn a_copr_needs_a_branch_it_can_map_to_a_chroot() {
+        let koji = FakeKoji::default();
+        let err = check_update_with(
+            "@rust/uutils-and-nushell",
+            &CheckUpdateOptions::default(),
+            &services(&koji, &NoBodhi),
+        )
+        .expect_err("a COPR without -b stops the check");
+        assert!(err.contains("pass -b <branch>"), "{err}");
+        let err = check_update_with(
+            "@rust/uutils-and-nushell",
+            &CheckUpdateOptions {
+                branch: Some("plan9".to_string()),
+                ..Default::default()
+            },
+            &services(&koji, &NoBodhi),
+        )
+        .expect_err("a branch with no chroot stops the check");
+        assert!(err.contains("cannot map branch 'plan9'"), "{err}");
+    }
+
+    #[test]
+    fn a_command_run_for_the_local_repo_reports_what_it_said() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = |s: &str| ["sh", "-c", s].map(String::from).to_vec();
+        run_in(dir.path(), &argv("touch here")).unwrap();
+        assert!(dir.path().join("here").exists(), "it ran in the directory");
+        // Its last line of stderr, or of stdout when stderr is empty.
+        let err = run_in(
+            dir.path(),
+            &argv("echo out; echo first >&2; echo bad >&2; exit 3"),
+        )
+        .unwrap_err();
+        assert!(err.ends_with("(exit status: 3): bad"), "{err}");
+        assert!(err.starts_with("`sh -c"), "{err}");
+        let err = run_in(dir.path(), &argv("echo only out; exit 1")).unwrap_err();
+        assert!(err.ends_with("only out"), "{err}");
+        let err = run_in(dir.path(), &["no-such-command-here".to_string()]).unwrap_err();
+        assert!(err.contains("could not run no-such-command-here"), "{err}");
+    }
+
+    #[test]
+    fn stale_repodata_without_any_binaries_is_named_in_the_report() {
+        let mut report = skip_report("f45", SkipReason::Epel10TestingUnsupported);
+        report.skip_reason = None;
+        report.full_analysis = true;
+        report.stale_side_tag = vec![StaleSideTag {
+            package: "foo".to_string(),
+            expected_nvr: "foo-2-1.fc45".to_string(),
+            actual_vr: None,
+        }];
+        let out = render_report(&report, false);
+        assert!(
+            out.contains("**foo**: expected `foo-2-1.fc45`, no matching binary RPMs in repodata"),
+            "{out}"
+        );
+        // Printed without color, it is the same text.
+        print_report(&report, false, sandogasa_cli::style::ColorChoice::Never);
     }
 }
