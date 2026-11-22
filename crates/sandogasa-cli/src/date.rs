@@ -38,6 +38,32 @@ pub fn next_weekday(today: NaiveDate, weekday: Weekday) -> NaiveDate {
     today + chrono::Duration::days(ahead)
 }
 
+/// The day `span` after `from`: `span` is a count and a unit, `d`
+/// (days), `w` (weeks), `m` (months) or `y` (years), as in `6m` or
+/// `2w`, for a `--for` option. A month from the 31st ends on the
+/// month's last day (2026-01-31 plus `1m` is 2026-02-28).
+pub fn span_end(from: NaiveDate, span: &str) -> Result<NaiveDate, String> {
+    let span = span.trim();
+    let bad = || format!("invalid span: {span} (expected e.g. 2w, 3m, 6m or 1y)");
+    let unit = span.chars().last().ok_or_else(bad)?.to_ascii_lowercase();
+    let count: u32 = span[..span.len() - unit.len_utf8()]
+        .parse()
+        .map_err(|_| bad())?;
+    if count == 0 {
+        return Err(bad());
+    }
+    let end = match unit {
+        'd' => from.checked_add_days(chrono::Days::new(count.into())),
+        'w' => from.checked_add_days(chrono::Days::new(u64::from(count) * 7)),
+        'm' => from.checked_add_months(chrono::Months::new(count)),
+        'y' => count
+            .checked_mul(12)
+            .and_then(|months| from.checked_add_months(chrono::Months::new(months))),
+        _ => return Err(bad()),
+    };
+    end.ok_or_else(|| format!("span {span} from {from} is past the last date"))
+}
+
 /// Resolve a `(--since, --until, --period)` triple into an
 /// inclusive date range.
 ///
@@ -111,6 +137,22 @@ pub fn parse_period(period: &str) -> Result<(NaiveDate, NaiveDate), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn span_end_counts_days_weeks_months_and_years() {
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        assert_eq!(span_end(d("2026-11-22"), "10d").unwrap(), d("2026-12-02"));
+        assert_eq!(span_end(d("2026-11-22"), "2w").unwrap(), d("2026-12-06"));
+        assert_eq!(span_end(d("2026-11-22"), "3m").unwrap(), d("2027-02-22"));
+        assert_eq!(span_end(d("2026-11-22"), " 6M ").unwrap(), d("2027-05-22"));
+        assert_eq!(span_end(d("2026-11-22"), "1y").unwrap(), d("2027-11-22"));
+        // The 31st plus a month is the next month's last day.
+        assert_eq!(span_end(d("2026-01-31"), "1m").unwrap(), d("2026-02-28"));
+        for bad in ["", "m", "0m", "-1m", "3x", "three m", "6mo", "4294967295y"] {
+            assert!(span_end(d("2026-11-22"), bad).is_err(), "{bad}");
+        }
+        assert!(span_end(NaiveDate::MAX, "1d").is_err());
+    }
 
     #[test]
     fn parse_period_bare_year() {

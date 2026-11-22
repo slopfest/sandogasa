@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH timebook 1 2026-11-20 "sandogasa 0.29.0" "Sandogasa Manual"
+.TH timebook 1 2026-11-22 "sandogasa 0.29.0" "Sandogasa Manual"
 .SH NAME
 timebook \- Find free Fedora meeting rooms and check bookings in Fedora Calendar
 .SH SYNOPSIS
@@ -20,6 +20,48 @@ Print help (see a summary with \*(Aq\-h\*(Aq)
 \fB\-V\fR, \fB\-\-version\fR
 Print version
 .SH COMMANDS
+.SS timebook add
+\fBtimebook add\fR [\fB\-\-json\fR] [\fB\-\-meeting\fR] [\fB\-\-count\fR] [\fB\-\-for\fR] [\fB\-\-until\fR] [\fB\-\-dry\-run\fR] [\fB\-\-replace\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-like\fR> <\fB\-\-monthly\fR>
+.PP
+Book a meeting held on the Nth weekday of each month
+.PP
+Fedora Calendar repeats an entry every 7, 14, 21 or 28 days only, so a monthly meeting booked as every 28 days slips a week whenever a month has five of its weekday. add books the right days instead, copying everything else from one of your entries: the days are grouped into series 28 days apart, a new one starting after each five\-week gap. Days the calendar already has an entry of that title on are skipped, so running it again extends the booking. \-\-replace turns the entry\*(Aqs own series into the first of them, keeping its page. Logs in with your Kerberos ticket (fkinit), shows every entry, and writes them once you confirm, reading them back.
+.TP
+\fB\-\-json\fR
+Print JSON instead of text
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.SH SELECTION
+.TP
+\fB\-\-like\fR \fI<ENTRY>\fR
+The entry to copy: its id or page, or its meeting\*(Aqs calendar
+.TP
+\fB\-\-meeting\fR \fI<TITLE>\fR
+Part of the title of the meeting meant, in a calendar with several
+.SH RECURRENCE
+.TP
+\fB\-\-monthly\fR \fI<DAY>\fR
+The day of each month, e.g. 3rd\-wed or last\-fri
+.TP
+\fB\-\-count\fR \fI<N>\fR
+How many days from the first, booked already or not (1 to 120)
+.TP
+\fB\-\-for\fR \fI<SPAN>\fR
+How far ahead to book from today: 6m, 1y, 12w
+.TP
+\fB\-\-until\fR \fI<DATE>\fR
+The last day a meeting may fall on (YYYY\-MM\-DD)
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Log in and show the entries, but write nothing
+.TP
+\fB\-\-replace\fR
+Turn the entry\*(Aqs series into the first of the new entries
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Write without asking
 .SS timebook cancel
 \fBtimebook cancel\fR [\fB\-\-dry\-run\fR] [\fB\-\-json\fR] [\fB\-\-meeting\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fICALENDAR|ENTRY\fR> <\fIDATES\fR>
 .PP

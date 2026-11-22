@@ -180,6 +180,44 @@ pub fn describe(form: &EntryForm, changes: &Changes, url: &str) -> String {
     out
 }
 
+/// The id of the entry `target` names: an entry's id or page, or a
+/// calendar, for the entry of the next occurrence in the coming
+/// quarter of the meeting `meeting` picks by title (any, when the
+/// calendar holds one).
+pub async fn entry_named(
+    client: &Client,
+    target: &str,
+    meeting: Option<&str>,
+) -> Result<u64, String> {
+    match crate::pick::named(target)? {
+        Named::Entry(_) if meeting.is_some() => {
+            Err("--meeting picks a meeting in a calendar; an entry names one already".into())
+        }
+        Named::Entry(id) => Ok(id),
+        Named::Calendar(calendar) => {
+            let now = Utc::now();
+            let today = now.date_naive();
+            let meetings = client
+                .meetings(
+                    &MeetingQuery::default()
+                        .calendar(calendar.clone())
+                        .between(today, today + Duration::days(COMING_DAYS)),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            let when = format!("in the next {COMING_DAYS} days");
+            crate::pick::next_entry(&meetings, &calendar, meeting, now, &when).map_err(|e| {
+                // Not found: perhaps a meeting of the past.
+                if e.starts_with("no ") || e.starts_with("calendar ") {
+                    format!("{e} (an entry's id or page names a past one)")
+                } else {
+                    e
+                }
+            })
+        }
+    }
+}
+
 /// Change the entry `args` names: log in, read it, show the changes,
 /// confirm, save, and read it back. `confirm` asks at the terminal;
 /// `login` logs in (blocking).
@@ -203,36 +241,7 @@ pub async fn run(
     {
         return Err("nothing to change: give --title, --location, --note or --until".into());
     }
-    let id = match crate::pick::named(&args.target)? {
-        Named::Entry(_) if args.meeting.is_some() => {
-            return Err(
-                "--meeting picks a meeting in a calendar; an entry names one already".into(),
-            );
-        }
-        Named::Entry(id) => id,
-        Named::Calendar(calendar) => {
-            let now = Utc::now();
-            let today = now.date_naive();
-            let meetings = client
-                .meetings(
-                    &MeetingQuery::default()
-                        .calendar(calendar.clone())
-                        .between(today, today + Duration::days(COMING_DAYS)),
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-            let when = format!("in the next {COMING_DAYS} days");
-            crate::pick::next_entry(&meetings, &calendar, args.meeting.as_deref(), now, &when)
-                .map_err(|e| {
-                    // Not found: perhaps a meeting of the past.
-                    if e.starts_with("no ") || e.starts_with("calendar ") {
-                        format!("{e} (an entry's id or page names a past one)")
-                    } else {
-                        e
-                    }
-                })?
-        }
-    };
+    let id = entry_named(client, &args.target, args.meeting.as_deref()).await?;
     let url = format!("{}/meeting/{id}/", client.base_url());
     let outcome = |outcome| EditOutcome {
         outcome,

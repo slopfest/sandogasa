@@ -46,11 +46,32 @@ pub struct Changes {
     pub location: Option<String>,
     /// For a recurring entry, the last day the series may repeat on.
     pub until: Option<NaiveDate>,
+    /// Move the entry to start on this day, keeping its times and how
+    /// many days it spans. Unlike [`Changes::days`], which sends a
+    /// full-day entry's end as fedocal stores it, this suits a timed
+    /// entry as well.
+    pub move_to: Option<NaiveDate>,
+    /// Stop the entry repeating: with [`Changes::whole_series`], the
+    /// series' next occurrence becomes a single entry and the later ones
+    /// go, fedocal keeping the earlier ones as a separate entry.
+    pub single: bool,
+    /// Make the entry repeat: every so many days (7, 14, 21 or 28, all
+    /// fedocal offers) up to and including the day given.
+    pub repeat: Option<Repeat>,
     /// For a recurring entry, change the series from the occurrence the
     /// form shows (the next one) on, fedocal's "Save all", rather than
     /// that occurrence alone ("Save"). fedocal keeps the earlier
     /// occurrences as a separate entry.
     pub whole_series: bool,
+}
+
+/// How a series repeats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Repeat {
+    /// Days between occurrences: 7, 14, 21 or 28.
+    pub every_days: u32,
+    /// The last day an occurrence may fall on.
+    pub until: NaiveDate,
 }
 
 /// An entry's edit form, as a browser would send it, and the save
@@ -150,6 +171,21 @@ impl Changes {
         self
     }
 
+    pub fn move_to(mut self, day: NaiveDate) -> Self {
+        self.move_to = Some(day);
+        self
+    }
+
+    pub fn single(mut self, single: bool) -> Self {
+        self.single = single;
+        self
+    }
+
+    pub fn repeat(mut self, repeat: Repeat) -> Self {
+        self.repeat = Some(repeat);
+        self
+    }
+
     /// Whether it changes nothing.
     pub fn is_empty(&self) -> bool {
         self.name.is_none()
@@ -157,6 +193,9 @@ impl Changes {
             && self.information.is_none()
             && self.location.is_none()
             && self.until.is_none()
+            && self.move_to.is_none()
+            && !self.single
+            && self.repeat.is_none()
     }
 
     /// `fields` (an edit form's, as a browser would send them) with these
@@ -164,6 +203,9 @@ impl Changes {
     /// day after the last is sent, which is how fedocal stores a full-day
     /// entry's end, as the form itself shows it.
     fn apply(&self, fields: &mut [(String, String)]) {
+        if let Some(day) = self.move_to {
+            move_fields(fields, day);
+        }
         let mut set = |name: &str, value: String| {
             if let Some(field) = fields.iter_mut().find(|(n, _)| n == name) {
                 field.1 = value;
@@ -186,6 +228,14 @@ impl Changes {
         if let Some(until) = self.until {
             set("end_repeats", until.to_string());
         }
+        if self.single {
+            set("frequency", String::new());
+            set("end_repeats", String::new());
+        }
+        if let Some(repeat) = self.repeat {
+            set("frequency", repeat.every_days.to_string());
+            set("end_repeats", repeat.until.to_string());
+        }
     }
 }
 
@@ -201,6 +251,32 @@ impl EntryForm {
     /// Whether the entry repeats: its form offers "Save all".
     pub fn recurring(&self) -> bool {
         self.submits.iter().any(|v| v == "Save all")
+    }
+
+    /// The fields of an entry like this one starting on `day`: its
+    /// title, times, time zone, location, description, co-managers and
+    /// reminder, repeating as `repeat` says (a single entry when
+    /// `None`), for [`Session::add_like`].
+    pub fn like_on(&self, day: NaiveDate, repeat: Option<Repeat>) -> EntryForm {
+        let mut fields: Vec<(String, String)> = self
+            .fields
+            .iter()
+            .filter(|(n, _)| n != "action" && n != "csrf_token")
+            .cloned()
+            .collect();
+        move_fields(&mut fields, day);
+        for (name, value) in fields.iter_mut() {
+            match (name.as_str(), repeat) {
+                ("frequency", Some(r)) => *value = r.every_days.to_string(),
+                ("end_repeats", Some(r)) => *value = r.until.to_string(),
+                ("frequency" | "end_repeats", None) => value.clear(),
+                _ => {}
+            }
+        }
+        EntryForm {
+            fields,
+            submits: Vec::new(),
+        }
     }
 }
 
@@ -293,13 +369,46 @@ impl Session {
     /// refusal shows the form again, with its reasons, which are
     /// returned as [`Error::Refused`].
     pub async fn add(&self, entry: &NewEntry) -> Result<(), Error> {
-        let url = format!("{}/{}/add/", self.base_url, entry.calendar);
         let token = self.form_token(&entry.calendar).await?;
+        let fields: Vec<(String, String)> = entry
+            .form(&token)
+            .into_iter()
+            .map(|(n, v)| (n.to_string(), v))
+            .collect();
+        self.submit_add(&entry.calendar, &fields).await
+    }
+
+    /// Add an entry like the one whose edit form is `form`, starting on
+    /// `day` and repeating as `repeat` says, to its calendar: everything
+    /// else in the form is kept (see [`EntryForm::like_on`]). fedocal
+    /// makes the user a manager, besides the form's co-managers.
+    pub async fn add_like(
+        &self,
+        form: &EntryForm,
+        day: NaiveDate,
+        repeat: Option<Repeat>,
+    ) -> Result<(), Error> {
+        let calendar = form
+            .get("calendar_name")
+            .filter(|c| !c.is_empty())
+            .ok_or_else(|| Error::Http("the entry's form names no calendar".to_string()))?
+            .to_string();
+        let token = self.form_token(&calendar).await?;
+        let mut fields = vec![("csrf_token".to_string(), token)];
+        fields.extend(form.like_on(day, repeat).fields);
+        self.submit_add(&calendar, &fields).await
+    }
+
+    /// Submit `fields` to `calendar`'s add form. fedocal answers a
+    /// success with a redirect to the entry's day in the calendar; a
+    /// refusal shows the form again, with its reasons.
+    async fn submit_add(&self, calendar: &str, fields: &[(String, String)]) -> Result<(), Error> {
+        let url = format!("{}/{calendar}/add/", self.base_url);
         let resp = self
             .http
             .post(&url)
             .header(reqwest::header::COOKIE, self.cookie_header())
-            .form(&entry.form(&token))
+            .form(fields)
             .send()
             .await
             .map_err(|e| Error::Http(format!("POST {url}: {e}")))?;
@@ -316,7 +425,7 @@ impl Session {
             // other redirect (the calendar itself when the user may not
             // add, the front page when the session expired) is a refusal,
             // with its reasons on the page it leads to.
-            if is_filed_redirect(&location, &self.base_url, &entry.calendar) {
+            if is_filed_redirect(&location, &self.base_url, calendar) {
                 return Ok(());
             }
             let page = self
@@ -681,6 +790,32 @@ fn host_cookies(jar: &str, host: &str) -> Vec<(String, String)> {
                 .then(|| (name.to_string(), value.to_string()))
         })
         .collect()
+}
+
+/// Move the entry in `fields` to start on `day`, its end moving by as
+/// many days, so a timed entry keeps its times and a full-day one its
+/// length (fedocal sends a full-day entry's end as the day after).
+fn move_fields(fields: &mut [(String, String)], day: NaiveDate) {
+    let date = |name: &str, fields: &[(String, String)]| {
+        fields
+            .iter()
+            .find(|(n, _)| n == name)
+            .and_then(|(_, v)| NaiveDate::parse_from_str(v, "%Y-%m-%d").ok())
+    };
+    let span = match (
+        date("meeting_date", fields),
+        date("meeting_date_end", fields),
+    ) {
+        (Some(start), Some(end)) if end >= start => end - start,
+        _ => chrono::Duration::zero(),
+    };
+    for (name, value) in fields.iter_mut() {
+        match name.as_str() {
+            "meeting_date" => *value = day.to_string(),
+            "meeting_date_end" => *value = (day + span).to_string(),
+            _ => {}
+        }
+    }
 }
 
 /// Whether a redirect after submitting leads to a day in `calendar`
@@ -1202,6 +1337,129 @@ mod tests {
         let s = session(&server);
         s.can_add("vacation").await.unwrap();
         s.add(&entry).await.unwrap();
+    }
+
+    /// A timed series' edit form, as fedocal fills it from the entry.
+    fn hangout_form() -> EntryForm {
+        let fields = [
+            ("csrf_token", "t3"),
+            ("calendar_name", "hyperscale"),
+            ("meeting_name", "Hangout"),
+            ("meeting_date", "2026-12-02"),
+            ("meeting_date_end", "2026-12-02"),
+            ("meeting_time_start", "17:00"),
+            ("meeting_time_stop", "18:00"),
+            ("meeting_timezone", "US/Eastern"),
+            ("comanager", "ngompa,salimma"),
+            ("frequency", "28"),
+            ("end_repeats", "2037-12-31"),
+            ("action", "Save"),
+        ]
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
+        EntryForm {
+            fields,
+            submits: vec!["Save".into(), "Save all".into()],
+        }
+    }
+
+    #[test]
+    fn a_single_entry_like_another_keeps_all_but_its_day_and_repeat() {
+        let single = hangout_form().like_on(day("2026-12-16"), None);
+        assert_eq!(single.get("meeting_date"), Some("2026-12-16"));
+        assert_eq!(single.get("meeting_date_end"), Some("2026-12-16"));
+        assert_eq!(single.get("meeting_time_start"), Some("17:00"));
+        assert_eq!(single.get("meeting_timezone"), Some("US/Eastern"));
+        assert_eq!(single.get("comanager"), Some("ngompa,salimma"));
+        assert_eq!(single.get("frequency"), Some(""));
+        assert_eq!(single.get("end_repeats"), Some(""));
+        // The form's own token and button are not sent to another form.
+        assert_eq!(single.get("csrf_token"), None);
+        assert_eq!(single.get("action"), None);
+        assert!(!single.recurring());
+        let series = hangout_form().like_on(
+            day("2027-01-20"),
+            Some(Repeat {
+                every_days: 28,
+                until: day("2027-03-17"),
+            }),
+        );
+        assert_eq!(series.get("frequency"), Some("28"));
+        assert_eq!(series.get("end_repeats"), Some("2027-03-17"));
+    }
+
+    #[test]
+    fn moving_an_entry_keeps_how_many_days_it_spans() {
+        let mut fields = hangout_form().fields;
+        Changes::default()
+            .move_to(day("2027-01-20"))
+            .single(true)
+            .apply(&mut fields);
+        let get = |n: &str| fields.iter().find(|(f, _)| f == n).unwrap().1.clone();
+        assert_eq!(get("meeting_date"), "2027-01-20");
+        assert_eq!(get("meeting_date_end"), "2027-01-20");
+        assert_eq!(get("frequency"), "");
+        assert_eq!(get("end_repeats"), "");
+        // A full-day entry's end is the day after, as fedocal sends it.
+        let mut fields: Vec<(String, String)> = vec![
+            ("meeting_date".into(), "2026-12-21".into()),
+            ("meeting_date_end".into(), "2026-12-23".into()),
+        ];
+        move_fields(&mut fields, day("2027-01-04"));
+        assert_eq!(fields[1].1, "2027-01-06");
+        // An unreadable end moves with the start.
+        let mut fields: Vec<(String, String)> = vec![
+            ("meeting_date".into(), "2026-12-21".into()),
+            ("meeting_date_end".into(), "".into()),
+        ];
+        move_fields(&mut fields, day("2027-01-04"));
+        assert_eq!(fields[1].1, "2027-01-04");
+        assert!(!Changes::default().single(true).is_empty());
+        assert!(!Changes::default().move_to(day("2027-01-04")).is_empty());
+        let repeat = Repeat {
+            every_days: 28,
+            until: day("2027-03-17"),
+        };
+        assert!(!Changes::default().repeat(repeat).is_empty());
+        let mut fields = hangout_form().fields;
+        Changes::default().repeat(repeat).apply(&mut fields);
+        let get = |n: &str| fields.iter().find(|(f, _)| f == n).unwrap().1.clone();
+        assert_eq!(get("frequency"), "28");
+        assert_eq!(get("end_repeats"), "2027-03-17");
+    }
+
+    #[tokio::test]
+    async fn an_entry_like_another_is_added_to_its_calendar() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/hyperscale/add/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(FORM))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/hyperscale/add/"))
+            .and(body_string_contains("csrf_token=t1"))
+            .and(body_string_contains("meeting_date=2027-01-20"))
+            .and(body_string_contains("meeting_time_start=17%3A00"))
+            .and(body_string_contains("comanager=ngompa%2Csalimma"))
+            .and(body_string_contains("frequency=&"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("location", "/hyperscale/2027/1/20/"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let s = session(&server);
+        s.add_like(&hangout_form(), day("2027-01-20"), None)
+            .await
+            .unwrap();
+        // A form without a calendar has nowhere to go.
+        let err = s
+            .add_like(&EntryForm::default(), day("2027-01-20"), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("names no calendar"), "{err}");
     }
 
     #[test]

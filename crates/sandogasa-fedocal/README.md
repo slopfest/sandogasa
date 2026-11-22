@@ -30,6 +30,11 @@ and adding entries as a logged-in user.
 - `Session::can_add(calendar)` checks that the user may add to a
   calendar, and `Session::add(entry)` fills in and submits the add form,
   CSRF token included. A refusal carries fedocal's own messages.
+- `Session::add_like(form, day, repeat)` adds an entry like an existing
+  one, from its edit form (`Session::entry`): everything in the form is
+  kept, co-managers and reminders included, but the start day and the
+  repeat (a `Repeat` of 7, 14, 21 or 28 days up to a last day, or none
+  for a single entry). `EntryForm::like_on` gives the fields it sends.
 - `Session::can_edit(id)` and `Session::edit(id, changes)` do the same
   for an existing entry, and `Session::entry(id)` reads it as its edit
   form shows it. fedocal replaces every field on saving, so `edit`
@@ -39,6 +44,12 @@ and adding entries as a logged-in user.
   `Changes::whole_series` saves the series from its next occurrence on
   ("Save all"), fedocal keeping the earlier ones as a separate entry;
   otherwise that occurrence alone is changed ("Save").
+  `Changes::move_to` moves an entry to another start day, its end
+  moving with it, which suits a timed entry as well as a full-day one;
+  `Changes::single` stops it repeating and `Changes::repeat` makes it
+  repeat. Moving a series' next occurrence in the same save as
+  `single` leaves fedocal keeping a copy of the old series, so stop the
+  repeat first and move the entry in a second save.
 - `Session::cancel(id, date)` (and `can_cancel`) takes one occurrence of
   an entry off the calendar through fedocal's delete form, `date` being
   the occurrence's own day (`Meeting::local_date`); fedocal ends the

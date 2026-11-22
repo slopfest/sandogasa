@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### timebook supports monthly recurrence, with a new add command
+
+Fedora Calendar repeats an entry every 7, 14, 21 or 28 days only, so the
+CentOS Hyperscale SIG's monthly hangout, held on the third Wednesday,
+was booked as every 28 days and slipped a week whenever a month had
+five Wednesdays. By November 2026 the calendar showed it on the first
+Wednesday, and the series' next occurrence after 2026-12-02 was
+2026-12-30, in the same month.
+
+`timebook add --like <entry> --monthly 3rd-wed` books the right days,
+copying everything else from the entry: title, time and time zone,
+location, description, co-managers and reminder. The days are grouped
+into series 28 days apart, a new one starting after each five-week gap,
+so a year of a third-Wednesday meeting takes five entries. The booking
+ends at `--until` (a date), after `--count` meetings, or `--for` a span
+from today (`6m`, `1y`). Days on which the calendar already has an
+entry of that title are left alone, and a series `add` made can be
+given as the entry, so running it again later extends the booking. A
+meeting in a shared room is checked against the room's other
+bookings. `--replace` turns the entry's own series into
+the first of the new entries, keeping its page: one save stops it
+repeating from its next occurrence on, and a second moves that
+occurrence to the first day, since moving it in the same save leaves
+fedocal keeping a copy of the old series. Every entry is shown before
+anything is written, and read back afterwards. Resolves #186.
+
+sandogasa-fedocal gains what this needs: `Session::add_like` adds an
+entry like an existing one, from its edit form, with a new start day
+and an optional `Repeat`; `Changes::move_to`, `Changes::single` and
+`Changes::repeat` move an entry (timed or full-day) and stop or set its
+repeat. sandogasa-cli gains `date::span_end`, which reads a span such
+as `6m` or `2w` for a `--for` option.
+
 ### fedora-cve-triage's claim prompt calls only the bugs it closes closed
 
 On 2026-11-22, `fedora-cve-triage` moved 8 misfiled bugs from epel10

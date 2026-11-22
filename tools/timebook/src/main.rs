@@ -8,6 +8,7 @@ use chrono_tz::Tz;
 use clap::{Args, Parser, Subcommand};
 use sandogasa_fedocal::{Client, MeetingQuery};
 
+mod add;
 mod book;
 mod cancel;
 mod edit;
@@ -43,6 +44,68 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Book a meeting held on the Nth weekday of each month
+    ///
+    /// Fedora Calendar repeats an entry every 7, 14, 21 or 28 days only,
+    /// so a monthly meeting booked as every 28 days slips a week whenever
+    /// a month has five of its weekday. add books the right days instead,
+    /// copying everything else from one of your entries: the days are
+    /// grouped into series 28 days apart, a new one starting after each
+    /// five-week gap. Days the calendar already has an entry of that
+    /// title on are skipped, so running it again extends the booking.
+    /// --replace turns the entry's own series into the first of them,
+    /// keeping its page. Logs in with your Kerberos ticket (fkinit),
+    /// shows every entry, and writes them once you confirm, reading them
+    /// back.
+    Add {
+        /// The entry to copy: its id or page, or its meeting's calendar
+        #[arg(long, value_name = "ENTRY", help_heading = "Selection")]
+        like: String,
+
+        /// Part of the title of the meeting meant, in a calendar with several
+        #[arg(long, value_name = "TITLE", help_heading = "Selection")]
+        meeting: Option<String>,
+
+        /// The day of each month, e.g. 3rd-wed or last-fri
+        #[arg(long, value_name = "DAY", help_heading = "Recurrence")]
+        monthly: add::Monthly,
+
+        /// How many days from the first, booked already or not (1 to 120)
+        #[arg(
+            long,
+            value_name = "N",
+            help_heading = "Recurrence",
+            group = "end",
+            value_parser = clap::value_parser!(u64).range(1..=120)
+        )]
+        count: Option<u64>,
+
+        /// How far ahead to book from today: 6m, 1y, 12w
+        #[arg(
+            long = "for",
+            value_name = "SPAN",
+            help_heading = "Recurrence",
+            group = "end"
+        )]
+        for_span: Option<String>,
+
+        /// The last day a meeting may fall on (YYYY-MM-DD)
+        #[arg(long, value_name = "DATE", help_heading = "Recurrence", group = "end")]
+        until: Option<NaiveDate>,
+
+        /// Log in and show the entries, but write nothing
+        #[arg(long, help_heading = "Writing")]
+        dry_run: bool,
+
+        /// Turn the entry's series into the first of the new entries
+        #[arg(long, help_heading = "Writing")]
+        replace: bool,
+
+        /// Write without asking
+        #[arg(short, long, help_heading = "Writing")]
+        yes: bool,
+    },
+
     /// Cancel occurrences of one of your own meetings
     ///
     /// Takes the occurrences on the days given off Fedora Calendar, past
@@ -481,6 +544,36 @@ async fn rooms(client: &Client, from: NaiveDate, days: i64, json: bool) -> Resul
     Ok(())
 }
 
+/// `add`: book a monthly meeting like one of your own entries.
+async fn add_entries(client: &Client, args: &add::AddArgs) -> Result<(), String> {
+    use std::io::IsTerminal;
+    if args.json && !args.yes && !args.dry_run {
+        return Err(
+            "--json prints only the outcome, so it writes without asking: \
+                    add --yes, or --dry-run"
+                .into(),
+        );
+    }
+    let at_terminal = std::io::stdin().is_terminal();
+    let confirm = |question: &str, default_yes: bool| -> Result<bool, String> {
+        if !at_terminal {
+            return Err(format!(
+                "{question} needs a terminal to answer; pass --yes to write without asking"
+            ));
+        }
+        sandogasa_cli::confirm(question, default_yes).map_err(|e| e.to_string())
+    };
+    let base = sandogasa_fedocal::DEFAULT_BASE_URL;
+    let outcome = add::run(client, args, Utc::now(), confirm, move || {
+        sandogasa_fedocal::session::Session::kerberos(base)
+    })
+    .await?;
+    if args.json {
+        println!("{}", to_json(&outcome)?);
+    }
+    Ok(())
+}
+
 /// `cancel`: cancel occurrences of one of your own meetings.
 async fn cancel_occurrences(client: &Client, args: &cancel::CancelArgs) -> Result<(), String> {
     use std::io::IsTerminal;
@@ -581,6 +674,40 @@ async fn main() -> ExitCode {
     let cli = sandogasa_cli::parse_with_defaults::<Cli>(env!("CARGO_PKG_NAME"));
     let client = Client::new();
     let result = match &cli.command {
+        Command::Add {
+            like,
+            meeting,
+            monthly,
+            count,
+            for_span,
+            until,
+            dry_run,
+            replace,
+            yes,
+        } => {
+            let end = match (count, for_span, until) {
+                (Some(n), _, _) => Ok(add::End::Count(*n as usize)),
+                (_, Some(span), _) => Ok(add::End::For(span.clone())),
+                (_, _, Some(day)) => Ok(add::End::Until(*day)),
+                _ => Err("say where the booking ends: --until, --count or --for".to_string()),
+            };
+            match end {
+                Ok(end) => {
+                    let args = add::AddArgs {
+                        like: like.clone(),
+                        meeting: meeting.clone(),
+                        monthly: *monthly,
+                        end,
+                        replace: *replace,
+                        dry_run: *dry_run,
+                        yes: *yes,
+                        json: cli.json,
+                    };
+                    add_entries(&client, &args).await
+                }
+                Err(e) => Err(e),
+            }
+        }
         Command::Cancel {
             target,
             dates,

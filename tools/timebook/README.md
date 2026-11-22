@@ -19,6 +19,47 @@ cargo install timebook
 
 ## Usage
 
+### add
+
+Books a meeting held on the Nth weekday of each month, such as a
+monthly hangout on the third Wednesday, copying everything else from
+one of your own entries: title, time and time zone, location,
+description, co-managers and reminder. The entry is given as for
+`edit`: by its id or page, or by its meeting's calendar (with
+`--meeting` and part of its title when the calendar holds several).
+`--monthly` names the day (`1st` to `4th`, or `last`, then `mon` to
+`sun`), and the booking ends at `--until` (a date), after `--count`
+meetings, or `--for` a span from today (`3m`, `6m`, `1y`, `12w`).
+
+```
+$ timebook add --like https://calendar.fedoraproject.org/meeting/11171/ --monthly 3rd-wed --count 5 --replace
+"CentOS Hyperscale SIG - monthly hangout" (centos-sig-hyperscale), 17:00-18:00 US/Eastern, at https://meet.example/hangout:
+  replaces entry 11171's occurrences from Wed 2026-12-02 on (every 28 days until 2037-12-31), coming: Wed 2026-12-02, Wed 2026-12-30, Wed 2027-01-27, and 3 more
+  entry 11171 becomes Wed 2026-12-16 17:00 EST (22:00 UTC)
+  new series         Wed 2027-01-20 17:00 EST (22:00 UTC), then every 28 days to Wed 2027-03-17, 3 times
+  new entry          Wed 2027-04-21 17:00 EDT (21:00 UTC)
+Make these 3 change(s)? [y/N]:
+```
+
+Fedora Calendar repeats an entry every 7, 14, 21 or 28 days only, so
+the days are grouped into series 28 days apart, a new one starting
+after each five-week gap. Days on which the calendar already has an
+entry of that title are left alone, so running it again later extends
+the booking. A meeting in a shared room is checked against the room's
+other bookings, and any clash is shown.
+
+A series that `add` made itself can be copied as it is. Any other entry
+that repeats is refused, since its other days would stay beside the new
+entries: `--replace` turns it into the first of the new entries instead,
+keeping its id and page. The series stops repeating from its next
+occurrence on, fedocal keeping the earlier ones as a separate entry,
+and that occurrence moves to the first day. The booking starts today,
+or tomorrow once today's meeting has begun, and `--count` counts the
+days from there, booked already or not. It logs in with your Kerberos ticket
+(`fkinit`); `--dry-run` shows the entries and checks you may add to the
+calendar, `--yes` writes without asking, and `--json` (with either)
+prints the outcome. Each day is read back from the calendar afterwards.
+
 ### cancel
 
 Takes occurrences of one of your own meetings off the calendar, past or
