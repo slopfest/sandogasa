@@ -87,6 +87,30 @@ fn looks_like_build(s: &str) -> bool {
     s.matches('-').count() >= 2 && dist_tag(s).is_some()
 }
 
+/// Where a dist tag's release goes in a multi-release run: newest
+/// first, as older releases are riskier to update and go after the
+/// newer ones have had a chance to show a problem. Fedora (`fc45`
+/// before `fc44`), then ELN, then EL by major and minor compared as
+/// numbers (`el10_4` before `el10_2` before `el9`), EPEL Next before
+/// the EL release it leads (`el9.next` before `el9`).
+fn release_order(tag: &str) -> (u8, std::cmp::Reverse<u32>, std::cmp::Reverse<u32>, u8) {
+    use std::cmp::Reverse;
+    let (tag, next) = match tag.strip_suffix(".next") {
+        Some(el) => (el, 0),
+        None => (tag, 1),
+    };
+    let (family, rest) = if let Some(r) = tag.strip_prefix("fc") {
+        (0, r)
+    } else if let Some(r) = tag.strip_prefix("eln") {
+        (1, r)
+    } else {
+        (2, tag.strip_prefix("el").unwrap_or(tag))
+    };
+    let (major, minor) = rest.split_once('_').unwrap_or((rest, "0"));
+    let number = |s: &str| s.parse().unwrap_or(0);
+    (family, Reverse(number(major)), Reverse(number(minor)), next)
+}
+
 /// Regroup a command line so each build input is one release's worth.
 ///
 /// Inputs that are not builds pass through untouched and keep their
@@ -102,7 +126,9 @@ pub fn group_builds_by_release(inputs: &[String]) -> Vec<String> {
             None => out.push(input.clone()),
         }
     }
-    out.extend(by_tag.into_values().map(|nvrs| nvrs.join(",")));
+    let mut groups: Vec<(&str, Vec<&str>)> = by_tag.into_iter().collect();
+    groups.sort_by_key(|(tag, _)| release_order(tag));
+    out.extend(groups.into_iter().map(|(_, nvrs)| nvrs.join(",")));
     out
 }
 
@@ -3687,7 +3713,7 @@ mod tests {
         ]);
         assert_eq!(
             grouped,
-            ["sandogasa-0.27.1-1.el9.next", "sandogasa-0.27.1-1.fc43"]
+            ["sandogasa-0.27.1-1.fc43", "sandogasa-0.27.1-1.el9.next"]
         );
         match detect_input_type("sandogasa-0.27.1-1.el9.next") {
             InputKind::Builds(n) => {
@@ -3720,6 +3746,20 @@ mod tests {
                 other => panic!("{other:?}"),
             }
         }
+        // Releases go newest first, their numbers compared as numbers.
+        let ordered = group_builds_by_release(
+            &[
+                "el9", "el10_4", "fc44", "el10_2", "eln159", "fc45", "el9.next",
+            ]
+            .map(|t| format!("a-1-1.{t}")),
+        );
+        let tags: Vec<&str> = ordered.iter().filter_map(|g| dist_tag(g)).collect();
+        assert_eq!(
+            tags,
+            [
+                "fc45", "fc44", "eln159", "el10_4", "el10_2", "el9.next", "el9"
+            ]
+        );
         // Anything that is not a build keeps its place in the order.
         let mixed = group_builds_by_release(&[
             "FEDORA-2026-e9bb998784".to_string(),

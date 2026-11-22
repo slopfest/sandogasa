@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### ebranch checks and submits a multi-release run newest release first
+
+`ebranch check-update --submit` given builds for several releases
+checked and submitted them as el10_4, el9, fc44, fc45: el9 came between
+el10_4 and Fedora, and the oldest releases went first, because the
+builds' release groups were ordered by dist tag as a string. They now
+go newest first: Fedora, then ELN, then EL, each by major and minor
+compared as numbers, with EPEL Next ahead of the EL release it leads
+(fc45, fc44, el10_4, el10_2, el9.next, el9). Older releases are
+riskier to update, so they come after the newer ones, where a problem
+has had a chance to show first. Inputs that are not builds keep their
+order, and `--help` says how builds are grouped and ordered.
+Fixes #215.
+
 ### The repository moved to michel-slm/sandogasa
 
 On 2026-11-22 the repository moved from the slopfest organization to

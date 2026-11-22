@@ -255,7 +255,11 @@ in a single run:
 
 They are checked and submitted in order, and
 every input is validated before any of them is
-submitted. RPM Fusion is told once per package
+submitted. Builds given as NVRs are grouped into
+one update per release, ordered newest first
+(fc45, fc44, el10_4, el9), since older releases
+are riskier to update; other inputs keep their
+order, ahead of them. RPM Fusion is told once per package
 afterwards, with every update linked — which is
 why a fan-out belongs in one run: three EPEL
 minors are one rebuild for them, not three."
