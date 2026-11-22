@@ -538,6 +538,50 @@ fn report_notes(
     }
 }
 
+/// `notes` pointed at where their items are now: by the config's
+/// `[notes.moved]`, then, when the report read github.com, by asking
+/// GitHub in one request where the repositories of the notes no item in
+/// `listed` takes have gone.
+fn follow_moves(
+    mut found: Vec<notes::Stored>,
+    listed: &str,
+    cfg: &config::ReportConfig,
+    reads_github: bool,
+    verbose: bool,
+) -> Vec<notes::Stored> {
+    notes::apply_moves(&mut found, &cfg.notes.moved);
+    if !reads_github {
+        return found;
+    }
+    const GITHUB: &str = "https://api.github.com";
+    let lookup = |repos: &[String]| {
+        let token = github::find_token(GITHUB, &cfg.github_tokens)?;
+        eprintln!(
+            "Checking with GitHub whether {} repo(s) of unattached notes moved...",
+            repos.len()
+        );
+        if verbose {
+            eprintln!("[notes] GitHub GraphQL: {}", repos.join(", "));
+        }
+        sandogasa_github::Client::new(GITHUB, &token)
+            .and_then(|c| c.current_repo_names(repos))
+            .map_err(|e| e.to_string())
+    };
+    let today = chrono::Local::now().date_naive();
+    match notes::follow_github_moves(&mut found, listed, today, lookup) {
+        Ok(moves) => {
+            for (old, new) in &moves {
+                eprintln!(
+                    "{old} has moved to {new}; to match its notes without asking \
+                     GitHub, add under [notes.moved]: \"{old}\" = \"{new}\""
+                );
+            }
+        }
+        Err(e) => eprintln!("warning: cannot check whether notes' repositories moved: {e}"),
+    }
+    found
+}
+
 /// Whether a source's error says its token was refused or lacks a
 /// scope: an HTTP 401 or 403, as the clients print a status with its
 /// reason, or Forgejo's "required scope(s)". Not the bare digits, which
@@ -1057,6 +1101,12 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
     // the sections, since it summarizes what they already say and a
     // reader usually wants both.
     let by_repo = cli.by.contains(&Axis::Repo);
+    let reads_github = !cli.no_github
+        && domains.iter().any(|(_, d)| {
+            d.github
+                .as_ref()
+                .is_some_and(|g| github::instance_host(&g.instance) == "api.github.com")
+        });
     let output = if cli.json {
         let rows = by_repo.then(|| by_repo::gather(&unified));
         let mut json = serde_json::json!({
@@ -1072,6 +1122,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             if by_repo {
                 listed.push_str(&by_repo::format_markdown(&by_repo::gather(&unified)));
             }
+            let period_notes = follow_moves(period_notes, &listed, &cfg, reads_github, cli.verbose);
             let period_notes = report_notes(cli, period_notes, || listed.clone());
             let (_, rest) = notes::attach(&listed, &period_notes);
             let printed: Vec<notes::Stored> = period_notes.iter().map(notes::shown).collect();
@@ -1095,6 +1146,7 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
         // Last, so each note sits under its item and the rest close
         // the report.
         if cli.notes {
+            let period_notes = follow_moves(period_notes, &md, &cfg, reads_github, cli.verbose);
             let period_notes = report_notes(cli, period_notes, || md.clone());
             let (attached, rest) = notes::attach(&md, &period_notes);
             let rest: Vec<notes::Stored> = rest

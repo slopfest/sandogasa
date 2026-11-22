@@ -862,6 +862,69 @@ impl Client {
         Ok(out)
     }
 
+    /// The current `owner/name` of each repository in `repos` (given
+    /// as `owner/name`), following transfers and renames as GitHub
+    /// does, or `None` for one GitHub does not find (which includes a
+    /// private one the token cannot see). Any other error, such as an
+    /// organization refusing the token, fails the whole lookup, so a
+    /// refused repository is never taken for a missing one. One GraphQL
+    /// request per hundred repositories.
+    pub fn current_repo_names(
+        &self,
+        repos: &[String],
+    ) -> Result<BTreeMap<String, Option<String>>, Box<dyn std::error::Error>> {
+        let mut out = BTreeMap::new();
+        for chunk in repos.chunks(100) {
+            let mut params = Vec::new();
+            let mut fields = Vec::new();
+            let mut variables = serde_json::Map::new();
+            let mut asked = Vec::new();
+            for (i, repo) in chunk.iter().enumerate() {
+                let Some((owner, name)) = repo.split_once('/') else {
+                    out.insert(repo.clone(), None);
+                    continue;
+                };
+                params.push(format!("$o{i}: String!, $n{i}: String!"));
+                fields.push(format!(
+                    "r{i}: repository(owner: $o{i}, name: $n{i}) {{ nameWithOwner }}"
+                ));
+                variables.insert(format!("o{i}"), json!(owner));
+                variables.insert(format!("n{i}"), json!(name));
+                asked.push((i, repo));
+            }
+            if asked.is_empty() {
+                continue;
+            }
+            let query = format!("query({}) {{ {} }}", params.join(", "), fields.join(" "));
+            // A repository that is not found is an error beside the
+            // others' data, so the answer is read even with errors.
+            let answer: GraphqlResponse<BTreeMap<String, Option<RepoName>>> =
+                self.graphql_answer(&query, &serde_json::Value::Object(variables))?;
+            let refused: Vec<GraphqlError> = answer
+                .errors
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.kind.as_deref() != Some("NOT_FOUND"))
+                .collect();
+            if !refused.is_empty() {
+                return Err(graphql_failure(Some(refused)));
+            }
+            let Some(data) = answer.data else {
+                return Err(graphql_failure(answer.errors));
+            };
+            for (i, repo) in asked {
+                let current = data
+                    .get(&format!("r{i}"))
+                    .cloned()
+                    .flatten()
+                    .map(|r| r.name_with_owner);
+                out.insert(repo.clone(), current);
+            }
+        }
+        Ok(out)
+    }
+
     /// The login of the token's owner (`/user`).
     pub fn token_login(&self) -> Result<String, Box<dyn std::error::Error>> {
         let url = format!("{}/user", self.base_url);
@@ -1260,9 +1323,19 @@ struct GraphqlResponse<T> {
     errors: Option<Vec<GraphqlError>>,
 }
 
+/// A repository's current name, as GraphQL answers it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepoName {
+    name_with_owner: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct GraphqlError {
     message: String,
+    /// GitHub's kind of error, such as `NOT_FOUND` or `FORBIDDEN`.
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2092,5 +2165,73 @@ mod tests {
             name: Some("o/r".into()),
         };
         assert_eq!(evt_repo.slug(), Some("o/r"));
+    }
+
+    #[test]
+    fn moved_repositories_answer_their_current_names_in_one_request() {
+        let mut server = mockito::Server::new();
+        let m = server
+            .mock("POST", "/graphql")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""o0":"old""#.into()),
+                mockito::Matcher::Regex(r#""n2":"gone""#.into()),
+            ]))
+            .with_body(graphql_body(
+                json!({"r0": {"nameWithOwner": "new/moved"},
+                       "r1": {"nameWithOwner": "same/repo"},
+                       "r2": null}),
+                json!([{"type": "NOT_FOUND", "message": "Could not resolve"}]),
+            ))
+            .expect(1)
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let names = client
+            .current_repo_names(&[
+                "old/moved".to_string(),
+                "same/repo".to_string(),
+                "old/gone".to_string(),
+                "no-slash".to_string(),
+            ])
+            .unwrap();
+        m.assert();
+        assert_eq!(names["old/moved"].as_deref(), Some("new/moved"));
+        assert_eq!(names["same/repo"].as_deref(), Some("same/repo"));
+        assert_eq!(names["old/gone"], None);
+        assert_eq!(names["no-slash"], None);
+    }
+
+    #[test]
+    fn a_name_lookup_without_data_is_an_error() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/graphql")
+            .with_body(graphql_body(
+                json!(null),
+                json!([{"message": "Bad credentials"}]),
+            ))
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let err = client
+            .current_repo_names(&["a/b".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Bad credentials"), "{err}");
+        // A repository refused rather than missing fails the lookup.
+        let mut server = mockito::Server::new();
+        server
+            .mock("POST", "/graphql")
+            .with_body(graphql_body(
+                json!({"r0": null}),
+                json!([{"type": "FORBIDDEN", "message": "SAML enforcement"}]),
+            ))
+            .create();
+        let client = Client::new(&server.url(), "tok").unwrap();
+        let err = client
+            .current_repo_names(&["org/r".to_string()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("SAML enforcement"), "{err}");
+        // Nothing to ask makes no request.
+        assert!(client.current_repo_names(&[]).unwrap().is_empty());
     }
 }

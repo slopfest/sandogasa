@@ -77,6 +77,11 @@ pub struct NotesConfig {
     /// says; unset, `include`.
     #[serde(default)]
     pub unattached: Option<crate::notes::Unattached>,
+    /// Where moved items are now: an old URL prefix (`host/path`, such
+    /// as `github.com/old-owner/repo`) to its new one, applied to each
+    /// note's URL before it is matched to the report's items.
+    #[serde(default)]
+    pub moved: BTreeMap<String, String>,
 }
 
 /// A person's identity across multiple services. The profile key
@@ -549,6 +554,23 @@ mod tests {
 
     fn toml_table(input: &str) -> toml::Value {
         toml::from_str(input).unwrap()
+    }
+
+    #[test]
+    fn moved_repositories_are_read_from_the_notes_table() {
+        let cfg: ReportConfig = toml::from_str(
+            r#"
+[notes.moved]
+"github.com/old/repo" = "github.com/new/repo"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.notes.moved["github.com/old/repo"],
+            "github.com/new/repo"
+        );
+        let empty: ReportConfig = toml::from_str("").unwrap();
+        assert!(empty.notes.moved.is_empty());
     }
 
     #[test]

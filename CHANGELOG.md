@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### sandogasa-report keeps notes attached after a repository moves
+
+A note written before its repository moved to another owner, such as
+slopfest/hansei to michel-slm/hansei on 2026-11-22, still named the old
+owner, while the report listed the repository under its new one, so
+the note fell to "Notes on items not in this report", or was left out
+of a shared report. `[notes.moved]` in the config now maps an old URL
+prefix to its new one, on any forge, before notes are matched. When a
+report reads github.com, the github.com notes still unattached are
+checked with GitHub in one GraphQL request, which follows transfers
+and renames, and each move found is printed with the `[notes.moved]`
+line that matches its notes without the lookup. Notes from a private
+directory and embargoed notes are never sent, and a repository GitHub
+refuses to show, rather than does not find, fails the lookup with
+GitHub's reason. sandogasa-github gains `current_repo_names`, the
+batched lookup. `notes --url` still matches the URL as written.
+Refs #217.
+
 ### sandogasa-report lists Launchpad PPA uploads
 
 Source packages uploaded to Launchpad PPAs appeared in no report, so a

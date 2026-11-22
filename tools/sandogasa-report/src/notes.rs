@@ -24,6 +24,7 @@
 //! only to a private directory, until `notes release` moves it out
 //! once the embargo has lifted.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::{NaiveDate, NaiveDateTime};
@@ -610,6 +611,117 @@ pub fn url_key(url: &str) -> String {
     key
 }
 
+/// `url` with the prefix `moved` maps it from replaced: each entry
+/// maps an old `host/path` to a new one (a scheme on either is
+/// ignored), matched on whole path segments and without regard to
+/// ASCII case, the longest one winning. `None` when no entry covers
+/// `url`.
+pub fn moved_url(url: &str, moved: &BTreeMap<String, String>) -> Option<String> {
+    let url = url.trim();
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (scheme, rest),
+        None => ("https", url),
+    };
+    // A GitHub API URL is matched as the web page it stands for, and
+    // stays an API URL.
+    const API: &str = "api.github.com/repos/";
+    if rest.len() > API.len() && rest[..API.len()].eq_ignore_ascii_case(API) {
+        let web = format!("github.com/{}", &rest[API.len()..]);
+        let moved_web = moved_url(&web, moved)?;
+        let path = moved_web.strip_prefix("https://")?;
+        return Some(match path.strip_prefix("github.com/") {
+            Some(repo_path) => format!("{scheme}://{API}{repo_path}"),
+            None => format!("{scheme}://{path}"),
+        });
+    }
+    let (old_len, new) = moved
+        .iter()
+        .filter_map(|(old, new)| {
+            let old = bare_prefix(old);
+            let head = rest.get(..old.len())?;
+            let after = &rest[old.len()..];
+            (!old.is_empty()
+                && head.eq_ignore_ascii_case(old)
+                && (after.is_empty() || after.starts_with(['/', '?', '#'])))
+            .then_some((old.len(), bare_prefix(new)))
+        })
+        .max_by_key(|(len, _)| *len)?;
+    Some(format!("{scheme}://{new}{}", &rest[old_len..]))
+}
+
+/// Point the notes `moved` covers at where their items are now (see
+/// [`moved_url`]); the number of notes changed.
+pub fn apply_moves(notes: &mut [Stored], moved: &BTreeMap<String, String>) -> usize {
+    let mut changed = 0;
+    for stored in notes.iter_mut() {
+        let Some(url) = &stored.note.url else {
+            continue;
+        };
+        if let Some(new) = moved_url(url, moved) {
+            stored.note.url = Some(new);
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// The github.com repositories (`owner/repo`, lowercase, sorted, each
+/// once) the notes at `indices` link into, leaving out notes from a
+/// private directory and notes still embargoed on `today`, whose
+/// repositories are not to be sent anywhere.
+pub fn github_repos(notes: &[Stored], indices: &[usize], today: NaiveDate) -> Vec<String> {
+    let mut repos: Vec<String> = indices
+        .iter()
+        .filter_map(|&i| notes.get(i))
+        .filter(|s| !s.private && !embargoed(&s.note, today))
+        .filter_map(|s| s.note.url.as_deref())
+        .filter_map(|url| {
+            let key = url_key(url);
+            let path = key.strip_prefix("github.com/")?;
+            let path = path.split(['?', '#']).next().unwrap_or("");
+            let mut parts = path.split('/');
+            let (owner, repo) = (parts.next()?, parts.next()?);
+            let repo = repo.strip_suffix(".git").unwrap_or(repo);
+            (!owner.is_empty() && !repo.is_empty()).then(|| format!("{owner}/{repo}"))
+        })
+        .collect();
+    repos.sort();
+    repos.dedup();
+    repos
+}
+
+/// Point the github.com notes no item in `listed` takes at where their
+/// repositories are now, as `lookup` answers for all of them at once
+/// (`owner/repo` to its current name, `None` when not found), leaving
+/// out notes that are private or embargoed on `today`; the moves
+/// found, as `[notes.moved]` entries (old prefix, new prefix).
+pub fn follow_github_moves(
+    notes: &mut [Stored],
+    listed: &str,
+    today: NaiveDate,
+    lookup: impl FnOnce(&[String]) -> Result<BTreeMap<String, Option<String>>, String>,
+) -> Result<Vec<(String, String)>, String> {
+    let (_, rest) = attach(listed, notes);
+    let repos = github_repos(notes, &rest, today);
+    if repos.is_empty() {
+        return Ok(Vec::new());
+    }
+    let moves: BTreeMap<String, String> = lookup(&repos)?
+        .into_iter()
+        .filter_map(|(old, now)| {
+            let now = now?;
+            (!now.eq_ignore_ascii_case(&old))
+                .then(|| (format!("github.com/{old}"), format!("github.com/{now}")))
+        })
+        .collect();
+    let mut unplaced: Vec<Stored> = rest.iter().map(|&i| notes[i].clone()).collect();
+    apply_moves(&mut unplaced, &moves);
+    for (&i, moved) in rest.iter().zip(unplaced) {
+        notes[i] = moved;
+    }
+    Ok(moves.into_iter().collect())
+}
+
 /// The bug number of a Red Hat Bugzilla short form: `rhbz#N`,
 /// `rhbz N`, `RHBZ:N`, any case.
 fn rhbz_id(url: &str) -> Option<&str> {
@@ -619,6 +731,16 @@ fn rhbz_id(url: &str) -> Option<&str> {
     }
     let id = url[4..].trim_start_matches(['#', ':', ' ']);
     (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(id)
+}
+
+/// A `[notes.moved]` prefix without its scheme or a trailing `/`.
+fn bare_prefix(prefix: &str) -> &str {
+    let prefix = prefix.trim();
+    let prefix = prefix
+        .strip_prefix("https://")
+        .or_else(|| prefix.strip_prefix("http://"))
+        .unwrap_or(prefix);
+    prefix.trim_end_matches('/')
 }
 
 /// The forge sections of a report, by their `###` heading.
@@ -2135,5 +2257,155 @@ mod tests {
         );
         // One whose day has come is printed in full.
         assert!(format_list(&printed[1..]).contains("The fix."));
+    }
+
+    fn noted(url: &str, private: bool) -> Stored {
+        Stored {
+            path: PathBuf::from("n.md"),
+            private,
+            hidden: false,
+            note: note(Some(url), "2026-11-18", "Why."),
+        }
+    }
+
+    #[test]
+    fn a_moved_prefix_rewrites_whole_segments_only() {
+        let moved = BTreeMap::from([
+            (
+                "github.com/old/sandogasa".to_string(),
+                "github.com/new/sandogasa".to_string(),
+            ),
+            // A scheme and a trailing slash in the table do not count.
+            (
+                "https://github.com/old/".to_string(),
+                "github.com/elsewhere".to_string(),
+            ),
+        ]);
+        assert_eq!(
+            moved_url("https://github.com/Old/Sandogasa/pull/3", &moved).as_deref(),
+            Some("https://github.com/new/sandogasa/pull/3")
+        );
+        assert_eq!(
+            moved_url("https://github.com/old/sandogasa", &moved).as_deref(),
+            Some("https://github.com/new/sandogasa")
+        );
+        assert_eq!(
+            moved_url("http://github.com/old/sandogasa?tab=x", &moved).as_deref(),
+            Some("http://github.com/new/sandogasa?tab=x")
+        );
+        // The longest prefix wins; a shorter one still covers the rest.
+        assert_eq!(
+            moved_url("https://github.com/old/hansei", &moved).as_deref(),
+            Some("https://github.com/elsewhere/hansei")
+        );
+        // Not a whole segment.
+        let only = BTreeMap::from([(
+            "github.com/old/sandogasa".to_string(),
+            "github.com/new/sandogasa".to_string(),
+        )]);
+        assert_eq!(
+            moved_url("https://github.com/old/sandogasa-foo", &only),
+            None
+        );
+        assert_eq!(moved_url("rhbz#123", &only), None);
+        assert_eq!(moved_url("https://gitlab.com/old/sandogasa", &only), None);
+        // A bare host/path gets https.
+        assert_eq!(
+            moved_url("github.com/old/sandogasa/issues/1", &only).as_deref(),
+            Some("https://github.com/new/sandogasa/issues/1")
+        );
+        let mut notes = vec![
+            noted("https://github.com/old/sandogasa/pull/1", false),
+            noted("https://github.com/other/repo", false),
+        ];
+        notes.push(Stored {
+            note: note(None, "2026-11-18", "No URL."),
+            ..noted("x", false)
+        });
+        assert_eq!(apply_moves(&mut notes, &only), 1);
+        assert_eq!(
+            notes[0].note.url.as_deref(),
+            Some("https://github.com/new/sandogasa/pull/1")
+        );
+    }
+
+    #[test]
+    fn unattached_github_notes_follow_their_repository_to_its_new_owner() {
+        let report = "### GitHub\n\n#### Commits by repo\n\n- `new/hansei`: 6\n\
+                      - [PR](https://github.com/kept/repo/pull/2)\n";
+        let mut notes = vec![
+            noted("https://github.com/old/hansei/commit/8ab1b2e", false),
+            noted("https://github.com/kept/repo/pull/2", false),
+            noted("https://github.com/Old/Gone", false),
+            // Never sent anywhere: from a private directory.
+            noted("https://github.com/secret/fix/pull/9", true),
+            noted("https://gitlab.com/old/hansei", false),
+            // Nor an embargoed note outside one.
+            Stored {
+                note: Note {
+                    headers: vec![("embargo".into(), "until disclosed".into())],
+                    ..note(
+                        Some("https://github.com/acme/hidden/pull/3"),
+                        "2026-11-18",
+                        "Why.",
+                    )
+                },
+                ..noted("x", false)
+            },
+            // An API URL follows its repository too, and stays one.
+            noted("https://api.github.com/repos/old/hansei/pulls/4", false),
+        ];
+        let mut asked = Vec::new();
+        let moves = follow_github_moves(
+            &mut notes,
+            report,
+            day("2026-11-22"),
+            |repos: &[String]| {
+                asked = repos.to_vec();
+                Ok(BTreeMap::from([
+                    ("old/hansei".to_string(), Some("new/hansei".to_string())),
+                    ("old/gone".to_string(), None),
+                ]))
+            },
+        )
+        .unwrap();
+        // Asked once, for the unattached public ones only.
+        assert_eq!(asked, ["old/gone", "old/hansei"]);
+        assert_eq!(
+            moves,
+            [(
+                "github.com/old/hansei".to_string(),
+                "github.com/new/hansei".to_string()
+            )]
+        );
+        assert_eq!(
+            notes[0].note.url.as_deref(),
+            Some("https://github.com/new/hansei/commit/8ab1b2e")
+        );
+        assert_eq!(
+            notes[6].note.url.as_deref(),
+            Some("https://api.github.com/repos/new/hansei/pulls/4")
+        );
+        let (_, rest) = attach(report, &notes);
+        // Its pull request is not in this report, so it stays unattached.
+        assert_eq!(rest, [2, 3, 4, 5, 6]);
+
+        // Nothing unattached on github.com: GitHub is not asked.
+        let mut placed = vec![noted("https://github.com/kept/repo/pull/2", false)];
+        let none = follow_github_moves(&mut placed, report, day("2026-11-22"), |_: &[String]| {
+            panic!("asked without need")
+        })
+        .unwrap();
+        assert!(none.is_empty());
+        // A failed lookup is reported and changes nothing.
+        let mut notes = vec![noted("https://github.com/old/hansei", false)];
+        let err = follow_github_moves(&mut notes, report, day("2026-11-22"), |_: &[String]| {
+            Err("no token".into())
+        });
+        assert_eq!(err.unwrap_err(), "no token");
+        assert_eq!(
+            notes[0].note.url.as_deref(),
+            Some("https://github.com/old/hansei")
+        );
     }
 }

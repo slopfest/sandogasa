@@ -285,6 +285,9 @@ dir = "~/Nextcloud/projects/notes/sandogasa-report"
 # dirs = ["~/team-notes"]           # more to read, after dir
 # private = ["~/src/embargoed/notes"]
 # unattached = "ask"   # include (default), exclude or ask
+
+# [notes.moved]         # where moved repositories are now
+# "github.com/old-owner/repo" = "github.com/new-owner/repo"
 ```
 
 Notes are read from `dir`, then `dirs`, then `private`. A private
@@ -326,17 +329,31 @@ fragment and tracking parameters (`utm_*`) do not count, nor the path's
 case on GitHub and GitLab; a Bugzilla bug matches in any form (`rhbz#N`,
 `/N`, `show_bug.cgi?id=N` with other parameters), a GitHub API URL
 matches the web page, and a GitLab work item (`/-/work_items/N`) its
-issue page (`/-/issues/N`). Notes no item took close the report in a
-section of their own, "Notes on items not in this report", grouped by
-the host their URL points at, those without a URL last, so the sources a
-report does not cover show at a glance. `--unattached-notes exclude`
-leaves them out of the Markdown report and `ask` asks (including them
-without a terminal); the default is `include`, or what `[notes]
-unattached` in the config says. Below `--detailed --detailed`, some
-items are counted rather than listed, so their notes land in this
-section too. With `--json`, the notes come as a `notes` array beside
-`report`, each with the `key` its URL is matched by and whether an item
-took it (`attached`), whatever `--unattached-notes` says.
+issue page (`/-/issues/N`).
+
+A note written before its repository moved to another owner or name
+still names the old one, while the report names the new one.
+`[notes.moved]` maps an old URL prefix to the new one, on any forge,
+and is applied to each note's URL before matching; it matches whole
+path segments in any case, the longest prefix wins, and it covers
+GitHub API URLs too. When the report reads github.com, the github.com
+notes still unattached after that are checked with GitHub in one
+request, which follows transfers and renames; a moved repository is
+reported with the `[notes.moved]` line that matches its notes without
+the lookup. Notes from a private directory, and embargoed notes, are
+never part of that request.
+
+Notes no item took close the report in a section of their own,
+"Notes on items not in this report", grouped by the host their URL
+points at, those without a URL last, so the sources a report does not
+cover show at a glance. `--unattached-notes exclude` leaves them out of
+the Markdown report and `ask` asks (including them without a terminal);
+the default is `include`, or what `[notes] unattached` in the config
+says. Below `--detailed --detailed`, some items are counted rather than
+listed, so their notes land in this section too. With `--json`, the
+notes come as a `notes` array beside `report`, each with the `key` its
+URL is matched by and whether an item took it (`attached`), whatever
+`--unattached-notes` says.
 
 A report is made to be shared unless `--private` is given: a note then
 shows only under an item the printed report shows (so it is no more

@@ -17,6 +17,9 @@ period:
   UTC;
 - `commit_counts(login, repos, since, until)`: the user's commits on
   each repository's default branch, 25 repositories to a request.
+- `current_repo_names(repos)`: where each repository is now, after a
+  transfer or rename (`None` when not found), 100 repositories to a
+  request.
 
 A window that names 100 repositories, the most GitHub gives, is split
 until none does. Items GitHub withholds from the token (an
