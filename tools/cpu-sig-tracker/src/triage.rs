@@ -284,6 +284,23 @@ pub fn cve_line(cve: &str, ratings: &[Rating]) -> String {
     )
 }
 
+/// The priority label for the most severe CVE `text`'s CVE lines rate
+/// (`— high (Red Hat: Important …)` is `priority::major`), the way
+/// `jira` sets a RHEL issue's priority from it: for an update with no
+/// RHEL issue to take a priority from, as a fix taken from another
+/// distribution has. `None` when no line is rated.
+pub fn cve_priority_label(text: &str) -> Option<String> {
+    let level = text
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix(CVE_LINE))
+        .filter_map(|rest| {
+            let (_, rated) = rest.split_once(" — ")?;
+            sandogasa_cve::severity::Level::parse(rated.split_whitespace().next()?)
+        })
+        .max()?;
+    priority_label([crate::jira_issue::priority_for(level)])
+}
+
 /// The CVEs a body's CVE lines name.
 pub fn parse_cve_lines(body: &str) -> Vec<String> {
     cves_in(
@@ -326,6 +343,33 @@ pub fn priority_change(labels: &[String], want: &str) -> (Vec<String>, Vec<Strin
 mod tests {
     use super::*;
     use sandogasa_cve::severity::Level;
+
+    #[test]
+    fn a_cve_lines_severity_names_the_priority_label() {
+        let line = |cve: &str, rated: &str| {
+            format!(
+                "- **CVE**: [{cve}](https://access.redhat.com/security/cve/{cve}) — {rated}; [NVD](x)"
+            )
+        };
+        let body = format!(
+            "{}\n{}\n- **Release**: c9s\n",
+            line("CVE-2026-1", "medium (Red Hat: Moderate)"),
+            line("CVE-2026-2", "high (Red Hat: Important (CVSS 3: 7.8))"),
+        );
+        assert_eq!(
+            cve_priority_label(&body).as_deref(),
+            Some("priority::major")
+        );
+        assert_eq!(
+            cve_priority_label(&line("CVE-2026-3", "critical (NVD: 9.8)")).as_deref(),
+            Some("priority::critical")
+        );
+        assert_eq!(
+            cve_priority_label(&line("CVE-2026-4", "not rated yet")),
+            None
+        );
+        assert_eq!(cve_priority_label("- **Release**: c9s"), None);
+    }
 
     #[test]
     fn the_most_urgent_jira_priority_names_the_label() {

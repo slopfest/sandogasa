@@ -51,19 +51,22 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker file-issue
-\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-embargoed\fR] [\fB\-\-note\fR] [\fB\-\-release\fR] [\fB\-\-type\fR] [\fB\-\-assign\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIMR_URL\fR>
+\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-branch\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-embargoed\fR] [\fB\-\-note\fR] [\fB\-\-release\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-type\fR] [\fB\-\-assign\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIMR_URL\fR]
 .PP
 File a tracking issue in the proposed_updates GitLab group for a given Merge Request URL
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIMR_URL\fR>
+[\fIMR_URL\fR]
 Full Merge Request URL to track, e.g. `gitlab.com/redhat/centos\-stream/rpms/xz/\-/merge_requests/42` (with the https:// scheme)
 .SH ISSUE
 .TP
 \fB\-\-affected\fR \fI<AFFECTED>\fR
 The stock build the update fixes (default: stock\*(Aqs current build; `status \-\-refresh` fills it in later otherwise)
+.TP
+\fB\-\-branch\fR \fI<BRANCH>\fR
+Instead of an MR: the branch of a fix taken from another distribution (cpu\-sig\-tracker import), read from the checkout
 .TP
 \fB\-\-expected\-fix\fR \fI<EXPECTED_FIX>\fR
 The stock build expected to carry the fix (default: the SIG\*(Aqs build without its ~proposed; `status \-\-refresh` fills it in later otherwise)
@@ -79,6 +82,9 @@ Free\-form context note prepended to the issue body as a lead paragraph before t
 .TP
 \fB\-\-release\fR \fI<RELEASE>\fR
 Override the release auto\-derived from the MR target branch (e.g. `c10s`)
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The checkout \-\-branch is read from (default: the current directory)
 .TP
 \fB\-\-type\fR \fI<ISSUE_TYPE>\fR
 The update\*(Aqs type label (default: security when it fixes a CVE; asked otherwise, and required without a terminal)

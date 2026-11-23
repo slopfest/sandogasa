@@ -36,6 +36,29 @@ fix not proposed to CentOS Stream. A tracking issue now matches a
 branch named after a CVE through its CVE line
 (`sandogasa_cbs::tracking::tracks_proposed_branch`). Refs #233.
 
+### cpu-sig-tracker files a tracking issue for an imported fix
+
+`cbspkg build` found no tracking issue to post to for a branch
+`import` made, and `file-issue` could not file one: it took only a
+CentOS Stream merge request's URL, which a fix taken from AlmaLinux
+does not have. `file-issue --branch <branch> [-C <dir>]` files it from
+the branch's commit instead: its subject and body, the CVEs and RHEL
+issues it names, the release from the branch's name, and the package
+from the checkout's remotes. The issue says where the fix came from,
+`- **Source**: Fix taken from AlmaLinux <commit URL>; no Stream merge
+request opened`, in place of the MR line, and has a JIRA line only
+when the commit names a RHEL issue. With no RHEL issue to take a
+priority from, the `priority::` label comes from the most severe CVE,
+as `jira` sets a RHEL issue's priority (Important is
+`priority::major`), and `status --refresh` adds it the same way. A
+branch named after an advisory
+gets an `- **Advisory**:` line, by which `cbspkg build` finds the
+issue. `status` reads the Source line back: such
+an issue needs no MR or RHEL issue to be complete, is never suggested
+`no-jira`, and keeps its Source and Advisory lines on `--refresh`.
+`import` ends with the `file-issue --branch` command for each branch.
+Resolves #233.
+
 ### sandogasa-distgit edits a spec's patches, Release and changelog
 
 The `spec` module can now add a patch the way the spec numbers its

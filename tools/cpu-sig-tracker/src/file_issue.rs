@@ -6,13 +6,18 @@
 //! corresponding `CentOS/proposed_updates/rpms/<pkg>` project on
 //! gitlab.com. The issue body is a standardized markdown block
 //! that `status` and `sync-issues` can parse back later.
+//!
+//! A fix taken from another distribution (`import`, #233) has no MR:
+//! given its branch instead, the change is read from the branch's
+//! commit, and the body names where it came from (a Source line) in
+//! place of the MR line, with a JIRA line only for a RHEL issue.
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use crate::gitlab;
 use crate::jira;
-use crate::utils::{format_jira_lines, format_mr_line};
+use crate::utils::{format_jira_lines, format_mr_line, format_source_line};
 
 /// Label applied to tracking issues so `sync-issues` and
 /// `status` can identify them.
@@ -71,12 +76,23 @@ pub struct FileIssueArgs {
     /// Full Merge Request URL to track, e.g.
     /// `gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42`
     /// (with the https:// scheme).
-    pub mr_url: String,
+    #[arg(required_unless_present = "branch")]
+    pub mr_url: Option<String>,
 
     /// The stock build the update fixes (default: stock's current
     /// build; `status --refresh` fills it in later otherwise)
     #[arg(long, help_heading = "Issue")]
     pub affected: Option<String>,
+
+    /// Instead of an MR: the branch of a fix taken from another
+    /// distribution (cpu-sig-tracker import), read from the checkout
+    #[arg(
+        long,
+        conflicts_with = "mr_url",
+        value_name = "BRANCH",
+        help_heading = "Issue"
+    )]
+    pub branch: Option<String>,
 
     /// The stock build expected to carry the fix (default: the SIG's
     /// build without its ~proposed; `status --refresh` fills it in
@@ -108,6 +124,17 @@ pub struct FileIssueArgs {
     /// branch (e.g. `c10s`).
     #[arg(long, help_heading = "Issue")]
     pub release: Option<String>,
+
+    /// The checkout --branch is read from (default: the current
+    /// directory)
+    #[arg(
+        short = 'C',
+        long,
+        value_name = "DIR",
+        requires = "branch",
+        help_heading = "Issue"
+    )]
+    pub repo: Option<std::path::PathBuf>,
 
     /// The update's type label (default: security when it fixes a CVE;
     /// asked otherwise, and required without a terminal)
@@ -181,38 +208,206 @@ pub fn sig_repo_exists(package: &str) -> Result<bool, Box<dyn std::error::Error>
         .is_some())
 }
 
-pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
-    let (_parsed_base, mr_project, iid) = gitlab::parse_mr_url(&args.mr_url)?;
+/// The change a tracking issue is filed for: a CentOS Stream merge
+/// request, or the branch of a fix taken from another distribution.
+#[derive(Debug)]
+struct Change {
+    package: String,
+    release: String,
+    /// The MR's title, or the branch's commit subject.
+    title: String,
+    /// The MR's description, or the commit's body.
+    description: String,
+    web_url: String,
+    state: Option<String>,
+    source_branch: Option<String>,
+    /// The Source line's text, for an imported fix.
+    source: Option<String>,
+    /// The Advisory line, for an imported fix whose branch is named
+    /// after an advisory.
+    advisory: Option<String>,
+    jira_keys: Vec<String>,
+}
+
+/// The change behind `mr_url`.
+fn change_from_mr(
+    args: &FileIssueArgs,
+    mr_url: &str,
+) -> Result<Change, Box<dyn std::error::Error>> {
+    let (_parsed_base, mr_project, iid) = gitlab::parse_mr_url(mr_url)?;
     if args.verbose {
         eprintln!("[cpu-sig-tracker] fetching MR {iid} from {mr_project}");
     }
-
     let package = package_from_project(&mr_project)
-        .ok_or_else(|| format!("could not extract package name from '{mr_project}'"))?;
-
+        .ok_or_else(|| format!("could not extract package name from '{mr_project}'"))?
+        .to_string();
     let mr_client = gitlab::client(&crate::utils::gitlab_base(), &mr_project)?;
     let mr = mr_client.merge_request(iid)?;
-
     let release = args
         .release
         .clone()
         .unwrap_or_else(|| mr.target_branch.clone());
-
     let jira_keys = if args.jira.is_empty() {
         extract_jira_keys(&mr.title, mr.description.as_deref())
     } else {
         args.jira.clone()
     };
+    Ok(Change {
+        package,
+        release,
+        title: mr.title.clone(),
+        description: mr.description.clone().unwrap_or_default(),
+        web_url: mr.web_url.clone(),
+        state: Some(mr.state.clone()),
+        source_branch: Some(mr.source_branch.clone()),
+        source: None,
+        advisory: None,
+        jira_keys,
+    })
+}
+
+/// The fix taken from another distribution on `branch`, from its
+/// newest commit as `import` wrote it: the subject and body, the
+/// `Taken from <distro>: <url>` line, and any `Resolves:` RHEL issue.
+fn change_from_branch(
+    args: &FileIssueArgs,
+    branch: &str,
+) -> Result<Change, Box<dyn std::error::Error>> {
+    let repo = args.repo.clone().unwrap_or_else(|| ".".into());
+    let git = |a: &[&str]| -> Result<String, String> {
+        let out = std::process::Command::new("git")
+            .args(a)
+            .current_dir(&repo)
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "git {}: {}",
+                a.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    };
+    let package = sandogasa_cbs::remotes::Remotes::parse(&git(&["remote", "-v"])?)
+        .package()
+        .map(str::to_string)
+        .ok_or("no remote of the checkout names the package's repo")?;
+    let message = git(&["log", "-1", "--format=%B", "--end-of-options", branch, "--"])?;
+    let (title, description) = message.split_once('\n').unwrap_or((message.as_str(), ""));
+    let (distro, url) = imported_from(description).ok_or_else(|| {
+        format!(
+            "{branch}'s commit says no `Taken from <distribution>: <URL>`: it is not a fix \
+             taken from another distribution; file the issue from its merge request instead"
+        )
+    })?;
+    let named = sandogasa_cbs::tracking::proposed_release(branch);
+    if let (Some(given), Some(named)) = (&args.release, named)
+        && given != named
+    {
+        return Err(format!(
+            "--release {given} disagrees with {branch}: cbspkg finds a branch's issue by the \
+             release its name starts with"
+        )
+        .into());
+    }
+    let release = match &args.release {
+        Some(r) => r.clone(),
+        None => named
+            .ok_or_else(|| {
+                format!("{branch} is not named <release>-proposed-<id>: pass --release")
+            })?
+            .to_string(),
+    };
+    let jira_keys = if args.jira.is_empty() {
+        extract_jira_keys(title, Some(description))
+    } else {
+        args.jira.clone()
+    };
+    let source = format_source_line(distro, url);
+    let source = source
+        .strip_prefix(crate::utils::SOURCE_LINE)
+        .unwrap_or(&source)
+        .trim()
+        .to_string();
+    let advisory = branch
+        .split_once("-proposed-")
+        .and_then(|(release, id)| advisory_line(id, release));
+    Ok(Change {
+        package,
+        release,
+        advisory,
+        title: title.trim().to_string(),
+        description: description.trim().to_string(),
+        web_url: url.to_string(),
+        state: None,
+        source_branch: Some(branch.to_string()),
+        source: Some(source),
+        jira_keys,
+    })
+}
+
+/// The `- **Advisory**:` line for a branch named after an advisory
+/// (`ALSA-2026-1234`, the `:` git refuses written as `-`), as its vendor
+/// writes it and linked to its page, for `release` (`c9s`); `None` for
+/// a branch named after a RHEL issue or a CVE. `cbspkg build` finds the
+/// tracking issue by this line (`tracks_proposed_branch`).
+pub(crate) fn advisory_line(id: &str, release: &str) -> Option<String> {
+    if id.starts_with("CVE-") || id.starts_with("RHEL-") {
+        return None;
+    }
+    let (vendor, rest) = id.split_once('-')?;
+    let (year, number) = rest.split_once('-')?;
+    if year.len() != 4 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let advisory = format!("{vendor}-{year}:{number}");
+    let major = release.trim_start_matches('c').trim_end_matches('s');
+    let url = match vendor {
+        "ALSA" => format!("https://errata.almalinux.org/{major}/{id}.html"),
+        "RHSA" | "RHBA" | "RHEA" => format!("https://access.redhat.com/errata/{advisory}"),
+        _ => return Some(format!("- **Advisory**: [{advisory}]")),
+    };
+    Some(format!("- **Advisory**: [{advisory}]({url})"))
+}
+
+/// The distribution and commit URL a commit message's `Taken from
+/// <distro>: <url>` line names, as `import` writes it.
+pub(crate) fn imported_from(message: &str) -> Option<(&str, &str)> {
+    // The last one: import writes its own after the message it took,
+    // which may cite where that distribution took the fix from.
+    message.lines().rev().find_map(|l| {
+        let (distro, url) = l.trim().strip_prefix("Taken from ")?.split_once(": ")?;
+        let url = url.trim();
+        (url.starts_with("https://") && !distro.is_empty()).then_some((distro, url))
+    })
+}
+
+pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let change = match (&args.mr_url, &args.branch) {
+        (Some(url), _) => change_from_mr(args, url)?,
+        (None, Some(branch)) => change_from_branch(args, branch)?,
+        (None, None) => return Err("give an MR URL, or --branch".into()),
+    };
+    let package = change.package.as_str();
+    let release = change.release.clone();
+    let jira_keys = change.jira_keys.clone();
     // Before Jira is asked anything: whether there is a repo to file
     // in. A dry run says so and still shows the issue.
     if !sig_repo_exists(package)? {
-        let help = missing_sig_repo_help(
-            &mr.web_url,
-            package,
-            &release,
-            Some(&mr.source_branch),
-            jira_keys.first().map(String::as_str),
-        );
+        let help = match &change.source {
+            None => missing_sig_repo_help(
+                &change.web_url,
+                package,
+                &release,
+                change.source_branch.as_deref(),
+                jira_keys.first().map(String::as_str),
+            ),
+            Some(_) => format!(
+                "the SIG has no repo for {package} yet; create it with:\n  \
+                 cbspkg sig-repo {package} --sig proposed-updates"
+            ),
+        };
         if !args.dry_run {
             return Err(format!("{help}\nthen run this again.").into());
         }
@@ -235,11 +430,11 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     let interactive = !args.dry_run && std::io::stdin().is_terminal();
     let settled = crate::triage::settle_cves(
         crate::triage::update_cves(
-            std::iter::once(mr.title.as_str()).chain(
+            std::iter::once(change.title.as_str()).chain(
                 seen.iter()
                     .filter_map(|(_, s)| s.as_ref().map(|s| s.summary.as_str())),
             ),
-            mr.description.as_deref().unwrap_or(""),
+            &change.description,
             seen.iter()
                 .filter_map(|(_, s)| s.as_ref()?.description.as_deref()),
         ),
@@ -249,11 +444,15 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     );
     settled.warn_left_out();
     let cves = settled.cves;
-    let cve_lines = crate::triage::rated_cve_lines(&cves, args.verbose);
+    let mut cve_lines = crate::triage::rated_cve_lines(&cves, args.verbose);
+    cve_lines.extend(change.advisory.clone());
+    // The RHEL issues' priority, else, with none to take it from, the
+    // CVEs' severity, as `jira` would set it.
     let priority = crate::triage::priority_label(
         seen.iter()
             .filter_map(|(_, s)| s.as_ref()?.priority.as_deref()),
-    );
+    )
+    .or_else(|| crate::triage::cve_priority_label(&cve_lines.join("\n")));
     // The builds, from the evidence when not named (#101): stock's build
     // expected to carry the fix, named by the SIG's in -release or
     // -testing, and stock's current build, the affected one while the
@@ -297,9 +496,10 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
 
     let body = format_body(&BodyFields {
         release: &release,
-        mr_url: &mr.web_url,
-        mr_title: &mr.title,
-        mr_state: Some(&mr.state),
+        mr_url: &change.web_url,
+        mr_title: &change.title,
+        mr_state: change.state.as_deref(),
+        source: change.source.as_deref(),
         jira: &jira,
         cve_lines: &cve_lines,
         not_fixed: &settled.declined,
@@ -308,7 +508,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
         note: args.note.as_deref(),
     });
 
-    let title = format_title(package, &mr.title);
+    let title = format_title(package, &change.title);
 
     let mut labels = build_labels(&release, issue_type);
     if let Some(p) = &priority {
@@ -447,6 +647,9 @@ struct BodyFields<'a> {
     mr_url: &'a str,
     mr_title: &'a str,
     mr_state: Option<&'a str>,
+    /// The Source line's text, for a fix taken from another
+    /// distribution: written instead of the MR line.
+    source: Option<&'a str>,
     /// `(key, status, resolution)` of each RHEL issue the MR resolves.
     jira: &'a [(String, Option<String>, Option<String>)],
     /// One line per CVE the change fixes (`triage::cve_line`).
@@ -712,13 +915,22 @@ fn format_title(package: &str, mr_title: &str) -> String {
 fn format_body(f: &BodyFields<'_>) -> String {
     let affected = f.affected.unwrap_or("_(unknown)_");
     let expected_fix = f.expected_fix.unwrap_or("_(unknown)_");
-    let mr_line = format_mr_line(f.mr_url, f.mr_title, f.mr_state);
     let issues: Vec<(&str, Option<&str>, Option<&str>)> = f
         .jira
         .iter()
         .map(|(k, s, r)| (k.as_str(), s.as_deref(), r.as_deref()))
         .collect();
-    let jira_line = format_jira_lines(&issues);
+    let (mr_line, jira_line) = match f.source {
+        Some(source) => (
+            format!("{} {source}", crate::utils::SOURCE_LINE),
+            (!issues.is_empty()).then(|| format_jira_lines(&issues)),
+        ),
+        None => (
+            format_mr_line(f.mr_url, f.mr_title, f.mr_state),
+            Some(format_jira_lines(&issues)),
+        ),
+    };
+    let jira_line = jira_line.map(|l| format!("{l}\n")).unwrap_or_default();
 
     let mut cves: String = f.cve_lines.iter().map(|l| format!("{l}\n")).collect();
     if !f.not_fixed.is_empty() {
@@ -727,7 +939,7 @@ fn format_body(f: &BodyFields<'_>) -> String {
     }
     let metadata = format!(
         "{mr_line}\n\
-         {jira_line}\n\
+         {jira_line}\
          {cves}\
          - **Release**: {release}\n\
          - **Affected build**: {affected}\n\
@@ -847,6 +1059,7 @@ mod tests {
             mr_url: "https://gitlab.com/redhat/centos-stream/rpms/xz/-/merge_requests/42",
             mr_title: "Fix CVE-2026-0001",
             mr_state: Some("opened"),
+            source: None,
             jira: &[(
                 "RHEL-12345".to_string(),
                 Some("In Progress".to_string()),
@@ -888,6 +1101,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             mr_state: None,
+            source: None,
             jira: &[],
             cve_lines: &[],
             not_fixed: &[],
@@ -910,6 +1124,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             mr_state: Some("merged"),
+            source: None,
             jira: &[(
                 "RHEL-1".to_string(),
                 Some("Closed".to_string()),
@@ -999,6 +1214,7 @@ mod tests {
             cve_lines: &[],
             not_fixed: &[],
             mr_state: None,
+            source: None,
             affected: None,
             expected_fix: None,
             note: None,
@@ -1020,6 +1236,7 @@ mod tests {
             cve_lines: &[],
             not_fixed: &[],
             mr_state: None,
+            source: None,
             affected: None,
             expected_fix: None,
             note: Some("Tracking for SIG decision 2026-04-22."),
@@ -1037,6 +1254,7 @@ mod tests {
             cve_lines: &[],
             not_fixed: &[],
             mr_state: None,
+            source: None,
             affected: None,
             expected_fix: None,
             note: Some("   \n\t"),
@@ -1054,6 +1272,7 @@ mod tests {
             cve_lines: &[],
             not_fixed: &[],
             mr_state: None,
+            source: None,
             affected: None,
             expected_fix: None,
             note: Some("  leading and trailing  \n\n"),
@@ -1237,8 +1456,12 @@ mod tests {
         ]);
 
         let args = FileIssueArgs {
-            mr_url: "https://gitlab.example/redhat/centos-stream/rpms/xz/-/merge_requests/42"
-                .to_string(),
+            mr_url: Some(
+                "https://gitlab.example/redhat/centos-stream/rpms/xz/-/merge_requests/42"
+                    .to_string(),
+            ),
+            branch: None,
+            repo: None,
             affected: Some("xz-5.6.2-3.el10".to_string()),
             expected_fix: Some("xz-5.6.4-1~proposed.el10".to_string()),
             jira: vec![],
@@ -1311,8 +1534,12 @@ mod tests {
             ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
         ]);
         let args = FileIssueArgs {
-            mr_url: "https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/90"
-                .to_string(),
+            mr_url: Some(
+                "https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/90"
+                    .to_string(),
+            ),
+            branch: None,
+            repo: None,
             affected: None,
             expected_fix: None,
             jira: vec![],
@@ -1399,6 +1626,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             mr_state: Some("opened"),
+            source: None,
             jira: &[("RHEL-1".to_string(), Some("New".to_string()), None)],
             cve_lines: std::slice::from_ref(&line),
             not_fixed: &[],
@@ -1416,6 +1644,7 @@ mod tests {
             mr_url: "https://example/mr",
             mr_title: "t",
             mr_state: Some("opened"),
+            source: None,
             jira: &[("RHEL-1".to_string(), Some("New".to_string()), None)],
             cve_lines: std::slice::from_ref(&line),
             not_fixed: &["CVE-2026-1001".to_string()],
@@ -1454,6 +1683,323 @@ mod tests {
         assert_eq!(
             settle_build("--affected", "s", Some("x"), None, false).as_deref(),
             Some("x")
+        );
+    }
+
+    #[test]
+    fn imported_from_reads_the_line_import_writes() {
+        let msg = "Fix CVE-2026-125396\n\nTaken from AlmaLinux: https://git.almalinux.org/rpms/ghostscript/commit/1a49561103\n";
+        assert_eq!(
+            imported_from(msg),
+            Some((
+                "AlmaLinux",
+                "https://git.almalinux.org/rpms/ghostscript/commit/1a49561103"
+            ))
+        );
+        assert_eq!(imported_from("Taken from AlmaLinux: not a url"), None);
+        assert_eq!(imported_from("Taken from : https://x"), None);
+        assert_eq!(imported_from("Resolves: RHEL-1"), None);
+    }
+
+    #[test]
+    fn an_advisory_branch_gets_its_advisory_line() {
+        assert_eq!(
+            advisory_line("ALSA-2026-1234", "c9s").as_deref(),
+            Some(
+                "- **Advisory**: [ALSA-2026:1234](https://errata.almalinux.org/9/ALSA-2026-1234.html)"
+            )
+        );
+        assert_eq!(
+            advisory_line("RHSA-2026-77", "c10s").as_deref(),
+            Some("- **Advisory**: [RHSA-2026:77](https://access.redhat.com/errata/RHSA-2026:77)")
+        );
+        assert_eq!(
+            advisory_line("XSA-2026-5", "c10s").as_deref(),
+            Some("- **Advisory**: [XSA-2026:5]")
+        );
+        assert_eq!(advisory_line("CVE-2026-1", "c9s"), None);
+        assert_eq!(advisory_line("RHEL-1", "c9s"), None);
+        assert_eq!(advisory_line("fix", "c9s"), None);
+        assert_eq!(advisory_line("ALSA-26-1", "c9s"), None);
+        // cbspkg build finds the issue by it.
+        let line = advisory_line("ALSA-2026-1234", "c9s").unwrap();
+        assert!(sandogasa_cbs::tracking::tracks_proposed_branch(
+            &["c9s".to_string()],
+            &line,
+            "c9s-proposed-ALSA-2026-1234"
+        ));
+    }
+
+    fn body_for(
+        source: Option<&str>,
+        jira: Vec<(String, Option<String>, Option<String>)>,
+    ) -> String {
+        format_body(&BodyFields {
+            release: "c9s",
+            mr_url: "https://git.almalinux.org/rpms/ghostscript/commit/1a49561103",
+            mr_title: "Fix CVE-2026-125396",
+            mr_state: None,
+            source,
+            jira: &jira,
+            cve_lines: &[],
+            not_fixed: &[],
+            affected: None,
+            expected_fix: None,
+            note: None,
+        })
+    }
+
+    #[test]
+    fn an_imported_fix_names_its_source_in_place_of_the_mr() {
+        let source = "Fix taken from AlmaLinux https://git.almalinux.org/rpms/ghostscript/commit/1a49561103; no Stream merge request opened";
+        let body = body_for(Some(source), vec![]);
+        assert!(
+            body.contains(&format!("- **Source**: {source}\n")),
+            "{body}"
+        );
+        assert!(!body.contains("- **MR**:"), "{body}");
+        assert!(!body.contains("- **JIRA**:"), "{body}");
+        assert_eq!(
+            crate::utils::parse_source_line(&body),
+            Some(source),
+            "status reads back what file-issue writes"
+        );
+        // A RHEL issue, when there is one, is still listed.
+        let body = body_for(Some(source), vec![("RHEL-9".into(), None, None)]);
+        assert!(body.contains("- **JIRA**:"), "{body}");
+        assert!(body.contains("RHEL-9"), "{body}");
+        // An MR's body keeps both lines.
+        let body = body_for(None, vec![]);
+        assert!(
+            body.contains("- **MR**:") && body.contains("- **JIRA**:"),
+            "{body}"
+        );
+    }
+
+    /// A checkout with `branch` committed as `import` writes it.
+    fn imported_checkout(dir: &std::path::Path, branch: &str, message: &str) {
+        let git = |a: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(a)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_AUTHOR_NAME", "A")
+                .env("GIT_AUTHOR_EMAIL", "a@example.org")
+                .env("GIT_COMMITTER_NAME", "C")
+                .env("GIT_COMMITTER_EMAIL", "c@example.org")
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {a:?}");
+        };
+        git(&["init", "-q", "-b", "c9s"]);
+        git(&[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.com/CentOS/proposed_updates/rpms/ghostscript.git",
+        ]);
+        git(&["commit", "-q", "--allow-empty", "-m", "stock"]);
+        git(&["switch", "-q", "-c", branch]);
+        git(&["commit", "-q", "--allow-empty", "-m", message]);
+        git(&["switch", "-q", "c9s"]);
+    }
+
+    fn branch_args(branch: &str, repo: &std::path::Path) -> FileIssueArgs {
+        FileIssueArgs {
+            mr_url: None,
+            branch: Some(branch.to_string()),
+            repo: Some(repo.to_path_buf()),
+            affected: None,
+            expected_fix: None,
+            jira: vec![],
+            release: None,
+            issue_type: None,
+            note: None,
+            embargoed: false,
+            assign: false,
+            dry_run: false,
+            verbose: false,
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_branch_is_read_from_its_commit() {
+        let dir = tempdir().unwrap();
+        let _guard = EnvGuard::new(&[
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ]);
+        let branch = "c9s-proposed-CVE-2026-125396";
+        imported_checkout(
+            dir.path(),
+            branch,
+            "Fix CVE-2026-125396 in .putgstringcopy\n\n\
+             Validate operands.\n\n\
+             Taken from AlmaLinux: https://git.almalinux.org/rpms/ghostscript/commit/1a49561103\n\
+             Resolves: RHEL-77",
+        );
+        let change = change_from_branch(&branch_args(branch, dir.path()), branch).unwrap();
+        assert_eq!(change.package, "ghostscript");
+        assert_eq!(change.release, "c9s");
+        assert_eq!(change.title, "Fix CVE-2026-125396 in .putgstringcopy");
+        assert!(change.description.starts_with("Validate operands."));
+        assert_eq!(
+            change.web_url,
+            "https://git.almalinux.org/rpms/ghostscript/commit/1a49561103"
+        );
+        assert_eq!(change.state, None);
+        assert_eq!(change.source_branch.as_deref(), Some(branch));
+        assert_eq!(
+            change.source.as_deref(),
+            Some(
+                "Fix taken from AlmaLinux https://git.almalinux.org/rpms/ghostscript/commit/1a49561103; \
+                 no Stream merge request opened"
+            )
+        );
+        assert_eq!(change.jira_keys, vec!["RHEL-77".to_string()]);
+
+        // --jira wins over the commit.
+        let mut args = branch_args(branch, dir.path());
+        args.jira = vec!["RHEL-1".into()];
+        let change = change_from_branch(&args, branch).unwrap();
+        assert_eq!(change.jira_keys, vec!["RHEL-1".to_string()]);
+        // A --release other than the branch's would hide the issue from
+        // cbspkg, which finds it by the branch's.
+        args.release = Some("c10s".into());
+        let err = change_from_branch(&args, branch).unwrap_err().to_string();
+        assert!(err.contains("disagrees"), "{err}");
+        args.release = Some("c9s".into());
+        assert_eq!(change_from_branch(&args, branch).unwrap().release, "c9s");
+
+        // The last Taken from line is import's own.
+        assert_eq!(
+            imported_from(
+                "Fix\n\nTaken from upstream: https://github.com/a/b/commit/1\n\
+                 Taken from AlmaLinux: https://git.almalinux.org/rpms/x/commit/2\n"
+            ),
+            Some(("AlmaLinux", "https://git.almalinux.org/rpms/x/commit/2"))
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_branch_not_imported_or_misnamed_is_refused() {
+        let dir = tempdir().unwrap();
+        let _guard = EnvGuard::new(&[
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ]);
+        imported_checkout(
+            dir.path(),
+            "c9s-proposed-RHEL-5",
+            "Fix it\n\nResolves: RHEL-5",
+        );
+        let err = change_from_branch(
+            &branch_args("c9s-proposed-RHEL-5", dir.path()),
+            "c9s-proposed-RHEL-5",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("merge request instead"), "{err}");
+
+        let dir = tempdir().unwrap();
+        imported_checkout(
+            dir.path(),
+            "fix",
+            "Fix\n\nTaken from AlmaLinux: https://git.almalinux.org/x",
+        );
+        let err = change_from_branch(&branch_args("fix", dir.path()), "fix")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pass --release"), "{err}");
+        let err = change_from_branch(&branch_args("missing", dir.path()), "missing")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("git log"), "{err}");
+    }
+
+    /// The whole run for an imported fix: no MR is fetched, and the
+    /// issue's body names the fix's source.
+    #[test]
+    #[serial_test::serial]
+    fn file_issue_for_an_imported_branch_end_to_end() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let proj = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fghostscript";
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(wiremock_path(proj))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "id": 8,
+                    "path_with_namespace": "CentOS/proposed_updates/rpms/ghostscript",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/ghostscript",
+                    "ssh_url_to_repo": "git@gitlab.example:CentOS/proposed_updates/rpms/ghostscript.git",
+                    "http_url_to_repo": "https://gitlab.example/CentOS/proposed_updates/rpms/ghostscript.git",
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wiremock_path(format!("{proj}/issues")))
+                .and(wiremock::matchers::body_string_contains(
+                    "- **Source**: Fix taken from AlmaLinux https://git.almalinux.org/rpms/ghostscript/commit/1a49561103; no Stream merge request opened",
+                ))
+                .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                    "iid": 3,
+                    "title": "ghostscript: Fix CVE-2026-125396",
+                    "description": null,
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/ghostscript/-/issues/3",
+                    "assignees": [],
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(wiremock_path("/api/graphql"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {}})))
+                .mount(&server)
+                .await;
+        });
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("ghostscript");
+        std::fs::create_dir(&repo).unwrap();
+        install_fake_bin(dir.path(), "koji", &[]);
+        install_fake_bin(dir.path(), "fedrq", &[("pkgs", "")]);
+        let new_path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let _guard = EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_REDHAT_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_NVD_BASE", &server.uri()),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("PATH", &new_path),
+        ]);
+        let branch = "c9s-proposed-CVE-2026-125396";
+        imported_checkout(
+            &repo,
+            branch,
+            "Fix CVE-2026-125396\n\n\
+             Taken from AlmaLinux: https://git.almalinux.org/rpms/ghostscript/commit/1a49561103",
+        );
+        let mut args = branch_args(branch, &repo);
+        args.issue_type = Some(IssueType::Security);
+        run_inner(&args).expect("file-issue succeeds");
+        let requests = runtime.block_on(server.received_requests()).unwrap();
+        assert!(
+            !requests
+                .iter()
+                .any(|r| r.url.path().contains("merge_requests")
+                    || r.url.path().starts_with("/rest/api")),
+            "no MR or Jira issue is asked for"
         );
     }
 }

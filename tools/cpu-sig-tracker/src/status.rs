@@ -322,7 +322,11 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     _ => in_testing(
                         suggest_next_action(
                             jira_keys.first().map(String::as_str),
-                            outcome == Outcome::Fixed,
+                            parsed.source.is_some(),
+                            outcome == Outcome::Fixed
+                                || (parsed.source.is_some()
+                                    && jira_keys.is_empty()
+                                    && crate::landed::stock_fix_on(body).is_some()),
                             sig_nvr.as_deref(),
                             stream_nvr.as_deref(),
                         ),
@@ -401,14 +405,20 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     if let Some(project) = project {
                         let has_build =
                             pu_nvrs.contains_key(package) || testing_nvrs.contains_key(package);
-                        maybe_refresh_work_item_status(
-                            &project,
-                            &issue,
-                            jira_resolved,
-                            jira_resolution.as_deref(),
-                            has_build,
-                            args.verbose,
-                        );
+                        // Without Jira, nothing outside the issue says how
+                        // a closed imported fix ended: its status is left
+                        // as whoever closed it set it.
+                        let no_word = parsed.source.is_some() && jira_keys.is_empty();
+                        if !no_word {
+                            maybe_refresh_work_item_status(
+                                &project,
+                                &issue,
+                                jira_resolved,
+                                jira_resolution.as_deref(),
+                                has_build,
+                                args.verbose,
+                            );
+                        }
                         maybe_refresh_dates(
                             &project,
                             &issue,
@@ -417,7 +427,9 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                             args.verbose,
                         );
                     }
-                } else if let (Some(project), true) = (project, mr_url.is_some()) {
+                } else if let (Some(project), true) =
+                    (project, mr_url.is_some() || parsed.source.is_some())
+                {
                     // How urgent it is (#98), for an issue filed before
                     // file-issue recorded it: the CVEs the change fixes,
                     // rated only when the body has no CVE lines yet.
@@ -484,6 +496,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                                 .iter()
                                 .filter_map(|(_, i)| i.as_ref()?.priority.as_deref()),
                         )
+                        .or_else(|| crate::triage::cve_priority_label(body))
                         .as_deref(),
                     );
                     let changed = maybe_refresh_issue(RefreshCtx {
@@ -494,6 +507,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                         mr_url: mr_url.as_deref(),
                         mr_title: mr_title.as_deref(),
                         mr_state: mr_state.as_deref(),
+                        source: parsed.source.as_deref(),
                         jira: &jira,
                         new_cve_lines: new_cve_lines.as_deref(),
                         new_not_fixed: &settled.declined,
@@ -797,6 +811,9 @@ struct BodyRefs {
     /// that the current canonical format dropped (standalone
     /// `- **Status**:` line, `* Stream MR:` bullet, etc.).
     has_legacy_lines: bool,
+    /// The Source line of a fix taken from another distribution
+    /// (`utils::SOURCE_LINE`), which stands in for the MR line.
+    source: Option<String>,
 }
 
 impl BodyRefs {
@@ -804,6 +821,11 @@ impl BodyRefs {
     /// (any structured line missing, any required suffix
     /// absent, or a legacy line hanging around).
     fn needs_refresh(&self) -> bool {
+        // A fix taken from another distribution has no MR, and needs no
+        // RHEL issue (#233).
+        if self.source.is_some() {
+            return (self.structured_jira && !self.jira_line_has_suffix) || self.has_legacy_lines;
+        }
         !self.structured_mr
             || !self.structured_jira
             || !self.mr_line_has_suffix
@@ -814,13 +836,17 @@ impl BodyRefs {
     /// Comma-joined list of drift reasons for stderr.
     fn describe_gaps(&self) -> String {
         let mut gaps: Vec<&str> = Vec::new();
-        if !self.structured_mr {
+        let imported = self.source.is_some();
+        if imported {
+        } else if !self.structured_mr {
             gaps.push("missing structured MR line");
         } else if !self.mr_line_has_suffix {
             gaps.push("MR line missing state suffix");
         }
         if !self.structured_jira {
-            gaps.push("missing structured JIRA line");
+            if !imported {
+                gaps.push("missing structured JIRA line");
+            }
         } else if !self.jira_line_has_suffix {
             gaps.push("JIRA line missing status suffix");
         }
@@ -847,9 +873,13 @@ impl BodyRefs {
 fn resolve_body_references(body: &str, verbose: bool, force_mr_fetch: bool) -> BodyRefs {
     let structured_mr = parse_mr_line(body);
     let mr_url_from_body = structured_mr.as_ref().map(|(u, _)| u.clone());
+    // A fix taken from another distribution has no MR: one its body
+    // mentions (in a note, say) is not the change it tracks.
+    let imported = crate::utils::parse_source_line(body).is_some();
     let mr_url = mr_url_from_body
         .clone()
-        .or_else(|| scan_mr_url_in_body(body));
+        .or_else(|| scan_mr_url_in_body(body))
+        .filter(|_| !imported);
 
     let structured_jira = parse_jira_lines(body);
     let jira_from_body: Vec<String> = if structured_jira.is_empty() {
@@ -890,6 +920,7 @@ fn resolve_body_references(body: &str, verbose: bool, force_mr_fetch: bool) -> B
         structured_jira: !structured_jira.is_empty(),
         body_jira_suffixes: structured_jira,
         has_legacy_lines: body.lines().any(is_legacy_line),
+        source: crate::utils::parse_source_line(body).map(str::to_string),
     }
 }
 
@@ -1212,6 +1243,9 @@ struct RefreshCtx<'a> {
     mr_url: Option<&'a str>,
     mr_title: Option<&'a str>,
     mr_state: Option<&'a str>,
+    /// The Source line's text, for a fix taken from another
+    /// distribution: written where an MR line would be.
+    source: Option<&'a str>,
     jira: &'a [JiraState],
     /// CVE lines to add, for a body that has none.
     new_cve_lines: Option<&'a [String]>,
@@ -1286,7 +1320,10 @@ fn maybe_refresh_labels(
 /// as a lead paragraph and appends the structured metadata.
 /// Returns `true` when the body was actually changed.
 fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
-    let Some(url) = ctx.mr_url else { return false };
+    if ctx.mr_url.is_none() && ctx.source.is_none() {
+        return false;
+    }
+    let url = ctx.mr_url.unwrap_or("");
     let title = ctx.mr_title.unwrap_or(url);
     let new_body = refreshed_body(RefreshedBodyArgs {
         original_body: ctx.original_body,
@@ -1294,6 +1331,7 @@ fn maybe_refresh_issue(ctx: RefreshCtx<'_>) -> bool {
         mr_url: url,
         mr_title: title,
         mr_state: ctx.mr_state,
+        source: ctx.source,
         jira: ctx.jira,
         new_cve_lines: ctx.new_cve_lines,
         new_not_fixed: ctx.new_not_fixed,
@@ -1338,6 +1376,9 @@ struct RefreshedBodyArgs<'a> {
     mr_url: &'a str,
     mr_title: &'a str,
     mr_state: Option<&'a str>,
+    /// The Source line's text, written in place of the MR line when
+    /// there is no MR (`mr_url` empty).
+    source: Option<&'a str>,
     jira: &'a [JiraState],
     new_cve_lines: Option<&'a [String]>,
     /// CVEs just declined, added to the body's not-fixed line.
@@ -1354,13 +1395,24 @@ struct RefreshedBodyArgs<'a> {
 /// the structured metadata.
 fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
     let lead = extract_lead_paragraph(a.original_body);
-    let mr_line = format_mr_line(a.mr_url, a.mr_title, a.mr_state);
     let issues: Vec<(&str, Option<&str>, Option<&str>)> = a
         .jira
         .iter()
         .map(|j| (j.key.as_str(), j.status.as_deref(), j.resolution.as_deref()))
         .collect();
-    let jira_line = format_jira_lines(&issues);
+    // A fix taken from another distribution: its Source line instead
+    // of the MR line, and no JIRA line unless it has a RHEL issue.
+    let (mr_line, jira_line) = match a.source {
+        Some(source) if a.mr_url.is_empty() => (
+            format!("{} {source}", crate::utils::SOURCE_LINE),
+            (!issues.is_empty()).then(|| format_jira_lines(&issues)),
+        ),
+        _ => (
+            format_mr_line(a.mr_url, a.mr_title, a.mr_state),
+            Some(format_jira_lines(&issues)),
+        ),
+    };
+    let jira_line = jira_line.map(|l| format!("{l}\n")).unwrap_or_default();
     // Lines that record something the live systems do not say — the
     // affected and expected builds the SIG named, the stock fix a
     // person established — survive the rewrite unchanged.
@@ -1398,6 +1450,15 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
             lines.iter().map(|l| format!("{l}\n")).collect()
         }
     };
+    // The advisory an imported fix's branch is named after, under the
+    // CVEs and above the not-fixed line, where file-issue writes it.
+    let advisory: String = a
+        .original_body
+        .lines()
+        .filter(|l| l.trim_start().starts_with("- **Advisory**:"))
+        .map(|l| format!("{}\n", l.trim_end()))
+        .collect();
+    let cves = format!("{cves}{advisory}");
     // CVEs declined before and now, so they are not asked about again.
     let mut not_fixed = crate::triage::parse_not_fixed(a.original_body);
     for id in a.new_not_fixed {
@@ -1416,7 +1477,7 @@ fn refreshed_body(a: RefreshedBodyArgs<'_>) -> String {
     };
     let metadata = format!(
         "{mr_line}\n\
-         {jira_line}\n\
+         {jira_line}\
          {cves}\
          - **Release**: {}\n{kept}",
         a.release,
@@ -1450,6 +1511,8 @@ fn extract_lead_paragraph(body: &str) -> Option<String> {
 fn is_metadata_line(line: &str) -> bool {
     const PREFIXES: &[&str] = &[
         "- **MR**:",
+        "- **Source**:",
+        "- **Advisory**:",
         "- **JIRA**:",
         "- **Release**:",
         "- **Affected build**:",
@@ -1655,13 +1718,20 @@ fn in_testing(suggestion: &'static str, testing_only: bool) -> &'static str {
     }
 }
 
+/// `imported`: a fix taken from another distribution, which needs no
+/// RHEL issue, so having none is not something to act on. `fixed` is
+/// then what the issue's Stock fix line says, as there is no Jira to
+/// ask; while the SIG ships a build, `landed` judges it from stock's
+/// commits naming the issue's CVEs.
 fn suggest_next_action(
     jira_key: Option<&str>,
-    jira_resolved: bool,
+    imported: bool,
+    fixed: bool,
     pu_nvr: Option<&str>,
     stream_nvr: Option<&str>,
 ) -> &'static str {
-    if jira_key.is_none() {
+    let jira_resolved = fixed;
+    if jira_key.is_none() && !imported {
         return "no-jira";
     }
     // Package has no build in proposed_updates -release or -testing
@@ -2096,6 +2166,7 @@ mod tests {
             mr_url: "https://gitlab.com/redhat/centos-stream/rpms/git/-/merge_requests/1",
             mr_title: "t",
             mr_state: None,
+            source: None,
             jira: &[],
             new_cve_lines: None,
             new_not_fixed: &[],
@@ -2303,7 +2374,7 @@ mod tests {
         // Build still in proposed_updates -release, JIRA closed:
         // the candidate action is to untag the build.
         assert_eq!(
-            suggest_next_action(Some("RHEL-1"), true, Some("xz-5.4-1.el10"), None),
+            suggest_next_action(Some("RHEL-1"), false, true, Some("xz-5.4-1.el10"), None),
             "untag-candidate"
         );
     }
@@ -2315,6 +2386,7 @@ mod tests {
         assert_eq!(
             suggest_next_action(
                 Some("RHEL-1"),
+                false,
                 true,
                 Some("xz-5.4-1.el10"),
                 Some("xz-5.6-1.el10"),
@@ -2328,11 +2400,11 @@ mod tests {
         // No proposed_updates build yet: MR in flight, but the
         // build hasn't been tagged for release. Informational.
         assert_eq!(
-            suggest_next_action(Some("RHEL-1"), false, None, None),
+            suggest_next_action(Some("RHEL-1"), false, false, None, None),
             "not-yet-tagged"
         );
         assert_eq!(
-            suggest_next_action(Some("RHEL-1"), false, None, Some("xz-5.6-1.el10")),
+            suggest_next_action(Some("RHEL-1"), false, false, None, Some("xz-5.6-1.el10")),
             "not-yet-tagged"
         );
     }
@@ -2343,11 +2415,11 @@ mod tests {
         // issue is still open — JIRA is closed so we just need
         // to close the issue.
         assert_eq!(
-            suggest_next_action(Some("RHEL-1"), true, None, None),
+            suggest_next_action(Some("RHEL-1"), false, true, None, None),
             "retire-issue"
         );
         assert_eq!(
-            suggest_next_action(Some("RHEL-1"), true, None, Some("xz-5.6-1.el10")),
+            suggest_next_action(Some("RHEL-1"), false, true, None, Some("xz-5.6-1.el10")),
             "retire-issue"
         );
     }
@@ -2357,6 +2429,7 @@ mod tests {
         assert_eq!(
             suggest_next_action(
                 Some("RHEL-1"),
+                false,
                 false,
                 Some("xz-5.4-1.el10"),
                 Some("xz-5.6-1.el10"),
@@ -2371,6 +2444,7 @@ mod tests {
             suggest_next_action(
                 Some("RHEL-1"),
                 false,
+                false,
                 Some("xz-5.6-1.el10"),
                 Some("xz-5.4-1.el10"),
             ),
@@ -2379,6 +2453,7 @@ mod tests {
         assert_eq!(
             suggest_next_action(
                 Some("RHEL-1"),
+                false,
                 false,
                 Some("xz-5.6-1.el10"),
                 Some("xz-5.6-1.el10"),
@@ -2392,14 +2467,31 @@ mod tests {
         // We have a proposed_updates build but can't look up
         // Stream — stay in-progress rather than guess rebase.
         assert_eq!(
-            suggest_next_action(Some("RHEL-1"), false, Some("xz-5.4-1.el10"), None),
+            suggest_next_action(Some("RHEL-1"), false, false, Some("xz-5.4-1.el10"), None),
             "in-progress"
         );
     }
 
     #[test]
     fn suggest_no_jira_when_key_missing() {
-        assert_eq!(suggest_next_action(None, false, None, None), "no-jira");
+        assert_eq!(
+            suggest_next_action(None, false, false, None, None),
+            "no-jira"
+        );
+        // Untagged, with a Stock fix line, it is done.
+        assert_eq!(
+            suggest_next_action(None, true, true, None, None),
+            "retire-issue"
+        );
+        // An imported fix needs no RHEL issue: it is judged by its build.
+        assert_eq!(
+            suggest_next_action(None, true, false, None, None),
+            "not-yet-tagged"
+        );
+        assert_eq!(
+            suggest_next_action(None, true, false, Some("gs-9.54.0-21.el9"), None),
+            "in-progress"
+        );
     }
 
     #[test]
@@ -2521,6 +2613,7 @@ mod tests {
             mr_url: "https://example/-/merge_requests/1",
             mr_title: "Fix CVE-2026-0001",
             mr_state: Some("merged"),
+            source: None,
             jira: &[JiraState {
                 key: "RHEL-12345".into(),
                 status: Some("Closed".into()),
@@ -2587,6 +2680,7 @@ mod tests {
             mr_url: "https://example/-/merge_requests/1",
             mr_title: "t",
             mr_state: Some("opened"),
+            source: None,
             jira: &jira,
             new_cve_lines: None,
             new_not_fixed: &[],
@@ -2717,6 +2811,7 @@ mod tests {
             mr_url: "https://example/-/merge_requests/1",
             mr_title: "t",
             mr_state: None,
+            source: None,
             jira: &[],
             new_cve_lines: None,
             new_not_fixed: &[],
@@ -2788,7 +2883,7 @@ mod tests {
         let git = Some("git-2.52.1-1~proposed.el10");
         let next = |resolved, stream| {
             in_testing(
-                suggest_next_action(Some("RHEL-1"), resolved, git, stream),
+                suggest_next_action(Some("RHEL-1"), false, resolved, git, stream),
                 true,
             )
         };
@@ -3231,6 +3326,7 @@ name = "PackageKit"
             mr_url: "https://example/-/merge_requests/90",
             mr_title: "t",
             mr_state: Some("opened"),
+            source: None,
             jira: &jira,
             new_cve_lines: new,
             new_not_fixed: &[],
@@ -3266,6 +3362,7 @@ name = "PackageKit"
             mr_url: "https://example/-/merge_requests/90",
             mr_title: "t",
             mr_state: Some("opened"),
+            source: None,
             jira: &jira,
             new_cve_lines: None,
             new_not_fixed: declined,
@@ -3362,6 +3459,7 @@ name = "PackageKit"
             mr_url: "https://example/-/merge_requests/90",
             mr_title: "t",
             mr_state: Some("opened"),
+            source: None,
             jira: &jira,
             new_cve_lines: None,
             new_not_fixed: &[],
@@ -3375,5 +3473,59 @@ name = "PackageKit"
             ),
             "{out}"
         );
+    }
+
+    const IMPORTED: &str = "Stream MR https://gitlab.com/redhat/centos-stream/rpms/gs/-/merge_requests/12 is stuck.\n\n\
+        - **Source**: Fix taken from AlmaLinux https://git.almalinux.org/rpms/gs/commit/1; no Stream merge request opened\n\
+        - **CVE**: [CVE-2026-1](https://access.redhat.com/security/cve/CVE-2026-1) — high (Red Hat: Important); [NVD](x)\n\
+        - **Release**: c9s\n\
+        - **Affected build**: gs-1-1.el9\n\
+        - **Expected fix**: _(unknown)_\n\
+        - **Advisory**: [ALSA-2026:1](https://errata.almalinux.org/9/ALSA-2026-1.html)\n";
+
+    #[test]
+    fn an_imported_fix_takes_no_mr_from_its_note() {
+        let refs = resolve_body_references(IMPORTED, false, true);
+        assert_eq!(refs.mr_url, None);
+        assert!(refs.source.is_some());
+    }
+
+    #[test]
+    fn a_refresh_keeps_an_imported_fix_s_source_and_advisory_under_its_cves() {
+        let body = refreshed_body(RefreshedBodyArgs {
+            original_body: IMPORTED,
+            release: "c9s",
+            mr_url: "",
+            mr_title: "",
+            mr_state: None,
+            source: crate::utils::parse_source_line(IMPORTED),
+            jira: &[],
+            new_cve_lines: None,
+            new_not_fixed: &[],
+            builds: (None, None),
+            not_built: Some(None),
+        });
+        assert!(!body.contains("- **MR**:"), "{body}");
+        assert!(!body.contains("- **JIRA**:"), "{body}");
+        let at = |p: &str| body.find(p).unwrap_or_else(|| panic!("{p} in {body}"));
+        assert!(at("- **Source**:") < at("- **CVE**:"));
+        assert!(at("- **CVE**:") < at("- **Advisory**:"));
+        assert!(at("- **Advisory**:") < at("- **Release**:"), "{body}");
+        assert_eq!(body.matches("- **Advisory**:").count(), 1);
+        // Written as file-issue writes it, so a second refresh keeps it.
+        let again = refreshed_body(RefreshedBodyArgs {
+            original_body: &body,
+            release: "c9s",
+            mr_url: "",
+            mr_title: "",
+            mr_state: None,
+            source: crate::utils::parse_source_line(&body),
+            jira: &[],
+            new_cve_lines: None,
+            new_not_fixed: &[],
+            builds: (None, None),
+            not_built: Some(None),
+        });
+        assert_eq!(again, body);
     }
 }

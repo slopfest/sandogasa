@@ -66,6 +66,25 @@ pub fn parse_jira_keys_from_body(body: &str) -> Vec<String> {
     keys
 }
 
+/// What the line naming where a fix taken from another distribution
+/// came from starts with, in place of the MR line: such a fix opens no
+/// CentOS Stream merge request (#233).
+pub const SOURCE_LINE: &str = "- **Source**:";
+
+/// The Source line for a fix taken from `distro` at `url`: `- **Source**:
+/// Fix taken from AlmaLinux <url>; no Stream merge request opened`.
+pub fn format_source_line(distro: &str, url: &str) -> String {
+    format!("{SOURCE_LINE} Fix taken from {distro} {url}; no Stream merge request opened")
+}
+
+/// The text of `body`'s Source line, after its label.
+pub fn parse_source_line(body: &str) -> Option<&str> {
+    body.lines()
+        .find_map(|l| l.trim_start().strip_prefix(SOURCE_LINE))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+}
+
 /// Build `- **MR**: [title](url) — state` (suffix omitted when
 /// state is unknown).
 pub fn format_mr_line(mr_url: &str, mr_title: &str, mr_state: Option<&str>) -> String {

@@ -92,7 +92,7 @@ reason, team, …) survive a re-build.
 ### `file-issue`
 
 ```sh
-cpu-sig-tracker file-issue <mr-url> \
+cpu-sig-tracker file-issue <mr-url | --branch BRANCH [-C DIR]> \
     [--affected VER-REL] [--expected-fix VER-REL] \
     [--jira RHEL-N[,RHEL-N…]] [--release cNs] [--type security] \
     [--note "context"] [--embargoed] [--assign] [--dry-run]
@@ -110,6 +110,17 @@ stamps `start_date` from the Koji build's creation time.
 
 The issue body follows a canonical format that `status` parses back
 (MR, JIRA, CVE, Release, Affected build, Expected fix).
+
+A fix taken from another distribution (`import`) has no merge request:
+`--branch` names its branch instead, read from the checkout (`-C`, else
+the current directory). The title, description and RHEL issues come
+from the branch's commit, the release from the branch's name, and the
+package from the checkout's remotes. In place of the MR line, the body
+says where the fix came from, `- **Source**: Fix taken from AlmaLinux
+<commit URL>; no Stream merge request opened`, and has a JIRA line only
+when the commit names a RHEL issue. A branch named after an advisory
+gets an `- **Advisory**:` line naming it as its vendor writes it
+(`ALSA-2026:1234`), which is how `cbspkg build` finds the issue.
 
 Without `--affected` and `--expected-fix`, the builds come from what
 CBS and stock carry: the expected fix is the stock build the SIG's newest build in
@@ -147,7 +158,9 @@ terminal (`security`, `bugfix`, `enhancement`, `arch-enablement` or
 advisory it does not really fix; it is a label of its own, so
 `status --refresh` leaves the type alone. The RHEL issues' Jira priority becomes a
 `priority::` label (`priority::blocker`, `::critical`, `::major`,
-`::normal`, `::minor`; the most urgent of them). The issue is assigned
+`::normal`, `::minor`; the most urgent of them), or, with no RHEL
+issue to take it from, the most severe CVE's, as `jira` sets a RHEL
+issue's priority (Red Hat's Important is `priority::major`). The issue is assigned
 to you (the GitLab token's user) with `--assign`; at a terminal you are
 asked, defaulting to yes; otherwise it is left unassigned.
 
@@ -213,8 +226,9 @@ The plan is shown first, then confirmed at a terminal (`--yes` skips
 the question; `--dry-run` shows the git commands without running
 them). A branch left over from an earlier run is reported before
 anything is made; a step that fails leaves no half-made branch. The checkout goes back to
-the branch it was on, and the run ends with the push command for each
-branch. A fix taken from another distribution needs no Jira issue.
+the branch it was on, and the run ends with the commands to push each
+branch and file its tracking issue (`file-issue --branch`). A fix taken
+from another distribution needs no Jira issue.
 
 ### `jira`
 
@@ -545,7 +559,10 @@ Stream NVR, and a suggested next action (`in-progress`, `in-testing`
 for a build only in `-testing`, `rebase`, `untag-candidate`,
 `retire-issue`, `not-yet-tagged`, `awaiting-stock`, `not-in-stock`,
 `jira-declined`, `jira-unverified`, `no-jira`, or `—` once closed with
-no build tagged).
+no build tagged). A fix taken from another distribution (a
+`- **Source**:` line in place of the MR) needs no RHEL issue, so it is
+never `no-jira`, and is judged by its build and by stock's commits
+naming its CVEs.
 
 While the SIG still ships a build, whether the change is in stock is
 judged as `untag` and `retire` judge it, from stock's patches first:

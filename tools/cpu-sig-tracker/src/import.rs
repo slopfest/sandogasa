@@ -844,6 +844,15 @@ fn run_inner(args: &ImportArgs) -> Result<(), Box<dyn std::error::Error>> {
             p.branch
         );
     }
+    // The tracking issue before the build, so cbspkg build finds it to
+    // post to.
+    for p in &planned {
+        println!(
+            "  cpu-sig-tracker file-issue --branch {} -C {}",
+            p.branch,
+            repo.display()
+        );
+    }
     println!("  then build each branch with cbspkg build");
     Ok(())
 }
