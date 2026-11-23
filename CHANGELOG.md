@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### fedora-cve-triage selects bugs by who is in CC
+
+`fedora-cve-triage run` and `search` selected bugs only by component
+or assignee, so clearing out the CVE bugs of packages one co-maintains,
+or of a SIG one is in, meant listing every package: a co-maintainer,
+and a SIG's list address, is in CC on those bugs, not their assignee.
+Both commands now take `--cc` (CSV or repeated; `cc` in the run
+config), which selects the bugs with one of its addresses in CC,
+matched as a whole address. Given with `--assignee`, a bug matching
+either is selected, and the run says how many came in each way.
+
+`search` builds its query as `run` does, so it also takes a component
+glob (`-c 'python-*'`), and its values are now URL-encoded: before, a
+component or address with `&` or a space broke the query. It also
+searches with the configured Bugzilla API key, as `run` does, so it
+finds bugs restricted to the user's groups too.
+Resolves #218.
+
 ### cbspkg updates a Hyperscale issue's table when a build moves
 
 When `cbspkg promote` moved a Hyperscale build, the tracking issue got
