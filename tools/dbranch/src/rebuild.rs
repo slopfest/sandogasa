@@ -1305,6 +1305,12 @@ pub(crate) fn ensure_salsa_ci(
     Ok(true)
 }
 
+/// Print one of the copyright stage's findings the way `dbranch
+/// check` prints its own: the warning, then where its rule comes from.
+fn report(finding: crate::check::Finding) {
+    anstream::eprint!("{}", crate::check::render_styled(&[finding], true));
+}
+
 /// Check `debian/copyright` against the source, and offer to
 /// reconcile it when it disagrees.
 ///
@@ -1367,12 +1373,12 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
     let (code, out) = ui.run_capture(&plan::lrc_argv(), repo)?;
     if code == 0 {
         // It passes placeholders, so they are worth saying separately.
-        if let Some(warning) = std::fs::read_to_string(&file)
+        if let Some(finding) = std::fs::read_to_string(&file)
             .ok()
             .as_deref()
-            .and_then(crate::copyright::placeholder_warning)
+            .and_then(crate::copyright::placeholder_finding)
         {
-            eprintln!("warning: {warning}");
+            report(finding);
         }
         return compare_holders(ui, repo, &file);
     }
@@ -1381,10 +1387,7 @@ fn copyright_checks(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Erro
     let cme = plan::cme_update_copyright_argv().join(" ");
     let decopy = plan::decopy_shell_line();
     if ui.dry_run || !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        eprintln!(
-            "warning: debian/copyright disagrees with the source; {cme} reconciles \
-             what is there, {decopy} regenerates it from a scan"
-        );
+        report(crate::copyright::mismatch_finding(&cme, &decopy));
         return Ok(());
     }
     // Two tools for two amounts of damage: cme keeps the file that is
@@ -1452,13 +1455,10 @@ fn check_copyright_syntax(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error
     }
     ui.step("Validate debian/copyright against the DEP-5 model (cme)");
     let (_, out) = ui.run_capture(&plan::cme_check_copyright_argv(), repo)?;
-    if !out.trim().is_empty() {
+    if let Some(finding) = crate::copyright::syntax_finding(&out) {
         eprintln!();
         eprint!("{out}");
-        eprintln!(
-            "warning: cme is unhappy with debian/copyright above; it exits 0 either \
-             way, so what it printed is the finding"
-        );
+        report(finding);
     }
     Ok(())
 }
@@ -1494,26 +1494,16 @@ fn compare_holders(ui: &Ui, repo: &Path, file: &Path) -> Result<(), Box<dyn std:
         std::fs::read_to_string(file)?,
         std::fs::read_to_string(repo.join(&rel))?,
     );
-    if let Some((claimed, found)) = crate::copyright::stale_years(&existing, &scanned) {
+    if let Some(finding) = crate::copyright::stale_years_finding(&existing, &scanned) {
         eprintln!();
-        eprintln!("warning: debian/copyright claims {claimed} at the latest, and the source");
-        eprintln!("  mentions {found}. A file crediting the right people under the right");
-        eprintln!("  license still goes stale every January.");
+        report(finding);
     }
-    match crate::copyright::unattributed(&existing, &scanned).as_slice() {
-        [] => Ok(()),
-        missing => {
-            eprintln!();
-            eprintln!(
-                "warning: the source names {}, which debian/copyright does not.",
-                missing.join(" and ")
-            );
-            eprintln!("  Compare it with {rel} -- that scan is a guess,");
-            eprintln!("  junk entries and all, so read it rather than copy it.");
-            note_upstream_fix_route(repo);
-            Ok(())
-        }
+    if let Some(finding) = crate::copyright::unattributed_finding(&existing, &scanned, &rel) {
+        eprintln!();
+        report(finding);
+        note_upstream_fix_route(repo);
     }
+    Ok(())
 }
 
 /// Commit whatever just rewrote `debian/copyright`, after saying what
@@ -1525,12 +1515,12 @@ fn commit_copyright(
     file: &Path,
     subject: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(warning) = std::fs::read_to_string(file)
+    if let Some(finding) = std::fs::read_to_string(file)
         .ok()
         .as_deref()
-        .and_then(crate::copyright::placeholder_warning)
+        .and_then(crate::copyright::placeholder_finding)
     {
-        eprintln!("warning: {warning}");
+        report(finding);
     }
     if !ui.dry_run && !git::is_dirty(repo) {
         eprintln!("note: debian/copyright already said that; nothing to commit");

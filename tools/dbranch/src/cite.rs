@@ -174,6 +174,78 @@ const DEVREF_PATCHES: Citation = cite(Source::DevRef {
     label: "bpp-debian-patches",
 });
 
+const POLICY_COPYRIGHT: Citation = cite(Source::Policy {
+    section: "12.5",
+    title: "Copyright information",
+    doc: "ch-docs",
+    label: "s-copyrightfile",
+});
+
+const POLICY_COPYRIGHT_FORMAT: Citation = cite(Source::Policy {
+    section: "12.5.1",
+    title: "Machine-readable copyright information",
+    doc: "ch-docs",
+    label: "s-copyrightformat",
+});
+
+/// The checklist for sponsoring a new package, which asks for
+/// licensecheck to be run and debian/copyright to be verified.
+const DEVREF_SPONSOR_NEW: Citation = cite(Source::DevRef {
+    section: "7.6.1.1",
+    title: "Sponsoring a new package",
+    doc: "beyond-pkging",
+    label: "sponsoring-new-package",
+});
+
+/// An entry in the Developer's Reference's tools appendix. Cited as a
+/// manual by its part rather than as [`Source::DevRef`]: the appendix
+/// is numbered by a toctree of its own, which the section check in
+/// the tests does not read.
+const fn devref_tool(part: &'static str, url: &'static str) -> Citation {
+    cite(Source::Manual {
+        title: "Developer's Reference",
+        part,
+        url: Some(url),
+    })
+}
+
+const DEVREF_CME: Citation = devref_tool(
+    "Overview of Debian Maintainer Tools, cme",
+    "https://www.debian.org/doc/manuals/developers-reference/tools.html#cme",
+);
+
+const DEVREF_LICENSECHECK: Citation = devref_tool(
+    "Overview of Debian Maintainer Tools, licensecheck",
+    "https://www.debian.org/doc/manuals/developers-reference/tools.html#licensecheck",
+);
+
+/// An entry on the Debian wiki's list of copyright review tools, the
+/// only Debian document that names licenserecon and decopy.
+const fn wiki_tool(part: &'static str, url: &'static str) -> Citation {
+    cite(Source::Manual {
+        title: "Debian wiki, CopyrightReviewTools",
+        part,
+        url: Some(url),
+    })
+}
+
+const WIKI_CME: Citation = wiki_tool("cme", "https://wiki.debian.org/CopyrightReviewTools#cme");
+
+const WIKI_DECOPY: Citation = wiki_tool(
+    "decopy",
+    "https://wiki.debian.org/CopyrightReviewTools#decopy",
+);
+
+const WIKI_LICENSERECON: Citation = wiki_tool(
+    "licenserecon",
+    "https://wiki.debian.org/CopyrightReviewTools#licenserecon",
+);
+
+const DEP5: Citation = cite(Source::Dep {
+    number: 5,
+    title: "Machine-readable debian/copyright file",
+});
+
 const DEP3: Citation = cite(Source::Dep {
     number: 3,
     title: "Patch Tagging Guidelines",
@@ -217,6 +289,45 @@ const TABLE: &[(&str, &[Citation])] = &[
                   distribution, and debcargo-conf's release.sh replaces it \
                   at release; nothing documents it beyond those scripts",
         })],
+    ),
+    (
+        "copyright-holder-unattributed",
+        &[POLICY_COPYRIGHT, DEVREF_SPONSOR_NEW, WIKI_DECOPY],
+    ),
+    (
+        "copyright-license-mismatch",
+        &[
+            POLICY_COPYRIGHT,
+            DEVREF_SPONSOR_NEW,
+            DEVREF_LICENSECHECK,
+            WIKI_LICENSERECON,
+        ],
+    ),
+    (
+        "copyright-placeholder",
+        &[
+            POLICY_COPYRIGHT,
+            cite(Source::Practice {
+                why: "cme writes no-info-found and decopy TODO where they \
+                      could not tell, and lrc passes both, since a \
+                      placeholder is not a license disagreement",
+            }),
+        ],
+    ),
+    (
+        "copyright-syntax",
+        &[DEP5, POLICY_COPYRIGHT_FORMAT, DEVREF_CME, WIKI_CME],
+    ),
+    (
+        "copyright-years-stale",
+        &[
+            cite(Source::Practice {
+                why: "Policy asks for the copyright information, not for \
+                      current years, but a file whose years the source has \
+                      outgrown no longer says what the source does",
+            }),
+            WIKI_DECOPY,
+        ],
     ),
     (
         "gbp-branch-missing",
@@ -338,15 +449,20 @@ pub fn for_check(check: &str) -> &'static [Citation] {
 mod tests {
     use super::*;
 
-    /// The slugs `check.rs` can report, read from its source: the
-    /// first argument of every `Finding::new` outside its tests.
+    /// The slugs that can be reported, read from the sources that
+    /// make findings (`check.rs`, and `copyright.rs` for the copyright
+    /// stage of `update`): the first argument of every `Finding::new`
+    /// outside their tests.
     fn reported_slugs() -> Vec<String> {
-        let source = include_str!("check.rs");
-        let code: String = source
-            .split("#[cfg(test)]\nmod tests")
-            .next()
-            .expect("check.rs has code")
-            .lines()
+        let code: String = [include_str!("check.rs"), include_str!("copyright.rs")]
+            .iter()
+            .map(|source| {
+                source
+                    .split("#[cfg(test)]\nmod tests")
+                    .next()
+                    .expect("the file has code")
+            })
+            .flat_map(str::lines)
             // A slug quoted in a comment is not one that is reported.
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()

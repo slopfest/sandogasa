@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### dbranch update names where its copyright checks come from
+
+The copyright stage of `dbranch update` printed its warnings (a
+`debian/copyright` that cme rejects, a license `lrc` disagrees with,
+a placeholder, a copyright holder or year the file is missing) with no
+word on where the rule or the tool is documented, unlike the findings
+of `dbranch check`. Two of its tools, `lrc` and `decopy`, are in
+neither Policy nor the Developer's Reference, and ship no man page.
+
+Each warning is now followed by `see:` lines, as `check`'s findings
+are: Debian Policy 12.5 and 12.5.1, DEP-5, the Developer's Reference
+checklist for sponsoring a new package and its tools appendix entries
+for `cme` and `licensecheck`, and the Debian wiki's
+CopyrightReviewTools page for `lrc` and `decopy`. The README and the
+source name the package each tool comes from (cme and
+libconfig-model-dpkg-perl, licenserecon, decopy). The stage's warnings
+are now `check` findings, so the test that requires every reported
+check to cite a source covers them too.
+
+New tests run the `dbranch` binary against stub tools: the copyright
+stage, `check`, a bulk `rebuild --dry-run` and `debusine-repo`.
+Resolves #140.
+
 ### fedora-cve-triage selects bugs by who is in CC
 
 `fedora-cve-triage run` and `search` selected bugs only by component

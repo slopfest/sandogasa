@@ -1031,8 +1031,9 @@ drift.
 Rules for new checks:
 
 - **Every reportable slug has a table entry.** A test reads the slugs
-  out of `check.rs` and fails on one with no entry, and on an entry no
-  check reports any more.
+  out of `check.rs` and `copyright.rs` (whose findings the copyright
+  stage of `update` prints) and fails on one with no entry, and on an
+  entry no check reports any more.
 - **Cite the most specific source there is.** A Policy or Developer's
   Reference section by number, title and label; a man page narrowed
   with `under` to the option or heading that applies.
@@ -1041,6 +1042,13 @@ Rules for new checks:
   on its own, and so the first candidates for a documentation patch.
 - **A known disagreement goes in `diverges`**, with the bug or patch
   that should settle it, and is printed with the citation.
+- **The Developer's Reference's tools appendix is cited as a manual,**
+  by its part ("Overview of Debian Maintainer Tools, cme") and URL.
+  The appendix sits in a numbered toctree of its own, so its sections
+  are numbered from 1 again, and the section check reads only the
+  main one. Tools no Debian manual covers (`lrc`, `decopy`, neither of
+  which ships a man page) are cited from the Debian wiki's
+  CopyrightReviewTools page, by entry anchor.
 - **BTS severities and tags are cited from the web,** at
   https://www.debian.org/Bugs/Developer#severities and `#tags`. The
   debbugs repository only has placeholders for them, filled with
@@ -1092,6 +1100,22 @@ before git reads it.
 The same applies to anything else a test has to tell a child process:
 prefer one variable over several that only make sense together, and
 prefer passing it to the command over setting it on the process.
+
+## A stage that drives other tools is tested through the binary
+
+The copyright stage runs `cme`, `lrc` and `decopy`, the bulk `rebuild`
+reads `ubuntu-distro-info`, and `debusine-repo` asks `curl` and the
+`debusine` client. None of them is in a packaging build, and a unit
+test cannot swap them out without changing `PATH` for every test in
+the process. So `tests/` runs the `dbranch` binary as a child process
+with a `PATH` holding only stub shell scripts and a link to git: the
+stubs answer what a test needs, and nothing the host has installed can
+change the outcome. The stubs use shell builtins only (`read`, not
+`cat`), since nothing else is on that `PATH`, and a stub given stdin
+has to read it, or the writer gets a broken pipe. A fixture repository
+sits one level inside its temporary directory, because the copyright
+stage writes its scan beside the repository. Coverage from these runs
+counts, since the binary links the same library.
 
 ## A step that reads the environment takes every path in some test run
 

@@ -10,6 +10,25 @@
 //! both leave placeholders where they could not tell, and
 //! `licenserecon` passes them, because a placeholder is not a license
 //! disagreement.
+//!
+//! Where the tools come from, and what documents them:
+//!
+//! - `cme` (packages cme and libconfig-model-dpkg-perl, which holds
+//!   the dpkg-copyright model) and `licensecheck`, which `lrc` runs,
+//!   are in the Developer's Reference appendix "Overview of Debian
+//!   Maintainer Tools". Its checklist for sponsoring a new package asks
+//!   for `licensecheck` to be run and `debian/copyright` checked.
+//! - `lrc` (package licenserecon) and `decopy` (package decopy) are in
+//!   neither Policy nor the Developer's Reference, and ship no man
+//!   page. The Debian wiki's CopyrightReviewTools page lists them, with
+//!   `cme` and `licensecheck`.
+//! - The file itself: Debian Policy, "Copyright information" and
+//!   "Machine-readable copyright information", and DEP-5.
+//!
+//! The stage's warnings are [`Finding`]s, so each names these sources
+//! through [`crate::cite`] the way `dbranch check`'s findings do.
+
+use crate::check::{Finding, Severity};
 
 /// Placeholders the generators leave for a human, as the exact strings
 /// they write.
@@ -178,6 +197,74 @@ pub fn unattributed(existing: &str, generated: &str) -> Vec<String> {
         .collect()
 }
 
+/// What `cme check dpkg-copyright` printed, as a finding: it exits 0
+/// for a file it rejects as well as one it accepts, so whatever it
+/// says is the finding, and silence is the only pass.
+pub fn syntax_finding(cme_output: &str) -> Option<Finding> {
+    if cme_output.trim().is_empty() {
+        return None;
+    }
+    Some(Finding::new(
+        "copyright-syntax",
+        Severity::Warning,
+        "cme is unhappy with debian/copyright above; it exits 0 either way, \
+         so what it printed is the finding"
+            .to_string(),
+    ))
+}
+
+/// `lrc` found a license debian/copyright does not declare, or the
+/// reverse, with the two commands that can reconcile it.
+pub fn mismatch_finding(cme: &str, decopy: &str) -> Finding {
+    Finding::new(
+        "copyright-license-mismatch",
+        Severity::Warning,
+        format!(
+            "debian/copyright disagrees with the source; {cme} reconciles what \
+             is there, {decopy} regenerates it from a scan"
+        ),
+    )
+}
+
+/// [`placeholder_warning`] as a finding.
+pub fn placeholder_finding(text: &str) -> Option<Finding> {
+    placeholder_warning(text)
+        .map(|warning| Finding::new("copyright-placeholder", Severity::Warning, warning))
+}
+
+/// [`stale_years`] as a finding.
+pub fn stale_years_finding(existing: &str, generated: &str) -> Option<Finding> {
+    let (claimed, found) = stale_years(existing, generated)?;
+    Some(Finding::new(
+        "copyright-years-stale",
+        Severity::Warning,
+        format!(
+            "debian/copyright claims {claimed} at the latest, and the source \
+             mentions {found}. A file crediting the right people under the \
+             right license still goes stale every January."
+        ),
+    ))
+}
+
+/// [`unattributed`] as a finding, pointing at the scan to compare
+/// with (`scan`, relative to the packaging repository).
+pub fn unattributed_finding(existing: &str, generated: &str, scan: &str) -> Option<Finding> {
+    let missing = unattributed(existing, generated);
+    if missing.is_empty() {
+        return None;
+    }
+    Some(Finding::new(
+        "copyright-holder-unattributed",
+        Severity::Warning,
+        format!(
+            "the source names {}, which debian/copyright does not. Compare it \
+             with {scan} -- that scan is a guess, junk entries and all, so read \
+             it rather than copy it.",
+            missing.join(" and ")
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +406,83 @@ mod tests {
         let w = placeholder_warning("Copyright: no-info-found\n").expect("a warning");
         assert!(w.contains("no-info-found"), "{w}");
         assert!(w.contains("needs a person before upload"), "{w}");
+    }
+
+    #[test]
+    fn each_warning_is_a_finding_that_cites_its_sources() {
+        let cited = |f: Finding, slug: &str| {
+            assert_eq!(f.check, slug);
+            assert_eq!(f.severity, Severity::Warning);
+            assert!(!f.sources.is_empty(), "{slug} cites nothing");
+            f.message
+        };
+
+        assert!(syntax_finding(" \n").is_none(), "silence is a pass");
+        let m = cited(
+            syntax_finding("Warning in 'Files:*': ...").unwrap(),
+            "copyright-syntax",
+        );
+        assert!(m.contains("exits 0 either way"), "{m}");
+
+        let m = cited(
+            mismatch_finding("cme update dpkg-copyright", "decopy > debian/copyright"),
+            "copyright-license-mismatch",
+        );
+        assert!(m.contains("cme update dpkg-copyright reconciles"), "{m}");
+        assert!(m.contains("decopy > debian/copyright regenerates"), "{m}");
+
+        assert!(placeholder_finding("Copyright: 2020 A\n").is_none());
+        let m = cited(
+            placeholder_finding("Copyright: no-info-found\n").unwrap(),
+            "copyright-placeholder",
+        );
+        assert!(m.contains("no-info-found"), "{m}");
+
+        let scan = "Files: *\nCopyright: 2019-2026, Phil Hagelberg\nLicense: Expat\n";
+        let stale = "Files: *\nCopyright: © 2019-2024 Phil Hagelberg\nLicense: Expat\n";
+        assert!(stale_years_finding(scan, scan).is_none());
+        let m = cited(
+            stale_years_finding(stale, scan).unwrap(),
+            "copyright-years-stale",
+        );
+        assert!(
+            m.contains("claims 2024") && m.contains("mentions 2026"),
+            "{m}"
+        );
+
+        let generated = "Copyright: Calvin Rose\n";
+        assert!(unattributed_finding(stale, stale, "../x").is_none());
+        let m = cited(
+            unattributed_finding(stale, generated, "../fnlfmt.copyright.decopy").unwrap(),
+            "copyright-holder-unattributed",
+        );
+        assert!(m.contains("names Calvin Rose"), "{m}");
+        assert!(m.contains("../fnlfmt.copyright.decopy"), "{m}");
+    }
+
+    #[test]
+    fn a_copyright_finding_renders_with_its_citations() {
+        let text = crate::check::render(&[placeholder_finding("Copyright: TODO\n").unwrap()]);
+        assert!(
+            text.starts_with("warning: debian/copyright still says TODO"),
+            "{text}"
+        );
+        assert!(
+            text.contains("see: Debian Policy 12.5, Copyright information"),
+            "{text}"
+        );
+        assert!(
+            text.contains("https://www.debian.org/doc/debian-policy/ch-docs.html#s-copyrightfile"),
+            "{text}"
+        );
+        let text = crate::check::render(&[mismatch_finding("cme", "decopy")]);
+        assert!(
+            text.contains("see: Debian wiki, CopyrightReviewTools, licenserecon"),
+            "{text}"
+        );
+        assert!(
+            text.contains("https://wiki.debian.org/CopyrightReviewTools#licenserecon"),
+            "{text}"
+        );
     }
 }

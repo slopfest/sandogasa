@@ -568,6 +568,16 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   patch file carries copies of upstream text — the lines it removes
   among them — which decopy reads as copyright statements.
 
+  Each warning is followed by `see:` lines naming where its rule and
+  its tool are documented, as `check`'s findings are. The file itself
+  is covered by Debian Policy, "Copyright information" and
+  "Machine-readable copyright information", and by DEP-5. `cme` (from
+  the cme and libconfig-model-dpkg-perl packages) and `licensecheck`,
+  which `lrc` runs, are in the Developer's Reference's tools appendix,
+  and its checklist for sponsoring a new package asks for both checks.
+  `lrc` (licenserecon) and `decopy` (decopy) are listed only on the
+  Debian wiki, at https://wiki.debian.org/CopyrightReviewTools.
+
   Whether the orig tarball is offered for upload depends on where the
   package is going. Uploads to the Debian archive — `update` to
   unstable, proposed-updates and backports, which share one pool — use
