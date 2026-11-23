@@ -120,6 +120,8 @@ repology_name = "linux"
 [[package]]
 name = "kexec-tools"
 divergent = true
+# Rebased on each release's stock: el9 on c9s, el10 on c10s.
+track = "centos-stream-matched"
 
 [[package]]
 name = "kpatch"
