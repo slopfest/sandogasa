@@ -325,7 +325,7 @@ Stages to run, repeatable or comma-separated:
           pipeline via glab (see --nowait)
   upload  dput the built package (needs --ppa or
           --upload-target)
-  tag     dh clean + gbp tag the release
+  tag     clean the tree + gbp tag the release
   all     merge + source + build + lint + push
           (upload and tag are opt-in)
 Defaults to merge (the others are opt-in for now)."
@@ -466,7 +466,7 @@ Stages to run, repeatable or comma-separated:
   lint    lintian on the built source package
   push    git push the branch, then watch its CI
   upload  dput the built package
-  tag     dh clean + gbp tag the release
+  tag     clean the tree + gbp tag the release
   all     import + copyright + source + build + lint + push
 Defaults to import."
         )]

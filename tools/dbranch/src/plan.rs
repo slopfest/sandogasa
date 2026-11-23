@@ -253,16 +253,27 @@ pub fn gbp_dch_release_argv(urgency: &str) -> Vec<String> {
     ])
 }
 
-/// `debuild -S {-sa|-si} -d` — build the source package. The `-s`
-/// option decides what the `.changes` *offers for upload*, not what the
-/// `.dsc` references (that always names the orig tarball): `-sa` forces
-/// the orig tarball into the upload, `-si` — dpkg's default — includes
-/// it only when the upstream version differs from the previous
-/// changelog entry's. Both are passed explicitly so the narrated
-/// command records which one this run decided on.
-pub fn debuild_argv(include_orig: bool) -> Vec<String> {
+/// `debuild -S {-sa|-si} -d [-nc]` — build the source package. The
+/// `-s` option decides what the `.changes` *offers for upload*, not
+/// what the `.dsc` references (that always names the orig tarball):
+/// `-sa` forces the orig tarball into the upload, `-si` — dpkg's
+/// default — includes it only when the upstream version differs from
+/// the previous changelog entry's. Both are passed explicitly so the
+/// narrated command records which one this run decided on.
+///
+/// `-d` skips the build-dependency check, since the binary build runs
+/// in a chroot. It does not provide them, though, and debuild's
+/// pre-clean runs `debian/rules clean`, which fails when the rules
+/// include a makefile or use a `dh --with` addon the host lacks.
+/// `no_pre_clean` adds `-nc` to skip it, for a tree with nothing to
+/// clean (see [`crate::git::pristine`]).
+pub fn debuild_argv(include_orig: bool, no_pre_clean: bool) -> Vec<String> {
     let source = if include_orig { "-sa" } else { "-si" };
-    argv(&["debuild", "-S", source, "-d"])
+    let mut v = argv(&["debuild", "-S", source, "-d"]);
+    if no_pre_clean {
+        v.push("-nc".to_string());
+    }
+    v
 }
 
 /// Whether a `.changes` file offers an orig tarball for upload. Matches
@@ -279,6 +290,13 @@ pub fn changes_includes_orig(contents: &str) -> bool {
 /// clean for `gbp tag`.
 pub fn dh_clean_argv() -> Vec<String> {
     argv(&["dh", "clean"])
+}
+
+/// `rm -f debian/files` — remove what `debuild -S` leaves behind,
+/// without loading `debian/rules` as [`dh_clean_argv`] does, for a
+/// tree that holds nothing else to clean.
+pub fn rm_source_leftover_argv() -> Vec<String> {
+    argv(&["rm", "-f", crate::git::SOURCE_BUILD_LEFTOVER])
 }
 
 /// `gbp tag` — tag the release on the current (Debian) branch, using
@@ -1336,9 +1354,14 @@ mod tests {
                 "--spawn-editor=never"
             ]
         );
-        assert_eq!(debuild_argv(true), ["debuild", "-S", "-sa", "-d"]);
-        assert_eq!(debuild_argv(false), ["debuild", "-S", "-si", "-d"]);
+        assert_eq!(debuild_argv(true, false), ["debuild", "-S", "-sa", "-d"]);
+        assert_eq!(debuild_argv(false, false), ["debuild", "-S", "-si", "-d"]);
+        assert_eq!(
+            debuild_argv(true, true),
+            ["debuild", "-S", "-sa", "-d", "-nc"]
+        );
         assert_eq!(dh_clean_argv(), ["dh", "clean"]);
+        assert_eq!(rm_source_leftover_argv(), ["rm", "-f", "debian/files"]);
         assert_eq!(gbp_tag_argv(), ["gbp", "tag"]);
         assert_eq!(
             gbp_import_orig_argv(),

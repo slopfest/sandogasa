@@ -1640,9 +1640,21 @@ fn build_pipeline(
 /// The tag stage: clean the work tree (`gbp tag` refuses a dirty one,
 /// and `debuild -S` leaves a generated `debian/files`) and tag the
 /// release with `gbp tag`.
+///
+/// When `debian/files` is all there is, it is removed directly: `dh
+/// clean` loads `debian/rules`, which can need build-deps the host
+/// does not have, the same reason the source stage skips its clean.
 fn tag_stage(ui: &Ui, repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    ui.step("Clean the work tree (gbp tag needs it clean)");
-    ui.run_required(&plan::dh_clean_argv(), repo)?;
+    if git::pristine(repo) {
+        ui.step("Remove what the source build left (gbp tag needs a clean tree)");
+        ui.run_required(&plan::rm_source_leftover_argv(), repo)?;
+    } else {
+        ui.step("Clean the work tree (gbp tag needs it clean)");
+        if let Err(e) = ui.run_required(&plan::dh_clean_argv(), repo) {
+            eprintln!("{DH_CLEAN_HINT}");
+            return Err(e);
+        }
+    }
     ui.step("Tag the release");
     ui.run_required(&plan::gbp_tag_argv(), repo)
 }
@@ -2601,12 +2613,47 @@ fn source_stage(
             None => ui.run_required(&plan::gbp_export_orig_argv(), repo)?,
         }
     }
-    ui.step(if include_orig {
-        "Build the source package, orig tarball included (-sa)"
+    let no_pre_clean = git::pristine(repo);
+    ui.step(&source_step(include_orig, no_pre_clean));
+    let result = ui.run_required(&plan::debuild_argv(include_orig, no_pre_clean), repo);
+    if result.is_err() && !no_pre_clean {
+        eprintln!("{}", PRE_CLEAN_HINT);
+    }
+    result
+}
+
+/// Said when a source build that ran debuild's pre-clean fails: the
+/// usual cause on a host without the build-deps is `debian/rules`
+/// failing to load, and a clean tree avoids it.
+const PRE_CLEAN_HINT: &str = "note: debuild ran `debian/rules clean` first, because the work tree \
+     has uncommitted, untracked or ignored files. If that failed on a build-dep \
+     this host lacks (an included makefile, a `dh --with` addon), commit or \
+     remove those files: on a clean tree dbranch skips the clean (-nc).";
+
+/// Said when the tag stage's `dh clean` fails, which on a host
+/// without the build-deps is usually `debian/rules` failing to load.
+/// The clean is left to the user: deleting untracked files is not
+/// something to do unasked, and `git clean -n` shows what it would
+/// remove first.
+const DH_CLEAN_HINT: &str = "note: `dh clean` ran because the work tree holds more than the \
+     debian/files a source build leaves. If it failed on a build-dep this host \
+     lacks, clean the tree by hand: `git status --ignored` lists what is there, \
+     `git clean -ndx` shows what `git clean -fdx` would delete. Then rerun \
+     with --stage tag.";
+
+/// The source stage's step, naming the choices its command records.
+fn source_step(include_orig: bool, no_pre_clean: bool) -> String {
+    let orig = if include_orig {
+        "orig tarball included (-sa)"
     } else {
-        "Build the source package, orig tarball as dpkg decides (-si)"
-    });
-    ui.run_required(&plan::debuild_argv(include_orig), repo)
+        "orig tarball as dpkg decides (-si)"
+    };
+    let clean = if no_pre_clean {
+        "; the tree is clean, so debian/rules clean is skipped (-nc)"
+    } else {
+        ""
+    };
+    format!("Build the source package, {orig}{clean}")
 }
 
 /// The build stage: scratch-build the source package the source stage
@@ -4447,6 +4494,22 @@ E: damo: an-error\n";
     fn tag_stage_dry_run_narrates() {
         let dir = setup();
         tag_stage(&ui_dry(), dir.path()).unwrap();
+        // Something besides debian/files: dh clean, as before.
+        std::fs::write(dir.path().join("stray"), "").unwrap();
+        tag_stage(&ui_dry(), dir.path()).unwrap();
+    }
+
+    #[test]
+    fn the_source_step_says_when_the_clean_is_skipped() {
+        assert_eq!(
+            source_step(true, false),
+            "Build the source package, orig tarball included (-sa)"
+        );
+        assert_eq!(
+            source_step(false, true),
+            "Build the source package, orig tarball as dpkg decides (-si); \
+             the tree is clean, so debian/rules clean is skipped (-nc)"
+        );
     }
 
     #[test]

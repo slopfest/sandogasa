@@ -273,6 +273,52 @@ pub fn is_dirty(repo: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// What `debuild -S` leaves in the tree. It is ignored when deciding
+/// whether a tree is [`pristine`], so a second source build of the
+/// same tree still counts as clean.
+pub const SOURCE_BUILD_LEFTOVER: &str = "debian/files";
+
+/// Whether `git status --porcelain --ignored --untracked-files=all`
+/// output describes a tree that holds exactly what `HEAD` does, apart
+/// from [`SOURCE_BUILD_LEFTOVER`].
+pub fn pristine_status(porcelain: &str) -> bool {
+    porcelain
+        .lines()
+        .filter(|l| !l.is_empty())
+        // Untracked or ignored only: a tracked debian/files that was
+        // changed or deleted is a real change, and removing it would
+        // dirty the tree.
+        .all(|l| {
+            (l.starts_with("?? ") || l.starts_with("!! "))
+                && l.get(3..) == Some(SOURCE_BUILD_LEFTOVER)
+        })
+}
+
+/// Whether the work tree holds exactly what `HEAD` does: nothing
+/// modified, staged, untracked or ignored, apart from
+/// [`SOURCE_BUILD_LEFTOVER`].
+///
+/// Such a tree has nothing for `debian/rules clean` to remove, so a
+/// source build can skip it (`-nc`). The clean target loads
+/// `debian/rules`, which can need build-deps the host does not have.
+/// Ignored files count, since a clean would remove build products
+/// that `.gitignore` hides. When git cannot answer, the tree is taken
+/// as not pristine, which keeps the clean.
+pub fn pristine(repo: &Path) -> bool {
+    Command::new("git")
+        .args([
+            "status",
+            "--porcelain",
+            "--ignored",
+            "--untracked-files=all",
+        ])
+        .current_dir(repo)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .is_some_and(|o| pristine_status(&String::from_utf8_lossy(&o.stdout)))
+}
+
 /// A remote's branches, as plain names (`debian/latest`), sorted.
 pub fn remote_branches(repo: &Path, remote: &str) -> Vec<String> {
     Command::new("git")
@@ -458,6 +504,57 @@ mod tests {
         );
         // An unknown remote yields None rather than erroring.
         assert_eq!(remote_host(p, "nope"), None);
+    }
+
+    #[test]
+    fn only_the_source_builds_leftover_keeps_a_tree_pristine() {
+        assert!(pristine_status(""));
+        assert!(pristine_status("!! debian/files\n"));
+        assert!(pristine_status("?? debian/files\n"));
+        assert!(!pristine_status(" M debian/control\n"));
+        assert!(!pristine_status(" M debian/files\n"));
+        assert!(!pristine_status("D  debian/files\n"));
+        assert!(!pristine_status("?? debian/files\n?? notes.txt\n"));
+        // A build product .gitignore hides is still something a clean
+        // would remove.
+        assert!(!pristine_status("!! debian/.debhelper/x\n"));
+        assert!(!pristine_status("!! debian/files.new\n"));
+    }
+
+    #[test]
+    fn pristine_reads_the_real_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(p)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@example.org"]);
+        git(&["config", "user.name", "T"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::create_dir(p.join("debian")).unwrap();
+        std::fs::write(p.join("debian/control"), "Source: x\n").unwrap();
+        std::fs::write(p.join(".gitignore"), "*.o\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init"]);
+        assert!(pristine(p));
+        std::fs::write(p.join("debian/files"), "x_1.dsc devel optional\n").unwrap();
+        assert!(pristine(p));
+        std::fs::write(p.join("a.o"), "").unwrap();
+        assert!(!pristine(p), "an ignored build product is not pristine");
+        std::fs::remove_file(p.join("a.o")).unwrap();
+        std::fs::write(p.join("debian/control"), "Source: y\n").unwrap();
+        assert!(!pristine(p));
+        // Not a repository: keep the clean.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(!pristine(empty.path()));
     }
 
     #[test]

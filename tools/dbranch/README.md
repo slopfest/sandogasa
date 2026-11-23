@@ -490,7 +490,12 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   and requires a **Debian host** (`--dry-run` exempt).
 - **`source`** — `debuild -S -d` the source package into the parent
   directory: the `.dsc` the `build` stage scratch-builds and the
-  `.changes` the `upload` stage dputs.
+  `.changes` the `upload` stage dputs. When the work tree holds
+  exactly what is committed (nothing modified, untracked or ignored,
+  apart from a `debian/files` left by an earlier source build), it adds
+  `-nc` to skip `debian/rules clean`. The host then needs none of the
+  build-deps, not even a makefile `debian/rules` includes or a
+  `dh --with` addon.
 
   After a successful `push`, packaging that started from upstream's
   own `debian/*` branch says how far it has diverged and names the
@@ -685,8 +690,9 @@ Like `rpmbuild`'s build stages, `--stage` selects what to run
   > If the prompt names several hosts, `ssh-keyscan` each. Don't
   > disable host-key checking — it removes the MITM protection on the
   > upload.
-- **`tag`** — tag the release: `dh clean` (so `gbp tag` sees a clean
-  tree — `debuild -S` leaves a `debian/files`) then `gbp tag`, which
+- **`tag`** — tag the release: remove the `debian/files` that
+  `debuild -S` leaves (or run `dh clean` when the tree holds anything
+  else), so `gbp tag` sees a clean tree, then `gbp tag`, which
   derives the version from `debian/changelog` and gbp's `debian-tag`
   format. Runs after `upload`. **Opt-in** — not part of `all`.
 - **`all`** — `merge`, `build`, `lint`, `push` (not `upload`/`tag`,

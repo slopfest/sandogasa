@@ -20,6 +20,28 @@ searches with the configured Bugzilla API key, as `run` does, so it
 finds bugs restricted to the user's groups too.
 Resolves #218.
 
+### dbranch builds a source package without the build-deps on the host
+
+`dbranch update` and `rebuild` failed at the `source` stage on a host
+without the package's build-deps, though the binary build runs in a
+pbuilder chroot. `debuild -S -d` skips the build-dependency check, but
+its pre-clean still runs `debian/rules clean`, which fails when the
+rules include a makefile or use a `dh --with` addon the host lacks.
+python-json-pointer (OpenStack team) includes openstack-pkg-tools'
+`pkgos.make` and uses `dh --with sphinxdoc`, so its source build
+stopped there. The `tag` stage ran `dh clean`, which loads
+`debian/rules` the same way.
+
+Now, when the work tree holds exactly what is committed (nothing
+modified, untracked or ignored, apart from the `debian/files` a source
+build leaves), the `source` stage adds `-nc` to skip the clean, and
+the `tag` stage removes `debian/files` instead of running `dh clean`.
+A tree with anything else keeps both cleans. A source build that
+fails there says why the clean ran and how to avoid it, and a failed
+`dh clean` says how to clean the tree by hand (`git status --ignored`,
+then `git clean -ndx` before `git clean -fdx`) and rerun the `tag`
+stage. Resolves #148.
+
 ### cbspkg updates a Hyperscale issue's table when a build moves
 
 When `cbspkg promote` moved a Hyperscale build, the tracking issue got

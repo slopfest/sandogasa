@@ -122,7 +122,22 @@ timestamp in the same session.
   "normalize, don't parse output" rule because gbp offers no
   machine-readable signal, and any other failure still propagates.
 - **`gbp tag` refuses a dirty tree**, and `debuild -S` leaves a
-  generated `debian/files`, so the `tag` stage runs `dh clean` first.
+  generated `debian/files`, so the `tag` stage removes it first. It
+  runs `dh clean` only when the tree holds something else.
+- **Neither the source build nor the tag stage loads `debian/rules`
+  on a clean tree.** `debuild -d` skips the build-dependency check but
+  not the pre-clean, and `debian/rules clean` fails on a host without
+  what the rules load: python-json-pointer (OpenStack team) includes
+  openstack-pkg-tools' `pkgos.make` and uses `dh --with sphinxdoc`.
+  The binary build runs in a chroot, so the host should need neither.
+  `git::pristine` decides: nothing modified, staged, untracked or
+  ignored besides `debian/files`, which is all a pre-clean of such a
+  tree would have removed. Ignored files count, because `.gitignore`
+  hides exactly the build products a clean removes. Anything else
+  keeps the old commands (the clean, `dh clean`). A failed source
+  build then says why the clean ran, and a failed `dh clean` says how
+  to clean by hand. dbranch does not run `git clean` itself: deleting
+  untracked files is the user's call.
 - The codename is taken from the **branch name** (`codename_from_branch`),
   not gbp.conf's `debian-branch` — an unadjusted branch may still point
   that at the Debian branch.
