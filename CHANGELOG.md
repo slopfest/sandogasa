@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### cbspkg updates a Hyperscale issue's table when a build moves
+
+When `cbspkg promote` moved a Hyperscale build, the tracking issue got
+a comment and a `stage::` label, but the version table in its
+description kept the builds from before. kexec-tools' issue said
+2.0.32 was ready for testing right under a table saying testing had
+2.0.29. hs-relmon's next scan would fix the table, but only when
+Repology answers, and since 2026-11-20 Repology has been answering
+with a bot check (#209), so the table could stay stale for days.
+
+Now `cbspkg promote` and `untag`, and `hs-relmon review`, also
+redraw the table rows of the build's
+Hyperscale release once a build reached or left `-testing` or
+`-release`, from the newest builds CBS has in that release's
+collections. Their status compares each build with the version in
+the issue's title. No other row is recomputed: the upstream, Fedora
+and CentOS Stream rows from Repology stay as they are, as does the
+not-built line below the table. The plan shown before confirming says
+which release's rows will be updated. hs-relmon and cbspkg now draw
+the table with the same code, `sandogasa_cbs::issue_table`.
+
+cpu-sig-tracker's issues have no such table. The one line a promotion
+affects there, an **Expected fix** still `_(unknown)_`, is filled by
+`status --refresh` once the SIG's build is in testing, as before.
+
+Of builds of one version in several variants, the row keeps the one
+it shows: hs-relmon picks the one built last, which comparing NVRs
+would not, so the two tools would otherwise keep swapping it.
+
+`sandogasa_cbs::packages::latest_in_tags` now reads a tag the hub does
+not have as having no build, instead of failing the whole request:
+Hyperscale's variants are not on every release (no asahi on 9). This
+also lets a Hyperscale issue close once every release has the
+version, where a package with a branch for a collection CBS does not
+have used to keep its issue open, since the check failed on that tag;
+the closing comment lists such a collection as not built for.
+Resolves #214.
+
 ### ebranch checks and submits a multi-release run newest release first
 
 `ebranch check-update --submit` given builds for several releases

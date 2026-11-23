@@ -2,6 +2,7 @@
 
 use crate::cbs::{self, HyperscaleSummary};
 use crate::repology;
+use sandogasa_cbs::issue_table::{self, Row};
 use serde::Serialize;
 
 /// Which distribution sources to check.
@@ -512,129 +513,34 @@ fn compute_newest_version(
     Some(crate::rpmvercmp::rpmvercmp(&effective.version, ref_ver) != std::cmp::Ordering::Less)
 }
 
-/// A single row in the output table.
-struct Row {
-    distro: String,
-    version: String,
-    detail: String,
-    status: String,
-}
-
 /// Collect the result into table rows.
 fn result_to_rows(result: &CheckResult) -> Vec<Row> {
     let mut rows = Vec::new();
 
     if let Some(v) = &result.upstream {
-        rows.push(Row {
-            distro: "Upstream".into(),
-            version: v.clone(),
-            detail: String::new(),
-            status: String::new(),
-        });
+        rows.push(Row::new("Upstream", v, "", ""));
     }
     if let Some(v) = &result.fedora_rawhide {
-        rows.push(Row {
-            distro: "Fedora Rawhide".into(),
-            version: v.clone(),
-            detail: String::new(),
-            status: String::new(),
-        });
+        rows.push(Row::new("Fedora Rawhide", v, "", ""));
     }
     if let Some(vd) = &result.fedora_stable {
-        rows.push(Row {
-            distro: "Fedora Stable".into(),
-            version: vd.version.clone(),
-            detail: vd.detail.clone(),
-            status: String::new(),
-        });
+        rows.push(Row::new("Fedora Stable", &vd.version, &vd.detail, ""));
     }
     if let Some(vd) = &result.centos_stream {
-        rows.push(Row {
-            distro: "CentOS Stream".into(),
-            version: vd.version.clone(),
-            detail: vd.detail.clone(),
-            status: String::new(),
-        });
+        rows.push(Row::new("CentOS Stream", &vd.version, &vd.detail, ""));
     }
-    if let Some(hs_result) = &result.hs9 {
-        hs_rows(
-            &mut rows,
-            "Hyperscale 9",
-            &hs_result.summary,
-            result.ref_version.as_deref(),
-        );
-    }
-    if let Some(hs_result) = &result.hs10 {
-        hs_rows(
-            &mut rows,
-            "Hyperscale 10",
-            &hs_result.summary,
-            result.ref_version.as_deref(),
-        );
+    for (major, hs) in [(9, &result.hs9), (10, &result.hs10)] {
+        if let Some(hs) = hs {
+            rows.extend(issue_table::hyperscale_rows(
+                major,
+                hs.summary.release.as_ref().map(|b| b.nvr.as_str()),
+                hs.summary.testing.as_ref().map(|b| b.nvr.as_str()),
+                result.ref_version.as_deref(),
+            ));
+        }
     }
 
     rows
-}
-
-fn version_status(version: &str, ref_version: Option<&str>) -> String {
-    match ref_version {
-        Some(ref_ver) => {
-            if crate::rpmvercmp::rpmvercmp(version, ref_ver) != std::cmp::Ordering::Less {
-                "newest".into()
-            } else {
-                "outdated".into()
-            }
-        }
-        None => String::new(),
-    }
-}
-
-fn hs_rows(
-    rows: &mut Vec<Row>,
-    label: &str,
-    summary: &HyperscaleSummary,
-    ref_version: Option<&str>,
-) {
-    match (&summary.release, &summary.testing) {
-        (Some(rel), Some(test)) => {
-            rows.push(Row {
-                distro: format!("{label} (release)"),
-                version: rel.version.clone(),
-                detail: rel.nvr.clone(),
-                status: version_status(&rel.version, ref_version),
-            });
-            rows.push(Row {
-                distro: format!("{label} (testing)"),
-                version: test.version.clone(),
-                detail: test.nvr.clone(),
-                status: version_status(&test.version, ref_version),
-            });
-        }
-        (Some(rel), None) => {
-            rows.push(Row {
-                distro: label.into(),
-                version: rel.version.clone(),
-                detail: rel.nvr.clone(),
-                status: version_status(&rel.version, ref_version),
-            });
-        }
-        (None, Some(test)) => {
-            rows.push(Row {
-                distro: format!("{label} (testing)"),
-                version: test.version.clone(),
-                detail: test.nvr.clone(),
-                status: version_status(&test.version, ref_version),
-            });
-        }
-        (None, None) => {
-            rows.push(Row {
-                distro: label.into(),
-                version: "not found".into(),
-                detail: String::new(),
-                status: String::new(),
-            });
-        }
-    }
 }
 
 /// Format the result as a table string.
@@ -669,76 +575,11 @@ fn write_json_array(
 }
 
 fn write_table(result: &CheckResult, w: &mut dyn std::io::Write) -> std::io::Result<()> {
-    let rows = result_to_rows(result);
-    if rows.is_empty() {
-        return Ok(());
-    }
-
-    let distro_w = rows
-        .iter()
-        .map(|r| r.distro.len())
-        .max()
-        .unwrap_or(0)
-        .max("Distribution".len());
-    let version_w = rows
-        .iter()
-        .map(|r| r.version.len())
-        .max()
-        .unwrap_or(0)
-        .max("Version".len());
-    let has_status = rows.iter().any(|r| !r.status.is_empty());
-    let detail_w = rows
-        .iter()
-        .map(|r| r.detail.len())
-        .max()
-        .unwrap_or(0)
-        .max("Detail".len());
-
-    writeln!(w, "{}", result.package)?;
-    if has_status {
-        writeln!(
-            w,
-            "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  Status",
-            "Distribution", "Version", "Detail"
-        )?;
-        writeln!(
-            w,
-            "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  ──────",
-            "─".repeat(distro_w),
-            "─".repeat(version_w),
-            "─".repeat(detail_w)
-        )?;
-    } else {
-        writeln!(
-            w,
-            "  {:<distro_w$}  {:<version_w$}  Detail",
-            "Distribution", "Version"
-        )?;
-        writeln!(
-            w,
-            "  {:<distro_w$}  {:<version_w$}  ──────",
-            "─".repeat(distro_w),
-            "─".repeat(version_w)
-        )?;
-    }
-    for row in &rows {
-        if !row.status.is_empty() {
-            writeln!(
-                w,
-                "  {:<distro_w$}  {:<version_w$}  {:<detail_w$}  {}",
-                row.distro, row.version, row.detail, row.status
-            )?;
-        } else if row.detail.is_empty() {
-            writeln!(w, "  {:<distro_w$}  {}", row.distro, row.version)?;
-        } else {
-            writeln!(
-                w,
-                "  {:<distro_w$}  {:<version_w$}  {}",
-                row.distro, row.version, row.detail
-            )?;
-        }
-    }
-    Ok(())
+    write!(
+        w,
+        "{}",
+        issue_table::render(&result.package, &result_to_rows(result))
+    )
 }
 
 fn write_json(

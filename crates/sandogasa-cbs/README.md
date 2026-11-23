@@ -134,6 +134,14 @@ through `notify::Checkout`, which the calling tool implements.
 `notify::one_line` puts an error or a command on one line, without
 backticks, for a code span in a comment.
 
+`issue_table` draws the version table hs-relmon puts in a Hyperscale
+issue (`render`, with each release's rows from `hyperscale_rows`) and
+reads it back (`parse`). `notify::post` uses `refreshed` to redraw a
+release's rows once a build reached or left its `-testing` or
+`-release`, from the newest builds `hyperscale_builds` reads from
+every Hyperscale collection on that release, and leaves every other
+row and anything below the table as it was.
+
 ## Builds
 
 `builds::HubBuilds::fetch` reads builds from the hub for the dependency

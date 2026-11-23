@@ -337,6 +337,15 @@ SIG-only commits an earlier one listed, from `build` or the promotion
 before, instead of listing them again; a different list, as after the
 merge request was updated, is listed in full.
 
+A Hyperscale issue's version table, which hs-relmon writes into its
+description, also has the rows of the build's release redrawn from
+what CBS now has, once the build reached or left `-testing` or
+`-release`: `Hyperscale 9 (release)` and `(testing)`, or the one
+`Hyperscale 9` row when only a release build is there. The other rows
+(upstream, Fedora, CentOS Stream, other releases) and the not-built
+line below the table stay as they are, and the description is left
+alone when no row changes or it has no such table.
+
 When the branch has commits the build was not made from, merged since,
 the comment lists them too, with the day of the newest and the merge
 request each merged, so whoever moves the build sees what it does not

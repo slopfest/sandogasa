@@ -565,6 +565,11 @@ pub fn describe_styled(notice: &Notice, postable: bool, color: bool) -> String {
     if let Some(label) = notice.unlabel {
         out.push_str(&format!("  and take off {label}\n"));
     }
+    if let Some(major) = table_release(notice).filter(|_| postable) {
+        out.push_str(&format!(
+            "  and update its table's Hyperscale {major} rows from CBS, if it has them\n"
+        ));
+    }
     if let Some(c) = notice.closing.as_ref().filter(|_| postable) {
         out.push_str(&format!(
             "  and close it as Done once these have {} or newer, leaving out any without a build of {}: {}\n",
@@ -594,7 +599,9 @@ pub fn describe_styled(notice: &Notice, postable: bool, color: bool) -> String {
 /// the comment, then the labels. A stage reached also moves the work
 /// item from `To do` to `In progress`, and a Hyperscale release closes
 /// its issue when every release has the version (`latest` reads what
-/// they have); an untag leaves the status to the tracker.
+/// they have); an untag leaves the status to the tracker. A Hyperscale
+/// build reaching or leaving `-testing` or `-release` also redraws its
+/// release's rows of the issue's version table ([`refresh_tables`]).
 pub fn post(
     base: &str,
     token: Option<&str>,
@@ -690,6 +697,105 @@ pub fn post(
             ),
         }
     }
+    refresh_tables(base, token, &notices, latest);
+}
+
+/// The Hyperscale release whose table rows `notice`'s event changes:
+/// the build's EL major when it reached or left `-testing` or
+/// `-release` and the issue is Hyperscale's. `None` otherwise: a build
+/// in `-candidate` is in no row, and Proposed Updates' issues have no
+/// table.
+fn table_release(notice: &Notice) -> Option<u32> {
+    let group = format!("{}/", Sig::Hyperscale.gitlab_group());
+    if !notice.path.starts_with(&group) {
+        return None;
+    }
+    let moves = match &notice.event {
+        Event::Reached(stage) => matches!(stage, Stage::Testing | Stage::Release),
+        Event::Untagged(tag) => tag.ends_with("-testing") || tag.ends_with("-release"),
+    };
+    moves.then(|| crate::issue_table::el_major(&notice.nvr))?
+}
+
+/// Redraw the Hyperscale rows of each issue told of in `notices` that
+/// the builds moved (#214): the rows of the releases they are built
+/// for, from what CBS has now (`latest`), and nothing else, so the table
+/// does not contradict the comment until hs-relmon's next scan, which
+/// needs Repology. The issue is read again first, as the comment may
+/// have closed it, and edited only when a row changed. A failure is a
+/// warning, as for the comment.
+fn refresh_tables(base: &str, token: &str, notices: &[Notice], latest: LatestIn) {
+    // Each issue once, with each of its releases once.
+    let mut wanted: Vec<(&Notice, Vec<u32>)> = Vec::new();
+    for n in notices {
+        let Some(major) = table_release(n) else {
+            continue;
+        };
+        match wanted
+            .iter_mut()
+            .find(|(w, _)| w.path == n.path && w.iid == n.iid)
+        {
+            Some((_, majors)) if majors.contains(&major) => {}
+            Some((_, majors)) => majors.push(major),
+            None => wanted.push((n, vec![major])),
+        }
+    }
+    for (notice, majors) in wanted {
+        let package = notice.path.rsplit('/').next().unwrap_or(&notice.path);
+        let read = Client::new(base, &notice.path, token)
+            .and_then(|client| Ok((client.issue(notice.iid)?, client)));
+        let (issue, client) = match read {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "warning: cannot read {} ({e}); its table is left as it is",
+                    notice.issue_url
+                );
+                continue;
+            }
+        };
+        let reference = requested_version(&issue.title, package);
+        let mut description = issue.description.clone().unwrap_or_default();
+        let mut changed = Vec::new();
+        for major in majors {
+            let (release, testing) =
+                match crate::issue_table::hyperscale_builds(major, package, latest) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!(
+                            "warning: cannot read {package}'s Hyperscale {major} builds ({e}); \
+                             {}'s table is left as it is",
+                            notice.issue_url
+                        );
+                        continue;
+                    }
+                };
+            if let Some(d) =
+                crate::issue_table::refreshed(&description, major, &release, &testing, reference)
+            {
+                description = d;
+                changed.push(format!("Hyperscale {major}"));
+            }
+        }
+        if changed.is_empty() {
+            continue;
+        }
+        let update = IssueUpdate {
+            description: Some(description),
+            ..Default::default()
+        };
+        match client.edit_issue(notice.iid, &update) {
+            Ok(_) => eprintln!(
+                "Updated the {} rows of {}'s table.",
+                changed.join(" and "),
+                notice.issue_url
+            ),
+            Err(e) => eprintln!(
+                "warning: could not update {}'s table ({e})",
+                notice.issue_url
+            ),
+        }
+    }
 }
 
 /// Whether there are tracking issues for `sig` to tell: Proposed
@@ -763,9 +869,7 @@ fn version_of(nvr: &str) -> Option<&str> {
     if nvr.starts_with('<') {
         return None;
     }
-    let mut parts = nvr.rsplitn(3, '-');
-    let (_release, version, _name) = (parts.next()?, parts.next()?, parts.next()?);
-    Some(version)
+    crate::issue_table::version_of(nvr)
 }
 
 /// Whether `nvr` is at or past `version`.
@@ -981,7 +1085,7 @@ mod tests {
     }
 
     fn no_latest(_: &[String], _: &str) -> Result<Vec<Option<String>>, String> {
-        panic!("only a Hyperscale release reads the release tags")
+        panic!("only a Hyperscale issue being closed, or its table updated, reads CBS")
     }
 
     const PATH: &str = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fgit";
@@ -1423,6 +1527,195 @@ mod tests {
         // Without a token nothing is posted.
         post(&server.url(), None, &notices, &done, &no_latest);
         comment.assert();
+    }
+
+    #[test]
+    fn a_hyperscale_build_moving_updates_its_releases_rows_of_the_table() {
+        use crate::issue_table::{Row, render};
+        let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Fkexec-tools";
+        let old = "kexec-tools-2.0.29-18.1.hs+fb.el9";
+        let new = "kexec-tools-2.0.32-1.1.hs+fb.el9";
+        let table = |testing: &str, status: &str| {
+            render(
+                "kexec-tools",
+                &[
+                    Row::new("Upstream", "2.0.32", "", ""),
+                    Row::new(
+                        "Hyperscale 9 (release)",
+                        "2.0.29",
+                        "kexec-tools-2.0.29-17.1.hs+fb.el9",
+                        "outdated",
+                    ),
+                    Row::new(
+                        "Hyperscale 9 (testing)",
+                        crate::issue_table::version_of(testing).unwrap(),
+                        testing,
+                        status,
+                    ),
+                    Row::new(
+                        "Hyperscale 10",
+                        "2.0.29",
+                        "kexec-tools-2.0.29-17.1.hs+fb.el10",
+                        "outdated",
+                    ),
+                ],
+            )
+        };
+        let mut server = mockito::Server::new();
+        let issue = server
+            .mock("GET", format!("{path}/issues/1").as_str())
+            .with_status(200)
+            .with_body(
+                serde_json::json!({
+                    "iid": 1,
+                    "title": "kexec-tools-2.0.32 is available",
+                    "state": "opened",
+                    "web_url": "h1",
+                    "description": format!("```\n{}```", table(old, "outdated")),
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create();
+        server
+            .mock("POST", format!("{path}/issues/1/notes").as_str())
+            .with_status(201)
+            .with_body(r#"{"id": 10, "body": "b"}"#)
+            .create();
+        server
+            .mock("POST", "/api/graphql")
+            .with_status(200)
+            .with_body(r#"{"data": {"project": {"workItems": {"nodes": []}}}}"#)
+            .create();
+        // Only the Hyperscale 9 testing row changes; the description is
+        // written once, and the labels are left to their own edit.
+        let edit = server
+            .mock("PUT", format!("{path}/issues/1").as_str())
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "description": format!("```\n{}```", table(new, "newest")),
+            })))
+            .with_status(200)
+            .with_body(r#"{"iid": 1, "title": "t", "state": "opened", "web_url": "h1"}"#)
+            .expect(1)
+            .create();
+        let notice = |nvr: &str, event: Event| Notice {
+            nvr: nvr.to_string(),
+            event,
+            path: "CentOS/Hyperscale/rpms/kexec-tools".to_string(),
+            iid: 1,
+            issue_url: "h1".to_string(),
+            note: "n".to_string(),
+            label: None,
+            missing_label: None,
+            unlabel: None,
+            at_least: None,
+            closing: None,
+            older: false,
+            tool: "cbspkg",
+        };
+        // Two builds of 9 moving: the issue is read and edited once.
+        let notices = [
+            notice(new, Event::Reached(Stage::Testing)),
+            notice(
+                old,
+                Event::Untagged("hyperscale9-packages-facebook-testing".to_string()),
+            ),
+        ];
+        assert!(describe(&notices[0], true).contains("and update its table's Hyperscale 9 rows"));
+        assert!(!describe(&notices[0], false).contains("its table's"));
+        let done: Vec<(String, Event)> = notices
+            .iter()
+            .map(|n| (n.nvr.clone(), n.event.clone()))
+            .collect();
+        let (release_tags, _) = crate::issue_table::hyperscale_tags(9);
+        let fb_testing = release_tags
+            .iter()
+            .position(|t| t == "hyperscale9-packages-facebook-release")
+            .unwrap()
+            + release_tags.len();
+        let latest = |tags: &[String], package: &str| {
+            assert_eq!(package, "kexec-tools");
+            let mut found = vec![None; tags.len()];
+            found[fb_testing - release_tags.len()] =
+                Some("kexec-tools-2.0.29-17.1.hs+fb.el9".to_string());
+            found[fb_testing] = Some(new.to_string());
+            Ok(found)
+        };
+        post(&server.url(), Some("t"), &notices, &done, &latest);
+        issue.assert();
+        edit.assert();
+    }
+
+    #[test]
+    fn only_hyperscale_builds_entering_or_leaving_a_row_touch_the_table() {
+        let notice = |path: &str, nvr: &str, event: Event| Notice {
+            nvr: nvr.to_string(),
+            event,
+            path: path.to_string(),
+            iid: 1,
+            issue_url: "h1".to_string(),
+            note: "n".to_string(),
+            label: None,
+            missing_label: None,
+            unlabel: None,
+            at_least: None,
+            closing: None,
+            older: false,
+            tool: "cbspkg",
+        };
+        let hs = "CentOS/Hyperscale/rpms/foo";
+        let nvr = "foo-1.0-1.hs.el10";
+        assert_eq!(
+            table_release(&notice(hs, nvr, Event::Reached(Stage::Release))),
+            Some(10)
+        );
+        assert_eq!(
+            table_release(&notice(hs, nvr, Event::Reached(Stage::Candidate))),
+            None
+        );
+        assert_eq!(
+            table_release(&notice(
+                hs,
+                nvr,
+                Event::Untagged("hyperscale10s-packages-main-release".into())
+            )),
+            Some(10)
+        );
+        assert_eq!(
+            table_release(&notice(
+                hs,
+                nvr,
+                Event::Untagged("hyperscale10s-packages-main-candidate".into())
+            )),
+            None
+        );
+        assert_eq!(
+            table_release(&notice(
+                "CentOS/proposed_updates/rpms/foo",
+                nvr,
+                Event::Reached(Stage::Testing)
+            )),
+            None
+        );
+        // A table that cannot be read, or builds that cannot, leave it
+        // as it is: a warning, no edit.
+        let mut server = mockito::Server::new();
+        let path = "/api/v4/projects/CentOS%2FHyperscale%2Frpms%2Ffoo";
+        server
+            .mock("GET", format!("{path}/issues/1").as_str())
+            .with_status(200)
+            .with_body(r#"{"iid": 1, "title": "foo-1.0 is available", "state": "opened", "web_url": "h1", "description": "```\nfoo\n  Distribution  Version  Detail\n  ────────────  ───────  ──────\n  Hyperscale 10  0.9  foo-0.9-1.hs.el10\n```"}"#)
+            .create();
+        let edit = server
+            .mock("PUT", format!("{path}/issues/1").as_str())
+            .expect(0)
+            .create();
+        let notices = [notice(hs, nvr, Event::Reached(Stage::Release))];
+        refresh_tables(&server.url(), "t", &notices, &|_: &[String], _: &str| {
+            Err("hub down".to_string())
+        });
+        refresh_tables("http://127.0.0.1:9", "t", &notices, &no_latest);
+        edit.assert();
     }
 
     #[test]

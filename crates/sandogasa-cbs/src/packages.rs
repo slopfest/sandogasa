@@ -279,9 +279,13 @@ pub fn latest(tag: &str, package: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The hub's fault for a tag that does not exist.
+const NO_SUCH_TAG: &str = "No such entry in table tag";
+
 /// The newest build of `package` in each of `tags`, in one request to
 /// the CBS hub (`koji --profile cbs`'s, else CBS's own): one entry per
-/// tag, `None` where the tag has no build of it.
+/// tag, `None` where the tag has no build of it, or does not exist
+/// (Hyperscale's variants are not on every release).
 pub fn latest_in_tags(tags: &[String], package: &str) -> Result<Vec<Option<String>>, String> {
     latest_in_tags_at(&hub_url(), tags, package)
 }
@@ -305,9 +309,10 @@ pub fn latest_in_tags_at(
     found
         .into_iter()
         .zip(tags)
-        .map(|(r, tag)| {
-            r.map(|b| b.map(|b| b.nvr))
-                .map_err(|e| format!("{tag}: {e}"))
+        .map(|(r, tag)| match r {
+            Ok(b) => Ok(b.map(|b| b.nvr)),
+            Err(e) if e.to_string().contains(NO_SUCH_TAG) => Ok(None),
+            Err(e) => Err(format!("{tag}: {e}")),
         })
         .collect()
 }
@@ -467,6 +472,40 @@ mod tests {
             [Some("ethtool-7.1-1.hs.el10".to_string()), None]
         );
         hub.assert();
+        // A tag the hub does not have has no build; any other fault is
+        // an error, not "none".
+        let fault = |message: &str| {
+            format!(
+                "<value><struct>\
+                 <member><name>faultCode</name><value><int>1000</int></value></member>\
+                 <member><name>faultString</name><value><string>{message}</string></value></member>\
+                 </struct></value>"
+            )
+        };
+        let missing = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(answer(&format!(
+                "{build}{}",
+                fault(
+                    "GenericError: No such entry in table tag: hyperscale9s-packages-main-release"
+                )
+            )))
+            .expect(1)
+            .create();
+        assert_eq!(
+            latest_in_tags_at(&url, &tags, "ethtool").unwrap(),
+            [Some("ethtool-7.1-1.hs.el10".to_string()), None]
+        );
+        missing.assert();
+        missing.remove();
+        let other = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(answer(&format!("{build}{}", fault("ActionNotAllowed"))))
+            .create();
+        assert!(latest_in_tags_at(&url, &tags, "ethtool").is_err());
+        other.remove();
         // An answer for fewer tags than asked is an error, not "the
         // rest have none".
         server
