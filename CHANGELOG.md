@@ -11,6 +11,21 @@ come from the `[domains]` of the main config, which the user's overlay
 does not have, so without `-c` none is known. The error now says so
 and names the option to pass.
 
+### fedora-cve-triage closes bugs on EPEL minors that carry an earlier minor's build
+
+bodhi-check found nothing to close four golang-github-facebook-time
+bugs against: they cover EPEL 10.3 and 10.4, which carry a build made
+and updated for EPEL 10.2, and Bodhi has no update of the package in
+either. Each was judged fixed and only commented on. For a release
+with no update of the package, bodhi-check now asks Koji which build
+the release's stable tag holds and Bodhi which release that build was
+updated in, and judges the bug by that release's updates up to that
+build, since a later fix there never reached the release that carries
+it. The stable tag is read for every component of the run in one Koji
+request, and a failed read leaves the release unchecked: the four
+bugs close against FEDORA-EPEL-2025-56e972fca8, the EPEL 10.2 update
+whose build was the first made with a fixed golang. Fixes #229.
+
 ### fedora-cve-triage judges a renamed package by its own build
 
 After the change for #226, a package whose binaries had moved to
