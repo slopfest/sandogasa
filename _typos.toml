@@ -60,6 +60,7 @@ extend-exclude = [
   "tools/sandogasa-hattrack/data/zone1970.tab",
   # Real spec files from CentOS Stream, used as test fixtures as they are
   "crates/sandogasa-distgit/testdata/*.spec",
+  "tools/cpu-sig-tracker/testdata/*.spec",
   # Package names
   "configs/rpmfusion/inventory.toml",
   # Notebook output

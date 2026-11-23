@@ -11,6 +11,7 @@ mod disclosure;
 mod dump_inventory;
 mod file_issue;
 mod gitlab;
+mod import;
 mod jira;
 mod jira_issue;
 mod landed;
@@ -67,6 +68,10 @@ enum Command {
     /// group for a given Merge Request URL.
     FileIssue(FileIssueArgs),
 
+    /// Start a Proposed Update from another distribution's fix: branch
+    /// off CentOS Stream, add its patch, and commit it under its author
+    Import(import::ImportArgs),
+
     /// Find the RHEL Jira issue a Proposed Update's MR needs, one per
     /// branch, or draft one and, with --file, file it.
     Jira(JiraArgs),
@@ -114,6 +119,7 @@ fn main() -> ExitCode {
         Command::FileIssue(args) => file_issue::run(&args),
         Command::Jira(args) => jira_issue::run(&args),
         Command::ListIssues(args) => list_issues::run(&args),
+        Command::Import(args) => import::run(&args),
         Command::Mr(args) => mr::run(&args),
         Command::Ping(args) => ping::run(&args),
         Command::Retire(args) => retire::run(&args),

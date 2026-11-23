@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### cbspkg sig-repo clones a package's repo into an empty -C directory
+
+`cbspkg sig-repo <package> --sig proposed-updates -C <dir>` created the
+SIG's repo but cloned nothing into `<dir>` when there was no merge
+request to carry, although `-C` and its `--yes` help promised a clone
+into a directory that does not exist yet. It now clones it there,
+after asking, in that case too. Refs #233.
+
+### cpu-sig-tracker imports AlmaLinux's fix into a Proposed Update
+
+For a CVE RHEL has not fixed yet, AlmaLinux sometimes ships its own
+fix days before Red Hat's advisory, the window where a Proposed Update
+helps most: Ghostscript's CVE-2026-125396 was fixed in AlmaLinux on
+2026-11-22, with no RHSA and no CentOS Stream merge request. Taking
+such a fix meant copying its patch and spec hunks into a Stream branch
+by hand. `cpu-sig-tracker import <package> --cve <CVE>` does it from
+the package's Proposed Updates checkout: for each release it finds
+AlmaLinux's fix commit on `a9`/`a10`, branches
+`c<N>s-proposed-<id>` off CentOS Stream's branch, copies the patch,
+edits the spec as its packager would (the patch numbered as the spec
+numbers patches, Release raised by one, a changelog entry on top), and
+commits it under AlmaLinux's author with a link to the commit.
+Without the checkout it offers to make one with `cbspkg sig-repo`,
+which creates the SIG's repo when GitLab has none, and to register it
+with myrepos; `[checkouts]` in the config sets where checkouts are
+looked for. `--dry-run` shows the plan and the commands and makes
+nothing.
+
+A Proposed Update branch is named after its RHEL issue, else its CVE,
+else the advisory grouping several CVEs; no Jira issue is needed for a
+fix not proposed to CentOS Stream. A tracking issue now matches a
+branch named after a CVE through its CVE line
+(`sandogasa_cbs::tracking::tracks_proposed_branch`). Refs #233.
+
 ### sandogasa-distgit edits a spec's patches, Release and changelog
 
 The `spec` module can now add a patch the way the spec numbers its

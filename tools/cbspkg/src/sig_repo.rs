@@ -1198,6 +1198,13 @@ pub fn run_configured(
             }
         }
     }
+    // A -C directory with nothing in it yet is asked for a clone even
+    // with no merge request to carry: a checkout to start work in, as
+    // cpu-sig-tracker import does (#233).
+    if !clone && args.repo.is_some() && matches!(checkout_of(&repo, &package), Ok(Checkout::Clone))
+    {
+        clone = confirm_clone(args, &repo, &path, &package)?;
+    }
     if clone {
         let host = base.split_once("://").map_or(base, |(_, h)| h);
         ui.step(&format!(
@@ -1985,6 +1992,66 @@ mod tests {
             ),
             format!("origin/{branch}")
         );
+    }
+
+    /// A package alone, with no merge request to carry, and `-C` naming
+    /// a directory that is not there yet: the SIG's repo is cloned into
+    /// it, for work to start in (#233). A dry run only says it would.
+    #[test]
+    #[serial_test::serial]
+    fn a_package_alone_is_cloned_into_an_empty_directory() {
+        use crate::test_support::{Fixture, git};
+        let fx = Fixture::proposed("c10s", &[]);
+        let mut server = mockito::Server::new();
+        no_tracking_issues(&mut server);
+        let host = server.url().trim_start_matches("http://").to_string();
+        // The SIG's repo by its SSH URL, local.
+        let sig = fx
+            .tmp
+            .path()
+            .join("host:CentOS/proposed_updates/rpms/rsync.git");
+        std::fs::create_dir_all(&sig).unwrap();
+        git(&sig, &["init", "--quiet", "--bare"]);
+        fx.git(&["push", "--quiet", &sig.display().to_string(), "c10s"]);
+        let gitconfig = fx.tmp.path().join("gitconfig");
+        std::fs::write(
+            &gitconfig,
+            format!(
+                "[url \"{tmp}/host:\"]\n\tinsteadOf = git+ssh://git@{host}/\n",
+                tmp = fx.tmp.path().display()
+            ),
+        )
+        .unwrap();
+        // SAFETY: serial test; the fixture restores the variable on drop.
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+        let path = "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Frsync";
+        server
+            .mock("GET", path)
+            .with_status(200)
+            .with_body(
+                r#"{"id": 9, "path_with_namespace": "CentOS/proposed_updates/rpms/rsync",
+                    "web_url": "w", "ssh_url_to_repo": "s", "http_url_to_repo": "h",
+                    "default_branch": "c10s"}"#,
+            )
+            .create();
+        server
+            .mock("GET", format!("{path}/repository/branches").as_str())
+            .match_query(mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("[]")
+            .create();
+        let clone = fx.tmp.path().join("rpms/rsync");
+        let mut run = args("rsync", Some(SigName::ProposedUpdates));
+        run.repo = Some(clone.clone());
+        run.dry_run = true;
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+        assert!(!clone.exists());
+        run.dry_run = false;
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
+        assert!(clone.join(".git").exists());
+        assert!(git(&clone, &["branch", "-r"]).contains("origin/c10s"));
+        // Run again, the checkout is there and nothing is cloned.
+        run_with(&run, &server.url(), Some("t".into())).unwrap();
     }
 
     /// The SIG repos the tests use, with no tracking issue open.

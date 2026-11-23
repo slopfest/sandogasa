@@ -11,11 +11,13 @@ repository.workspace = true
 [dependencies]
 chrono = { workspace = true }
 clap = { workspace = true }
+dirs = { workspace = true }
 reqwest = { workspace = true }
 sandogasa-cbs = { workspace = true }
 sandogasa-cli = { workspace = true, features = ["explain", "http"] }
 sandogasa-config = { workspace = true }
 sandogasa-cve = { workspace = true }
+sandogasa-distgit = { workspace = true }
 sandogasa-fedrq = { workspace = true }
 sandogasa-gitlab = { workspace = true }
 sandogasa-inventory = { workspace = true }

@@ -8,6 +8,22 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub gitlab: Option<GitlabConfig>,
     pub jira: Option<JiraConfig>,
+    /// Where `import` looks for, and clones, package checkouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkouts: Option<CheckoutsConfig>,
+}
+
+/// Directories holding one checkout per package (`<dir>/<package>`);
+/// `~/` at the start is the home directory.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct CheckoutsConfig {
+    /// Proposed Updates repos (default:
+    /// `~/src/centos/proposed_updates/rpms`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_updates: Option<String>,
+    /// AlmaLinux's rpms repos (default: `~/src/almalinux/rpms`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub almalinux: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

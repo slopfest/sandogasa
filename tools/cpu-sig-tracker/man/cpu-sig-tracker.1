@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-11-20 "sandogasa 0.29.0" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-11-23 "sandogasa 0.29.0" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates SIG package state across Koji, GitLab and JIRA
 .SH SYNOPSIS
@@ -109,6 +109,62 @@ Print the issue that would be filed and exit without making any GitLab API calls
 .TP
 \fB\-v\fR, \fB\-\-verbose\fR
 Print progress to stderr
+.SS cpu-sig-tracker import
+\fBcpu\-sig\-tracker import\fR [\fB\-\-commit\fR] [\fB\-\-from\fR] [\fB\-\-release\fR] [\fB\-\-advisory\fR] [\fB\-\-rhel\-key\fR] [\fB\-\-alma\-dir\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-dry\-run\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-explain\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-cve\fR> <\fIPACKAGE\fR>
+.PP
+Start a Proposed Update from another distribution\*(Aqs fix: branch off CentOS Stream, add its patch, and commit it under its author
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+<\fIPACKAGE\fR>
+The package (its source package name)
+.SH SELECTION
+.TP
+\fB\-\-commit\fR \fI<SHA,...>\fR
+AlmaLinux commit(s) to take (default: those on its a9/a10 branches naming the CVE, since its last import)
+.TP
+\fB\-\-cve\fR \fI<CVE,...>\fR
+The CVE(s) the fix is for (CSV or repeated)
+.TP
+\fB\-\-from\fR \fI<FROM>\fR [default: almalinux]
+Where the fix comes from
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+almalinux: AlmaLinux\*(Aqs rpms repositories (git.almalinux.org)
+.RE
+.TP
+\fB\-\-release\fR \fI<cNs,...>\fR
+CentOS Stream releases to take it into (default: each one the fix is found for, of c9s and c10s)
+.SH BRANCH
+.TP
+\fB\-\-advisory\fR \fI<ID>\fR
+Advisory grouping several CVEs (ALSA\-…, RHSA\-…), naming the branch when there is no RHEL issue
+.TP
+\fB\-\-rhel\-key\fR \fI<KEY>\fR
+RHEL issue the fix is for, naming the branch and its Resolves: line
+.SH CHECKOUTS
+.TP
+\fB\-\-alma\-dir\fR \fI<DIR>\fR
+AlmaLinux checkout of the package (default: <package> under [checkouts] almalinux, ~/src/almalinux/rpms, else its URL)
+.TP
+\fB\-C\fR, \fB\-\-repo\fR \fI<DIR>\fR
+The package\*(Aqs Proposed Updates checkout, cloned when missing (default: <package> under [checkouts] proposed_updates, ~/src/centos/proposed_updates/rpms)
+.SH WRITING
+.TP
+\fB\-\-dry\-run\fR
+Show each step and its command without making anything
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Make the branches and commits without asking
+.SH OUTPUT
+.TP
+\fB\-\-explain\fR
+Narrate each step and show its command, pausing before each
 .SS cpu-sig-tracker jira
 \fBcpu\-sig\-tracker jira\fR [\fB\-\-branch\fR] [\fB\-\-cve\fR] [\fB\-\-description\fR] [\fB\-\-description\-file\fR] [\fB\-\-priority\fR] [\fB\-\-summary\fR] [\fB\-\-type\fR] [\fB\-\-upstream\fR] [\fB\-\-file\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-\-json\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fITARGET\fR>
 .PP

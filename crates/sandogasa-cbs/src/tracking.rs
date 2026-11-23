@@ -26,17 +26,29 @@ use crate::Stage;
 /// Update built from the SIG branch `branch`
 /// (`c10s-proposed-RHEL-306261`): it carries the release's label, and
 /// its `- **JIRA**: [RHEL-…](…)` line, as cpu-sig-tracker writes it,
-/// names the RHEL issue. A key mentioned anywhere else, such as another
-/// update's "see also", does not count.
+/// names the RHEL issue. A branch named after its CVE
+/// (`c9s-proposed-CVE-2026-125396`), as one with no RHEL issue is, is
+/// matched by the issue's `- **CVE**: [CVE-…](…)` line instead. An id
+/// mentioned anywhere else, such as another update's "see also", does
+/// not count.
 pub fn tracks_proposed_branch(labels: &[String], description: &str, branch: &str) -> bool {
     let Some((release, key)) = branch.split_once("-proposed-") else {
         return false;
     };
     let link = format!("[{key}]");
+    let line = if key.starts_with("CVE-") {
+        "- **CVE**:"
+    } else if key.starts_with("RHEL-") {
+        "- **JIRA**:"
+    } else {
+        // An advisory (`ALSA-2026-1234`), which the issue writes as its
+        // vendor does (`ALSA-2026:1234`).
+        "- **Advisory**:"
+    };
     let names_key = description.lines().any(|l| {
         l.trim_start()
-            .strip_prefix("- **JIRA**:")
-            .is_some_and(|rest| rest.contains(&link))
+            .strip_prefix(line)
+            .is_some_and(|rest| rest.replace(':', "-").contains(&link))
     });
     labels.iter().any(|l| l == release) && names_key
 }
@@ -249,6 +261,41 @@ mod tests {
 
     fn labels(names: &[&str]) -> Vec<String> {
         names.iter().map(|n| n.to_string()).collect()
+    }
+
+    #[test]
+    fn a_branch_named_after_its_cve_finds_its_issue_by_the_cve_line() {
+        let labels = vec!["c9s".to_string()];
+        let body = "- **CVE**: [CVE-2026-125396](https://access.redhat.com/security/cve/CVE-2026-125396) — Important\n";
+        assert!(tracks_proposed_branch(
+            &labels,
+            body,
+            "c9s-proposed-CVE-2026-125396"
+        ));
+        assert!(!tracks_proposed_branch(
+            &labels,
+            body,
+            "c9s-proposed-CVE-2026-1"
+        ));
+        // An advisory, written with its colon on the issue.
+        let adv = "- **Advisory**: [ALSA-2026:1234](https://errata.almalinux.org/)\n";
+        assert!(tracks_proposed_branch(
+            &labels,
+            adv,
+            "c9s-proposed-ALSA-2026-1234"
+        ));
+        assert!(!tracks_proposed_branch(
+            &labels,
+            body,
+            "c9s-proposed-ALSA-2026-1234"
+        ));
+        // Named only on a JIRA line, a CVE does not count.
+        let jira = "- **JIRA**: [CVE-2026-125396](u)\n";
+        assert!(!tracks_proposed_branch(
+            &labels,
+            jira,
+            "c9s-proposed-CVE-2026-125396"
+        ));
     }
 
     #[test]

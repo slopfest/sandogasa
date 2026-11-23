@@ -437,7 +437,10 @@ such as the same fix for `c9s` and `c10s`, are carried in one run, all
 read from GitLab in one request. Given only the package and
 `--sig proposed-updates`, it carries the merge requests the SIG repo's
 open tracking issues name, saying which it found, and skipping one
-closed in CentOS Stream without being merged.
+closed in CentOS Stream without being merged. Given only the package
+with nothing to carry, a `-C` directory that does not exist yet, or is
+empty, still gets a clone of the SIG's repo, after asking, to start
+work in.
 
 The changes are pushed from the dist-git checkout: the current
 directory, or `-C`. A `-C` directory that does not exist yet, or is

@@ -89,6 +89,9 @@ fn to_save(gitlab_token: String, jira: Option<JiraConfig>, before: Option<JiraCo
                 ..j
             })
         }),
+        // Not asked about: saving lays the answers over the file, so a
+        // [checkouts] table written by hand stays.
+        checkouts: None,
     }
 }
 

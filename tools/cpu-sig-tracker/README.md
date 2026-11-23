@@ -159,6 +159,63 @@ anything and names that command, with the steps to do the same by hand
 (`--dry-run` prints them as a warning and still shows the issue), and
 `mr` names them as the next step after opening the merge request.
 
+### `import`
+
+```sh
+cpu-sig-tracker import <package> --cve CVE-… [--commit SHA] [--release cNs] \
+    [--rhel-key KEY | --advisory ID] [-C DIR] [--alma-dir DIR] \
+    [--explain] [--dry-run] [--yes]
+```
+
+Starts a Proposed Update from another distribution's fix, AlmaLinux's
+for now. AlmaLinux's rpms repository keeps a branch per release (`a9`,
+`a10`), and a fix there is a commit adding a patch file and its spec
+hunks. For each CentOS Stream release (`c9s` from `a9`, `c10s` from
+`a10`, or those `--release` names), `import`:
+
+1. Reads AlmaLinux's branch, from `--alma-dir`, else the package's
+   checkout under `~/src/almalinux/rpms` (its `origin/aN` when it has
+   one), else git.almalinux.org, and Stream's branch, into the
+   package's Proposed Updates checkout (`-C`, else the package under
+   `~/src/centos/proposed_updates/rpms`). Only remote-tracking refs are
+   updated, so this happens under `--dry-run` too. Without that
+   checkout, `import` offers to make it: `cbspkg sig-repo <package>
+   --sig proposed-updates -C <dir>`, which creates the SIG's repo when
+   GitLab has none (asking first) and clones it, then `mr register`
+   in the clone when `~/.mrconfig` exists; `--dry-run` only shows the
+   two commands.
+2. Finds the fix: the commit since the branch's last `import …` commit
+   that names the CVE, or the one `--commit` gives.
+3. Branches `c<N>s-proposed-<id>` off Stream's branch, named after the
+   RHEL issue (`--rhel-key`), else the CVE, else the advisory grouping
+   several CVEs (`--advisory`, `ALSA-2026:1234` as `ALSA-2026-1234`).
+4. Copies the patch files the fix adds, and edits the spec as its
+   packager would: each patch numbered as the spec numbers its patches
+   (`Patch028:` after `Patch027:`, or a bare `Patch:`), with the comment
+   lines AlmaLinux wrote above it; Release raised by one (the build
+   target adds `~proposed`); and a changelog entry with AlmaLinux's
+   lines, and `Resolves:` with a RHEL issue. A spec that applies its
+   patches one by one in `%prep` is refused, as where a new one goes is
+   a choice to make by hand.
+5. Commits it under AlmaLinux's author, signed off by you, with
+   AlmaLinux's message and `Taken from AlmaLinux: <commit URL>`.
+
+The directories the checkouts are looked for in can be set in
+`~/.config/cpu-sig-tracker/config.toml`:
+
+```toml
+[checkouts]
+proposed_updates = "~/src/centos/proposed_updates/rpms"
+almalinux = "~/src/almalinux/rpms"
+```
+
+The plan is shown first, then confirmed at a terminal (`--yes` skips
+the question; `--dry-run` shows the git commands without running
+them). A branch left over from an earlier run is reported before
+anything is made; a step that fails leaves no half-made branch. The checkout goes back to
+the branch it was on, and the run ends with the push command for each
+branch. A fix taken from another distribution needs no Jira issue.
+
 ### `jira`
 
 ```sh
