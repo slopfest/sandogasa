@@ -205,14 +205,6 @@ pub fn github_report(
         .into_iter()
         .map(into_pr_ref)
         .collect();
-    // A PR opened in the window but now closed-without-merging may
-    // still have landed (commit applied out-of-band). Check whether
-    // its head commit is on the target branch.
-    for pr in report.opened_prs.iter_mut() {
-        if pr.state == "closed" && !pr.merged {
-            pr.applied = applied_out_of_band(&client, pr, verbose);
-        }
-    }
 
     // PRs by the user that were merged in window.
     let q = format!(
@@ -443,8 +435,77 @@ pub fn github_report(
         );
     }
     report.tags_pushed = collect_tags(&client, &tag_repos, &user_obj, since, until);
+    mark_applied(&client, &mut report, verbose);
 
     Ok(report)
+}
+
+/// Mark each closed-unmerged PR of the report whose work landed anyway
+/// (applied out of band, [`applied_out_of_band`]), in every list it is
+/// in: checked once per PR, so one opened and commented on reads the
+/// same in both (#230). An entry from the events stream has no state
+/// of its own and takes what another list knows of the same PR. The
+/// checks run a few at a time, as each is two to four requests.
+fn mark_applied(client: &Client, report: &mut GithubReport, verbose: bool) {
+    const AT_ONCE: usize = 4;
+    let key = |p: &PrRef| (p.repo.clone(), p.number);
+    // What each PR is known to be, from the entries that know it.
+    let mut known: BTreeMap<(String, u64), (String, bool)> = BTreeMap::new();
+    let mut todo: Vec<PrRef> = Vec::new();
+    for pr in report
+        .opened_prs
+        .iter()
+        .chain(&report.reviewed_prs)
+        .chain(&report.commented_prs)
+        .filter(|p| !p.state.is_empty())
+    {
+        if known
+            .insert(key(pr), (pr.state.clone(), pr.merged))
+            .is_none()
+            && pr.state == "closed"
+            && !pr.merged
+        {
+            todo.push(pr.clone());
+        }
+    }
+    let mut applied: BTreeMap<(String, u64), bool> = BTreeMap::new();
+    if !todo.is_empty() {
+        eprintln!(
+            "Checking {} closed pull request(s) for commits applied without merging...",
+            todo.len()
+        );
+    }
+    for batch in todo.chunks(AT_ONCE) {
+        let answers: Vec<bool> = std::thread::scope(|s| {
+            let handles: Vec<_> = batch
+                .iter()
+                .map(|pr| s.spawn(move || applied_out_of_band(client, pr, verbose)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or(false))
+                .collect()
+        });
+        for (pr, answer) in batch.iter().zip(answers) {
+            applied.insert(key(pr), answer);
+        }
+    }
+    for pr in report
+        .opened_prs
+        .iter_mut()
+        .chain(&mut report.reviewed_prs)
+        .chain(&mut report.commented_prs)
+    {
+        if pr.state.is_empty()
+            && let Some((state, merged)) = known.get(&key(pr))
+        {
+            pr.state = state.clone();
+            pr.merged = *merged;
+        }
+        if let Some(&answer) = applied.get(&key(pr)) {
+            pr.applied = answer;
+        }
+    }
 }
 
 /// Format the GitHub section as Markdown. `heading_suffix` is
@@ -1023,8 +1084,9 @@ fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
 
 /// The fallback when the PR's own commit is not on the target branch:
 /// rebased or reworded, it lands under a new sha. GitHub lists a
-/// branch's commits by author, so ask for the PR author's since the PR
-/// was opened and match them against the PR's commits by title and
+/// branch's commits by author, so ask for the PR author's since the
+/// earlier of the PR's opening and its own commits
+/// ([`forge::listing_since`]), and match them against the PR's commits by title and
 /// author (`forge::rebased_onto`). Two calls, spent only on a PR that
 /// has already failed the sha check.
 fn landed_rebased(
@@ -1044,9 +1106,15 @@ fn landed_rebased(
     let result = client
         .pull_request_commits(owner, repo, pr.number)
         .and_then(|pr_commits| {
+            let opened = since;
+            let since = forge::listing_since(opened, &commit_dates(&pr_commits));
             let branch =
-                client.branch_commits_by(owner, repo, &detail.base.ref_name, login, since)?;
-            Ok(forge::rebased_onto(&landed(&pr_commits), &landed(&branch)))
+                client.branch_commits_by(owner, repo, &detail.base.ref_name, login, &since)?;
+            Ok(forge::rebased_onto(
+                &landed(&pr_commits),
+                &landed(&branch),
+                Some(opened),
+            ))
         });
     match result {
         Ok(applied) => applied,
@@ -1062,10 +1130,19 @@ fn landed_rebased(
     }
 }
 
+/// When each of `commits` was authored, as the forge gave it.
+fn commit_dates(commits: &[RepoCommit]) -> Vec<Option<String>> {
+    commits
+        .iter()
+        .map(|c| c.commit.author.as_ref().and_then(|a| a.date.clone()))
+        .collect()
+}
+
 fn landed(commits: &[RepoCommit]) -> Vec<forge::Landed> {
     commits
         .iter()
         .map(|c| forge::Landed {
+            authored: c.commit.author.as_ref().and_then(|a| a.date.clone()),
             title: c.title().to_string(),
             author_name: c
                 .commit
@@ -1977,6 +2054,96 @@ mod tests {
             with_notes.contains("Asked for the reporter's logs."),
             "{with_notes}"
         );
+    }
+
+    /// #230, rasdaemon#272's shape: the maintainer applied the PR's
+    /// commit as it was, so it kept its date, 15 minutes before the PR
+    /// was opened, and the branch is only listed from that date.
+    #[test]
+    fn a_commit_applied_with_its_own_earlier_date_counts_as_applied() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let title = "meson.build: build openbmc-unified-sel on every architecture";
+        let author = json!({"name": "Me", "email": "me@example.com",
+                            "date": "2026-11-18T21:53:57Z"});
+        rt.block_on(async {
+            let get = |p: &str, body: serde_json::Value| {
+                Mock::given(method("GET"))
+                    .and(path(p.to_string()))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            };
+            get(
+                "/repos/o/r/pulls/272",
+                json!({
+                "number": 272, "state": "closed", "merged": false,
+                "head": {"ref": "fix", "sha": "3780377"},
+                "base": {"ref": "master", "sha": "609799a"},
+                "created_at": "2026-11-20T11:17:51Z", "user": {"login": "me"}}),
+            )
+            .mount(&server)
+            .await;
+            // The PR's head is not on master under its own sha.
+            get(
+                "/repos/o/r/compare/master...3780377",
+                json!({"ahead_by": 1}),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/repos/o/r/pulls/272/commits",
+                json!([{
+                "sha": "3780377", "commit": {"message": title, "author": author}}]),
+            )
+            .mount(&server)
+            .await;
+            // Listed from the PR commit's date, the applied one is there.
+            Mock::given(method("GET"))
+                .and(path("/repos/o/r/commits"))
+                .and(query_param("since", "2026-11-18T21:53:57Z"))
+                .and(query_param("author", "me"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                    "sha": "ffd1392",
+                    "commit": {"message": format!("{title}\n\nSigned-off-by: M"),
+                               "author": author}}])))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let client = Client::new(&server.uri(), "tok").unwrap();
+        let pr = |list: &str| PrRef {
+            repo: "o/r".into(),
+            number: 272,
+            title: title.into(),
+            url: format!("https://github.com/o/r/pull/272#{list}"),
+            state: "closed".into(),
+            merged: false,
+            applied: false,
+        };
+        // Commented on, as the events stream gives it: no state.
+        let from_events = PrRef {
+            state: String::new(),
+            ..pr("reviewed")
+        };
+        let mut report = GithubReport {
+            opened_prs: vec![pr("opened")],
+            reviewed_prs: vec![from_events],
+            commented_prs: vec![pr("commented")],
+            ..Default::default()
+        };
+        mark_applied(&client, &mut report, false);
+        // Checked once (the listing mock expects one request), and
+        // marked alike in every list.
+        assert!(report.opened_prs[0].applied);
+        assert!(report.commented_prs[0].applied);
+        assert!(report.reviewed_prs[0].applied);
+        assert_eq!(report.reviewed_prs[0].state, "closed");
+        drop(rt);
     }
 
     #[test]

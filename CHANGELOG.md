@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### sandogasa-report finds a PR applied with its own, earlier commit date
+
+The 2026H2 self-review report listed mchehab/rasdaemon#272 as
+"(closed)", although its maintainer applied it as ffd1392, while #273
+and #274, applied the same way, were "(applied)". When a closed PR's
+own commit is not on the target branch, the report looks for it
+rebased among the branch's commits since the PR was opened; ffd1392
+kept the date of the PR's commit, 15 minutes before the PR was opened,
+so it was never listed. The branch is now listed from the earlier of
+the PR's opening and its own commits' dates, by at most 30 days, on
+GitHub and on Forgejo; a branch commit authored before the PR was
+opened counts only when authored at the same moment as the PR's
+commit, so an earlier commit of the same title by the same author is
+not taken for it.
+#274 also appeared as "(closed)" under "Commented on": the check ran
+only for the opened list. Every closed-unmerged PR in the opened,
+reviewed and commented-on lists is now checked, once, a few at a time
+and saying so, and marked alike in each, entries from the events
+stream included. sandogasa-github's and sandogasa-forgejo's `CommitAuthor`
+gain `date`. Fixes #230.
+
 ### sandogasa-report config --token says to pass the main config
 
 `sandogasa-report config --token salsa.debian.org` run without `-c`

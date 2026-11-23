@@ -61,24 +61,83 @@ pub(crate) struct Landed {
     pub title: String,
     pub author_name: String,
     pub author_email: String,
+    /// When it was authored (RFC 3339), where the forge says.
+    pub authored: Option<String>,
+}
+
+/// How far before a PR was opened its own commits' dates may move the
+/// branch listing ([`listing_since`]): enough for a commit written and
+/// applied around the time the PR was, without listing months of a
+/// branch, which comes one page at a time.
+const LISTING_LEAD_DAYS: i64 = 30;
+
+/// When an RFC 3339 timestamp is, in UTC.
+fn instant(ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+
+/// Where to start listing a target branch's commits to find a PR's work
+/// on it: the earliest of when the PR was opened (`opened`) and when
+/// its own commits were made (`commit_dates`, as the forge gives them),
+/// but no more than [`LISTING_LEAD_DAYS`] before the opening. A commit
+/// applied as it is keeps its own date, which can be before the PR was
+/// opened: rasdaemon's ffd1392 is dated 15 minutes before its PR #272
+/// (#230). Dates that do not parse are left out; with none, `opened` as
+/// it is.
+pub(crate) fn listing_since(opened: &str, commit_dates: &[Option<String>]) -> String {
+    let Some(open) = instant(opened) else {
+        return opened.to_string();
+    };
+    let floor = open - chrono::Duration::days(LISTING_LEAD_DAYS);
+    commit_dates
+        .iter()
+        .flatten()
+        .filter_map(|d| instant(d))
+        .chain([open])
+        .min()
+        .unwrap_or(open)
+        .max(floor)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// Whether a PR's work landed as a rebased or reworded commit: one of
-/// the target branch's commits (already limited by the caller to those
-/// made after the PR was opened) carries the same title as one of the
-/// PR's commits **and the same author**. Authorship is the decisive
-/// check, not content: the same change redone by the maintainer — an
-/// identical `gbp import-orig` two days later, say — is theirs, and
-/// the PR it superseded stays closed.
-pub(crate) fn rebased_onto(pr_commits: &[Landed], branch_commits: &[Landed]) -> bool {
+/// the target branch's commits (already limited by the caller, from the
+/// earlier of the PR's opening and its own commits, [`listing_since`])
+/// carries the same title as one of the PR's commits **and the same
+/// author**. Authorship is the decisive check, not content: the same
+/// change redone by the maintainer — an identical `gbp import-orig` two
+/// days later, say — is theirs, and the PR it superseded stays closed.
+///
+/// With `opened`, the listing reaches back before the PR was opened, so
+/// a branch commit authored before then counts only when authored at
+/// the same moment as the PR's commit: applied or rebased, a commit
+/// keeps its author date, while an earlier commit of the same title by
+/// the same author ("Update translations") is another one (#230).
+pub(crate) fn rebased_onto(
+    pr_commits: &[Landed],
+    branch_commits: &[Landed],
+    opened: Option<&str>,
+) -> bool {
     let same_author = |a: &Landed, b: &Landed| {
         (!a.author_email.is_empty() && a.author_email.eq_ignore_ascii_case(&b.author_email))
             || (!a.author_name.is_empty() && a.author_name == b.author_name)
     };
+    let opened = opened.and_then(instant);
+    let in_time = |pc: &Landed, bc: &Landed| {
+        let Some(opened) = opened else {
+            return true;
+        };
+        match bc.authored.as_deref().and_then(instant) {
+            Some(at) if at < opened => pc.authored.as_deref().and_then(instant) == Some(at),
+            _ => true,
+        }
+    };
     pr_commits.iter().any(|pc| {
         branch_commits
             .iter()
-            .any(|bc| bc.title.trim() == pc.title.trim() && same_author(pc, bc))
+            .any(|bc| bc.title.trim() == pc.title.trim() && same_author(pc, bc) && in_time(pc, bc))
     })
 }
 
@@ -233,6 +292,7 @@ mod tests {
 
     fn landed(title: &str, name: &str, email: &str) -> Landed {
         Landed {
+            authored: None,
             title: title.into(),
             author_name: name.into(),
             author_email: email.into(),
@@ -245,6 +305,58 @@ mod tests {
         let mut out = String::new();
         super::write_counts_by(&mut out, &items, |i| i.0);
         assert_eq!(out, "- `a`: 2\n- `b`: 1\n- `c`: 1\n\n");
+    }
+
+    #[test]
+    fn before_the_pr_only_a_commit_of_the_prs_own_moment_counts() {
+        let at = |title: &str, date: &str| Landed {
+            authored: Some(date.into()),
+            ..landed(title, "Michel Lind", "michel@example.org")
+        };
+        let opened = Some("2026-11-20T11:17:51Z");
+        let pr = [at(
+            "meson.build: build it everywhere",
+            "2026-11-18T21:53:57Z",
+        )];
+        // Applied as it is: authored at the PR commit's own moment.
+        assert!(rebased_onto(
+            &pr,
+            &[at(
+                "meson.build: build it everywhere",
+                "2026-11-18T21:53:57Z"
+            )],
+            opened
+        ));
+        // Same title and author, but another, earlier commit.
+        assert!(!rebased_onto(
+            &pr,
+            &[at(
+                "meson.build: build it everywhere",
+                "2026-11-10T09:00:00Z"
+            )],
+            opened
+        ));
+        // Authored after the PR was opened: a rebase that reset the
+        // date, which counts as before.
+        assert!(rebased_onto(
+            &pr,
+            &[at(
+                "meson.build: build it everywhere",
+                "2026-11-21T08:00:00Z"
+            )],
+            opened
+        ));
+    }
+
+    #[test]
+    fn the_listing_reaches_back_at_most_a_month_before_the_pr() {
+        assert_eq!(
+            listing_since(
+                "2026-11-20T11:17:51Z",
+                &[Some("2026-06-01T00:00:00Z".into())]
+            ),
+            "2026-10-21T11:17:51Z"
+        );
     }
 
     #[test]
@@ -261,7 +373,8 @@ mod tests {
                 "New upstream version 3.2.16",
                 "Michel Lind",
                 "michel@example.org"
-            )]
+            )],
+            None
         ));
         // Reworded on a different email but the same name still counts.
         assert!(rebased_onto(
@@ -270,7 +383,8 @@ mod tests {
                 "New upstream version 3.2.16 ",
                 "Michel Lind",
                 "michel@fedoraproject.org"
-            )]
+            )],
+            None
         ));
         // The maintainer redid the identical import themselves: superseded, not applied.
         assert!(!rebased_onto(
@@ -279,14 +393,16 @@ mod tests {
                 "New upstream version 3.2.16",
                 "Simon Quigley",
                 "simon@example.org"
-            )]
+            )],
+            None
         ));
         // The author's own unrelated commit does not count either.
         assert!(!rebased_onto(
             &pr,
-            &[landed("Team upload.", "Michel Lind", "michel@example.org")]
+            &[landed("Team upload.", "Michel Lind", "michel@example.org")],
+            None
         ));
-        assert!(!rebased_onto(&pr, &[]));
+        assert!(!rebased_onto(&pr, &[], None));
     }
 
     #[test]
@@ -307,6 +423,34 @@ mod tests {
         assert_eq!(out, "- **Commits authored:** 12 across 2 repo(s)\n");
     }
     use super::*;
+
+    #[test]
+    fn a_branch_is_listed_from_the_prs_earliest_commit() {
+        let some = |d: &str| Some(d.to_string());
+        // rasdaemon#272: its commit, applied as it is, is dated before
+        // the PR was opened.
+        assert_eq!(
+            listing_since(
+                "2026-11-20T11:17:51Z",
+                &[
+                    some("2026-11-18T21:53:57Z"),
+                    some("2026-11-20T09:00:00+02:00")
+                ]
+            ),
+            "2026-11-18T21:53:57Z"
+        );
+        // An offset is compared as the instant it is.
+        assert_eq!(
+            listing_since("2026-11-20T11:17:51Z", &[some("2026-11-20T12:00:00+02:00")]),
+            "2026-11-20T10:00:00Z"
+        );
+        // Nothing earlier, or nothing that parses: the PR's opening.
+        assert_eq!(
+            listing_since("2026-11-20T11:17:51Z", &[None, some("not a date")]),
+            "2026-11-20T11:17:51Z"
+        );
+        assert_eq!(listing_since("garbled", &[]), "garbled");
+    }
 
     const GITLAB: TokenSpec = TokenSpec {
         service: "GitLab",

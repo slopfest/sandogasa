@@ -892,7 +892,12 @@ fn landed_rebased(
             return Ok(false);
         }
         let branch = client.branch_commits_by(&detail.target_branch, &author, since)?;
-        Ok(forge::rebased_onto(&landed(&mr_commits), &landed(&branch)))
+        // Listed from the MR's opening: nothing before it to tell apart.
+        Ok(forge::rebased_onto(
+            &landed(&mr_commits),
+            &landed(&branch),
+            None,
+        ))
     });
     match result {
         Ok(applied) => applied,
@@ -912,6 +917,7 @@ fn landed(commits: &[sandogasa_gitlab::RepoCommit]) -> Vec<forge::Landed> {
     commits
         .iter()
         .map(|c| forge::Landed {
+            authored: None,
             title: c.title.clone(),
             author_name: c.author_name.clone(),
             author_email: c.author_email.clone(),

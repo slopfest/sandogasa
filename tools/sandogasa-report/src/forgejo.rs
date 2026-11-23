@@ -381,7 +381,8 @@ fn applied_out_of_band(client: &Client, pr: &PrRef, verbose: bool) -> bool {
 
 /// The fallback when the PR's own commit is not on the target branch:
 /// rebased or reworded, it lands under a new sha. Match the PR's
-/// commits against the branch's commits since the PR was opened, by
+/// commits against the branch's commits since the earlier of the PR's
+/// opening and its own commits ([`forge::listing_since`]), by
 /// title and author (`forge::rebased_onto`). Two calls, spent only on
 /// a PR that has already failed the sha check.
 fn landed_rebased(
@@ -398,8 +399,18 @@ fn landed_rebased(
     let result = client
         .pull_request_commits(owner, repo, pr.number)
         .and_then(|pr_commits| {
-            let branch = client.branch_commits_since(owner, repo, &detail.base.ref_name, since)?;
-            Ok(forge::rebased_onto(&landed(&pr_commits), &landed(&branch)))
+            let opened = since;
+            let dates: Vec<Option<String>> = landed(&pr_commits)
+                .into_iter()
+                .map(|l| l.authored)
+                .collect();
+            let since = forge::listing_since(opened, &dates);
+            let branch = client.branch_commits_since(owner, repo, &detail.base.ref_name, &since)?;
+            Ok(forge::rebased_onto(
+                &landed(&pr_commits),
+                &landed(&branch),
+                Some(opened),
+            ))
         });
     match result {
         Ok(applied) => applied,
@@ -419,6 +430,7 @@ fn landed(commits: &[RepoCommit]) -> Vec<forge::Landed> {
     commits
         .iter()
         .map(|c| forge::Landed {
+            authored: c.commit.author.as_ref().and_then(|a| a.date.clone()),
             title: c.title().to_string(),
             author_name: c
                 .commit
@@ -891,6 +903,73 @@ mod tests {
             md.contains("#### Issues commented on\n\n- [fesco/tickets#3704]"),
             "{md}"
         );
+    }
+
+    /// #230 on Forgejo: a commit applied with its own date, before the
+    /// PR was opened, is found by listing the branch from that date.
+    #[test]
+    fn a_commit_applied_with_its_own_earlier_date_counts_as_applied() {
+        use serde_json::json;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let server = rt.block_on(MockServer::start());
+        let title = "spec: ship the license";
+        let author = json!({"name": "Me", "email": "me@example.com",
+                            "date": "2026-11-18T21:53:57+01:00"});
+        rt.block_on(async {
+            let get = |p: &str, body: serde_json::Value| {
+                Mock::given(method("GET"))
+                    .and(path(p.to_string()))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            };
+            get(
+                "/api/v1/repos/o/r/pulls/7",
+                json!({
+                "number": 7, "merged": false,
+                "head": {"ref": "fix", "sha": "aaa1111"},
+                "base": {"ref": "main", "sha": "bbb2222"},
+                "created_at": "2026-11-20T11:17:51Z"}),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v1/repos/o/r/compare/main...aaa1111",
+                json!({"total_commits": 1}),
+            )
+            .mount(&server)
+            .await;
+            get(
+                "/api/v1/repos/o/r/pulls/7/commits",
+                json!([{
+                "sha": "aaa1111", "commit": {"message": title, "author": author}}]),
+            )
+            .mount(&server)
+            .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/repos/o/r/commits"))
+                .and(query_param("since", "2026-11-18T20:53:57Z"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                    "sha": "ccc3333", "commit": {"message": title, "author": author}}])))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let client = Client::new(&server.uri(), "tok").unwrap();
+        let pr = PrRef {
+            repo: "o/r".into(),
+            number: 7,
+            title: title.into(),
+            url: "https://forge.example.org/o/r/pulls/7".into(),
+            state: "closed".into(),
+            merged: false,
+            applied: false,
+        };
+        assert!(applied_out_of_band(&client, &pr, false));
+        drop(rt);
     }
 
     #[test]

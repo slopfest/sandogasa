@@ -42,9 +42,11 @@ packaging activity across multiple systems:
   facebookincubator) withhold their items from one; the report says
   how many were withheld. Optionally scoped by organization. See
   `TODO.md` for why GitHub ships only the authored count today
-  (mirror-pusher detection deferred). The opened list carries the
-  same `(merged)` / `(closed)` / `(applied)` markers, rebased
-  commits included
+  (mirror-pusher detection deferred). The opened, reviewed and
+  commented-on lists carry the same `(merged)` / `(closed)` /
+  `(applied)` markers, rebased commits included, each PR checked once
+  and marked alike in every list; the "PRs applied" count is of the
+  PRs you opened
 - **Forgejo / Gitea** (e.g. codeberg.org, Fedora Forge,
   src.opensuse.org): PRs opened / merged and issues opened / closed
   / commented on in the window, across every repo you contribute to.
@@ -59,8 +61,10 @@ packaging activity across multiple systems:
   on the target branch: as-is (a maintainer cherry-picked or
   fast-forwarded it instead of clicking merge), or rebased or
   reworded under a new sha, recognized by the same title *and the
-  same author*. The same change redone by the maintainer stays
-  `(closed)`.
+  same author* among the branch's commits since the earlier of the
+  PR's opening and its own commits' dates (a commit applied as it is
+  keeps its date, which can come before the PR). The same change
+  redone by the maintainer stays `(closed)`.
 - **Pagure** (e.g. Fedora's dist-git, src.fedoraproject.org): pull
   requests you filed, opened / merged in the window, with each
   opened one's fate (`(merged)`, `(closed)`). Read anonymously, by

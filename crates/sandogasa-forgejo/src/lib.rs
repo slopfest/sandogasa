@@ -375,6 +375,9 @@ pub struct CommitAuthor {
     pub name: String,
     #[serde(default)]
     pub email: String,
+    /// When git recorded it (ISO 8601), if the forge said.
+    #[serde(default)]
+    pub date: Option<String>,
 }
 
 impl RepoCommit {
