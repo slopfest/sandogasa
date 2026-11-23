@@ -63,6 +63,66 @@ pub fn version_status(version: &str, reference: Option<&str>) -> String {
     }
 }
 
+/// What a Hyperscale build is measured against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Reference<'a> {
+    /// A version the build's version has to reach (`2.0.32`), from
+    /// upstream or a distribution. It may itself hold a `-`
+    /// (`2024-03-01`), so it is never split.
+    Version(&'a str),
+    /// The version and release of the stock build a SIG build is
+    /// rebased on (`9.9p1`, `17.el9`), which the build's version and
+    /// release have to reach.
+    VersionRelease(&'a str, &'a str),
+}
+
+impl<'a> Reference<'a> {
+    /// A stock build's `version-release` (`9.9p1-17.el9`) as a
+    /// reference; `None` without a `-`.
+    pub fn version_release(vr: &'a str) -> Option<Self> {
+        let (version, release) = vr.split_once('-')?;
+        Some(Reference::VersionRelease(version, release))
+    }
+}
+
+/// Whether the build `nvr` meets `reference`, compared as RPM does:
+/// `9.9p1-17.1.hs+fb.el9` meets stock's `9.9p1-17.el9`, and
+/// `9.9p1-16.1…` does not. Against a version, a string that is no NVR
+/// is compared as a version whole.
+pub fn meets(nvr: &str, reference: Reference) -> bool {
+    match reference {
+        Reference::Version(v) => {
+            sandogasa_rpmvercmp::rpmvercmp(version_of(nvr).unwrap_or(nvr), v).is_ge()
+        }
+        Reference::VersionRelease(v, r) => {
+            version_release(nvr).is_some_and(|(version, release)| {
+                sandogasa_rpmvercmp::rpmvercmp(version, v)
+                    .then_with(|| sandogasa_rpmvercmp::rpmvercmp(release, r))
+                    .is_ge()
+            })
+        }
+    }
+}
+
+/// The status of build `nvr` against `reference` (see [`meets`]):
+/// `newest`, `outdated`, or empty without a reference. Against stock's
+/// version-release, an outdated build is shown with the SIG build it
+/// should be, stock's release plus `.1` (`outdated (expect
+/// 9.9p1-17.1)`).
+pub fn build_status(nvr: &str, reference: Option<Reference>) -> String {
+    let Some(reference) = reference else {
+        return String::new();
+    };
+    if meets(nvr, reference) {
+        return "newest".to_string();
+    }
+    match reference {
+        Reference::VersionRelease(v, r) => format!("outdated (expect {v}-{}.1)", without_dist(r)),
+        Reference::Version(_) => "outdated".to_string(),
+    }
+}
+
 /// The version of an NVR: `7.1` of `ethtool-7.1-1.hs.el9`.
 pub fn version_of(nvr: &str) -> Option<&str> {
     let mut parts = nvr.rsplitn(3, '-');
@@ -81,12 +141,13 @@ pub fn el_major(nvr: &str) -> Option<u32> {
 /// any of its `-release` tags and the newest in its `-testing` tags
 /// when that one is newer: a `(release)` and a `(testing)` row with
 /// both, one plain row with only one of them released, a `(testing)`
-/// row with only testing, and `not found` with neither.
+/// row with only testing, and `not found` with neither. Each build's
+/// status is measured against `reference` ([`build_status`]).
 pub fn hyperscale_rows(
     major: u32,
     release: Option<&str>,
     testing: Option<&str>,
-    reference: Option<&str>,
+    reference: Option<Reference>,
 ) -> Vec<Row> {
     let label = format!("Hyperscale {major}");
     let row = |distro: String, nvr: &str| {
@@ -95,7 +156,7 @@ pub fn hyperscale_rows(
             distro,
             version: version.to_string(),
             detail: nvr.to_string(),
-            status: version_status(version, reference),
+            status: build_status(nvr, reference),
         }
     };
     match (release, testing) {
@@ -245,7 +306,7 @@ pub fn refreshed(
         major,
         rel,
         test,
-        reference.filter(|_| has_status),
+        reference.filter(|_| has_status).map(Reference::Version),
     ));
     rows.extend(
         table.rows[first..]
@@ -394,6 +455,28 @@ fn pick<'a>(found: &'a [String], shown: Option<&str>) -> Option<&'a str> {
             .find(|f| *f == s && version_of(f) == version_of(newest))
     });
     Some(kept.unwrap_or(newest))
+}
+
+/// The version and release of an NVR.
+fn version_release(nvr: &str) -> Option<(&str, &str)> {
+    let mut parts = nvr.rsplitn(3, '-');
+    let (release, version, _name) = (parts.next()?, parts.next()?, parts.next()?);
+    Some((version, release))
+}
+
+/// A release without its dist tag: `17` of `17.el9`, `3` of
+/// `3.el10_1`.
+fn without_dist(release: &str) -> &str {
+    let bytes = release.as_bytes();
+    let mut i = 0;
+    while let Some(at) = release[i..].find(".el") {
+        let at = i + at;
+        if bytes.get(at + 3).is_some_and(u8::is_ascii_digit) {
+            return &release[..at];
+        }
+        i = at + 3;
+    }
+    release
 }
 
 #[cfg(test)]
@@ -614,6 +697,65 @@ mod tests {
         assert_eq!(
             cmp_nvr("foo-1.9-10.el9", "foo-1.9-9.el9"),
             Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn a_build_is_measured_by_version_or_by_version_and_release() {
+        // openssh on 2026-11-20: stock moved by release, not version.
+        let stock9 = Reference::version_release("9.9p1-17.el9").unwrap();
+        assert!(meets("openssh-9.9p1-17.1.hs+fb.el9", stock9));
+        assert!(!meets("openssh-9.9p1-16.1.hs+fb.el9", stock9));
+        assert!(meets("openssh-10.0p1-1.hs.el9", stock9));
+        assert!(!meets("bogus", stock9));
+        assert!(meets(
+            "openssh-9.9p1-16.1.hs+fb.el9",
+            Reference::Version("9.9p1")
+        ));
+        // A version with a `-` is a version whole, never split.
+        assert!(meets(
+            "foo-2024.03.02-1.el9",
+            Reference::Version("2024-03-01")
+        ));
+        // A string that is no NVR is compared as a version.
+        assert!(meets("2.0", Reference::Version("1.0")));
+        assert_eq!(Reference::version_release("9.9p1"), None);
+        assert_eq!(
+            build_status(
+                "openssh-9.9p1-30.1.hs+fb.el10",
+                Reference::version_release("9.9p1-34.el10")
+            ),
+            "outdated (expect 9.9p1-34.1)"
+        );
+        assert_eq!(
+            build_status(
+                "openssh-9.9p1-34.1.hs+fb.el10",
+                Reference::version_release("9.9p1-34.el10")
+            ),
+            "newest"
+        );
+        assert_eq!(
+            build_status("foo-1-1.el9", Some(Reference::Version("2"))),
+            "outdated"
+        );
+        assert_eq!(build_status("foo-1-1.el9", None), "");
+        assert_eq!(without_dist("17.el9"), "17");
+        assert_eq!(without_dist("3.el10_1"), "3");
+        assert_eq!(without_dist("1.2"), "1.2");
+        assert_eq!(without_dist("4.elfoo.el9"), "4.elfoo");
+        // A status with spaces reads back from the table.
+        let text = render(
+            "openssh",
+            &hyperscale_rows(
+                10,
+                Some("openssh-9.9p1-30.1.hs+fb.el10"),
+                None,
+                Reference::version_release("9.9p1-34.el10"),
+            ),
+        );
+        assert_eq!(
+            parse(&text).unwrap().rows[0].status,
+            "outdated (expect 9.9p1-34.1)"
         );
     }
 

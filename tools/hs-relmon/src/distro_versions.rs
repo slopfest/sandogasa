@@ -23,6 +23,10 @@ pub struct DistroVersions {
     pub fedora_stable: Option<(u32, HashMap<String, String>)>,
     /// The newest CentOS Stream release, and its versions.
     pub centos_stream: Option<(u32, HashMap<String, String>)>,
+    /// Each CentOS Stream release the SIG builds for that was read, by
+    /// major, with each package's version-release (`9.9p1-17.el9`), for
+    /// `track = "centos-stream-matched"`. A major missing was not read.
+    pub stream_matched: HashMap<u32, HashMap<String, String>>,
 }
 
 /// What to read: the columns the run shows, and the ones its packages
@@ -32,6 +36,8 @@ pub struct Wanted {
     pub fedora_rawhide: bool,
     pub fedora_stable: bool,
     pub centos_stream: bool,
+    /// Every CentOS Stream release the SIG builds for, with releases.
+    pub centos_stream_matched: bool,
 }
 
 /// The NVRs of `packages`' source packages on a branch: one query for
@@ -52,12 +58,30 @@ pub fn read(
         return out;
     }
     eprintln!("Reading Fedora and CentOS Stream versions with fedrq…");
-    let read_branch = |branch: &str| match query(branch, packages) {
-        Ok(nvrs) => Some(versions(&nvrs)),
-        Err(e) => {
-            eprintln!("warning: fedrq cannot read {branch} ({e}); asking Repology instead");
-            None
+    // Each branch is asked once, though c10s serves both the CentOS
+    // Stream column and the matched el10 references.
+    let asked: std::cell::RefCell<HashMap<String, Option<Vec<String>>>> = Default::default();
+    let nvrs_of = |branch: &str| -> Option<Vec<String>> {
+        if let Some(found) = asked.borrow().get(branch) {
+            return found.clone();
         }
+        let found = match query(branch, packages) {
+            Ok(nvrs) => Some(nvrs),
+            Err(e) => {
+                eprintln!("warning: fedrq cannot read {branch} ({e})");
+                None
+            }
+        };
+        asked.borrow_mut().insert(branch.to_string(), found.clone());
+        found
+    };
+    // A column fedrq cannot read is Repology's.
+    let read_branch = |branch: &str| {
+        let found = nvrs_of(branch).map(|nvrs| versions(&nvrs));
+        if found.is_none() {
+            eprintln!("  (Repology is asked for {branch}'s column instead)");
+        }
+        found
     };
     if wanted.fedora_rawhide {
         out.fedora_rawhide = read_branch("rawhide");
@@ -90,6 +114,20 @@ pub fn read(
     if wanted.centos_stream {
         out.centos_stream = read_branch(&format!("c{stream_major}s")).map(|v| (stream_major, v));
     }
+    if wanted.centos_stream_matched {
+        for &major in sandogasa_cbs::HYPERSCALE_MAJORS {
+            match nvrs_of(&format!("c{major}s")) {
+                Some(nvrs) => {
+                    out.stream_matched.insert(major, version_releases(&nvrs));
+                }
+                // Repology has no releases to stand in with.
+                None => eprintln!(
+                    "  (centos-stream-matched packages have no reference for Hyperscale \
+                     {major}: their freshness there is unknown)"
+                ),
+            }
+        }
+    }
     out
 }
 
@@ -104,6 +142,12 @@ pub fn read_with_fedrq(packages: &[String], wanted: Wanted, stream_major: u32) -
             "note: fedrq is not installed, so Fedora and CentOS Stream versions come from \
              Repology (sudo dnf install fedrq)"
         );
+        if wanted.centos_stream_matched {
+            eprintln!(
+                "note: without fedrq, centos-stream-matched packages have no reference: \
+                 their freshness is unknown"
+            );
+        }
         return DistroVersions::default();
     }
     let query = |branch: &str, names: &[String]| {
@@ -122,6 +166,28 @@ fn name_version(nvr: &str) -> Option<(&str, &str)> {
     let mut parts = nvr.rsplitn(3, '-');
     let (_release, version, name) = (parts.next()?, parts.next()?, parts.next()?);
     Some((name, version))
+}
+
+/// The newest version-release of each package among `nvrs`.
+fn version_releases(nvrs: &[String]) -> HashMap<String, String> {
+    let mut out: HashMap<String, String> = HashMap::new();
+    for nvr in nvrs {
+        let mut parts = nvr.rsplitn(3, '-');
+        let (Some(release), Some(version), Some(name)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let newer = out.get(name).is_none_or(|old| {
+            let (v, r) = old.split_once('-').unwrap_or((old, ""));
+            sandogasa_rpmvercmp::rpmvercmp(version, v)
+                .then_with(|| sandogasa_rpmvercmp::rpmvercmp(release, r))
+                .is_gt()
+        });
+        if newer {
+            out.insert(name.to_string(), format!("{version}-{release}"));
+        }
+    }
+    out
 }
 
 /// The newest version of each package among `nvrs`.
@@ -163,6 +229,7 @@ mod tests {
             fedora_rawhide: true,
             fedora_stable: true,
             centos_stream: true,
+            ..Wanted::default()
         };
         let v = read(
             &s(&["kexec-tools", "rust-foo-bar", "gone"]),
@@ -192,6 +259,30 @@ mod tests {
     }
 
     #[test]
+    fn each_stream_the_sig_builds_for_is_read_with_releases_once() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let query = |branch: &str, _: &[String]| {
+            asked.borrow_mut().push(branch.to_string());
+            Ok(match branch {
+                "c9s" => s(&["openssh-9.9p1-16.el9", "openssh-9.9p1-17.el9"]),
+                "c10s" => s(&["openssh-9.9p1-34.el10"]),
+                _ => Vec::new(),
+            })
+        };
+        let wanted = Wanted {
+            centos_stream: true,
+            centos_stream_matched: true,
+            ..Wanted::default()
+        };
+        let v = read(&s(&["openssh"]), wanted, 10, &query);
+        assert_eq!(v.stream_matched[&9]["openssh"], "9.9p1-17.el9");
+        assert_eq!(v.stream_matched[&10]["openssh"], "9.9p1-34.el10");
+        assert_eq!(v.centos_stream.unwrap().1["openssh"], "9.9p1");
+        // c10s once, for both the column and el10's reference.
+        assert_eq!(*asked.borrow(), ["c10s", "c9s"]);
+    }
+
+    #[test]
     fn a_branch_fedrq_cannot_read_is_left_to_repology() {
         let query = |branch: &str, _: &[String]| match branch {
             "c10s" => Ok(s(&["foo-1-1.el10"])),
@@ -201,6 +292,7 @@ mod tests {
             fedora_rawhide: true,
             fedora_stable: true,
             centos_stream: true,
+            ..Wanted::default()
         };
         let v = read(&s(&["foo"]), all, 10, &query);
         assert_eq!(v.fedora_rawhide, None);

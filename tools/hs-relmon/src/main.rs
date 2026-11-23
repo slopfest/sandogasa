@@ -103,12 +103,15 @@ from the package (e.g. linux for perf)."
 Distribution to compare Hyperscale builds against.
 
 Valid names:
-  upstream         Newest version across all repos (default)
-  fedora-rawhide   Fedora Rawhide
-  fedora-stable    Latest stable Fedora
-  centos           Latest CentOS Stream
-  centos-stream    Latest CentOS Stream
-  none             Nothing: no freshness check, no issue"
+  upstream               Newest version across all repos (default)
+  fedora-rawhide         Fedora Rawhide
+  fedora-stable          Latest stable Fedora
+  centos-stream-latest   Latest CentOS Stream, for every release
+                         (also: centos-stream, centos)
+  centos-stream-matched  Each release's own CentOS Stream (el9 with
+                         c9s), on version and release; needs fedrq,
+                         and files no issue yet
+  none                   Nothing: no freshness check, no issue"
         )]
         track: String,
     },
@@ -758,6 +761,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("{package}: skipping issue filing ({reason})");
                 } else if track == TrackRef::Untracked {
                     eprintln!("{package}: skipping issue filing (--track none)");
+                } else if track == TrackRef::CentosStreamMatched {
+                    eprintln!("{package}: {MATCHED_NO_ISSUES}");
                 } else if result.repology_refused
                     && result.ref_from_repology
                     && result.ref_version().is_none()
@@ -910,7 +915,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 // A package tracked against nothing has no issue to file.
-                if pkg.file_issue && pkg.track != TrackRef::Untracked {
+                if pkg.file_issue && pkg.track == TrackRef::CentosStreamMatched {
+                    eprintln!("{}: {MATCHED_NO_ISSUES}", pkg.name);
+                    // Its issue is still read, without writing, so the
+                    // issue filters and the listing see it.
+                    let project_url = pkg
+                        .issue_url
+                        .as_deref()
+                        .map(String::from)
+                        .unwrap_or_else(|| default_issue_url(&pkg.name));
+                    if project_issue_block_reason(&project_url).is_none() {
+                        match lookup_issue(&project_url) {
+                            Ok(issue) => result.issue = issue,
+                            Err(e) => eprintln!("{}: reading its issue: {e}", pkg.name),
+                        }
+                    }
+                } else if pkg.file_issue && pkg.track != TrackRef::Untracked {
                     let project_url = pkg
                         .issue_url
                         .as_deref()
@@ -1834,6 +1854,12 @@ fn issue_table(result: &check_latest::CheckResult) -> String {
     format!("```\n{}```", check_latest::format_table(result))
 }
 
+/// Why a `centos-stream-matched` package's issue is left alone: one
+/// issue per Hyperscale release, with the version-release it asks for in
+/// its title, is still to come (#209).
+const MATCHED_NO_ISSUES: &str = "no issue is filed, updated or closed for \
+     centos-stream-matched yet: issues per Hyperscale release are still to come (#209)";
+
 /// The rows an issue keeps from its current table when this run could
 /// not read them: the ones Repology was asked for, when it refused
 /// this network. A row fedrq read stays as fedrq read it, absent
@@ -1858,6 +1884,7 @@ fn wanted_versions<'a>(
         w.fedora_rawhide |= d.fedora_rawhide || (hs && *t == TrackRef::FedoraRawhide);
         w.fedora_stable |= d.fedora_stable || (hs && *t == TrackRef::FedoraStable);
         w.centos_stream |= d.centos_stream || (hs && *t == TrackRef::CentosStream);
+        w.centos_stream_matched |= hs && *t == TrackRef::CentosStreamMatched;
     }
     w
 }
@@ -2309,6 +2336,8 @@ mod tests {
         // Tracked but not shown and without Hyperscale columns: nothing.
         let w = super::wanted_versions([(&up, &TrackRef::CentosStream)].into_iter());
         assert_eq!(w, hs_relmon::distro_versions::Wanted::default());
+        let w = super::wanted_versions([(&hs, &TrackRef::CentosStreamMatched)].into_iter());
+        assert!(w.centos_stream_matched && !w.centos_stream);
         assert_eq!(super::stream_major(), 10);
     }
 

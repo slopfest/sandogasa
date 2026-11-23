@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH hs-relmon 1 2026-11-20 "sandogasa 0.29.0" "Sandogasa Manual"
+.TH hs-relmon 1 2026-11-23 "sandogasa 0.29.0" "Sandogasa Manual"
 .SH NAME
 hs\-relmon \- Release monitoring tool for CentOS Hyperscale SIG packages
 .SH SYNOPSIS
@@ -54,12 +54,15 @@ from the package (e.g. linux for perf).
 Distribution to compare Hyperscale builds against.
 
 Valid names:
-  upstream         Newest version across all repos (default)
-  fedora\-rawhide   Fedora Rawhide
-  fedora\-stable    Latest stable Fedora
-  centos           Latest CentOS Stream
-  centos\-stream    Latest CentOS Stream
-  none             Nothing: no freshness check, no issue
+  upstream               Newest version across all repos (default)
+  fedora\-rawhide         Fedora Rawhide
+  fedora\-stable          Latest stable Fedora
+  centos\-stream\-latest   Latest CentOS Stream, for every release
+                         (also: centos\-stream, centos)
+  centos\-stream\-matched  Each release\*(Aqs own CentOS Stream (el9 with
+                         c9s), on version and release; needs fedrq,
+                         and files no issue yet
+  none                   Nothing: no freshness check, no issue
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)

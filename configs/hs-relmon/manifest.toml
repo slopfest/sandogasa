@@ -6,6 +6,11 @@
 # changes of its own, so when stock catches up it is rebased, not
 # retired; `false` says it is tracked only until stock catches up.
 # `hs-relmon check-stock` asks for the field where it is unset.
+#
+# `track = "centos"` (centos-stream-latest) compares every Hyperscale
+# release with the newest CentOS Stream; `"centos-stream-matched"`
+# compares each with its own release's Stream, on version and release,
+# for a package rebased on its release's stock.
 [defaults]
 distros = "upstream,fedora,centos,hyperscale"
 track = "centos"
@@ -150,6 +155,8 @@ track = "fedora-stable"
 [[package]]
 name = "openssh"
 divergent = true
+# Rebased on each release's stock: el9 on c9s, el10 on c10s.
+track = "centos-stream-matched"
 
 [[package]]
 name = "pciutils"

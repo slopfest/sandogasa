@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::distro_versions::DistroVersions;
 use crate::repology;
-use sandogasa_cbs::issue_table::{self, Row};
+use sandogasa_cbs::issue_table::{self, Reference, Row};
 use serde::Serialize;
 
 /// Which distribution sources to check.
@@ -78,7 +78,12 @@ pub enum TrackRef {
     Upstream,
     FedoraRawhide,
     FedoraStable,
+    /// The newest CentOS Stream, for every Hyperscale release: a
+    /// package whose newest Stream build is backported to each.
     CentosStream,
+    /// Each Hyperscale release's own CentOS Stream (el9 with c9s), on
+    /// version and release: a package rebased on its release's stock.
+    CentosStreamMatched,
     /// No reference: for SIG-only packages no distribution carries,
     /// whose freshness cannot be judged. No warning, no issue.
     Untracked,
@@ -87,14 +92,16 @@ pub enum TrackRef {
 impl TrackRef {
     /// Parse a track reference name.
     ///
-    /// Valid names: `upstream`, `fedora-rawhide`, `fedora-stable`, `centos`,
-    /// `centos-stream`, `none`.
+    /// Valid names: `upstream`, `fedora-rawhide`, `fedora-stable`,
+    /// `centos-stream-latest` (also `centos-stream` and `centos`),
+    /// `centos-stream-matched`, `none`.
     pub fn parse(input: &str) -> Result<Self, String> {
         match input.trim() {
             "upstream" => Ok(Self::Upstream),
             "fedora-rawhide" => Ok(Self::FedoraRawhide),
             "fedora-stable" => Ok(Self::FedoraStable),
-            "centos" | "centos-stream" => Ok(Self::CentosStream),
+            "centos" | "centos-stream" | "centos-stream-latest" => Ok(Self::CentosStream),
+            "centos-stream-matched" => Ok(Self::CentosStreamMatched),
             "none" => Ok(Self::Untracked),
             other => Err(format!("unknown track reference: {other:?}")),
         }
@@ -106,7 +113,8 @@ impl TrackRef {
             Self::Upstream => "upstream",
             Self::FedoraRawhide => "fedora-rawhide",
             Self::FedoraStable => "fedora-stable",
-            Self::CentosStream => "centos-stream",
+            Self::CentosStream => "centos-stream-latest",
+            Self::CentosStreamMatched => "centos-stream-matched",
             Self::Untracked => "none",
         }
     }
@@ -158,6 +166,10 @@ pub struct CheckResult {
     /// JSON).
     #[serde(skip)]
     pub ref_from_repology: bool,
+    /// For `centos-stream-matched`: each Hyperscale release's reference,
+    /// its own Stream's version-release, by major.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub matched_refs: HashMap<u32, String>,
     /// The package's branches with merged commits not built, once
     /// checked (`check-latest` checks; `check-manifest` leaves it to
     /// `check-unbuilt`).
@@ -215,14 +227,24 @@ impl CheckResult {
     /// version, **or** when it has never been built at all while a
     /// reference version is known.
     pub fn is_outdated(&self) -> bool {
-        [&self.hs9, &self.hs10]
+        [(9, &self.hs9), (10, &self.hs10)]
             .iter()
-            .filter_map(|r| r.as_ref())
-            .any(|r| match r.newest_version {
+            .filter_map(|(major, r)| Some((*major, r.as_ref()?)))
+            .any(|(major, r)| match r.newest_version {
                 Some(false) => true,
-                None => self.ref_version.is_some(),
+                None => self.reference_for(major).is_some(),
                 Some(true) => false,
             })
+    }
+
+    /// What Hyperscale release `major`'s builds are measured against:
+    /// its own Stream's version-release under `centos-stream-matched`,
+    /// the one reference version otherwise.
+    pub fn reference_for(&self, major: u32) -> Option<Reference<'_>> {
+        match self.matched_refs.get(&major) {
+            Some(vr) => Reference::version_release(vr),
+            None => self.ref_version.as_deref().map(Reference::Version),
+        }
     }
 
     /// Whether any Hyperscale distro has an up-to-date build still in
@@ -233,20 +255,14 @@ impl CheckResult {
     /// - a release build exists but is outdated while a newer testing
     ///   build matches the reference.
     pub fn is_in_testing(&self) -> bool {
-        let ref_ver = match &self.ref_version {
-            Some(v) => v,
-            None => return false,
-        };
-        [&self.hs9, &self.hs10]
+        [(9, &self.hs9), (10, &self.hs10)]
             .iter()
-            .filter_map(|r| r.as_ref())
-            .any(|r| {
-                if let Some(testing) = &r.summary.testing {
-                    crate::rpmvercmp::rpmvercmp(&testing.version, ref_ver)
-                        != std::cmp::Ordering::Less
-                } else {
-                    false
-                }
+            .filter_map(|(major, r)| Some((self.reference_for(*major)?, r.as_ref()?)))
+            .any(|(reference, r)| {
+                r.summary
+                    .testing
+                    .as_ref()
+                    .is_some_and(|t| issue_table::meets(&t.nvr, reference))
             })
     }
 
@@ -395,6 +411,7 @@ pub fn check(
         repology_refused: false,
         repology_rows: Vec::new(),
         ref_from_repology: false,
+        matched_refs: HashMap::new(),
         unbuilt: None,
         unbuilt_targets: Vec::new(),
         unbuilt_checked: false,
@@ -495,7 +512,8 @@ pub fn check(
         TrackRef::FedoraRawhide => rawhide.clone(),
         TrackRef::FedoraStable => stable.as_ref().map(|v| v.version.clone()),
         TrackRef::CentosStream => stream.as_ref().map(|v| v.version.clone()),
-        TrackRef::Untracked => None,
+        // One reference per Hyperscale release instead, below.
+        TrackRef::CentosStreamMatched | TrackRef::Untracked => None,
     };
     if distros.fedora_rawhide {
         result.fedora_rawhide = rawhide;
@@ -515,10 +533,29 @@ pub fn check(
         TrackRef::FedoraRawhide => fq_rawhide.is_some(),
         TrackRef::FedoraStable => fq_stable.is_some(),
         TrackRef::CentosStream => fq_stream.is_some(),
+        TrackRef::CentosStreamMatched => true,
         _ => false,
     };
     result.ref_from_repology = *track != TrackRef::Untracked && !from_fedrq;
-    if from_fedrq && ref_version.is_none() && distros.needs_cbs() {
+    if *track == TrackRef::CentosStreamMatched {
+        // Each Hyperscale release shown against its own Stream, read
+        // only with fedrq: Repology has no releases to compare.
+        let shown = [(9, distros.hyperscale_9), (10, distros.hyperscale_10)];
+        for (major, _) in shown.iter().filter(|(_, on)| *on) {
+            // A branch that could not be read was said once, then.
+            if let Some(read) = stock.stream_matched.get(major) {
+                match read.get(package) {
+                    Some(vr) => {
+                        result.matched_refs.insert(*major, vr.clone());
+                    }
+                    None => eprintln!(
+                        "warning: {package}: fedrq finds no {package} source package in \
+                         c{major}s; Hyperscale {major}'s freshness is unknown"
+                    ),
+                }
+            }
+        }
+    } else if from_fedrq && ref_version.is_none() && distros.needs_cbs() {
         eprintln!(
             "warning: {package}: fedrq finds no {package} source package for the '{}' \
              reference; freshness is unknown",
@@ -550,7 +587,7 @@ pub fn check(
 
         if distros.hyperscale_9 {
             let summary = cbs_client.hyperscale_summary(builds, 9)?;
-            let newest_version = compute_newest_version(&summary, &ref_version);
+            let newest_version = compute_newest_version(&summary, result.reference_for(9));
             result.hs9 = Some(HyperscaleResult {
                 summary,
                 newest_version,
@@ -558,7 +595,7 @@ pub fn check(
         }
         if distros.hyperscale_10 {
             let summary = cbs_client.hyperscale_summary(builds, 10)?;
-            let newest_version = compute_newest_version(&summary, &ref_version);
+            let newest_version = compute_newest_version(&summary, result.reference_for(10));
             result.hs10 = Some(HyperscaleResult {
                 summary,
                 newest_version,
@@ -576,11 +613,11 @@ pub fn check(
 /// Returns `None` if the reference version is unknown.
 fn compute_newest_version(
     summary: &HyperscaleSummary,
-    ref_version: &Option<String>,
+    reference: Option<Reference>,
 ) -> Option<bool> {
-    let ref_ver = ref_version.as_ref()?;
+    let reference = reference?;
     let effective = summary.release.as_ref().or(summary.testing.as_ref())?;
-    Some(crate::rpmvercmp::rpmvercmp(&effective.version, ref_ver) != std::cmp::Ordering::Less)
+    Some(issue_table::meets(&effective.nvr, reference))
 }
 
 /// Collect the result into table rows.
@@ -605,7 +642,7 @@ fn result_to_rows(result: &CheckResult) -> Vec<Row> {
                 major,
                 hs.summary.release.as_ref().map(|b| b.nvr.as_str()),
                 hs.summary.testing.as_ref().map(|b| b.nvr.as_str()),
-                result.ref_version.as_deref(),
+                result.reference_for(major),
             ));
         }
     }
@@ -766,6 +803,7 @@ mod tests {
             fedora_rawhide: Some(map("2.0.33")),
             fedora_stable: Some((45, map("2.0.32"))),
             centos_stream: Some((10, map("2.0.32"))),
+            ..DistroVersions::default()
         };
         let result = check(
             &repology,
@@ -852,6 +890,96 @@ mod tests {
         assert_eq!(result.ref_version(), Some("6.18"));
         assert!(result.ref_from_repology);
         assert_eq!(result.repology_rows, ["Fedora Rawhide"]);
+    }
+
+    #[test]
+    fn a_matched_package_is_measured_against_its_own_streams_release() {
+        // openssh on 2026-11-20: c9s at 17, c10s at 34, both 9.9p1.
+        let mut quiet = mockito::Server::new();
+        let never = quiet.mock("GET", mockito::Matcher::Any).expect(0).create();
+        let repology = repology::Client::with_base_url(&quiet.url())
+            .with_min_interval(std::time::Duration::ZERO);
+        let mut hub = mockito::Server::new();
+        hub.mock("POST", "/")
+            .with_body(
+                "<?xml version='1.0'?><methodResponse><params><param><value><nil/></value>\
+                 </param></params></methodResponse>",
+            )
+            .create();
+        let cbs = cbs::Client::with_hub_url(&hub.url());
+        let vr = |v: &str| HashMap::from([("openssh".to_string(), v.to_string())]);
+        let stock = DistroVersions {
+            stream_matched: HashMap::from([(9, vr("9.9p1-17.el9")), (10, vr("9.9p1-34.el10"))]),
+            ..DistroVersions::default()
+        };
+        let mut result = check(
+            &repology,
+            &cbs,
+            "openssh",
+            "openssh",
+            &Distros::parse("hs").unwrap(),
+            &TrackRef::CentosStreamMatched,
+            &stock,
+        )
+        .unwrap();
+        never.assert();
+        assert_eq!(result.ref_version(), None);
+        assert_eq!(
+            result.reference_for(9),
+            Reference::version_release("9.9p1-17.el9")
+        );
+        assert_eq!(
+            result.reference_for(10),
+            Reference::version_release("9.9p1-34.el10")
+        );
+        assert!(!result.ref_from_repology);
+
+        // el9 rebased on 17 and released; el10 still on 30, with 34.1 in
+        // testing.
+        let summary = |rel: &str, test: Option<&str>| HyperscaleSummary {
+            release: Some(make_build("9.9p1", rel)),
+            testing: test.map(|t| make_build("9.9p1", t)),
+        };
+        let s9 = summary("openssh-9.9p1-17.1.hs+fb.el9", None);
+        let s10 = summary(
+            "openssh-9.9p1-30.1.hs+fb.el10",
+            Some("openssh-9.9p1-34.1.hs+fb.el10"),
+        );
+        result.hs9 = Some(HyperscaleResult {
+            newest_version: compute_newest_version(&s9, result.reference_for(9)),
+            summary: s9,
+        });
+        result.hs10 = Some(HyperscaleResult {
+            newest_version: compute_newest_version(&s10, result.reference_for(10)),
+            summary: s10,
+        });
+        assert!(result.is_outdated());
+        assert!(result.is_in_testing());
+        assert!(!result.is_released());
+        let rows = result_to_rows(&result);
+        assert_eq!(rows[0].status, "newest");
+        assert_eq!(rows[1].distro, "Hyperscale 10 (release)");
+        assert_eq!(rows[1].status, "outdated (expect 9.9p1-34.1)");
+        assert_eq!(rows[2].status, "newest");
+
+        // A Stream fedrq did not read, or without the package: unknown.
+        let stock = DistroVersions {
+            stream_matched: HashMap::from([(9, vr("9.9p1-17.el9"))]),
+            ..DistroVersions::default()
+        };
+        let result = check(
+            &repology,
+            &cbs,
+            "other",
+            "other",
+            &Distros::parse("hs").unwrap(),
+            &TrackRef::CentosStreamMatched,
+            &stock,
+        )
+        .unwrap();
+        assert_eq!(result.reference_for(9), None);
+        assert_eq!(result.reference_for(10), None);
+        assert!(!result.is_outdated());
     }
 
     #[test]
@@ -964,6 +1092,19 @@ mod tests {
             TrackRef::CentosStream
         );
         assert_eq!(TrackRef::parse("none").unwrap(), TrackRef::Untracked);
+        assert_eq!(
+            TrackRef::parse("centos-stream-latest").unwrap(),
+            TrackRef::CentosStream
+        );
+        assert_eq!(TrackRef::CentosStream.name(), "centos-stream-latest");
+        assert_eq!(
+            TrackRef::parse("centos-stream-matched").unwrap(),
+            TrackRef::CentosStreamMatched
+        );
+        assert_eq!(
+            TrackRef::CentosStreamMatched.name(),
+            "centos-stream-matched"
+        );
         assert_eq!(TrackRef::Untracked.name(), "none");
         assert!(TrackRef::parse("bogus").is_err());
     }
@@ -1005,6 +1146,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1036,6 +1178,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1067,6 +1210,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1095,6 +1239,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1124,6 +1269,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1152,6 +1298,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1180,6 +1327,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1198,7 +1346,7 @@ mod tests {
             testing: None,
         };
         assert_eq!(
-            compute_newest_version(&summary, &Some("6.15".into())),
+            compute_newest_version(&summary, Some(Reference::Version("6.15"))),
             Some(true)
         );
     }
@@ -1210,7 +1358,7 @@ mod tests {
             testing: None,
         };
         assert_eq!(
-            compute_newest_version(&summary, &Some("6.19".into())),
+            compute_newest_version(&summary, Some(Reference::Version("6.19"))),
             Some(false)
         );
     }
@@ -1222,7 +1370,7 @@ mod tests {
             testing: None,
         };
         assert_eq!(
-            compute_newest_version(&summary, &Some("6.18.16".into())),
+            compute_newest_version(&summary, Some(Reference::Version("6.18.16"))),
             Some(true)
         );
     }
@@ -1233,7 +1381,7 @@ mod tests {
             release: Some(make_build("6.15", "ethtool-6.15-3.hs.el9")),
             testing: None,
         };
-        assert_eq!(compute_newest_version(&summary, &None), None);
+        assert_eq!(compute_newest_version(&summary, None), None);
     }
 
     #[test]
@@ -1243,7 +1391,7 @@ mod tests {
             testing: Some(make_build("6.19", "ethtool-6.19-1.hs.el9")),
         };
         assert_eq!(
-            compute_newest_version(&summary, &Some("6.19".into())),
+            compute_newest_version(&summary, Some(Reference::Version("6.19"))),
             Some(true)
         );
     }
@@ -1254,7 +1402,10 @@ mod tests {
             release: None,
             testing: None,
         };
-        assert_eq!(compute_newest_version(&summary, &Some("6.19".into())), None);
+        assert_eq!(
+            compute_newest_version(&summary, Some(Reference::Version("6.19"))),
+            None
+        );
     }
 
     #[test]
@@ -1273,6 +1424,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1307,6 +1459,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1340,6 +1493,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1370,6 +1524,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1393,6 +1548,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1429,6 +1585,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1458,6 +1615,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1487,6 +1645,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1516,6 +1675,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1545,6 +1705,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1575,6 +1736,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1604,6 +1766,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1633,6 +1796,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1662,6 +1826,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1698,6 +1863,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1728,6 +1894,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1751,6 +1918,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1787,6 +1955,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1824,6 +1993,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1873,6 +2043,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1902,6 +2073,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1935,6 +2107,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1964,6 +2137,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1989,6 +2163,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -2023,6 +2198,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -2053,6 +2229,7 @@ mod tests {
                 repology_refused: false,
                 repology_rows: Vec::new(),
                 ref_from_repology: false,
+                matched_refs: HashMap::new(),
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -2077,6 +2254,7 @@ mod tests {
                 repology_refused: false,
                 repology_rows: Vec::new(),
                 ref_from_repology: false,
+                matched_refs: HashMap::new(),
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -2116,6 +2294,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -2147,6 +2326,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -2193,6 +2373,7 @@ mod tests {
                 repology_refused: false,
                 repology_rows: Vec::new(),
                 ref_from_repology: false,
+                matched_refs: HashMap::new(),
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -2211,6 +2392,7 @@ mod tests {
                 repology_refused: false,
                 repology_rows: Vec::new(),
                 ref_from_repology: false,
+                matched_refs: HashMap::new(),
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -2266,6 +2448,7 @@ mod tests {
             repology_refused: false,
             repology_rows: Vec::new(),
             ref_from_repology: false,
+            matched_refs: HashMap::new(),
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,

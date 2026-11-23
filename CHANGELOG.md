@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### hs-relmon compares a rebased package with its own release's CentOS Stream
+
+hs-relmon compared every Hyperscale build with the newest CentOS
+Stream, by version only. A package the SIG rebases on its own
+release's stock, as kexec-tools and openssh are, was misjudged: on
+2026-11-20 c9s had moved openssh to 9.9p1-17 and c10s to 9.9p1-34,
+both still 9.9p1, so the el9 build 9.9p1-16.1 looked current, and
+c9s's release was never what el9 was compared with. A package can now
+be tracked with `track = "centos-stream-matched"`: each Hyperscale
+release is compared with its own Stream (el9 with c9s, el10 with
+c10s), read with fedrq, on version and release, and an outdated build's
+status names the build it should be (`outdated (expect 9.9p1-17.1)`).
+The existing mode is now called `centos-stream-latest`, with
+`centos-stream` and `centos` kept as its aliases. Issues for matched
+packages are not filed, updated or closed yet: they are to be one per
+Hyperscale release, titled with the version-release they ask for.
+
+`sandogasa_cbs::issue_table` gains `Reference`, which says whether a
+build is measured against a version or against stock's
+version-release, with `meets` and `build_status` to compare and label
+a build; `hyperscale_rows` now takes a `Reference`. Refs #209.
+
 ### hs-relmon reads Fedora and CentOS Stream versions with fedrq
 
 Since 2026-11-20 Repology has at times answered hs-relmon with a bot

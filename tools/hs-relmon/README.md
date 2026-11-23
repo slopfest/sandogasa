@@ -118,7 +118,8 @@ $ hs-relmon check-latest ethtool --json
 | `upstream` | Newest version across all repos (default) |
 | `fedora-rawhide` | Fedora Rawhide |
 | `fedora-stable` | Latest stable Fedora |
-| `centos` / `centos-stream` | Latest CentOS Stream |
+| `centos-stream-latest` (or `centos-stream`, `centos`) | Latest CentOS Stream, for every Hyperscale release: for a package whose newest Stream build is backported to each |
+| `centos-stream-matched` | Each Hyperscale release's own CentOS Stream (el9 with c9s, el10 with c10s), on version and release: for a package rebased on its release's stock. An outdated build's status names the build it should be, stock's release plus `.1` (`outdated (expect 9.9p1-17.1)`). Read with fedrq only; no issue is filed, updated or closed for such a package yet |
 | `none` | Nothing: for SIG-only packages no distribution carries. No freshness check, no warning, no issue |
 
 ### Filing GitLab issues
