@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### fedora-cve-triage's bodhi-check no longer drops bugs from its report
+
+`fedora-cve-triage run`'s bodhi-check stage took 12
+golang-github-facebook-time bugs and reported 8: the 4 EPEL 10 bugs
+appeared nowhere. The package's last EPEL 10 build was made for 10.2,
+so Bodhi had no update for it in EPEL-10.3 or EPEL-10.4, the releases
+those bugs cover; each such release was skipped as having nothing to
+say, and a bug no release spoke for got no verdict and fell out of
+the report. Such a bug is now listed under "No update in any release
+the bug covers", naming the releases, and a bug the stage cannot judge
+at all under "Not judged", so every bug the stage is given appears in
+its report. Fixes #228.
+
 ### fedora-cve-triage no longer takes a renamed package's leftovers for a source-only library
 
 `fedora-cve-triage run`'s bundled-library check offered 20 Go CVE bugs
