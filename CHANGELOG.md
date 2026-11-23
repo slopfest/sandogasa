@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage no longer takes a renamed package's leftovers for a source-only library
+
+`fedora-cve-triage run`'s bundled-library check offered 20 Go CVE bugs
+against golang-github-facebook-time on epel9, epel10 and f43 for
+closing as "neither bundles nor links it". The package had been
+renamed to facebook-time, which now builds its binaries (calnex,
+fbclock, ntpcheck, …), so the repositories held only a noarch
+`-vendor-licenses` subpackage of the old one, and a package with only
+noarch subpackages was taken for a source-only Go library that
+compiles nothing. Before reaching that verdict the check now asks Koji
+what the package's build produced: when it compiled binaries the
+repositories get from another source package, the bug is left to a
+person, with a note naming that package and suggesting the bug be
+moved there or the old package retired on that branch. A build's RPM
+list is kept for good after the first lookup. Fixes #226.
+
 ### hs-relmon compares a rebased package with its own release's CentOS Stream
 
 hs-relmon compared every Hyperscale build with the newest CentOS
