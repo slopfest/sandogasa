@@ -246,9 +246,252 @@ fn extract_binary(line: &str, package_name: Option<&str>) -> Option<String> {
     None
 }
 
+/// How a spec numbers its patches: `Patch027:` (and how wide), or
+/// bare `Patch:` lines rpm numbers itself, as CentOS Stream 10's
+/// ghostscript does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PatchNumbering {
+    /// The next free number, and the width the existing ones are
+    /// written in (`Patch027` is 3).
+    Numbered { next: u32, width: usize },
+    /// `Patch:` lines without a number.
+    Unnumbered,
+}
+
+/// The number on a `PatchNNN:` tag line, with its width; `None` for a
+/// bare `Patch:` and for any other line.
+fn patch_number(line: &str) -> Option<(u32, usize)> {
+    let rest = line.trim_start().strip_prefix("Patch")?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() || !rest[digits.len()..].starts_with(':') {
+        return None;
+    }
+    Some((digits.parse().ok()?, digits.len()))
+}
+
+/// Whether `line` is a patch tag, numbered or not.
+fn is_patch_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("Patch:") || patch_number(line).is_some()
+}
+
+/// How `spec` numbers its patches ([`PatchNumbering`]). A spec without
+/// any starts numbered at 0, one digit wide; one with both numbered and
+/// bare lines continues the numbered ones.
+pub fn patch_numbering(spec: &str) -> PatchNumbering {
+    let numbered: Vec<(u32, usize)> = spec.lines().filter_map(patch_number).collect();
+    let bare = spec.lines().any(|l| l.trim_start().starts_with("Patch:"));
+    match numbered.iter().max_by_key(|(n, _)| *n) {
+        Some(&(n, width)) => PatchNumbering::Numbered { next: n + 1, width },
+        None if bare => PatchNumbering::Unnumbered,
+        None => PatchNumbering::Numbered { next: 0, width: 1 },
+    }
+}
+
+/// `spec` with a patch `file` added after its last patch line (or its
+/// last `Source` line, without any), as the spec numbers patches, and
+/// `comments` (each line written as `# <line>`) above it, after a blank
+/// line. Returns the new spec and the tag line written (`Patch028: …`).
+pub fn add_patch(spec: &str, comments: &[String], file: &str) -> Result<(String, String), String> {
+    let lines: Vec<&str> = spec.lines().collect();
+    let after = lines
+        .iter()
+        .rposition(|l| is_patch_line(l))
+        .or_else(|| {
+            lines
+                .iter()
+                .rposition(|l| l.trim_start().starts_with("Source"))
+        })
+        .ok_or("the spec has no Source or Patch line to add a patch after")?;
+    let tag = match patch_numbering(spec) {
+        PatchNumbering::Numbered { next, width } => format!("Patch{next:0width$}: {file}"),
+        PatchNumbering::Unnumbered => format!("Patch: {file}"),
+    };
+    let mut block = vec![String::new()];
+    block.extend(comments.iter().map(|c| format!("# {c}")));
+    block.push(tag.clone());
+    let mut out: Vec<String> = lines[..=after].iter().map(|l| l.to_string()).collect();
+    out.extend(block);
+    out.extend(lines[after + 1..].iter().map(|l| l.to_string()));
+    Ok((join_lines(&out, spec), tag))
+}
+
+/// Whether `spec`'s `%prep` applies every patch itself (`%autosetup`
+/// without `-N`, or `%autopatch`), so a new patch needs no line there.
+pub fn applies_patches_itself(spec: &str) -> bool {
+    spec.lines().any(|l| {
+        let t = l.trim_start();
+        t.starts_with("%autopatch")
+            || (t.starts_with("%autosetup") && !t.split_whitespace().any(|w| w == "-N"))
+    })
+}
+
+/// `spec` with its `Release:` number raised by one (`20%{?dist}` to
+/// `21%{?dist}`), and the new release without the dist tag (`21`), for
+/// a changelog entry. A release that does not start with a number, such
+/// as `%autorelease`, is refused: it is numbered some other way.
+pub fn bump_release(spec: &str) -> Result<(String, String), String> {
+    let mut found = None;
+    let mut out = Vec::new();
+    for line in spec.lines() {
+        if found.is_none()
+            && let Some(rest) = line.strip_prefix("Release:")
+        {
+            let value = rest.trim_start();
+            let pad = &rest[..rest.len() - value.len()];
+            let digits: String = value.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                return Err(format!(
+                    "Release: {value} does not start with a number; raise it by hand"
+                ));
+            }
+            let next = digits.parse::<u64>().map_err(|e| e.to_string())? + 1;
+            let tail = &value[digits.len()..];
+            let release = tail.split("%{?dist}").next().unwrap_or("");
+            found = Some(format!("{next}{release}"));
+            out.push(format!("Release:{pad}{next}{tail}"));
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    let release = found.ok_or("the spec has no Release: line")?;
+    Ok((join_lines(&out, spec), release))
+}
+
+/// `spec` with a `%changelog` entry added at the top: `* <date> <who> -
+/// <evr>` and each of `lines` as given (`- …`, continuation lines
+/// indented), then a blank line. `date` is as rpm writes it (`Mon Nov 23
+/// 2026`), `who` a name and `<email>`.
+pub fn add_changelog_entry(
+    spec: &str,
+    date: &str,
+    who: &str,
+    evr: &str,
+    lines: &[String],
+) -> Result<String, String> {
+    let all: Vec<&str> = spec.lines().collect();
+    let at = all
+        .iter()
+        .position(|l| l.trim_end() == "%changelog")
+        .ok_or("the spec has no %changelog")?;
+    let mut out: Vec<String> = all[..=at].iter().map(|l| l.to_string()).collect();
+    out.push(format!("* {date} {who} - {evr}"));
+    out.extend(lines.iter().cloned());
+    out.push(String::new());
+    out.extend(all[at + 1..].iter().map(|l| l.to_string()));
+    Ok(join_lines(&out, spec))
+}
+
+/// `lines` joined as `original` was: with a final newline when it had
+/// one.
+fn join_lines(lines: &[String], original: &str) -> String {
+    let mut s = lines.join("\n");
+    if original.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GS_C9S: &str = include_str!("../testdata/ghostscript-c9s.spec");
+    const GS_C10S: &str = include_str!("../testdata/ghostscript-c10s.spec");
+
+    #[test]
+    fn a_patch_takes_the_next_number_or_none_as_the_spec_does() {
+        // CentOS Stream 9's ghostscript numbers its patches to 027.
+        assert_eq!(
+            patch_numbering(GS_C9S),
+            PatchNumbering::Numbered { next: 28, width: 3 }
+        );
+        // Stream 10's writes bare `Patch:` lines.
+        assert_eq!(patch_numbering(GS_C10S), PatchNumbering::Unnumbered);
+        assert_eq!(
+            patch_numbering("Source0: a.tar.gz\n"),
+            PatchNumbering::Numbered { next: 0, width: 1 }
+        );
+        assert_eq!(
+            patch_numbering("Patch0: a.patch\nPatch1: b.patch\nPatch: c.patch\n"),
+            PatchNumbering::Numbered { next: 2, width: 1 }
+        );
+    }
+
+    #[test]
+    fn a_patch_goes_after_the_last_one_with_its_comments() {
+        let comments = vec!["CVE-2026-125396 (Upload2Shell)".to_string()];
+        let file = "1000-PS-interpreter-validate-operands-to-.putgstringcopy.patch";
+        let (spec, tag) = add_patch(GS_C9S, &comments, file).unwrap();
+        assert_eq!(tag, format!("Patch028: {file}"));
+        let at = spec.lines().position(|l| l == tag).unwrap();
+        let lines: Vec<&str> = spec.lines().collect();
+        assert_eq!(lines[at - 1], "# CVE-2026-125396 (Upload2Shell)");
+        assert_eq!(lines[at - 2], "");
+        assert!(lines[at - 3].starts_with("Patch027:"));
+        assert_eq!(spec.lines().count(), GS_C9S.lines().count() + 3);
+        assert!(spec.ends_with('\n'));
+        let (spec, tag) = add_patch(GS_C10S, &[], file).unwrap();
+        assert_eq!(tag, format!("Patch: {file}"));
+        assert!(spec.contains(&format!("\n\nPatch: {file}\n")));
+        // No patch yet: after the last Source.
+        let (spec, tag) = add_patch("Source0: a.tar.gz\n\n%prep\n", &[], "x.patch").unwrap();
+        assert_eq!(tag, "Patch0: x.patch");
+        assert_eq!(spec, "Source0: a.tar.gz\n\nPatch0: x.patch\n\n%prep\n");
+        assert!(add_patch("Name: x\n", &[], "x.patch").is_err());
+    }
+
+    #[test]
+    fn autosetup_and_autopatch_apply_patches_themselves() {
+        assert!(applies_patches_itself(GS_C9S));
+        assert!(applies_patches_itself("%prep\n%autosetup -p1\n"));
+        assert!(!applies_patches_itself("%prep\n%autosetup -N\n"));
+        assert!(!applies_patches_itself(
+            "%prep\n%setup -q\n%patch -P0 -p1\n"
+        ));
+    }
+
+    #[test]
+    fn the_release_is_raised_by_one() {
+        let (spec, release) = bump_release(GS_C9S).unwrap();
+        assert_eq!(release, "21");
+        assert!(spec.contains("\nRelease:          21%{?dist}\n"));
+        let (_, release) = bump_release(GS_C10S).unwrap();
+        assert_eq!(release, "18");
+        let (spec, release) = bump_release("Release: 3.2%{?dist}\n").unwrap();
+        assert_eq!(
+            (spec.as_str(), release.as_str()),
+            ("Release: 4.2%{?dist}\n", "4.2")
+        );
+        assert!(bump_release("Release: %autorelease\n").is_err());
+        assert!(bump_release("Name: x\n").is_err());
+    }
+
+    #[test]
+    fn a_changelog_entry_goes_on_top() {
+        let lines = vec!["- CVE-2026-125396 ghostscript: validate operands".to_string()];
+        let spec = add_changelog_entry(
+            GS_C9S,
+            "Mon Nov 23 2026",
+            "Michel Lind <michel@example.org>",
+            "9.54.0-21",
+            &lines,
+        )
+        .unwrap();
+        let at = spec.lines().position(|l| l == "%changelog").unwrap();
+        let after: Vec<&str> = spec.lines().skip(at + 1).take(4).collect();
+        assert_eq!(
+            after,
+            [
+                "* Mon Nov 23 2026 Michel Lind <michel@example.org> - 9.54.0-21",
+                "- CVE-2026-125396 ghostscript: validate operands",
+                "",
+                "* Thu Oct 15 2026 Zdenek Dohnal <zdohnal@redhat.com> - 9.54.0-20",
+            ]
+        );
+        assert!(add_changelog_entry("Name: x\n", "d", "w", "1-1", &[]).is_err());
+    }
 
     // ---- parse_field / parse_version ----
 

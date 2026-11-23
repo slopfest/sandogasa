@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### sandogasa-distgit edits a spec's patches, Release and changelog
+
+The `spec` module can now add a patch the way the spec numbers its
+patches (`patch_numbering`: `Patch028:` after `Patch027:`, or a bare
+`Patch:` where CentOS Stream 10's ghostscript writes those), with its
+comments, after the last patch line (`add_patch`); tell whether `%prep`
+applies patches itself (`applies_patches_itself`); raise `Release:` by
+one (`bump_release`, which refuses `%autorelease`); and add a
+`%changelog` entry on top (`add_changelog_entry`). They are what
+cpu-sig-tracker's import of another distribution's fix into a Proposed
+Update builds on. Refs #233.
+
 ### sandogasa-report finds a PR applied with its own, earlier commit date
 
 The 2026H2 self-review report listed mchehab/rasdaemon#272 as
