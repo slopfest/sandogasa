@@ -1302,9 +1302,34 @@ only copy; the old standalone overlay is gone. The branch was never
 pushed during 0.25–0.27 and was rebuilt on 2026-11-04 on top of
 upstream master, restoring all four crates as of 0.27.0-1 from the
 Debusine sources; its history before that, the 0.25.4-era patches
-included, is lost. dbranch 0.27.0-2, not yet uploaded (branch head
-251a52ac7a), adds `Depends: git` and `Recommends: glab`. It lints
-clean (no tags at all).
+included, is lost.
+
+On 2026-11-23 the branch was rebased onto the team's master again (it
+had fallen 1253 commits behind; ours touch only our four directories,
+so the rebase was clean) and all four crates moved to 0.29.0-1 (branch
+head 3a1a7e4a53). dbranch's never-uploaded 0.27.0-2 entry became
+0.29.0-1, adding `Depends: git` and `Recommends: cme, decopy, glab,
+libconfig-model-dpkg-perl, licenserecon`. All four are published,
+confirmed in the suite's `Sources`: workflows 1651602 (build), 1651619
+(config), 1651649 (cli) and 1651672 (dbranch). The source packages
+lint clean (no tags at all).
+
+1651649 reports failure, and will again whenever sandogasa-config and
+sandogasa-cli move to a new version together. Only piuparts' upgrade
+test on amd64 failed: it first installs the version already in the
+suite, librust-sandogasa-cli-dev 0.27.0-1, which depends on
+librust-sandogasa-config-0.27, and the suite keeps only the newest
+version of each package, so sandogasa-config 0.29.0-1 had already
+replaced it. Nothing to fix; the archive keeps a coherent old set to
+upgrade from. dbranch's own upgrade test passes, since its old version
+depends on no sandogasa crate.
+
+The Debusine client's config, `~/.config/debusine/client/config.ini`,
+was lost in the VM outage of 2026-11-18 and recreated with `debusine
+setup`, which writes the API token into that file in plain text.
+Keeping it in the keyring instead is an idea for debusine-client
+upstream (freexian-team/debusine on Salsa), taken up by the
+dd-application session.
 What it took, beyond the anstream patch that was already there:
 
 - No `test_depends`: with `lib = false` there are no autopkgtests to
