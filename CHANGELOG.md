@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### fedora-cve-triage judges a renamed package by its own build
+
+After the change for #226, a package whose binaries had moved to
+another source package was always left to a person, although its own
+build usually answers the bug filed against it: golang-github-facebook-time's
+builds on f43, epel9 and epel10 used golang 1.25.3 to 1.25.5, past the
+Go 1.25.2 fix of the twelve standard-library CVEs filed against it. Such
+a package is now judged as the compiled package it was, by its own
+build's buildroot. A build that carries the fix answers the bug, and
+bodhi-check closes it against the update that first shipped one (on
+f43 and epel9 here; epel10's last build came from EPEL 10.2, which #229
+is to follow), with the finding naming the package that ships the
+binaries now. A build without the fix still leaves the bug to a person,
+with the note suggesting it be moved there. Refs #227.
+
 ### fedora-cve-triage's bodhi-check no longer drops bugs from its report
 
 `fedora-cve-triage run`'s bodhi-check stage took 12
