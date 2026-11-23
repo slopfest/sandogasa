@@ -3,6 +3,7 @@
 pub mod cbs;
 pub mod check_latest;
 pub mod config;
+pub mod distro_versions;
 pub mod dupe_subpkgs;
 pub mod file_conflicts;
 pub mod gitlab;

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### hs-relmon reads Fedora and CentOS Stream versions with fedrq
+
+Since 2026-11-20 Repology has at times answered hs-relmon with a bot
+check, and a refusal emptied the Fedora and CentOS Stream columns of
+`check-latest` and `check-manifest` and left every package tracked
+against them without a version to compare with, so no issue was filed,
+updated or closed. Both commands now read those versions with fedrq
+from the distributions' own repositories: one query per branch
+(rawhide, the newest Fedora release below it, the newest CentOS
+Stream) for every package of a run. Repology is still asked for the
+upstream versions, and for the Fedora and Stream ones when fedrq is
+not installed or cannot read a branch, and for a package Repology
+knows by another name that fedrq has no source package of (perf,
+tracked as `linux`). The columns keep Repology's
+names (`fedora_45`, `centos_stream_10`), so issue tables do not change
+for the source alone.
+
+A package tracked against Fedora or CentOS Stream now has its issue
+filed and updated even when Repology refuses, and the update keeps the
+rows Repology was asked for from the issue's table instead of dropping
+them (`sandogasa_cbs::issue_table::carry_rows`). Refs #209.
+
 ### dbranch update names where its copyright checks come from
 
 The copyright stage of `dbranch update` printed its warnings (a

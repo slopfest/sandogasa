@@ -899,6 +899,7 @@ dependencies = [
  "sandogasa-cbs",
  "sandogasa-cli",
  "sandogasa-config",
+ "sandogasa-fedrq",
  "sandogasa-gitlab",
  "sandogasa-koji",
  "sandogasa-kojihub",

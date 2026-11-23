@@ -9,6 +9,7 @@ use std::io::IsTerminal;
 use hs_relmon::cbs;
 use hs_relmon::check_latest::{self, Distros, TrackRef};
 use hs_relmon::config;
+use hs_relmon::distro_versions;
 use hs_relmon::dupe_subpkgs;
 use hs_relmon::file_conflicts;
 use hs_relmon::gitlab;
@@ -728,6 +729,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let repology_client = repology::Client::new();
             let cbs_client = cbs::Client::new();
+            let stock = distro_versions::read_with_fedrq(
+                std::slice::from_ref(&package),
+                wanted_versions(std::iter::once((&distros, &track))),
+                stream_major(),
+            );
             let mut result = check_latest::check(
                 &repology_client,
                 &cbs_client,
@@ -735,6 +741,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 repology_name,
                 &distros,
                 &track,
+                &stock,
             )?;
             // What the package's branches have merged since their newest
             // builds, from the builds just read: shown, and written to an
@@ -751,7 +758,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("{package}: skipping issue filing ({reason})");
                 } else if track == TrackRef::Untracked {
                     eprintln!("{package}: skipping issue filing (--track none)");
-                } else if result.repology_refused {
+                } else if result.repology_refused
+                    && result.ref_from_repology
+                    && result.ref_version().is_none()
+                {
                     return Err(format!(
                         "{package}: cannot file/update the issue: Repology refused this \
                          network, so the version to track is unknown"
@@ -867,6 +877,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let repology_client = repology::Client::new();
             let cbs_client = cbs::Client::new();
+            // Every package's Fedora and CentOS Stream versions, in one
+            // fedrq query per branch.
+            let names: Vec<String> = packages.iter().map(|p| p.name.clone()).collect();
+            let stock = distro_versions::read_with_fedrq(
+                &names,
+                wanted_versions(packages.iter().map(|p| (&p.distros, &p.track))),
+                stream_major(),
+            );
             let mut results = Vec::new();
             let mut errors = 0u32;
 
@@ -880,6 +898,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     repology_name,
                     &pkg.distros,
                     &pkg.track,
+                    &stock,
                 );
                 let mut result = match result {
                     Ok(r) => r,
@@ -899,7 +918,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap_or_else(|| default_issue_url(&pkg.name));
                     if let Some(reason) = project_issue_block_reason(&project_url) {
                         eprintln!("{}: skipping issue filing ({reason})", pkg.name);
-                    } else if result.repology_refused {
+                    } else if result.repology_refused
+                        && result.ref_from_repology
+                        && result.ref_version().is_none()
+                    {
                         // Said once already; the issue is left as it is.
                         errors += 1;
                     } else if result.ref_version().is_none() {
@@ -1812,6 +1834,46 @@ fn issue_table(result: &check_latest::CheckResult) -> String {
     format!("```\n{}```", check_latest::format_table(result))
 }
 
+/// The rows an issue keeps from its current table when this run could
+/// not read them: the ones Repology was asked for, when it refused
+/// this network. A row fedrq read stays as fedrq read it, absent
+/// included.
+fn kept_rows(result: &check_latest::CheckResult) -> &[&'static str] {
+    if result.repology_refused {
+        &result.repology_rows
+    } else {
+        &[]
+    }
+}
+
+/// What is read from fedrq for a run's `(distros, track)` pairs: a
+/// column any of them shows, or a reference any of them is tracked
+/// against.
+fn wanted_versions<'a>(
+    runs: impl Iterator<Item = (&'a Distros, &'a TrackRef)>,
+) -> distro_versions::Wanted {
+    let mut w = distro_versions::Wanted::default();
+    for (d, t) in runs {
+        let hs = d.hyperscale_9 || d.hyperscale_10;
+        w.fedora_rawhide |= d.fedora_rawhide || (hs && *t == TrackRef::FedoraRawhide);
+        w.fedora_stable |= d.fedora_stable || (hs && *t == TrackRef::FedoraStable);
+        w.centos_stream |= d.centos_stream || (hs && *t == TrackRef::CentosStream);
+    }
+    w
+}
+
+/// The CentOS Stream to compare with: the newest the SIG builds for,
+/// which is what its builds can follow. Repology's column is the newest
+/// Stream carrying the package, which is the same until a Stream exists
+/// that Hyperscale does not build for yet; the SIG adds it then.
+fn stream_major() -> u32 {
+    sandogasa_cbs::HYPERSCALE_MAJORS
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(10)
+}
+
 /// Close an open issue with a comment linking to the
 /// CBS release build(s), refreshing its table in the same edit.
 ///
@@ -1854,6 +1916,7 @@ fn maybe_close_issue(
         &issue_table(result),
         &not_built_line(result),
         current.description.as_deref(),
+        kept_rows(result),
     );
     let refreshed =
         (current.description.as_deref() != Some(description.as_str())).then(|| description.clone());
@@ -1910,7 +1973,7 @@ fn maybe_file_issue(
     let title = format!("{package}-{ref_ver} is available");
     let table = issue_table(result);
     let not_built = not_built_line(result);
-    file_or_update_issue(project_url, &title, &table, not_built)
+    file_or_update_issue(project_url, &title, &table, not_built, kept_rows(result))
 }
 
 /// `check-unbuilt --update-issues`: the open `rfe::new-version` issues
@@ -2071,11 +2134,21 @@ fn not_built_line(result: &mut check_latest::CheckResult) -> Option<Option<Strin
 /// `table` as an issue's description, with the not-built line
 /// `not_built` gives, or for `None` (not told) the one `existing`
 /// (the issue's current description) has.
+///
+/// The rows in `keep` that `table` lacks are taken from `existing`
+/// ([`sandogasa_cbs::issue_table::carry_rows`]): a run Repology refused
+/// keeps the issue's upstream row rather than dropping it.
 fn issue_description(
     table: &str,
     not_built: &Option<Option<String>>,
     existing: Option<&str>,
+    keep: &[&str],
 ) -> String {
+    let table = match existing {
+        Some(e) if !keep.is_empty() => sandogasa_cbs::issue_table::carry_rows(table, e, keep),
+        _ => table.to_string(),
+    };
+    let table = table.as_str();
     let line = match not_built {
         Some(line) => line.clone(),
         None => existing.and_then(|d| {
@@ -2113,6 +2186,7 @@ fn file_or_update_issue(
     title: &str,
     table: &str,
     not_built: Option<Option<String>>,
+    keep: &[&str],
 ) -> Result<check_latest::IssueRef, Box<dyn std::error::Error>> {
     let client = gitlab::client_from_project_url(keyring(), project_url)?;
     let description = |existing: Option<&gitlab::Issue>| {
@@ -2120,6 +2194,7 @@ fn file_or_update_issue(
             table,
             &not_built,
             existing.and_then(|e| e.description.as_deref()),
+            keep,
         )
     };
 
@@ -2197,22 +2272,63 @@ fn reopen_issue(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_refused_run_keeps_the_issues_repology_rows() {
+        use sandogasa_cbs::issue_table::{Row, render};
+        let fence = |rows: &[Row]| format!("```\n{}```", render("foo", rows));
+        let existing = fence(&[
+            Row::new("Upstream", "2.0", "", ""),
+            Row::new("Hyperscale 9", "1.0", "foo-1.0-1.hs.el9", "outdated"),
+        ]);
+        let now = fence(&[
+            Row::new("Fedora Rawhide", "2.0", "", ""),
+            Row::new("Hyperscale 9", "2.0", "foo-2.0-1.hs.el9", "newest"),
+        ]);
+        let kept = super::issue_description(&now, &None, Some(&existing), &["Upstream"]);
+        assert!(kept.contains("Upstream"));
+        assert!(kept.contains("Fedora Rawhide"));
+        assert!(kept.contains("foo-2.0-1.hs.el9"));
+        // A run Repology answered draws its own table.
+        assert_eq!(
+            super::issue_description(&now, &None, Some(&existing), &[]),
+            now
+        );
+    }
+
+    #[test]
+    fn fedrq_reads_what_a_run_shows_or_tracks() {
+        use hs_relmon::check_latest::{Distros, TrackRef};
+        let hs = Distros::parse("hs").unwrap();
+        let w = super::wanted_versions([(&hs, &TrackRef::FedoraStable)].into_iter());
+        assert!(w.fedora_stable && !w.fedora_rawhide && !w.centos_stream);
+        let up = Distros::parse("upstream").unwrap();
+        let all = Distros::all();
+        let w = super::wanted_versions(
+            [(&up, &TrackRef::CentosStream), (&all, &TrackRef::Upstream)].into_iter(),
+        );
+        assert!(w.fedora_rawhide && w.fedora_stable && w.centos_stream);
+        // Tracked but not shown and without Hyperscale columns: nothing.
+        let w = super::wanted_versions([(&up, &TrackRef::CentosStream)].into_iter());
+        assert_eq!(w, hs_relmon::distro_versions::Wanted::default());
+        assert_eq!(super::stream_major(), 10);
+    }
+
+    #[test]
     fn an_issue_keeps_its_not_built_line_when_it_cannot_be_told() {
         let table = "```\nethtool 7.1\n```";
         let existing = "```\nold\n```\n\n- **Not built**: 9 commit(s) on `c9s-hs`";
         assert_eq!(
-            super::issue_description(table, &None, Some(existing)),
+            super::issue_description(table, &None, Some(existing), &[]),
             format!("{table}\n\n- **Not built**: 9 commit(s) on `c9s-hs`")
         );
         assert_eq!(
-            super::issue_description(table, &Some(None), Some(existing)),
+            super::issue_description(table, &Some(None), Some(existing), &[]),
             table
         );
         assert_eq!(
-            super::issue_description(table, &Some(Some("- **Not built**: 1".into())), None),
+            super::issue_description(table, &Some(Some("- **Not built**: 1".into())), None, &[]),
             format!("{table}\n\n- **Not built**: 1")
         );
-        assert_eq!(super::issue_description(table, &None, None), table);
+        assert_eq!(super::issue_description(table, &None, None, &[]), table);
     }
 
     /// `--token` names gitlab.com, where the token is kept; another

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::cbs::{self, HyperscaleSummary};
+use std::collections::HashMap;
+
+use crate::distro_versions::DistroVersions;
 use crate::repology;
 use sandogasa_cbs::issue_table::{self, Row};
 use serde::Serialize;
@@ -64,10 +67,6 @@ impl Distros {
         Ok(d)
     }
 
-    fn needs_repology(&self) -> bool {
-        self.upstream || self.fedora_rawhide || self.fedora_stable || self.centos_stream
-    }
-
     fn needs_cbs(&self) -> bool {
         self.hyperscale_9 || self.hyperscale_10
     }
@@ -111,23 +110,6 @@ impl TrackRef {
             Self::Untracked => "none",
         }
     }
-
-    /// Resolve the reference version from Repology package data.
-    fn resolve(&self, packages: &[repology::Package]) -> Option<String> {
-        match self {
-            Self::Upstream => repology::find_newest(packages).map(|p| p.version.clone()),
-            Self::FedoraRawhide => {
-                repology::latest_for_repo(packages, "fedora_rawhide").map(|p| p.version.clone())
-            }
-            Self::FedoraStable => {
-                repology::latest_fedora_stable(packages).map(|p| p.version.clone())
-            }
-            Self::CentosStream => {
-                repology::latest_centos_stream(packages).map(|p| p.version.clone())
-            }
-            Self::Untracked => None,
-        }
-    }
 }
 
 /// A Hyperscale summary with optional freshness status.
@@ -168,6 +150,14 @@ pub struct CheckResult {
     /// gives are unknown rather than missing.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub repology_refused: bool,
+    /// The table rows Repology filled, or was asked for: what an issue
+    /// keeps from its own table when Repology refused (not in JSON).
+    #[serde(skip)]
+    pub repology_rows: Vec<&'static str>,
+    /// Whether the reference version was Repology's to give (not in
+    /// JSON).
+    #[serde(skip)]
+    pub ref_from_repology: bool,
     /// The package's branches with merged commits not built, once
     /// checked (`check-latest` checks; `check-manifest` leaves it to
     /// `check-unbuilt`).
@@ -378,6 +368,10 @@ pub fn matches_filter(
 ///
 /// The `track` reference determines which distribution Hyperscale builds are
 /// compared against to determine freshness (newest / outdated).
+///
+/// The Fedora and CentOS Stream versions come from `stock` where it
+/// read them (fedrq, see [`crate::distro_versions`]), and from
+/// Repology otherwise; upstream's always come from Repology.
 pub fn check(
     repology_client: &repology::Client,
     cbs_client: &cbs::Client,
@@ -385,6 +379,7 @@ pub fn check(
     repology_name: &str,
     distros: &Distros,
     track: &TrackRef,
+    stock: &DistroVersions,
 ) -> Result<CheckResult, Box<dyn std::error::Error>> {
     let mut result = CheckResult {
         package: package.to_string(),
@@ -398,16 +393,52 @@ pub fn check(
         ref_version: None,
         builds: Vec::new(),
         repology_refused: false,
+        repology_rows: Vec::new(),
+        ref_from_repology: false,
         unbuilt: None,
         unbuilt_targets: Vec::new(),
         unbuilt_checked: false,
     };
 
-    // Repology, for the columns it fills, or for the reference version
-    // the Hyperscale builds are compared with; with nothing tracked and
-    // only the Hyperscale columns shown, it is not asked at all.
-    let fetch_repology =
-        distros.needs_repology() || (distros.needs_cbs() && *track != TrackRef::Untracked);
+    // What each Fedora and CentOS Stream column, and the reference, is
+    // read from: fedrq when it read the branch, Repology otherwise. A
+    // package Repology knows by another name (perf, as linux) that
+    // fedrq does not have is Repology's too: its distributions carry it
+    // under that other name.
+    let ours = |m: &HashMap<String, String>| m.contains_key(package) || repology_name == package;
+    let fq_rawhide = stock.fedora_rawhide.as_ref().filter(|m| ours(m));
+    let fq_stable = stock.fedora_stable.as_ref().filter(|(_, m)| ours(m));
+    let fq_stream = stock.centos_stream.as_ref().filter(|(_, m)| ours(m));
+    let tracked = |t: TrackRef| distros.needs_cbs() && *track == t;
+    let rawhide_wanted = distros.fedora_rawhide || tracked(TrackRef::FedoraRawhide);
+    let stable_wanted = distros.fedora_stable || tracked(TrackRef::FedoraStable);
+    let stream_wanted = distros.centos_stream || tracked(TrackRef::CentosStream);
+    // Repology, for the columns and the reference only it can give;
+    // with nothing tracked and only the Hyperscale columns shown, it is
+    // not asked at all.
+    let fetch_repology = distros.upstream
+        || tracked(TrackRef::Upstream)
+        || (rawhide_wanted && fq_rawhide.is_none())
+        || (stable_wanted && fq_stable.is_none())
+        || (stream_wanted && fq_stream.is_none());
+    result.repology_rows = [
+        ("Upstream", distros.upstream),
+        (
+            "Fedora Rawhide",
+            distros.fedora_rawhide && fq_rawhide.is_none(),
+        ),
+        (
+            "Fedora Stable",
+            distros.fedora_stable && fq_stable.is_none(),
+        ),
+        (
+            "CentOS Stream",
+            distros.centos_stream && fq_stream.is_none(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(row, from)| from.then_some(row))
+    .collect();
     let packages = if fetch_repology {
         match repology_client.get_project(repology_name) {
             Ok(packages) => packages,
@@ -433,32 +464,71 @@ pub fn check(
     if distros.upstream {
         result.upstream = repology::find_newest(&packages).map(|p| p.version.clone());
     }
+    let rawhide = match fq_rawhide {
+        Some(v) => v.get(package).cloned(),
+        None => repology::latest_for_repo(&packages, "fedora_rawhide").map(|p| p.version.clone()),
+    };
+    // fedrq's columns are named as Repology's, so an issue's table does
+    // not change for the source alone.
+    let stable = match fq_stable {
+        Some((n, v)) => v.get(package).map(|version| VersionWithDetail {
+            version: version.clone(),
+            detail: format!("fedora_{n}"),
+        }),
+        None => repology::latest_fedora_stable(&packages).map(|p| VersionWithDetail {
+            version: p.version.clone(),
+            detail: p.repo.clone(),
+        }),
+    };
+    let stream = match fq_stream {
+        Some((n, v)) => v.get(package).map(|version| VersionWithDetail {
+            version: version.clone(),
+            detail: format!("centos_stream_{n}"),
+        }),
+        None => repology::latest_centos_stream(&packages).map(|p| VersionWithDetail {
+            version: p.version.clone(),
+            detail: p.repo.clone(),
+        }),
+    };
+    let ref_version = match track {
+        TrackRef::Upstream => repology::find_newest(&packages).map(|p| p.version.clone()),
+        TrackRef::FedoraRawhide => rawhide.clone(),
+        TrackRef::FedoraStable => stable.as_ref().map(|v| v.version.clone()),
+        TrackRef::CentosStream => stream.as_ref().map(|v| v.version.clone()),
+        TrackRef::Untracked => None,
+    };
     if distros.fedora_rawhide {
-        result.fedora_rawhide =
-            repology::latest_for_repo(&packages, "fedora_rawhide").map(|p| p.version.clone());
+        result.fedora_rawhide = rawhide;
     }
     if distros.fedora_stable {
-        result.fedora_stable =
-            repology::latest_fedora_stable(&packages).map(|p| VersionWithDetail {
-                version: p.version.clone(),
-                detail: p.repo.clone(),
-            });
+        result.fedora_stable = stable;
     }
     if distros.centos_stream {
-        result.centos_stream =
-            repology::latest_centos_stream(&packages).map(|p| VersionWithDetail {
-                version: p.version.clone(),
-                detail: p.repo.clone(),
-            });
+        result.centos_stream = stream;
     }
-
-    let ref_version = track.resolve(&packages);
     // An unresolvable reference must be loud: with no reference,
     // nothing ever counts as outdated, so a --file-issue run would
     // otherwise silently skip filing/updating (observed with perf,
     // whose repology project is empty — the kernel's perf lives
     // under repology project "linux").
-    if ref_version.is_none() && *track != TrackRef::Untracked && !result.repology_refused {
+    let from_fedrq = match track {
+        TrackRef::FedoraRawhide => fq_rawhide.is_some(),
+        TrackRef::FedoraStable => fq_stable.is_some(),
+        TrackRef::CentosStream => fq_stream.is_some(),
+        _ => false,
+    };
+    result.ref_from_repology = *track != TrackRef::Untracked && !from_fedrq;
+    if from_fedrq && ref_version.is_none() && distros.needs_cbs() {
+        eprintln!(
+            "warning: {package}: fedrq finds no {package} source package for the '{}' \
+             reference; freshness is unknown",
+            track.name()
+        );
+    } else if ref_version.is_none()
+        && *track != TrackRef::Untracked
+        && !result.repology_refused
+        && !from_fedrq
+    {
         eprintln!(
             "warning: {package}: cannot resolve the '{}' reference version \
              (repology project '{repology_name}' has no matching entries); \
@@ -617,6 +687,7 @@ mod tests {
             "pkg",
             &distros,
             &TrackRef::Untracked,
+            &DistroVersions::default(),
         )
         .unwrap();
         assert!(result.upstream.is_none() && !result.repology_refused);
@@ -644,6 +715,7 @@ mod tests {
             "ethtool",
             &distros,
             &TrackRef::Upstream,
+            &DistroVersions::default(),
         )
         .unwrap();
         assert!(result.repology_refused);
@@ -658,7 +730,8 @@ mod tests {
                 "ethtool",
                 "ethtool",
                 &distros,
-                &TrackRef::Upstream
+                &TrackRef::Upstream,
+                &DistroVersions::default()
             )
             .unwrap()
             .repology_refused
@@ -666,6 +739,119 @@ mod tests {
         page.assert();
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["repology_refused"], true);
+    }
+
+    #[test]
+    fn fedrqs_versions_stand_in_for_a_refusing_repology() {
+        let mut server = mockito::Server::new();
+        server
+            .mock("GET", "/project/kexec-tools")
+            .with_status(403)
+            .with_header("content-type", "text/html")
+            .with_body("<html><title>Bot access denied</title></html>")
+            .create();
+        let repology = repology::Client::with_base_url(&server.url())
+            .with_min_interval(std::time::Duration::ZERO);
+        let mut hub = mockito::Server::new();
+        hub.mock("POST", "/")
+            .with_body(
+                "<?xml version='1.0'?><methodResponse><params><param><value><nil/></value>\
+                 </param></params></methodResponse>",
+            )
+            .create();
+        let cbs = cbs::Client::with_hub_url(&hub.url());
+        let map =
+            |v: &str| std::collections::HashMap::from([("kexec-tools".to_string(), v.to_string())]);
+        let stock = DistroVersions {
+            fedora_rawhide: Some(map("2.0.33")),
+            fedora_stable: Some((45, map("2.0.32"))),
+            centos_stream: Some((10, map("2.0.32"))),
+        };
+        let result = check(
+            &repology,
+            &cbs,
+            "kexec-tools",
+            "kexec-tools",
+            &Distros::all(),
+            &TrackRef::CentosStream,
+            &stock,
+        )
+        .unwrap();
+        // Repology refused, so upstream is unknown, but the reference
+        // and the other columns come from fedrq, named as Repology's.
+        assert!(result.repology_refused);
+        assert_eq!(result.upstream, None);
+        assert_eq!(result.ref_version(), Some("2.0.32"));
+        assert_eq!(result.fedora_rawhide.as_deref(), Some("2.0.33"));
+        assert_eq!(result.fedora_stable.as_ref().unwrap().detail, "fedora_45");
+        assert_eq!(
+            result.centos_stream.as_ref().unwrap().detail,
+            "centos_stream_10"
+        );
+        // Only the upstream row was Repology's to fill.
+        assert_eq!(result.repology_rows, ["Upstream"]);
+        assert!(!result.ref_from_repology);
+
+        // A package fedrq read the branch without: no row, no reference,
+        // and Repology is not asked for what fedrq answered.
+        let mut quiet = mockito::Server::new();
+        let never = quiet.mock("GET", mockito::Matcher::Any).expect(0).create();
+        let repology = repology::Client::with_base_url(&quiet.url())
+            .with_min_interval(std::time::Duration::ZERO);
+        let result = check(
+            &repology,
+            &cbs,
+            "other",
+            "other",
+            &Distros::parse("fedora,centos,hs").unwrap(),
+            &TrackRef::FedoraRawhide,
+            &stock,
+        )
+        .unwrap();
+        assert_eq!(result.fedora_rawhide, None);
+        assert_eq!(result.ref_version(), None);
+        never.assert();
+    }
+
+    #[test]
+    fn a_package_repology_knows_by_another_name_keeps_repologys_versions() {
+        // perf is tracked as Repology's linux; fedrq read rawhide but has
+        // no perf source package, so rawhide comes from Repology.
+        let mut server = mockito::Server::new();
+        let asked = server
+            .mock("GET", "/project/linux")
+            .with_body(r#"[{"repo":"fedora_rawhide","version":"6.18","status":"newest"}]"#)
+            .expect(1)
+            .create();
+        let repology = repology::Client::with_base_url(&server.url())
+            .with_min_interval(std::time::Duration::ZERO);
+        let mut hub = mockito::Server::new();
+        hub.mock("POST", "/")
+            .with_body(
+                "<?xml version='1.0'?><methodResponse><params><param><value><nil/></value>\
+                 </param></params></methodResponse>",
+            )
+            .create();
+        let cbs = cbs::Client::with_hub_url(&hub.url());
+        let stock = DistroVersions {
+            fedora_rawhide: Some(HashMap::from([("kernel".to_string(), "6.18".to_string())])),
+            ..DistroVersions::default()
+        };
+        let result = check(
+            &repology,
+            &cbs,
+            "perf",
+            "linux",
+            &Distros::parse("fedora-rawhide,hs").unwrap(),
+            &TrackRef::FedoraRawhide,
+            &stock,
+        )
+        .unwrap();
+        asked.assert();
+        assert_eq!(result.fedora_rawhide.as_deref(), Some("6.18"));
+        assert_eq!(result.ref_version(), Some("6.18"));
+        assert!(result.ref_from_repology);
+        assert_eq!(result.repology_rows, ["Fedora Rawhide"]);
     }
 
     #[test]
@@ -742,14 +928,9 @@ mod tests {
     }
 
     #[test]
-    fn test_needs_repology() {
-        let d = Distros::parse("hs9").unwrap();
-        assert!(!d.needs_repology());
-        assert!(d.needs_cbs());
-
-        let d = Distros::parse("upstream").unwrap();
-        assert!(d.needs_repology());
-        assert!(!d.needs_cbs());
+    fn test_needs_cbs() {
+        assert!(Distros::parse("hs9").unwrap().needs_cbs());
+        assert!(!Distros::parse("upstream").unwrap().needs_cbs());
     }
 
     fn make_build(version: &str, nvr: &str) -> Build {
@@ -784,7 +965,6 @@ mod tests {
         );
         assert_eq!(TrackRef::parse("none").unwrap(), TrackRef::Untracked);
         assert_eq!(TrackRef::Untracked.name(), "none");
-        assert_eq!(TrackRef::Untracked.resolve(&[]), None);
         assert!(TrackRef::parse("bogus").is_err());
     }
 
@@ -823,6 +1003,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -852,6 +1034,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -881,6 +1065,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -907,6 +1093,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -934,6 +1122,8 @@ mod tests {
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -960,6 +1150,8 @@ mod tests {
             ref_version: Some("6.15".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -986,6 +1178,8 @@ mod tests {
             ref_version: Some("260".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1077,6 +1271,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1109,6 +1305,8 @@ mod tests {
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1140,6 +1338,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1168,6 +1368,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1189,6 +1391,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1223,6 +1427,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1250,6 +1456,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1277,6 +1485,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1304,6 +1514,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1331,6 +1543,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1359,6 +1573,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1386,6 +1602,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1413,6 +1631,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1440,6 +1660,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1474,6 +1696,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1502,6 +1726,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1523,6 +1749,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1557,6 +1785,8 @@ mod tests {
             ref_version: Some("2.0".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1592,6 +1822,8 @@ mod tests {
             ref_version: Some("6.11".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1639,6 +1871,8 @@ mod tests {
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1666,6 +1900,8 @@ mod tests {
             ref_version: Some("6.19".into()),
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1697,6 +1933,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1724,6 +1962,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1747,6 +1987,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1779,6 +2021,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1807,6 +2051,8 @@ mod tests {
                 ref_version: None,
                 builds: Vec::new(),
                 repology_refused: false,
+                repology_rows: Vec::new(),
+                ref_from_repology: false,
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -1829,6 +2075,8 @@ mod tests {
                 ref_version: None,
                 builds: Vec::new(),
                 repology_refused: false,
+                repology_rows: Vec::new(),
+                ref_from_repology: false,
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -1866,6 +2114,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1895,6 +2145,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,
@@ -1939,6 +2191,8 @@ mod tests {
                 ref_version: None,
                 builds: Vec::new(),
                 repology_refused: false,
+                repology_rows: Vec::new(),
+                ref_from_repology: false,
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -1955,6 +2209,8 @@ mod tests {
                 ref_version: None,
                 builds: Vec::new(),
                 repology_refused: false,
+                repology_rows: Vec::new(),
+                ref_from_repology: false,
                 unbuilt: None,
                 unbuilt_targets: Vec::new(),
                 unbuilt_checked: false,
@@ -2008,6 +2264,8 @@ mod tests {
             ref_version: None,
             builds: Vec::new(),
             repology_refused: false,
+            repology_rows: Vec::new(),
+            ref_from_repology: false,
             unbuilt: None,
             unbuilt_targets: Vec::new(),
             unbuilt_checked: false,

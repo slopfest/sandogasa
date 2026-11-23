@@ -224,12 +224,7 @@ pub fn refreshed(
     testing: &[String],
     reference: Option<&str>,
 ) -> Option<String> {
-    // A description edited in GitLab's web UI may have CRLF endings.
-    let description = description.replace("\r\n", "\n");
-    let open = description.find("```\n")?;
-    let body_start = open + 4;
-    let close = body_start + description[body_start..].find("```")?;
-    let table = parse(&description[body_start..close])?;
+    let (description, body_start, close, table) = fenced(description)?;
     let first = table
         .rows
         .iter()
@@ -267,6 +262,42 @@ pub fn refreshed(
         render(&table.package, &rows),
         &description[close..]
     ))
+}
+
+/// `description` (a table in a fence, and what follows it) with the rows
+/// for `distros` that it lacks taken from `existing`, the description
+/// it replaces: for rows whose source could not be read this run (a
+/// Repology refusal), so an update keeps what the issue said rather than
+/// dropping it. `distros` come first, in their order, then the rest of
+/// `description`'s rows. `description` as it is when either has no
+/// table, or nothing is missing.
+pub fn carry_rows(description: &str, existing: &str, distros: &[&str]) -> String {
+    let (Some((new, start, close, table)), Some((_, _, _, old))) =
+        (fenced(description), fenced(existing))
+    else {
+        return description.to_string();
+    };
+    let find = |rows: &[Row], d: &str| rows.iter().find(|r| r.distro == d).cloned();
+    let mut rows: Vec<Row> = distros
+        .iter()
+        .filter_map(|d| find(&table.rows, d).or_else(|| find(&old.rows, d)))
+        .collect();
+    rows.extend(
+        table
+            .rows
+            .iter()
+            .filter(|r| !distros.contains(&r.distro.as_str()))
+            .cloned(),
+    );
+    if rows == table.rows {
+        return description.to_string();
+    }
+    format!(
+        "{}{}{}",
+        &new[..start],
+        render(&table.package, &rows),
+        &new[close..]
+    )
 }
 
 /// The `-release` and `-testing` tags of every Hyperscale collection on
@@ -331,6 +362,18 @@ fn cmp_nvr(a: &str, b: &str) -> Ordering {
     };
     let ((va, ra), (vb, rb)) = (vr(a), vr(b));
     sandogasa_rpmvercmp::rpmvercmp(&va, &vb).then_with(|| sandogasa_rpmvercmp::rpmvercmp(&ra, &rb))
+}
+
+/// `description` with CRLF endings made LF (GitLab's web UI may store
+/// them), where its fenced table's text starts and its closing fence
+/// is, and the table; `None` without one.
+fn fenced(description: &str) -> Option<(String, usize, usize, Table)> {
+    let description = description.replace("\r\n", "\n");
+    let open = description.find("```\n")?;
+    let start = open + 4;
+    let close = start + description[start..].find("```")?;
+    let table = parse(&description[start..close])?;
+    Some((description, start, close, table))
 }
 
 /// Whether `distro` is a row of Hyperscale release `major`.
@@ -674,6 +717,37 @@ mod tests {
                 .unwrap()
                 .contains("foo-1.1-1.hs+fb.el9")
         );
+    }
+
+    #[test]
+    fn rows_a_run_could_not_read_are_kept_from_the_issue() {
+        let repology = ["Upstream", "Fedora Rawhide"];
+        let old = issue(&kexec_table());
+        // This run has no Upstream row (Repology refused) but a new
+        // Fedora Rawhide one, from fedrq.
+        let now = issue(&render(
+            "kexec-tools",
+            &[
+                Row::new("Fedora Rawhide", "2.0.33", "", ""),
+                Row::new(
+                    "Hyperscale 9",
+                    "2.0.32",
+                    "kexec-tools-2.0.32-1.1.hs+fb.el9",
+                    "newest",
+                ),
+            ],
+        ));
+        let kept = carry_rows(&now, &old, &repology);
+        let rows = parse(&kept[4..kept.rfind("```").unwrap()]).unwrap().rows;
+        assert_eq!(rows[0], Row::new("Upstream", "2.0.32", "", ""));
+        assert_eq!(rows[1], Row::new("Fedora Rawhide", "2.0.33", "", ""));
+        assert_eq!(rows[2].distro, "Hyperscale 9");
+        assert_eq!(rows.len(), 3);
+        assert!(kept.ends_with(&format!("{} 1 commit on c9s-hs+fb", crate::unbuilt::LINE)));
+        // Nothing missing, or nothing to take from: unchanged.
+        assert_eq!(carry_rows(&old, &now, &repology), old);
+        assert_eq!(carry_rows(&now, "Filed by hand.", &repology), now);
+        assert_eq!(carry_rows("no table", &old, &repology), "no table");
     }
 
     #[test]

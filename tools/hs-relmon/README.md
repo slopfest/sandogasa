@@ -15,7 +15,9 @@ cargo install hs-relmon
 
 `review` changes tags through the `cbs` command
 (`sudo dnf install centos-packager`); the other CBS commands use `koji`
-with the `cbs` profile.
+with the `cbs` profile. `check-latest` and `check-manifest` read the
+Fedora and CentOS Stream versions with `fedrq` (`sudo dnf install
+fedrq`), and ask Repology for them instead when it is not installed.
 
 ## Usage
 
@@ -101,10 +103,10 @@ $ hs-relmon check-latest ethtool --json
 | Name | What it checks |
 |------|---------------|
 | `upstream` | Newest version across all repos (via Repology) |
-| `fedora` | Fedora Rawhide + latest stable |
-| `fedora-rawhide` | Fedora Rawhide only |
-| `fedora-stable` | Latest stable Fedora only |
-| `centos` / `centos-stream` | Latest CentOS Stream |
+| `fedora` | Fedora Rawhide + latest stable (via fedrq) |
+| `fedora-rawhide` | Fedora Rawhide only (via fedrq) |
+| `fedora-stable` | Latest stable Fedora only (via fedrq): the release below Rawhide, branched included |
+| `centos` / `centos-stream` | Latest CentOS Stream (via fedrq) |
 | `hyperscale` / `hs` | Hyperscale EL9 + EL10 |
 | `hs9` | Hyperscale EL9 only |
 | `hs10` | Hyperscale EL10 only |
@@ -747,11 +749,20 @@ reviewed (an NVR is recognized by its `.el` dist marker).
 
 ## Data sources
 
-- **Repology** ([repology.org](https://repology.org/)) for upstream, Fedora,
-  and CentOS Stream versions. When Repology refuses the network with a bot
-  check, hs-relmon says so once and carries on without them: the CBS
-  columns still show, the versions to compare with are unknown, and no
-  issue is filed, updated or closed for lack of them
+- **fedrq** for the Fedora and CentOS Stream versions in `check-latest`
+  and `check-manifest`, read from the distributions' own repositories,
+  one query per branch for every package of a run. A branch fedrq
+  cannot read, or a machine without fedrq, falls back to Repology for
+  those versions
+- **Repology** ([repology.org](https://repology.org/)) for upstream
+  versions, and for the stock versions `check-stock` and
+  `prune-archived` compare with. When Repology refuses the network with
+  a bot check, hs-relmon says so once and carries on without them: the
+  CBS columns, and the fedrq ones, still show. A package tracked
+  against Fedora or CentOS Stream still has its version to compare
+  with, and its issue keeps the upstream row it had; one tracked
+  against upstream has none, and no issue is filed, updated or closed
+  for it
 - **CBS Koji** ([cbs.centos.org](https://cbs.centos.org/koji/)) for
   Hyperscale builds and tag status
 
