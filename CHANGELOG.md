@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### sandogasa-report config --token says to pass the main config
+
+`sandogasa-report config --token salsa.debian.org` run without `-c`
+answered "no secret is kept for salsa.debian.org; this configuration
+has: none", which read as a configuration without tokens. The forges
+come from the `[domains]` of the main config, which the user's overlay
+does not have, so without `-c` none is known. The error now says so
+and names the option to pass.
+
 ### fedora-cve-triage judges a renamed package by its own build
 
 After the change for #226, a package whose binaries had moved to

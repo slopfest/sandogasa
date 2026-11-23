@@ -262,6 +262,18 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         .into_iter()
         .flat_map(|(instances, kind)| instances.iter().map(move |i| (kind.host)(i)))
         .collect();
+        // The forges come from the domains of the main config, which
+        // the overlay alone does not have: say so rather than list
+        // "none", which reads as a configuration without tokens.
+        if known.is_empty() {
+            return Err(format!(
+                "--token: this configuration names no forge, so no token is kept for {}; the \
+                 forges come from the [domains] of the main config: pass it with -c (in a \
+                 sandogasa checkout, -c configs/sandogasa-report/config.toml)",
+                redo.hosts.join(", ")
+            )
+            .into());
+        }
         redo.check(known.iter().map(String::as_str))?;
     }
 
@@ -1966,6 +1978,34 @@ mod tests {
             asked_again(TokenChoice::Saved("t".into())),
             TokenChoice::Saved(t) if t == "t"
         ));
+    }
+
+    /// `--token` without the main config, whose domains name the
+    /// forges: the error says to pass it, not that nothing is kept.
+    #[test]
+    #[serial_test::serial]
+    fn token_without_the_main_config_says_to_pass_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = isolated(&dir);
+        let mut token = sandogasa_cli::TokenArgs::default();
+        token.hosts.push("salsa.debian.org".into());
+        let args = ConfigArgs {
+            all: false,
+            config: None,
+            missing: false,
+            token,
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let err = run_inner(&args, &mut scripted(&[], &asked))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("--token: this configuration names no forge"),
+            "{err}"
+        );
+        assert!(err.contains("salsa.debian.org"), "{err}");
+        assert!(err.contains("pass it with -c"), "{err}");
+        assert!(asked.borrow().is_empty());
     }
 
     /// `--token` end to end: only the instance given is asked about,
