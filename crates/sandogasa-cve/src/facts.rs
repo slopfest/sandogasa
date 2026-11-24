@@ -714,4 +714,182 @@ mod tests {
             "no fixed version: nothing is a fix"
         );
     }
+
+    #[test]
+    fn a_python_name_is_normalized_and_matched_through_its_provide() {
+        assert_eq!(pep503("jaraco.context"), "jaraco-context");
+        assert_eq!(pep503("Foo__Bar-.baz"), "foo-bar-baz");
+        assert!(product_matches_component("zstd", "zstd", None));
+        assert!(!product_matches_component("zstd", "zlib", None));
+        let provides = "python3dist(django) = 5.2\npython3dist(jaraco-context) = 6";
+        assert!(product_matches_component(
+            "Django",
+            "python-django5",
+            Some(provides)
+        ));
+        assert!(product_matches_component(
+            "jaraco.context",
+            "python-jaraco-context",
+            Some(provides)
+        ));
+        assert!(!product_matches_component(
+            "flask",
+            "python-flask",
+            Some(provides)
+        ));
+    }
+
+    /// NVD's answer for `cve`, with `configurations` and `references`.
+    fn nvd_json(cve: &str, configurations: &str, references: &[&str]) -> String {
+        let refs: Vec<String> = references
+            .iter()
+            .map(|u| format!(r#"{{"url": "{u}"}}"#))
+            .collect();
+        format!(
+            r#"{{"vulnerabilities": [{{"cve": {{"id": "{cve}", "vulnStatus": "Analyzed",
+                "descriptions": [{{"lang": "en", "value": "A flaw."}}],
+                "references": [{}], "configurations": {configurations}}}}}]}}"#,
+            refs.join(", ")
+        )
+    }
+
+    /// `fix_facts` for `cve`, with NVD answering from `server` and the
+    /// advisory sources from `answers` kept on disk beforehand, so
+    /// nothing is asked of the network.
+    async fn fix_facts_for(
+        server: &wiremock::MockServer,
+        cve: &str,
+        answers: &[(String, &str)],
+    ) -> Option<CveFix> {
+        let dir = tempfile::tempdir().unwrap();
+        let advisories = DiskCache::at(Some(dir.path().to_path_buf()), false, None);
+        for (url, body) in answers {
+            advisories.store(&sandogasa_cli::cache::url_key(url), body);
+        }
+        let mut nvd = NvdCache::with(
+            sandogasa_nvd::NvdClient::with_base_url(&server.uri()),
+            DiskCache::at(None, false, None),
+            std::time::Duration::from_millis(10),
+            false,
+        );
+        let http = reqwest::Client::new();
+        fix_facts(cve, "zstd", &mut nvd, &http, &advisories, None).await
+    }
+
+    #[tokio::test]
+    async fn a_fix_is_found_in_nvd_then_github_then_a_range_then_a_release() {
+        use wiremock::matchers::{method, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        let mount = |cve: &'static str, body: String| {
+            Mock::given(method("GET"))
+                .and(query_param("cveId", cve))
+                .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        };
+        let cpe = |extra: &str| {
+            format!(
+                r#"[{{"nodes": [{{"cpeMatch": [{{"vulnerable": true,
+                    "criteria": "cpe:2.3:a:facebook:zstd:*:*:*:*:*:*:*:*", {extra}}}]}}]}}]"#
+            )
+        };
+        // NVD's own data names the fix.
+        mount(
+            "CVE-2026-1",
+            nvd_json(
+                "CVE-2026-1",
+                &cpe(r#""versionStartIncluding": "1.5.1", "versionEndExcluding": "1.5.8""#),
+                &[],
+            ),
+        )
+        .mount(&server)
+        .await;
+        // Nothing in NVD; GitHub's advisory database has the fix.
+        mount("CVE-2026-2", nvd_json("CVE-2026-2", "[]", &[]))
+            .mount(&server)
+            .await;
+        // A range closed at the top, with no fix recorded anywhere.
+        mount(
+            "CVE-2026-3",
+            nvd_json("CVE-2026-3", &cpe(r#""versionEndIncluding": "1.5.7""#), &[]),
+        )
+        .mount(&server)
+        .await;
+        // Only a release tag among the references.
+        mount(
+            "CVE-2026-4",
+            nvd_json(
+                "CVE-2026-4",
+                "[]",
+                &["https://github.com/facebook/zstd/releases/tag/v1.5.8"],
+            ),
+        )
+        .mount(&server)
+        .await;
+        // Two release tags: left for a person.
+        mount(
+            "CVE-2026-5",
+            nvd_json(
+                "CVE-2026-5",
+                "[]",
+                &[
+                    "https://github.com/facebook/zstd/releases/tag/v1.5.8",
+                    "https://github.com/facebook/zstd/releases/tag/v1.6.0",
+                ],
+            ),
+        )
+        .mount(&server)
+        .await;
+
+        let silent = |cve: &str| {
+            vec![
+                (crate::advisory::ghsa_search_url(cve), "[]"),
+                (crate::osv::vuln_url(cve), r#"{"id": "x"}"#),
+            ]
+        };
+        let fix = fix_facts_for(&server, "CVE-2026-1", &silent("CVE-2026-1"))
+            .await
+            .expect("NVD names the fix");
+        assert_eq!(fix.source, "NVD");
+        assert_eq!(fix.fixed[0].version, "1.5.8");
+        assert_eq!(fix.ranges.len(), 1);
+
+        let ghsa = r#"[{"ghsa_id": "GHSA-aaaa-bbbb-cccc", "vulnerabilities": [
+            {"package": {"ecosystem": "other", "name": "zstd"},
+             "vulnerable_version_range": "< 1.5.8",
+             "first_patched_version": "1.5.8"}]}]"#;
+        let fix = fix_facts_for(
+            &server,
+            "CVE-2026-2",
+            &[(crate::advisory::ghsa_search_url("CVE-2026-2"), ghsa)],
+        )
+        .await
+        .expect("GitHub names the fix");
+        assert_eq!(fix.source, "GHSA-aaaa-bbbb-cccc");
+        assert_eq!(fix.fixed[0].version, "1.5.8");
+
+        let fix = fix_facts_for(&server, "CVE-2026-3", &silent("CVE-2026-3"))
+            .await
+            .expect("a closed range names the fix");
+        assert_eq!(fix.source, "NVD's affected range");
+
+        let fix = fix_facts_for(&server, "CVE-2026-4", &silent("CVE-2026-4"))
+            .await
+            .expect("the release names the fix");
+        assert_eq!(fix.source, "the release NVD's references name");
+        assert_eq!(fix.fixed[0].version, "1.5.8");
+
+        assert!(
+            fix_facts_for(&server, "CVE-2026-5", &silent("CVE-2026-5"))
+                .await
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_resolved_version_from_one_source_is_one_fix() {
+        let r = Resolved::one("zstd", "1.5.8", VersionSource::Ranges);
+        assert_eq!(r.fixed.len(), 1);
+        assert_eq!(r.fixed[0].product, "zstd");
+        assert!(r.ranges.is_empty());
+    }
 }
