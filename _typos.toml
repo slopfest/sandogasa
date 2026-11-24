@@ -20,6 +20,9 @@ extend-ignore-re = [
 # Public variant of sandogasa-bugzilla's LoginCheck; renaming it breaks
 # callers, so it waits for the next breaking release
 NotRecognised = "NotRecognised"
+# cve.org's error code for an id it has published nothing under, quoted
+# as cve.org answers it; "DNE" anywhere else is still reported
+CVE_RECORD_DNE = "CVE_RECORD_DNE"
 
 [default.extend-words]
 # Names, not misspellings
@@ -34,6 +37,7 @@ debbugs = "debbugs"          # Debian's bug tracker
 hpe = "hpe"                  # an NVD vendor name
 IST = "IST"                  # a time-zone abbreviation
 MENA = "MENA"                # Middle East and North Africa
+mitre = "mitre"              # MITRE: cve.org's API host, and a CNA
 noteable = "noteable"        # GitLab's API field name
 # en-US accepts these spellings
 queueing = "queueing"
