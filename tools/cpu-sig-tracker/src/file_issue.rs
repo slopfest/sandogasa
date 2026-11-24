@@ -1980,6 +1980,7 @@ mod tests {
             ("CPU_SIG_TRACKER_REDHAT_BASE", &server.uri()),
             ("CPU_SIG_TRACKER_CVEORG_BASE", &server.uri()),
             ("CPU_SIG_TRACKER_NVD_BASE", &server.uri()),
+            ("CPU_SIG_TRACKER_GITHUB_BASE", &server.uri()),
             ("GIT_CONFIG_GLOBAL", "/dev/null"),
             ("GIT_CONFIG_NOSYSTEM", "1"),
             ("PATH", &new_path),

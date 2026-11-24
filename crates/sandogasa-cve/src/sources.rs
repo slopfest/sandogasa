@@ -18,6 +18,66 @@ use crate::advisory::{self, GhsaVuln};
 use crate::cveorg;
 use crate::osv::{self, OsvFix};
 
+/// Where the sources are asked, when not at each service's own
+/// address: a test's server on loopback, so that no test reaches the
+/// network (`Sources::with_endpoints`). Each is a base URL replacing
+/// the service's scheme and host (`http://127.0.0.1:8080`).
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct Endpoints {
+    /// In place of `https://access.redhat.com`.
+    pub redhat: Option<String>,
+    /// In place of `https://cveawg.mitre.org`, cve.org's API.
+    pub cveorg: Option<String>,
+    /// In place of `https://api.github.com`.
+    pub github: Option<String>,
+    /// In place of `https://api.osv.dev`.
+    pub osv: Option<String>,
+}
+
+impl Endpoints {
+    /// Red Hat's security data asked at `base`.
+    pub fn with_redhat(mut self, base: impl Into<String>) -> Self {
+        self.redhat = Some(base.into());
+        self
+    }
+
+    /// cve.org's API asked at `base`.
+    pub fn with_cveorg(mut self, base: impl Into<String>) -> Self {
+        self.cveorg = Some(base.into());
+        self
+    }
+
+    /// GitHub's API asked at `base`.
+    pub fn with_github(mut self, base: impl Into<String>) -> Self {
+        self.github = Some(base.into());
+        self
+    }
+
+    /// OSV asked at `base`.
+    pub fn with_osv(mut self, base: impl Into<String>) -> Self {
+        self.osv = Some(base.into());
+        self
+    }
+
+    /// `url` with its service's address replaced, when that service has
+    /// an endpoint of its own; as it is otherwise.
+    pub fn rebase(&self, url: &str) -> String {
+        let services = [
+            ("https://access.redhat.com", &self.redhat),
+            ("https://cveawg.mitre.org", &self.cveorg),
+            ("https://api.github.com", &self.github),
+            ("https://api.osv.dev", &self.osv),
+        ];
+        for (own, base) in services {
+            if let (Some(base), Some(rest)) = (base, url.strip_prefix(own)) {
+                return format!("{}{rest}", base.trim_end_matches('/'));
+            }
+        }
+        url.to_string()
+    }
+}
+
 /// The advisory sources, with the client, cache and credentials they
 /// share.
 pub struct Sources<'a> {
@@ -25,6 +85,7 @@ pub struct Sources<'a> {
     cache: &'a DiskCache,
     github_token: Option<&'a str>,
     on_fetch: &'a dyn Fn(&str),
+    endpoints: Endpoints,
 }
 
 impl<'a> Sources<'a> {
@@ -40,7 +101,14 @@ impl<'a> Sources<'a> {
             cache,
             github_token,
             on_fetch: &|_| {},
+            endpoints: Endpoints::default(),
         }
+    }
+
+    /// Ask the services at `endpoints` instead of their own addresses.
+    pub fn with_endpoints(mut self, endpoints: Endpoints) -> Self {
+        self.endpoints = endpoints;
+        self
     }
 
     /// Call `on_fetch` with a short description (`Asking OSV about
@@ -197,6 +265,7 @@ impl<'a> Sources<'a> {
     /// `url` from the cache, or fetched (and kept) when it is not
     /// there; `None` when it cannot be read.
     async fn cached(&self, url: &str, what: &str, github: bool) -> Option<String> {
+        let url = &self.endpoints.rebase(url);
         let key = url_key(url);
         if let Some(text) = self.cache.load(&key) {
             return Some(text);
@@ -224,6 +293,40 @@ mod tests {
             cache.store(&url_key(url), body);
         }
         cache
+    }
+
+    #[test]
+    fn an_endpoint_replaces_only_its_own_service_s_address() {
+        let e = Endpoints::default()
+            .with_redhat("http://127.0.0.1:1/")
+            .with_cveorg("http://127.0.0.1:2")
+            .with_github("http://127.0.0.1:3")
+            .with_osv("http://127.0.0.1:4");
+        assert_eq!(
+            e.rebase(&crate::severity::redhat_url("CVE-1")),
+            "http://127.0.0.1:1/hydra/rest/securitydata/cve/CVE-1.json"
+        );
+        assert_eq!(
+            e.rebase(&cveorg::record_url("CVE-1")),
+            "http://127.0.0.1:2/api/cve/CVE-1"
+        );
+        assert_eq!(
+            e.rebase(&advisory::ghsa_search_url("CVE-1")),
+            "http://127.0.0.1:3/advisories?cve_id=CVE-1"
+        );
+        assert_eq!(
+            e.rebase(&osv::vuln_url("CVE-1")),
+            "http://127.0.0.1:4/v1/vulns/CVE-1"
+        );
+        // Unset, or another service: unchanged.
+        let url = advisory::ghsa_search_url("CVE-1");
+        assert_eq!(Endpoints::default().rebase(&url), url);
+        assert_eq!(
+            Endpoints::default()
+                .with_redhat("http://x")
+                .rebase("https://example.org/a"),
+            "https://example.org/a"
+        );
     }
 
     #[tokio::test]

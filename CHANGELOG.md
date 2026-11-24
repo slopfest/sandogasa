@@ -106,6 +106,11 @@ or changed in signature:
 - `facts::first_sentence`, the first sentence of a CVE's description,
   moved from fedora-cve-triage so cpu-sig-tracker can name an issue by
   it.
+- `sources::Endpoints` and `Sources::with_endpoints`, to ask Red Hat,
+  cve.org, GitHub and OSV at other addresses, such as a test's server
+  on loopback. cpu-sig-tracker's tests used to ask the real services
+  for a CVE's ratings, and their tests stayed green offline only
+  because a lookup that fails leaves a CVE unrated.
 
 A record's `affected` versions are not read; DEVELOPMENT.md says why.
 

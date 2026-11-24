@@ -1027,6 +1027,24 @@ pub(crate) async fn cve_ratings(cve: &str, verbose: bool) -> Vec<Rating> {
     cve_facts(cve, verbose).await.ratings
 }
 
+/// Where the CVE sources are asked: the `CPU_SIG_TRACKER_*_BASE`
+/// variables that point the disclosure check at a test's local server
+/// point these lookups there too, so no test reaches the network.
+fn cve_endpoints() -> sandogasa_cve::sources::Endpoints {
+    let var = |name: &str| std::env::var(name).ok();
+    let mut e = sandogasa_cve::sources::Endpoints::default();
+    if let Some(b) = var("CPU_SIG_TRACKER_REDHAT_BASE") {
+        e = e.with_redhat(b);
+    }
+    if let Some(b) = var("CPU_SIG_TRACKER_CVEORG_BASE") {
+        e = e.with_cveorg(b);
+    }
+    if let Some(b) = var("CPU_SIG_TRACKER_GITHUB_BASE") {
+        e = e.with_github(b);
+    }
+    e
+}
+
 /// Every severity rating of `cve`, its description (NVD's, or cve.org's
 /// when NVD has no record of it yet or does not answer), and Red Hat's
 /// security data on it.
@@ -1054,8 +1072,25 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
         false,
     );
     let token = std::env::var("GITHUB_TOKEN").ok();
-    let sources = sandogasa_cve::sources::Sources::new(&http, &cache, token.as_deref());
-    let mut nvd = sandogasa_cve::NvdCache::new("cpu-sig-tracker", String::new(), verbose, false);
+    let sources = sandogasa_cve::sources::Sources::new(&http, &cache, token.as_deref())
+        .with_endpoints(cve_endpoints());
+    let mut nvd = match std::env::var("CPU_SIG_TRACKER_NVD_BASE") {
+        Ok(base) => sandogasa_cve::NvdCache::with(
+            sandogasa_nvd::NvdClient::with_base_url(&format!(
+                "{}/rest/json/cves/2.0",
+                base.trim_end_matches('/')
+            )),
+            sandogasa_cli::cache::DiskCache::new(
+                "cpu-sig-tracker",
+                "nvd",
+                Some(sandogasa_cve::cache::NVD_TTL),
+                false,
+            ),
+            sandogasa_cve::cache::NVD_BACKOFF,
+            verbose,
+        ),
+        Err(_) => sandogasa_cve::NvdCache::new("cpu-sig-tracker", String::new(), verbose, false),
+    };
     let ratings = sandogasa_cve::severity::ratings(cve, &mut nvd, &sources).await;
     // Already fetched for the rating, so read from the cache.
     let record = sources.cveorg(cve).await;
