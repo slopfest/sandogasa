@@ -35,6 +35,40 @@ Small, obvious corrections (a typo, a broken link, a stale doc line) are
 fine to send directly without an issue. A maintainer marks such a pull
 request `no-issue` so the contribution check lets it through.
 
+## Issues and labels
+
+**Writing one.** The title says what should change: `cpu-sig-tracker
+jira: look up a draft's CVEs together, sharing one NVD client`. The body
+opens with the problem as someone using the tool meets it, with a
+concrete case (the command, the package or CVE, what came back), and
+only then the cause or a proposed fix. Say where it came from when that
+helps the next reader: "Found in review of #236", "Found while
+triaging …". The bug and feature forms ask for these.
+
+**Labels.** Every issue carries:
+
+- one kind: `bug` or `enhancement`, or `documentation` or
+  `dependencies` when that is all it is. The forms set it; a maintainer
+  corrects it if needed. It decides the closing word, `Fixes #N` for a
+  bug and `Resolves #N` for an enhancement;
+- a `tool::<name>` or `crate::<name>` label for each tool or library
+  crate it touches, added by a maintainer.
+
+**Milestones** say which release an issue is planned for. Three roll
+forward: `Next patch`, `Next minor`, and `1.0` (the API work tracked in
+#216). An issue gets at most one, when it is filed if it is planned at
+all. At a release, the milestone it cuts is renamed to the version and
+closed, so closed milestones list what each release shipped. An issue
+that is not planned carries one label saying why instead: `blocked` (it
+waits on something outside this repository, which it names),
+`exploratory` (too large or undecided to plan yet) or `priority::low`
+(nothing waits on it).
+
+Contributors only need the kind, and the forms set it. The rest is the
+maintainers' bookkeeping, done when an issue is filed or triaged;
+[`AGENTS.md`](AGENTS.md) has their procedure, including the sweep
+before each release.
+
 ## What a contribution includes
 
 **Tests that pass.** Add or update tests alongside the change, and make
