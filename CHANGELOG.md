@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### A command fed input that it does not read reports its own exit status
+
+`sandogasa-cli`'s `run_required_with_input`, which dbranch uses to
+start a Debusine workflow from data on stdin, wrote the input before
+waiting for the command. A command that exited without reading it all,
+as one does when it fails early, closed the pipe under the write, and
+the step failed with "Broken pipe (os error 32)" instead of the
+command's exit status. Whether it did depended on timing: the packaging
+sandbox caught it on a test that passed elsewhere. A broken pipe is now
+left to the exit status, which says how the command went.
+
 ### cbspkg upload-sources shows its upload commands as `--explain` does
 
 Asking before an upload, `cbspkg upload-sources` printed "The SIG

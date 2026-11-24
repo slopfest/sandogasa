@@ -273,7 +273,13 @@ impl Ui {
             .stdin(Stdio::piped())
             .spawn()?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(input.as_bytes())?;
+            // A command can exit without reading all of its input, which
+            // closes the pipe under the write: its exit status, below,
+            // says how it went, not the broken pipe.
+            match stdin.write_all(input.as_bytes()) {
+                Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => return Err(e.into()),
+                _ => {}
+            }
         }
         let code = child.wait()?.code().unwrap_or(1);
         if code == 0 {
@@ -422,6 +428,17 @@ mod tests {
         let failure = err.downcast_ref::<StageFailure>().unwrap();
         assert_eq!(failure.code, 3);
         assert_eq!(failure.command, "echo hello | sh -c exit 3");
+        // More input than a pipe holds, to a command that reads none of
+        // it: still its exit status, not a broken pipe.
+        let big = "x".repeat(1 << 20);
+        let err = ui
+            .run_required_with_input(&big, &sh("exit 4"), Path::new("."))
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<StageFailure>().map(|f| f.code),
+            Some(4),
+            "{err}"
+        );
         // A dry run narrates the pipe and runs nothing.
         let dry = Ui {
             dry_run: true,
