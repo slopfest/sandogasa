@@ -50,6 +50,13 @@ A CVE no source describes either still gets no draft, and the message
 says so and suggests checking the id, in place of asking for a `--cve`
 that was given.
 
+Any summary `jira` makes now fits the 255 characters Jira takes, after
+`RFE: ` is added for an enhancement and whichever source gave the
+title: one for a single CVE that runs over becomes the package and the
+CVE alone, and an MR's title naming several CVEs is cut short with an
+ellipsis. A `--summary` over the limit is refused before anything is
+asked, where Jira used to refuse it only once the filing was confirmed.
+
 ### cpu-sig-tracker's site asks cve.org whether a CVE is public
 
 `sync-updates` lists an update only once every CVE it fixes is

@@ -563,6 +563,16 @@ fn settle_priority(
 }
 
 fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
+    // Before anything is asked: Jira would refuse it only at filing.
+    if let Some(s) = &args.summary
+        && s.chars().count() > SUMMARY_MAX
+    {
+        return Err(format!(
+            "--summary is {} characters; Jira takes at most {SUMMARY_MAX}",
+            s.chars().count()
+        )
+        .into());
+    }
     let ask = !args.yes && !args.json && std::io::stdin().is_terminal();
     let target = resolve_target(args, ask)?;
     let runtime = crate::jira::runtime()?;
@@ -857,7 +867,9 @@ pub fn with_not_counted(
 /// since no one CVE's title names a change fixing them all. `RFE: ` goes
 /// in front for an enhancement, as Red Hat's RFEs read. An explicit
 /// summary is never rewritten; one for an enhancement without the
-/// prefix gets a note. `None` when there is nothing to call the issue.
+/// prefix gets a note. A made summary over the [`SUMMARY_MAX`] characters
+/// Jira takes is fitted to it ([`fitted`]). `None` when there is nothing
+/// to call the issue.
 fn summary_for(
     args: &JiraArgs,
     target: &Target,
@@ -875,9 +887,15 @@ fn summary_for(
     match uncovered {
         [] | [_] => {
             let title = target.mr_title.as_deref().or(cve_title)?;
-            Some(derived_summary(title, uncovered.first().copied(), rfe))
+            let cve = uncovered.first().copied();
+            let short =
+                cve.map(|c| derived_summary(&format!("{}: {c}", target.package), None, rfe));
+            Some(fitted(derived_summary(title, cve, rfe), short))
         }
-        _ => Some(derived_summary(target.mr_title.as_deref()?, None, rfe)),
+        _ => Some(fitted(
+            derived_summary(target.mr_title.as_deref()?, None, rfe),
+            None,
+        )),
     }
 }
 
@@ -889,6 +907,23 @@ fn rejected_why(rejected: &[&str]) -> String {
          vulnerability to file an issue for; check the id, or leave it out of --cve",
         rejected.join(", ")
     )
+}
+
+/// `summary` as Jira takes it, at most [`SUMMARY_MAX`] characters: as it
+/// is when it fits, else `short` (the package and the CVE alone), else
+/// cut short with an ellipsis.
+fn fitted(summary: String, short: Option<String>) -> String {
+    if summary.chars().count() <= SUMMARY_MAX {
+        return summary;
+    }
+    match short {
+        Some(short) if short.chars().count() <= SUMMARY_MAX => short,
+        _ => {
+            let mut cut: String = summary.chars().take(SUMMARY_MAX - 1).collect();
+            cut.push('…');
+            cut
+        }
+    }
 }
 
 /// Why there is no draft, for the report and for a `--file` that is
@@ -2005,6 +2040,54 @@ mod tests {
             "no draft: 2 CVEs have no issue on c9s; pass --summary to name one issue \
              covering them all"
         );
+    }
+
+    #[test]
+    fn a_summary_over_jira_s_limit_is_fitted_to_it() {
+        let rfe = |title: &str, cves: &[&str]| {
+            let mut a = args("rsync");
+            a.branch = Some("c9s".into());
+            a.issue_type = Some(IssueType::Enhancement);
+            let mut t = target(cves);
+            t.mr_title = Some(title.to_string());
+            summary_for(&a, &t, cves, None).unwrap()
+        };
+        // Fits before "RFE: " is added, not after: the package and the
+        // CVE alone, still an RFE.
+        let title = format!("CVE-1: {}", "x".repeat(SUMMARY_MAX - 9));
+        assert_eq!(title.chars().count(), SUMMARY_MAX - 2);
+        assert_eq!(rfe(&title, &["CVE-1"]), "RFE: rsync: CVE-1");
+        // Several CVEs, or none: cut with an ellipsis.
+        let long = "y".repeat(SUMMARY_MAX + 20);
+        for cves in [&["CVE-1", "CVE-2"][..], &[]] {
+            let s = rfe(&long, cves);
+            assert_eq!(s.chars().count(), SUMMARY_MAX, "{cves:?}");
+            assert!(s.starts_with("RFE: yyy") && s.ends_with('…'));
+        }
+        // A CNA's long title, from cve.org, with no MR to name it.
+        let mut a = args("rsync");
+        a.branch = Some("c9s".into());
+        let cna = format!("rsync: {} (CVE-1)", "v".repeat(SUMMARY_MAX));
+        assert_eq!(
+            summary_for(&a, &target(&["CVE-1"]), &["CVE-1"], Some(&cna)).as_deref(),
+            Some("rsync: CVE-1")
+        );
+        // What fits is left alone.
+        assert_eq!(fitted("short".into(), None), "short");
+        // A short form that does not fit either is cut too.
+        let s = fitted("z".repeat(300), Some("w".repeat(300)));
+        assert!(s.starts_with('z') && s.chars().count() == SUMMARY_MAX);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_summary_jira_would_refuse_stops_before_anything_is_asked() {
+        // No server: the check comes first.
+        let mut a = args("rsync");
+        a.branch = Some("c9s".into());
+        a.summary = Some("s".repeat(SUMMARY_MAX + 1));
+        let err = run_inner(&a).unwrap_err().to_string();
+        assert!(err.contains("Jira takes at most 255"), "{err}");
     }
 
     #[test]
