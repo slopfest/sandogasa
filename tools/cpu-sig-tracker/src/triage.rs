@@ -309,8 +309,8 @@ pub fn parse_cve_lines(body: &str) -> Vec<String> {
     )
 }
 
-/// The CVE lines for `cves`, each rated by Red Hat, NVD and GitHub
-/// (what `jira` rates a CVE by).
+/// The CVE lines for `cves`, each rated by Red Hat, NVD, cve.org and
+/// GitHub (what `jira` rates a CVE by).
 pub fn rated_cve_lines(cves: &[String], verbose: bool) -> Vec<String> {
     let Ok(runtime) = crate::jira::runtime() else {
         return cves.iter().map(|c| cve_line(c, &[])).collect();

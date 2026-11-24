@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### cpu-sig-tracker rates, describes and titles a CVE from cve.org as well
+
+A Jira draft or a tracking issue for a CVE published the same day could
+come out with no severity and no description: NVD copies its records
+from cve.org with a delay, so it had none yet, or it answered 503, and
+Red Hat had not assessed the CVE either. `jira`, `file-issue` and
+`status` now read cve.org's record as well:
+
+- its scores are listed after Red Hat's and NVD's and before GitHub's,
+  the CVE's CNA first, then each other party's, such as CISA's
+  (`cve.org: CVSS 3.1 10 critical (redhat)`). A score NVD only passes
+  on, as it does the CNA's and CISA's until it has one of its own, is
+  not listed a second time. Where Red Hat or NVD rates a CVE, the
+  rating an issue's priority is taken from is the same as before;
+- its description is used when NVD has none;
+- its title can name a Jira issue for a single CVE, when neither Red
+  Hat's bug nor GitHub's advisory gives one.
+
+The four sources are asked together, so the extra one adds no time.
+
 ### sandogasa-cve: cve.org as a source
 
 New in the library, for the cve.org entries here, with nothing removed

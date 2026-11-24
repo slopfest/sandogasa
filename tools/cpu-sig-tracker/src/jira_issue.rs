@@ -303,7 +303,7 @@ pub struct CveBlock<'a> {
     pub cve: &'a str,
     /// Every source's rating, the one to trust first.
     pub ratings: &'a [Rating],
-    /// NVD's description.
+    /// NVD's description, or cve.org's when NVD has none.
     pub description: Option<&'a str>,
     /// The RHEL major Red Hat assesses the CVE as not applicable to.
     pub not_applicable_in: Option<u32>,
@@ -672,7 +672,13 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // A single CVE can name the issue; several need a person to.
     let cve_title = match facts.as_slice() {
-        [(cve, f)] => cve_title(&target.package, cve, f.redhat.as_deref(), f.ghsa.as_deref()),
+        [(cve, f)] => cve_title(
+            &target.package,
+            cve,
+            f.redhat.as_deref(),
+            f.ghsa.as_deref(),
+            f.title.as_deref(),
+        ),
         _ => None,
     };
     let Some(summary) = summary_for(args, &target, &uncovered, cve_title.as_deref()) else {
@@ -869,12 +875,14 @@ fn summary_for(
 /// `<package>: <what>  (<CVE>)`. Red Hat's security data names the bug
 /// (`bugzilla.description`), often with the package said twice
 /// (`rsync: rsync: Denial of Service …`), which is collapsed; else the
-/// summary of GitHub's first advisory for it. NVD has no title.
+/// summary of GitHub's first advisory for it; else the title its CNA
+/// gave it on cve.org (`cveorg`). NVD has no title.
 pub fn cve_title(
     package: &str,
     cve: &str,
     redhat: Option<&str>,
     ghsa: Option<&str>,
+    cveorg: Option<&str>,
 ) -> Option<String> {
     let parse = |j: Option<&str>| j.and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok());
     let from_redhat =
@@ -886,7 +894,9 @@ pub fn cve_title(
                 .find_map(|a| a["summary"].as_str().map(str::to_string))
         })
     };
-    let raw = from_redhat.or_else(from_ghsa)?;
+    let raw = from_redhat
+        .or_else(from_ghsa)
+        .or_else(|| cveorg.map(str::to_string))?;
     let prefix = format!("{}: ", package.to_ascii_lowercase());
     let mut what = raw.trim();
     while what.to_ascii_lowercase().starts_with(&prefix) {
@@ -920,8 +930,10 @@ pub fn derived_summary(title: &str, cve: Option<&str>, rfe: bool) -> String {
 struct CveFacts {
     /// Every severity rating, Red Hat's first.
     ratings: Vec<Rating>,
-    /// NVD's description.
+    /// NVD's description, or cve.org's when NVD has none.
     description: Option<String>,
+    /// The title the CVE's CNA gave it on cve.org.
+    title: Option<String>,
     /// Red Hat's security data, as JSON.
     redhat: Option<String>,
     /// GitHub's advisories for it, as JSON.
@@ -934,11 +946,12 @@ pub(crate) async fn cve_ratings(cve: &str, verbose: bool) -> Vec<Rating> {
     cve_facts(cve, verbose).await.ratings
 }
 
-/// Every severity rating of `cve`, NVD's description of it, and Red
-/// Hat's security data on it.
+/// Every severity rating of `cve`, its description (NVD's, or cve.org's
+/// when NVD has no record of it yet or does not answer), and Red Hat's
+/// security data on it.
 async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
     if verbose {
-        eprintln!("[cpu-sig-tracker] rating {cve}: Red Hat, NVD, GitHub");
+        eprintln!("[cpu-sig-tracker] rating {cve}: Red Hat, NVD, cve.org, GitHub");
     }
     let http = match sandogasa_cli::http::builder(concat!(
         env!("CARGO_PKG_NAME"),
@@ -963,16 +976,19 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
     let sources = sandogasa_cve::sources::Sources::new(&http, &cache, token.as_deref());
     let mut nvd = sandogasa_cve::NvdCache::new("cpu-sig-tracker", String::new(), verbose, false);
     let ratings = sandogasa_cve::severity::ratings(cve, &mut nvd, &sources).await;
+    // Already fetched for the rating, so read from the cache.
+    let record = sources.cveorg(cve).await;
     let description = nvd
         .get(cve, |r| r)
         .await
-        .and_then(|r| r.english_description().map(str::to_string));
-    // Already fetched for the rating, so read from the cache.
+        .and_then(|r| r.english_description().map(str::to_string))
+        .or_else(|| record.as_ref().and_then(|r| r.description.clone()));
     let redhat = sources.redhat_cve(cve).await;
     let ghsa = sources.ghsa_json(cve).await;
     CveFacts {
         ratings,
         description,
+        title: record.and_then(|r| r.title),
         redhat,
         ghsa,
     }
@@ -1696,7 +1712,7 @@ mod tests {
         let redhat = r#"{"bugzilla": {"description":
             "rsync: rsync: Denial of Service via crafted checksums during delta transfer"}}"#;
         assert_eq!(
-            cve_title("rsync", "CVE-2026-119741", Some(redhat), None).as_deref(),
+            cve_title("rsync", "CVE-2026-119741", Some(redhat), None, None).as_deref(),
             Some(
                 "rsync: Denial of Service via crafted checksums during delta transfer \
                  (CVE-2026-119741)"
@@ -1705,16 +1721,30 @@ mod tests {
         // GitHub's advisory when Red Hat has none.
         let ghsa = r#"[{"ghsa_id": "GHSA-1", "summary": "FreeType OOB write"}]"#;
         assert_eq!(
-            cve_title("freetype", "CVE-2025-27363", Some("{}"), Some(ghsa)).as_deref(),
+            cve_title("freetype", "CVE-2025-27363", Some("{}"), Some(ghsa), None).as_deref(),
+            Some("freetype: FreeType OOB write (CVE-2025-27363)")
+        );
+        // cve.org's title when neither has one, and only then. Red Hat's
+        // CNA titles a CVE with the package capitalized.
+        let cna = "Rsync: heap buffer overflow in rsync due to improper checksum length handling";
+        assert_eq!(
+            cve_title("rsync", "CVE-2024-12084", None, Some("[]"), Some(cna)).as_deref(),
+            Some(
+                "rsync: heap buffer overflow in rsync due to improper checksum length handling \
+                 (CVE-2024-12084)"
+            )
+        );
+        assert_eq!(
+            cve_title("freetype", "CVE-2025-27363", None, Some(ghsa), Some(cna)).as_deref(),
             Some("freetype: FreeType OOB write (CVE-2025-27363)")
         );
         // A title naming the CVE already is not given it twice.
         let named = r#"{"bugzilla": {"description": "xz: CVE-2024-3094 backdoor"}}"#;
         assert_eq!(
-            cve_title("xz", "CVE-2024-3094", Some(named), None).as_deref(),
+            cve_title("xz", "CVE-2024-3094", Some(named), None, None).as_deref(),
             Some("xz: CVE-2024-3094 backdoor")
         );
-        assert_eq!(cve_title("rsync", "CVE-1", None, None), None);
+        assert_eq!(cve_title("rsync", "CVE-1", None, None, None), None);
     }
 
     #[test]

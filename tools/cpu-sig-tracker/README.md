@@ -143,9 +143,9 @@ request or its RHEL issues name (the merge request's title, the RHEL
 issues' summaries, and the per-CVE sections `jira` writes into an RHEL
 issue's description, which is where an update fixing several CVEs names
 them) gets a `- **CVE**:` line with its
-severity (Red Hat's rating first, then NVD's and GitHub's), linking
-Red Hat's page for it, which lists the advisories that fix it, and
-NVD's. CVEs named only in the merge request's description are listed,
+severity (Red Hat's rating first, then NVD's, cve.org's and GitHub's),
+linking Red Hat's page for it, which lists the advisories that fix it,
+and NVD's. CVEs named only in the merge request's description are listed,
 each with the line naming it, and asked about at a terminal, defaulting
 to none; those declined go on a `- **Not fixed here**:` line, and
 without a terminal they are left out with a warning. A change
@@ -276,7 +276,8 @@ drafts one issue covering every CVE without one:
 - a summary from `--summary`, else the MR's title; for a single CVE,
   else the CVE's title as Red Hat's bug for it reads (`rsync: Denial
   of Service via crafted checksums during delta transfer
-  (CVE-2026-119741)`), or GitHub's advisory's when Red Hat has none.
+  (CVE-2026-119741)`), or GitHub's advisory's when Red Hat has none,
+  or the title its CNA gave it on cve.org when neither has one.
   Several CVEs need `--summary` or an MR, as no one CVE's title names
   the change. Without a summary there is no draft, only the search;
 - the package as the component;
@@ -284,7 +285,9 @@ drafts one issue covering every CVE without one:
   allows a single affected version, trims issues listing more in a way
   that keeps no predictable one, and sets the RHEL versions itself;
 - a priority from the most severe CVE's severity, each taken from
-  Red Hat's rating, else NVD's, else GitHub's advisory: critical → Critical, high (Red
+  Red Hat's rating, else NVD's, else cve.org's (the score of the CVE's
+  CNA, else another party's there, such as CISA's), else GitHub's
+  advisory: critical → Critical, high (Red
   Hat's Important) → Major, medium → Normal, low → Minor. Blocker is
   left to Red Hat. A CVE Red Hat assesses as not applicable to the
   branch's RHEL major (`Not affected`: not built or reachable there,
@@ -294,7 +297,8 @@ drafts one issue covering every CVE without one:
   priority. A `--priority` that disagrees is confirmed at a terminal
   and kept with a note otherwise;
 - a description of your text, then for each CVE its severity by
-  every source that rated it, NVD's description and link, then the
+  every source that rated it, its description (NVD's, or cve.org's
+  when NVD has no record of the CVE yet) and NVD's link, then the
   MR.
 
 The draft is printed exactly as it would be filed, every field and
