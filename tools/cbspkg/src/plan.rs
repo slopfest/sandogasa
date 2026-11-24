@@ -100,7 +100,10 @@ pub fn promote(
 ) -> String {
     let mut out = checks(found, unchecked, color);
     for (nvr, to, changes) in steps {
-        out.push_str(&heading(&format!("{nvr} to -{}:", to.as_str()), color));
+        out.push_str(&heading(
+            &format!("Promote {nvr} to -{}:", to.as_str()),
+            color,
+        ));
         for change in changes {
             out.push_str(&command(&change.argv(), color));
         }
@@ -155,13 +158,15 @@ mod tests {
         )];
         assert_eq!(
             promote(&steps, &[], None, &[], &replaced, true, false),
-            "r-1-1.hs.el10 to -testing:\n  \
+            "Promote r-1-1.hs.el10 to -testing:\n  \
              cbs tag-build hyperscale10s-packages-main-testing r-1-1.hs.el10\n\
              Then, asked separately, the older builds they replace:\n  \
              cbs untag-build hyperscale10s-packages-main-testing r-0-1.hs.el10\n"
         );
         let colored = promote(&steps, &[], None, &[], &[], true, true);
-        assert!(colored.starts_with(&format!("{BOLD}r-1-1.hs.el10 to -testing:{RESET}\n")));
+        assert!(colored.starts_with(&format!(
+            "{BOLD}Promote r-1-1.hs.el10 to -testing:{RESET}\n"
+        )));
         assert!(
             colored.contains(&format!("  {BOLD}{GREEN}cbs tag-build")),
             "{colored}"

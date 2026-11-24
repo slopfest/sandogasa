@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### cbspkg promote's plan says "Promote" before each build's commands
+
+The plan `cbspkg promote` shows before asking headed each build's tag
+commands with the build alone ("linux-firmware-20261019-1.hs.el9 to
+-testing:"), the one line in it without a verb, beside "Then comment
+on …". It now reads "Promote linux-firmware-20261019-1.hs.el9 to
+-testing:".
+
 ### cbspkg srpm fetches a new package's sources from CentOS Stream or Fedora
 
 `cbspkg srpm` stopped short of an SRPM for a package new to its SIG,
