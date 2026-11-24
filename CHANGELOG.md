@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### cve.org's ratings keep another party's score equal to the one NVD passes on
+
+When a CVE's CNA and another party, such as CISA, gave it the same CVSS
+score, and NVD passed on the CNA's, `cpu-sig-tracker`'s `jira`,
+`file-issue` and `status` listed neither cve.org score: both matched
+the one NVD carried, and both were left out as already listed (#243).
+CISA's assessment, an independent one, was lost.
+
+Only the score NVD passes on is left out now. It is told apart by who
+scored it: NVD names an ADP such as CISA by its cve.org organization
+id, and a CNA by an address whose domain carries the CNA's short name
+(`secalert@redhat.com` for `redhat`); failing both, the CNA's.
+`sandogasa-cve`'s `cveorg::Score` gains `org_id`, the scorer's
+organization id at cve.org.
+
 ### cbspkg promote's plan says "Promote" before each build's commands
 
 The plan `cbspkg promote` shows before asking headed each build's tag

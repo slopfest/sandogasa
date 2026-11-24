@@ -108,6 +108,9 @@ pub struct Score {
     /// Who scored it, by short name: the CNA (`redhat`) or another
     /// party (`CISA-ADP`).
     pub by: String,
+    /// The scorer's organization id at cve.org, which NVD gives as the
+    /// source of a score it passes on from an ADP such as CISA's.
+    pub org_id: Option<String>,
 }
 
 /// cve.org's API URL for a CVE's record.
@@ -134,7 +137,8 @@ pub fn parse(json: &str) -> Option<Record> {
 
     let mut references: Vec<String> = Vec::new();
     let mut scores = Vec::new();
-    scores.extend(score(cna, &assigner));
+    let cna_org = text(&cna["providerMetadata"]["orgId"]).or_else(|| text(&meta["assignerOrgId"]));
+    scores.extend(score(cna, &assigner, cna_org.as_deref()));
     for container in std::iter::once(cna).chain(adps) {
         for url in container["references"]
             .as_array()
@@ -149,7 +153,8 @@ pub fn parse(json: &str) -> Option<Record> {
     }
     for adp in adps {
         let by = text(&adp["providerMetadata"]["shortName"]).unwrap_or_else(|| "ADP".to_string());
-        scores.extend(score(adp, &by));
+        let org = text(&adp["providerMetadata"]["orgId"]);
+        scores.extend(score(adp, &by, org.as_deref()));
     }
 
     Some(Record {
@@ -184,10 +189,10 @@ fn english(texts: &Value) -> Option<String> {
     })
 }
 
-/// The score a container gives, by `by`: in the first CVSS version of
+/// The score a container gives, by `by` (`org_id` at cve.org): in the first CVSS version of
 /// [`CVSS_KEYS`] it used. One without a severity word (CVSS 2 data has
 /// none) is passed over, since the word is what a rating is read by.
-fn score(container: &Value, by: &str) -> Option<Score> {
+fn score(container: &Value, by: &str, org_id: Option<&str>) -> Option<Score> {
     let metrics = container["metrics"].as_array()?;
     CVSS_KEYS.iter().find_map(|(key, version)| {
         metrics.iter().find_map(|m| {
@@ -197,6 +202,7 @@ fn score(container: &Value, by: &str) -> Option<Score> {
                 score: data["baseScore"].as_f64()?,
                 severity: data["baseSeverity"].as_str()?.to_ascii_lowercase(),
                 by: by.to_string(),
+                org_id: org_id.map(str::to_string),
             })
         })
     })
@@ -231,7 +237,8 @@ mod tests {
                     {"url": "https://access.redhat.com/security/cve/CVE-2024-3094",
                      "tags": ["vdb-entry"]},
                     {"url": "https://github.com/tukaani-project/xz/issues/92"}],
-                "providerMetadata": {"shortName": "redhat"}},
+                "providerMetadata": {"shortName": "redhat",
+                    "orgId": "53f830b8-0a3f-465b-8143-3b8a9948e749"}},
             "adp": [
                 {"title": "CISA ADP Vulnrichment",
                  "metrics": [{"other": {"type": "ssvc", "content": {}}}],
@@ -277,6 +284,7 @@ mod tests {
                 score: 10.0,
                 severity: "critical".to_string(),
                 by: "redhat".to_string(),
+                org_id: Some("53f830b8-0a3f-465b-8143-3b8a9948e749".to_string()),
             }]
         );
     }

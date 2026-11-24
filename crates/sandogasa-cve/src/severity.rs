@@ -144,19 +144,54 @@ pub fn ghsa_rating(json: &str) -> Option<Rating> {
     })
 }
 
+/// Which of `scores` NVD passes on as `cvss`, when it passes one on:
+/// of those with its CVSS version and score, the one by the party NVD
+/// names as the source. NVD names an ADP by its cve.org organization id
+/// (CISA's), and a CNA by an address, whose domain carries the CNA's
+/// short name (`secalert@redhat.com` for `redhat`). Failing both, the
+/// first, which is the CNA's, as the record lists it first.
+fn passed_on(scores: &[cveorg::Score], cvss: &sandogasa_nvd::Cvss) -> Option<usize> {
+    let same: Vec<usize> = scores
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.version == cvss.version && s.score == cvss.score)
+        .map(|(i, _)| i)
+        .collect();
+    let source = cvss.source.to_ascii_lowercase();
+    let domain = source.split_once('@').map(|(_, d)| d);
+    let named = |s: &cveorg::Score| {
+        s.org_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case(&source))
+            || domain.is_some_and(|d| {
+                let by = s.by.to_ascii_lowercase();
+                !by.is_empty() && d.split('.').any(|label| label == by)
+            })
+    };
+    same.iter()
+        .copied()
+        .find(|&i| named(&scores[i]))
+        .or_else(|| same.first().copied())
+}
+
 /// The ratings cve.org's record gives a CVE: its CNA's score, then each
 /// other party's (CISA's, for many CVEs their CNA did not score).
 ///
 /// `nvd` is the score NVD's answer was rated by, when it was. NVD
 /// carries the CNA's and other parties' scores until it has one of its
-/// own, so a score here equal to one NVD only passes on is the same
-/// assessment and is not listed a second time.
+/// own, so the score here NVD only passes on is the same assessment and
+/// is not listed a second time. Only that one is left out: another
+/// party's equal score is an assessment of its own.
 pub fn cveorg_ratings(record: &cveorg::Record, nvd: Option<&sandogasa_nvd::Cvss>) -> Vec<Rating> {
-    let passed_on = nvd.filter(|c| !c.source.eq_ignore_ascii_case(NVD_ITSELF));
+    let dropped = nvd
+        .filter(|c| !c.source.eq_ignore_ascii_case(NVD_ITSELF))
+        .and_then(|c| passed_on(&record.scores, c));
     record
         .scores
         .iter()
-        .filter(|s| !passed_on.is_some_and(|c| c.version == s.version && c.score == s.score))
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != dropped)
+        .map(|(_, s)| s)
         .filter_map(|s| {
             Some(Rating {
                 level: Level::parse(&s.severity)?,
@@ -328,6 +363,44 @@ mod tests {
         let mut v4 = nvd_score(8.1, "secalert@redhat.com");
         v4.version = "4.0".to_string();
         assert_eq!(by(&v4).len(), 2);
+    }
+
+    /// #243: the CNA and CISA give the same score, as they often do, and
+    /// NVD passes on one of them. Only that one is left out; the other
+    /// is an assessment of its own.
+    #[test]
+    fn an_equal_score_by_another_party_is_kept() {
+        const CISA: &str = "134c704f-9b21-4f2e-91b3-4a467353bcc0";
+        let record = |cna: &str| {
+            cveorg::parse(&format!(
+                r#"{{"cveMetadata": {{"cveId": "CVE-2026-2", "state": "PUBLISHED",
+                        "assignerShortName": "{cna}"}},
+                    "containers": {{
+                        "cna": {{"metrics": [{{"cvssV3_1": {{"baseScore": 7.5, "baseSeverity": "HIGH"}}}}]}},
+                        "adp": [{{"metrics": [{{"cvssV3_1": {{"baseScore": 7.5, "baseSeverity": "HIGH"}}}}],
+                            "providerMetadata": {{"shortName": "CISA-ADP", "orgId": "{CISA}"}}}}]}}}}"#
+            ))
+            .expect("a record")
+        };
+        let by = |cna: &str, source: &str| -> Vec<String> {
+            cveorg_ratings(&record(cna), Some(&nvd_score(7.5, source)))
+                .into_iter()
+                .map(|r| r.detail)
+                .collect()
+        };
+        // NVD names the CNA by its address: CISA's stays.
+        assert_eq!(
+            by("redhat", "secalert@redhat.com"),
+            ["CVSS 3.1 7.5 high (CISA-ADP)"]
+        );
+        // NVD names CISA by its organization id: the CNA's stays.
+        assert_eq!(by("redhat", CISA), ["CVSS 3.1 7.5 high (redhat)"]);
+        // An address that does not carry the CNA's short name is still
+        // the CNA's, the one NVD passes on when it has one.
+        assert_eq!(
+            by("Linux", "416baaa9@kernel.org"),
+            ["CVSS 3.1 7.5 high (CISA-ADP)"]
+        );
     }
 
     /// Every source answering, from a primed cache and a local NVD.
