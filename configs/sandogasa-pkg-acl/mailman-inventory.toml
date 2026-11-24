@@ -1,0 +1,34 @@
+# The packages mailman-packages.toml is applied to, for the EPEL 10
+# bring-up of mailman. Seeded by hand from infra's request on
+# 2026-11-24; #248 is for applying an ACL from a set like this,
+# expanded to its dependencies. Applied so far with the groups alone
+# (infra-sig and python-packagers-sig commit), not the users.
+[inventory]
+name = "mailman"
+description = "Packages mailman needs, for its EPEL 10 bring-up"
+maintainer = "salimma"
+
+[inventory.workloads.epel10]
+description = "Requested by Fedora Infrastructure, to build mailman for EPEL 10"
+packages = [
+    "python-django-mailman3",
+    "python-django-q2",
+    "python-django-redis",
+    "python-django5",
+    "python-django6",
+    "python-flufl-lock",
+    "python-whoosh",
+    "python-xapian-haystack",
+]
+
+[[package]]
+name = "python-django6"
+reason = "Added beside python-django5, which reaches end of life in April 2028"
+
+[[package]]
+name = "python-whoosh"
+reason = "Owned by abbra, where salimma has only commit: infra-sig not added yet"
+
+[[package]]
+name = "python-xapian-haystack"
+reason = "Owned by zlopez, where salimma has no access: infra-sig not added yet"
