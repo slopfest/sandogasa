@@ -183,7 +183,20 @@ async fn cveorg_answer(
                 _ => Ok(true),
             }
         }
-        404 => Ok(false),
+        // Only cve.org's own word that there is no record: a 404 from a
+        // proxy or a moved path says nothing about the CVE.
+        404 => {
+            let text = resp.text().await.unwrap_or_default();
+            let error = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v["error"].as_str().map(str::to_string));
+            match error.as_deref() {
+                Some("CVE_RECORD_DNE") => Ok(false),
+                _ => Err(format!(
+                    "cve.org answered HTTP 404 for {cve} without saying it has no record"
+                )),
+            }
+        }
         other => Err(format!("cve.org answered HTTP {other} for {cve}")),
     }
 }
@@ -266,6 +279,7 @@ mod tests {
                 ("CVE-2026-7", 404, ""),
                 ("CVE-2026-8", 404, ""),
                 ("CVE-2026-9", 404, ""),
+                ("CVE-2026-10", 404, ""),
             ] {
                 Mock::given(method("GET"))
                     .and(path(rh(cve)))
@@ -287,6 +301,8 @@ mod tests {
                 ("CVE-2026-7", 503, String::new()),
                 ("CVE-2026-8", 200, "<html>busy</html>".to_string()),
                 ("CVE-2026-9", 503, String::new()),
+                // Not cve.org's own answer: a proxy's, or a moved path's.
+                ("CVE-2026-10", 404, "<html>not found</html>".to_string()),
             ] {
                 Mock::given(method("GET"))
                     .and(path(format!("/api/cve/{cve}")))
@@ -302,6 +318,7 @@ mod tests {
                 ("CVE-2026-7", 200, 0),
                 ("CVE-2026-8", 200, 1),
                 ("CVE-2026-9", 503, 0),
+                ("CVE-2026-10", 200, 1),
             ] {
                 Mock::given(method("GET"))
                     .and(path("/rest/json/cves/2.0"))
@@ -349,6 +366,11 @@ mod tests {
             public("CVE-2026-8"),
             Ok(true),
             "cve.org's answer is not a record, NVD has one"
+        );
+        assert_eq!(
+            public("CVE-2026-10"),
+            Ok(true),
+            "a 404 that is not cve.org's no-record answer, NVD has one"
         );
         let neither = public("CVE-2026-9").unwrap_err();
         assert!(

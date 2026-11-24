@@ -244,8 +244,15 @@ impl<'a> Sources<'a> {
     /// when it has published nothing under that id or does not answer.
     pub async fn cveorg(&self, cve_id: &str) -> Option<cveorg::Record> {
         let url = cveorg::record_url(cve_id);
+        // Only a record is kept: a busy page sent with 200 would
+        // otherwise hide the CVE's record for a day.
         let json = self
-            .cached(&url, &format!("Asking cve.org about {cve_id}"), false)
+            .kept_if(
+                &url,
+                &format!("Asking cve.org about {cve_id}"),
+                false,
+                |json| cveorg::parse(json).is_some(),
+            )
             .await?;
         cveorg::parse(&json)
     }
@@ -265,6 +272,18 @@ impl<'a> Sources<'a> {
     /// `url` from the cache, or fetched (and kept) when it is not
     /// there; `None` when it cannot be read.
     async fn cached(&self, url: &str, what: &str, github: bool) -> Option<String> {
+        self.kept_if(url, what, github, |_| true).await
+    }
+
+    /// [`Self::cached`], keeping a fetched answer only when `keep`
+    /// says it is one worth reading again.
+    async fn kept_if(
+        &self,
+        url: &str,
+        what: &str,
+        github: bool,
+        keep: impl Fn(&str) -> bool,
+    ) -> Option<String> {
         let url = &self.endpoints.rebase(url);
         let key = url_key(url);
         if let Some(text) = self.cache.load(&key) {
@@ -276,7 +295,9 @@ impl<'a> Sources<'a> {
         } else {
             advisory::fetch(self.http, url).await
         }?;
-        self.cache.store(&key, &text);
+        if keep(&text) {
+            self.cache.store(&key, &text);
+        }
         Some(text)
     }
 }
@@ -396,5 +417,36 @@ mod tests {
         assert!(record.is_rejected());
         assert_eq!(sources.cveorg("CVE-2026-2").await, None);
         assert!(fetched.borrow().is_empty(), "{:?}", fetched.borrow());
+    }
+
+    #[tokio::test]
+    async fn only_a_cve_org_answer_that_is_a_record_is_kept() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/cve/CVE-2026-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<html>busy</html>"))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/cve/CVE-2026-2"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"cveMetadata": {"cveId": "CVE-2026-2", "state": "PUBLISHED"},
+                    "containers": {"cna": {}}}"#,
+            ))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::at(Some(dir.path().to_path_buf()), false, None);
+        sandogasa_cli::install_crypto_provider();
+        let http = reqwest::Client::new();
+        let endpoints = Endpoints::default().with_cveorg(server.uri());
+        let sources = Sources::new(&http, &cache, None).with_endpoints(endpoints.clone());
+        assert_eq!(sources.cveorg("CVE-2026-1").await, None);
+        assert!(sources.cveorg("CVE-2026-2").await.is_some());
+        let kept = |cve: &str| cache.load(&url_key(&endpoints.rebase(&cveorg::record_url(cve))));
+        assert_eq!(kept("CVE-2026-1"), None, "a busy page is asked for again");
+        assert!(kept("CVE-2026-2").is_some());
     }
 }

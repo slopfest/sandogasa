@@ -69,8 +69,10 @@ asked NVD. NVD has a CVE hours after it is published, and answers 503
 under load, which left the update out of that run. It now asks cve.org,
 where a CVE is published: a record there means public, and no record
 means not yet, without asking NVD, which cannot have a CVE cve.org has
-not published. NVD is still asked when cve.org does not answer, and the
-update is left out only when neither does.
+not published. Only cve.org's own no-record answer counts as one: a 404
+from a proxy or a moved address is no answer. NVD is still asked when
+cve.org does not answer, and the update is left out only when neither
+does.
 
 ### fedora-cve-triage reads a CVE from cve.org when NVD has no record
 
@@ -83,7 +85,10 @@ JavaScript, tool-name and fixed-version lookups start from. It has none
 of NVD's product data, so a check that needs the affected products
 still passes the bug over, as it does for a CVE NVD has not analyzed;
 the fixed-version prompt reads `NVD: no record; read from cve.org`, and
-the closing summary names the CVEs read this way after a refusal.
+the closing summary names the CVEs read this way after a refusal. After
+a refusal, bodhi-check passes the bug over too: NVD may hold the fixed
+versions it trusts over every other source, and did not say. A record cve.org marks rejected is not read in NVD's
+place, since its description is the withdrawal, not a vulnerability.
 
 `rejected-cve` also closes a bug whose CVE cve.org marks `REJECTED`
 while NVD still shows the record or does not answer, and the bug says
@@ -117,7 +122,8 @@ or changed in signature:
   NVD's answer with none of NVD's analysis, and `STAND_IN_STATUS`, the
   status it carries;
 - `Sources::cveorg`, kept in the caller's disk cache like the other
-  sources' answers;
+  sources' answers when it is a record, so a busy page is asked for
+  again;
 - `severity::cveorg_ratings`. `severity::ratings` now lists Red Hat,
   NVD, cve.org, GitHub, and asks them together;
 - `severity::ratings_from`, the same ratings from answers the caller
