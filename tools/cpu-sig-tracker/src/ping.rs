@@ -1887,4 +1887,232 @@ mod tests {
             "{text}"
         );
     }
+
+    /// The GitLab answers for one open tracking issue whose MR has been
+    /// quiet since 2025, and the fake `koji` and `fedrq` that place the
+    /// SIG's build ahead of stock. Returns the temporary directory the
+    /// fakes and the inventory are in; `PATH` and the GitLab base are
+    /// left to the caller's guard.
+    fn quiet_mr_world(
+        server: &wiremock::MockServer,
+        rt: &tokio::runtime::Runtime,
+    ) -> tempfile::TempDir {
+        use serde_json::json;
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, ResponseTemplate};
+        let get = |p: &str, body: serde_json::Value| {
+            Mock::given(method("GET"))
+                .and(path(p))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        };
+        rt.block_on(async {
+            get("/api/v4/user", json!({"id": 1, "username": "salimma"}))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues"))
+                .and(query_param("labels", "cpu-sig-tracker,c10s"))
+                .and(query_param("state", "opened"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                    "iid": 3,
+                    "title": "PackageKit — CVE-2026-1",
+                    "description": "- **MR**: [Fix](https://gitlab.example/redhat/centos-stream/rpms/PackageKit/-/merge_requests/10) — opened\n\
+                                    - **Release**: c10s",
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/PackageKit/-/issues/3",
+                    "assignees": [],
+                }])))
+                .mount(server)
+                .await;
+            get(
+                "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2FPackageKit/issues/3/notes",
+                json!([]),
+            )
+            .mount(server)
+            .await;
+            get(
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2FPackageKit/merge_requests/10",
+                json!({
+                    "iid": 10,
+                    "title": "Fix CVE-2026-1",
+                    "state": "opened",
+                    "web_url": "https://gitlab.example/redhat/centos-stream/rpms/PackageKit/-/merge_requests/10",
+                    "source_branch": "fix",
+                    "target_branch": "c10s",
+                    "sha": "2b171ab4",
+                    "updated_at": "2025-12-14T20:38:23Z",
+                    "has_conflicts": false,
+                    "detailed_merge_status": "mergeable",
+                    "author": {"username": "upstream-dev"},
+                }),
+            )
+            .mount(server)
+            .await;
+            get(
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2FPackageKit/merge_requests/10/notes",
+                json!([]),
+            )
+            .mount(server)
+            .await;
+            get(
+                "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2FPackageKit/repository/commits",
+                json!([]),
+            )
+            .mount(server)
+            .await;
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let listing = |tag: &str| {
+            format!(
+                "Build    Tag    Built by\n-------  -----  --------\n\
+                 PackageKit-1.2.8-9~proposed.el10    {tag}    alice\n"
+            )
+        };
+        let release = listing("proposed_updates10s-packages-main-release");
+        let testing = listing("proposed_updates10s-packages-main-testing");
+        crate::test_support::install_fake_bin(
+            dir.path(),
+            "koji",
+            &[
+                ("proposed_updates10s-packages-main-release", &release),
+                ("proposed_updates10s-packages-main-testing", &testing),
+            ],
+        );
+        crate::test_support::install_fake_bin(
+            dir.path(),
+            "fedrq",
+            &[("-b c10s -- PackageKit", "PackageKit : 1.2.8 : 8.el10")],
+        );
+        std::fs::write(
+            dir.path().join("inventory.toml"),
+            "[inventory]\nname = \"t\"\ndescription = \"t\"\nmaintainer = \"t\"\n\
+             [inventory.workloads.c10s]\npackages = [\"PackageKit\"]\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    fn ping_args(dir: &std::path::Path) -> PingArgs {
+        PingArgs {
+            inventory: dir.join("inventory.toml").to_string_lossy().into_owned(),
+            packages: vec![],
+            release: Some("c10s".into()),
+            days: 14,
+            reping_days: 30,
+            dry_run: false,
+            yes: false,
+            json: false,
+            verbose: true,
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_scan_reads_the_issue_its_mr_and_the_builds_into_a_ping() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+        let dir = quiet_mr_world(&server, &rt);
+        let path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let _guard = crate::test_support::EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("PATH", &path),
+        ]);
+
+        let rows = scan(&ping_args(dir.path())).expect("scan");
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(
+            (r.release.as_str(), r.package.as_str()),
+            ("c10s", "PackageKit")
+        );
+        assert_eq!(r.mr_state, "opened");
+        assert_eq!(r.mr_author, "upstream-dev");
+        assert_eq!(r.mr_merge_status.as_deref(), Some("mergeable"));
+        assert_eq!(
+            r.release_nvr.as_deref(),
+            Some("PackageKit-1.2.8-9~proposed.el10")
+        );
+        assert_eq!(r.stream_nvr.as_deref(), Some("PackageKit-1.2.8-8.el10"));
+        assert_eq!(r.assessment.action, Action::Ping);
+        let tags: Vec<&str> = r.pending.iter().map(|p| p.tag.as_str()).collect();
+        assert_eq!(
+            tags,
+            ["announce release@mr", "announce release@issue", "ping@mr"]
+        );
+
+        let unknown = PingArgs {
+            release: Some("c8s".into()),
+            ..ping_args(dir.path())
+        };
+        let err = scan(&unknown).unwrap_err().to_string();
+        assert!(
+            err.contains("release 'c8s' not found in inventory"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn yes_posts_each_note_where_it_belongs() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt.block_on(wiremock::MockServer::start());
+        let dir = quiet_mr_world(&server, &rt);
+        rt.block_on(async {
+            Mock::given(method("POST"))
+                .and(path(
+                    "/api/v4/projects/redhat%2Fcentos-stream%2Frpms%2FPackageKit/merge_requests/10/notes",
+                ))
+                .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+                .expect(2)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2FPackageKit/issues/3/notes",
+                ))
+                .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let _guard = crate::test_support::EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("PATH", &path),
+        ]);
+
+        // A dry run reports and posts nothing; -y posts every note,
+        // as a table run and as a JSON one.
+        let dry = PingArgs {
+            dry_run: true,
+            ..ping_args(dir.path())
+        };
+        assert_eq!(run(&dry), ExitCode::SUCCESS);
+        let mut rows = scan(&ping_args(dir.path())).unwrap();
+        let yes = PingArgs {
+            yes: true,
+            ..ping_args(dir.path())
+        };
+        assert_eq!(post(&mut rows, &yes).unwrap(), 0);
+        assert_eq!(
+            rows[0].posted,
+            ["announce release@mr", "announce release@issue", "ping@mr"]
+        );
+        rt.block_on(server.verify());
+    }
 }

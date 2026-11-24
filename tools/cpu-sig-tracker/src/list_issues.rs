@@ -797,4 +797,70 @@ name = "missingpkg"
             "https://example/not-an-mr"
         );
     }
+
+    #[test]
+    #[serial_test::serial]
+    fn adopt_labels_a_hand_filed_issue_and_retire_finds_it() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let rpms_path = "/api/v4/groups/CentOS%2Fproposed_updates%2Frpms/issues";
+        let hand_filed = json!({
+            "iid": 2, "title": "blktrace: a fix", "description": "",
+            "state": "opened",
+            "web_url": "https://gitlab.example/CentOS/proposed_updates/rpms/blktrace/-/issues/2",
+            "labels": ["c10s"], "assignees": []
+        });
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path(rpms_path))
+                .and(query_param("labels", "c10s"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!([hand_filed])))
+                .mount(&server)
+                .await;
+            Mock::given(method("PUT"))
+                .and(path(
+                    "/api/v4/projects/CentOS%2Fproposed_updates%2Frpms%2Fblktrace/issues/2",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(hand_filed.clone()))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let dir = tempdir().unwrap();
+        let _guard = crate::test_support::EnvGuard::new(&[
+            ("GITLAB_TOKEN", "test-token"),
+            ("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri()),
+            ("XDG_CONFIG_HOME", &dir.path().to_string_lossy()),
+        ]);
+        let args = |adopt, json| ListIssuesArgs {
+            inventory: None,
+            release: Some("c10s".to_string()),
+            package: vec![],
+            adopt,
+            json,
+            verbose: true,
+        };
+
+        // Not a terminal, so without --adopt the issue is only named;
+        // with it, labeled once.
+        assert_eq!(run(&args(false, true)), ExitCode::SUCCESS);
+        assert_eq!(run(&args(true, false)), ExitCode::SUCCESS);
+        runtime.block_on(server.verify());
+
+        let found = tracking_issues(Some("c10s"), "blktrace", false).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].status, TrackingStatus::HandFiled);
+        assert!(
+            tracking_issues(Some("c10s"), "zstd", false)
+                .unwrap()
+                .is_empty()
+        );
+
+        // An inventory that is not there fails the run.
+        let missing = ListIssuesArgs {
+            inventory: Some(dir.path().join("none.toml").to_string_lossy().into_owned()),
+            ..args(false, false)
+        };
+        assert_eq!(run(&missing), ExitCode::FAILURE);
+    }
 }
