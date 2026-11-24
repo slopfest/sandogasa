@@ -22,6 +22,12 @@ Red Hat had not assessed the CVE either. `jira`, `file-issue` and
 
 The four sources are asked together, so the extra one adds no time.
 
+A CVE cve.org lists as rejected, withdrawn by its CNA, is neither
+titled nor described by its record, which only says why the id was
+withdrawn. `jira` notes that there is no vulnerability to file an issue
+for, drafts none when nothing else names it, and with `--file` refuses
+to file one.
+
 ### cpu-sig-tracker jira drafts an issue for a CVE nothing titles
 
 `cpu-sig-tracker jira --cve CVE-2026-124851 --branch c9s zstd`, run the

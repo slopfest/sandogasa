@@ -652,6 +652,18 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         empty_search_notes(&target.package, &pairs, major, logged_in)
     };
+    let rejected: Vec<&str> = facts
+        .iter()
+        .filter(|(_, f)| f.rejected)
+        .map(|(cve, _)| *cve)
+        .collect();
+    if !rejected.is_empty() {
+        let why = rejected_why(&rejected);
+        if args.file {
+            return Err(format!("not filing: {why}").into());
+        }
+        notes.push(why);
+    }
     if target.cves.is_empty() && lookups.iter().any(|l| !l.here.is_empty()) {
         notes.push(
             "without a CVE there is nothing to match an issue on: the open issues \
@@ -686,7 +698,10 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     let Some(summary) = summary_for(args, &target, &uncovered, cve_title.as_deref()) else {
-        let why = no_draft_why(&uncovered, &target.branch);
+        let why = match uncovered.as_slice() {
+            [cve] if rejected.contains(cve) => format!("no draft: {}", rejected_why(&rejected)),
+            _ => no_draft_why(&uncovered, &target.branch),
+        };
         if args.file {
             return Err(why.into());
         }
@@ -866,6 +881,16 @@ fn summary_for(
     }
 }
 
+/// What to say about CVEs cve.org lists as rejected: there is nothing
+/// to file an issue for.
+fn rejected_why(rejected: &[&str]) -> String {
+    format!(
+        "cve.org lists {} as rejected: its CNA withdrew the id, so there is no \
+         vulnerability to file an issue for; check the id, or leave it out of --cve",
+        rejected.join(", ")
+    )
+}
+
 /// Why there is no draft, for the report and for a `--file` that is
 /// refused: nothing names the issue. Of the CVEs with no issue yet
 /// (`uncovered`), one that came this far has neither a title nor a
@@ -984,6 +1009,8 @@ struct CveFacts {
     redhat: Option<String>,
     /// GitHub's advisories for it, as JSON.
     ghsa: Option<String>,
+    /// cve.org lists it as rejected: its CNA withdrew the id.
+    rejected: bool,
 }
 
 /// What names an issue for the one CVE it fixes: the CVE's title
@@ -1094,6 +1121,10 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
     let ratings = sandogasa_cve::severity::ratings(cve, &mut nvd, &sources).await;
     // Already fetched for the rating, so read from the cache.
     let record = sources.cveorg(cve).await;
+    let rejected = record.as_ref().is_some_and(|r| r.is_rejected());
+    // A rejected record's text says why the id was withdrawn, not what
+    // the vulnerability is, so it neither describes nor titles one.
+    let record = record.filter(|r| !r.is_rejected());
     let description = nvd
         .get(cve, |r| r)
         .await
@@ -1107,6 +1138,7 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
         title: record.and_then(|r| r.title),
         redhat,
         ghsa,
+        rejected,
     }
 }
 
@@ -2134,6 +2166,10 @@ mod tests {
         let mut vars = vec![
             ("CPU_SIG_TRACKER_JIRA_BASE", server.uri()),
             ("CPU_SIG_TRACKER_GITLAB_BASE", server.uri()),
+            ("CPU_SIG_TRACKER_REDHAT_BASE", server.uri()),
+            ("CPU_SIG_TRACKER_CVEORG_BASE", server.uri()),
+            ("CPU_SIG_TRACKER_NVD_BASE", server.uri()),
+            ("CPU_SIG_TRACKER_GITHUB_BASE", server.uri()),
             ("XDG_CONFIG_HOME", home.clone()),
             ("XDG_CACHE_HOME", home),
             ("GITLAB_TOKEN", "test-token".to_string()),
@@ -2145,6 +2181,96 @@ mod tests {
         }
         let refs: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
         EnvGuard::new(&refs).unset(&unset)
+    }
+
+    /// CVE-2024-35918, as cve.org answers for it: withdrawn by its CNA.
+    const REJECTED_RECORD: &str = r#"{"cveMetadata": {"cveId": "CVE-2024-35918",
+            "state": "REJECTED", "assignerShortName": "Linux"},
+        "containers": {"cna": {"providerMetadata": {"shortName": "Linux"},
+            "rejectedReasons": [{"lang": "en", "value":
+                "This CVE ID has been rejected or withdrawn by its CVE Numbering Authority."}]}}}"#;
+
+    /// NVD's answer for a CVE it has no record of, as the real service
+    /// gives it: an empty list, not a 404.
+    async fn mount_nvd_unknown(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/rest/json/cves/2.0"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"totalResults": 0, "vulnerabilities": []})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_rejected_cve_s_withdrawal_neither_titles_nor_describes_it() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // Nothing but cve.org knows the id; every other source 404s.
+            Mock::given(method("GET"))
+                .and(path("/api/cve/CVE-2024-35918"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(REJECTED_RECORD))
+                .mount(&server)
+                .await;
+            mount_nvd_unknown(&server).await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _env = guard(&server, home.path(), None);
+        let facts = runtime.block_on(cve_facts("CVE-2024-35918", false));
+        assert!(facts.rejected);
+        assert_eq!(facts.description, None);
+        assert_eq!(facts.title, None);
+        assert_eq!(
+            cve_summary("kernel", "CVE-2024-35918", &facts),
+            (None, None)
+        );
+        let why = rejected_why(&["CVE-2024-35918"]);
+        assert!(why.contains("CVE-2024-35918 as rejected"), "{why}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_rejected_cve_gets_no_draft_and_is_not_filed() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/search/jql"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"issues": [], "isLast": true})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/cve/CVE-2024-35918"))
+                .respond_with(ResponseTemplate::new(200).set_body_string(REJECTED_RECORD))
+                .mount(&server)
+                .await;
+            mount_nvd_unknown(&server).await;
+            mount_no_filing(&server).await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _g = guard(&server, home.path(), None);
+
+        let mut a = args("kernel");
+        a.branch = Some("c9s".into());
+        a.cve = vec!["CVE-2024-35918".into()];
+        run_inner(&a).expect("reports that there is nothing to draft");
+        a.json = true;
+        run_inner(&a).expect("and says so as JSON");
+        // Even with a summary to name it by, a rejected id is not filed.
+        a.json = false;
+        a.summary = Some("kernel: something".into());
+        a.file = true;
+        a.yes = true;
+        let err = run_inner(&a).unwrap_err().to_string();
+        assert!(
+            err.contains("not filing") && err.contains("rejected"),
+            "{err}"
+        );
     }
 
     #[test]
