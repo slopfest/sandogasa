@@ -8,10 +8,14 @@
 //! mirror. Every answer is kept in the caller's [`DiskCache`], and the
 //! caller hears about each request that actually goes out, so a tool
 //! can say what it is asking without repeating it for cached answers.
+//!
+//! The sources that say what a CVE is, not where it is fixed, are
+//! asked the same way: Red Hat's security data and cve.org's record.
 
 use sandogasa_cli::cache::{DiskCache, url_key};
 
 use crate::advisory::{self, GhsaVuln};
+use crate::cveorg;
 use crate::osv::{self, OsvFix};
 
 /// The advisory sources, with the client, cache and credentials they
@@ -168,6 +172,16 @@ impl<'a> Sources<'a> {
         .await
     }
 
+    /// cve.org's record of `cve_id` (see [`crate::cveorg`]); `None`
+    /// when it has published nothing under that id or does not answer.
+    pub async fn cveorg(&self, cve_id: &str) -> Option<cveorg::Record> {
+        let url = cveorg::record_url(cve_id);
+        let json = self
+            .cached(&url, &format!("Asking cve.org about {cve_id}"), false)
+            .await?;
+        cveorg::parse(&json)
+    }
+
     /// One OSV record as JSON.
     async fn osv_record(&self, id: &str) -> Option<String> {
         let url = osv::vuln_url(id);
@@ -252,6 +266,32 @@ mod tests {
         let records = sources.advisory_records("CVE-2026-2", &[], None).await;
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].0, "GHSA-aaaa-bbbb-cccc");
+        assert!(fetched.borrow().is_empty(), "{:?}", fetched.borrow());
+    }
+
+    #[tokio::test]
+    async fn cve_org_s_record_is_read_from_its_kept_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = primed(
+            dir.path(),
+            &[
+                (
+                    &cveorg::record_url("CVE-2026-1"),
+                    r#"{"cveMetadata": {"cveId": "CVE-2026-1", "state": "REJECTED"},
+                        "containers": {"cna": {}}}"#,
+                ),
+                // Kept, but not a record.
+                (&cveorg::record_url("CVE-2026-2"), r#"{"error": "busy"}"#),
+            ],
+        );
+        sandogasa_cli::install_crypto_provider();
+        let http = reqwest::Client::new();
+        let fetched = RefCell::new(Vec::new());
+        let note = |what: &str| fetched.borrow_mut().push(what.to_string());
+        let sources = Sources::new(&http, &cache, None).reporting(&note);
+        let record = sources.cveorg("CVE-2026-1").await.expect("a record");
+        assert!(record.is_rejected());
+        assert_eq!(sources.cveorg("CVE-2026-2").await, None);
         assert!(fetched.borrow().is_empty(), "{:?}", fetched.borrow());
     }
 }

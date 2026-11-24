@@ -12,10 +12,15 @@
 //! this build a fix for that CVE. fedora-cve-triage asks it to close
 //! bugs a Bodhi update already fixed; ebranch asks it to say which
 //! CVE bugs a security update closes.
+//!
+//! It also says what a CVE is and how severe (`severity`), for which
+//! cve.org's own record (`cveorg`) is read beside NVD's: it is there
+//! before NVD's, and when NVD does not answer.
 
 pub mod advisory;
 pub mod bundled;
 pub mod cache;
+pub mod cveorg;
 pub mod facts;
 pub mod osv;
 pub mod severity;

@@ -6,13 +6,20 @@
 //! is weighed by, but Red Hat may not have assessed a CVE yet, which is
 //! often exactly when a CentOS Proposed Update is filed. NVD's answer
 //! carries the CNA's score, and other parties', even before NVD has
-//! analyzed a CVE, but a CNA may give none. GitHub's advisory database
-//! has a severity for what it has reviewed. So [`ratings`] asks them in
-//! that order and keeps every answer: the first is the one to use, and
-//! the rest show whether the sources agree.
+//! analyzed a CVE, but a CNA may give none, and NVD may have no record
+//! yet or not answer. cve.org's record is there first, with the CNA's
+//! score and those other parties added to it. GitHub's advisory
+//! database has a severity for what it has reviewed. So [`ratings`]
+//! lists them in that order and keeps every answer: the first is the
+//! one to use, and the rest show whether the sources agree.
 
 use crate::cache::NvdCache;
+use crate::cveorg;
 use crate::sources::Sources;
+
+/// Who NVD names as the source of a score of its own, as opposed to
+/// one it carries for a CNA or another party.
+const NVD_ITSELF: &str = "nvd@nist.gov";
 
 /// A severity, in the vocabulary CVSS and GitHub use; Red Hat's
 /// `Important` and `Moderate` read as `High` and `Medium`.
@@ -53,10 +60,11 @@ impl Level {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rating {
     pub level: Level,
-    /// Who says so: `Red Hat`, `NVD`, a GHSA id.
+    /// Who says so: `Red Hat`, `NVD`, `cve.org`, a GHSA id.
     pub source: String,
     /// What they say, in their own words: `Important (CVSS 3: 8.1)`,
-    /// `CVSS 3.1 8.1 high (nvd@nist.gov)`.
+    /// `CVSS 3.1 8.1 high (nvd@nist.gov)`,
+    /// `CVSS 3.1 7.8 high (CISA-ADP)`.
     pub detail: String,
 }
 
@@ -136,33 +144,51 @@ pub fn ghsa_rating(json: &str) -> Option<Rating> {
     })
 }
 
+/// The ratings cve.org's record gives a CVE: its CNA's score, then each
+/// other party's (CISA's, for many CVEs their CNA did not score).
+///
+/// `nvd` is the score NVD's answer was rated by, when it was. NVD
+/// carries the CNA's and other parties' scores until it has one of its
+/// own, so a score here equal to one NVD only passes on is the same
+/// assessment and is not listed a second time.
+pub fn cveorg_ratings(record: &cveorg::Record, nvd: Option<&sandogasa_nvd::Cvss>) -> Vec<Rating> {
+    let passed_on = nvd.filter(|c| !c.source.eq_ignore_ascii_case(NVD_ITSELF));
+    record
+        .scores
+        .iter()
+        .filter(|s| !passed_on.is_some_and(|c| c.version == s.version && c.score == s.score))
+        .filter_map(|s| {
+            Some(Rating {
+                level: Level::parse(&s.severity)?,
+                source: "cve.org".to_string(),
+                detail: format!("CVSS {} {} {} ({})", s.version, s.score, s.severity, s.by),
+            })
+        })
+        .collect()
+}
+
 /// Every rating the sources give `cve_id`, in the order to trust them:
-/// Red Hat, NVD, GitHub. Empty when none has rated it.
+/// Red Hat, NVD, cve.org, GitHub. Empty when none has rated it. The
+/// sources are asked together, so none waits for another's answer.
 pub async fn ratings(
     cve_id: &str,
     nvd: &mut NvdCache<sandogasa_nvd::models::CveResponse>,
     sources: &Sources<'_>,
 ) -> Vec<Rating> {
+    let (redhat, nvd, record, ghsa) = tokio::join!(
+        sources.redhat_cve(cve_id),
+        nvd.get(cve_id, |r| r),
+        sources.cveorg(cve_id),
+        sources.ghsa_json(cve_id),
+    );
     let mut out = Vec::new();
-    if let Some(r) = sources
-        .redhat_cve(cve_id)
-        .await
-        .as_deref()
-        .and_then(redhat_rating)
-    {
-        out.push(r);
+    out.extend(redhat.as_deref().and_then(redhat_rating));
+    out.extend(nvd.and_then(nvd_rating));
+    if let Some(record) = &record {
+        let nvd_score = nvd.and_then(|r| r.cvss());
+        out.extend(cveorg_ratings(record, nvd_score.as_ref()));
     }
-    if let Some(r) = nvd.get(cve_id, |r| r).await.and_then(nvd_rating) {
-        out.push(r);
-    }
-    if let Some(r) = sources
-        .ghsa_json(cve_id)
-        .await
-        .as_deref()
-        .and_then(ghsa_rating)
-    {
-        out.push(r);
-    }
+    out.extend(ghsa.as_deref().and_then(ghsa_rating));
     out
 }
 
@@ -217,5 +243,139 @@ mod tests {
         let r = nvd_rating(&resp).expect("rated");
         assert_eq!(r.level, Level::Medium);
         assert_eq!(r.to_string(), "NVD: CVSS 4.0 5.7 medium (cna@python.org)");
+    }
+
+    /// A record whose CNA scored it 8.1 and CISA 7.8, with one more
+    /// party whose word is not a level.
+    fn scored_record() -> cveorg::Record {
+        cveorg::parse(
+            r#"{"cveMetadata": {"cveId": "CVE-2026-1", "state": "PUBLISHED",
+                    "assignerShortName": "redhat"},
+                "containers": {
+                    "cna": {"metrics": [{"cvssV3_1": {"baseScore": 8.1, "baseSeverity": "HIGH"}}]},
+                    "adp": [
+                        {"metrics": [{"cvssV3_1": {"baseScore": 7.8, "baseSeverity": "HIGH"}}],
+                         "providerMetadata": {"shortName": "CISA-ADP"}},
+                        {"metrics": [{"cvssV3_1": {"baseScore": 0.0, "baseSeverity": "NONE"}}],
+                         "providerMetadata": {"shortName": "other"}}]}}"#,
+        )
+        .expect("a record")
+    }
+
+    fn nvd_score(score: f64, source: &str) -> sandogasa_nvd::Cvss {
+        sandogasa_nvd::Cvss {
+            version: "3.1".to_string(),
+            score,
+            severity: "high".to_string(),
+            source: source.to_string(),
+        }
+    }
+
+    #[test]
+    fn cve_org_s_ratings_are_the_cna_s_then_each_other_party_s() {
+        let listed: Vec<String> = cveorg_ratings(&scored_record(), None)
+            .iter()
+            .map(Rating::to_string)
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "cve.org: CVSS 3.1 8.1 high (redhat)",
+                "cve.org: CVSS 3.1 7.8 high (CISA-ADP)",
+            ]
+        );
+        assert!(
+            cveorg_ratings(&scored_record(), None)
+                .iter()
+                .all(|r| r.level == Level::High)
+        );
+        assert!(cveorg_ratings(&cveorg::Record::default(), None).is_empty());
+    }
+
+    #[test]
+    fn a_score_nvd_only_passes_on_is_not_listed_again() {
+        let by = |nvd: &sandogasa_nvd::Cvss| -> Vec<String> {
+            cveorg_ratings(&scored_record(), Some(nvd))
+                .into_iter()
+                .map(|r| r.detail)
+                .collect()
+        };
+        // NVD is quoting the CNA: only CISA's is news.
+        assert_eq!(
+            by(&nvd_score(8.1, "secalert@redhat.com")),
+            ["CVSS 3.1 7.8 high (CISA-ADP)"]
+        );
+        // NVD scored it itself, and happens to agree with the CNA: the
+        // CNA's is a second opinion, and stays.
+        assert_eq!(by(&nvd_score(8.1, "nvd@nist.gov")).len(), 2);
+        // Another party's score that differs from both.
+        assert_eq!(by(&nvd_score(9.8, "secalert@redhat.com")).len(), 2);
+        // The same number in another CVSS version is another score.
+        let mut v4 = nvd_score(8.1, "secalert@redhat.com");
+        v4.version = "4.0".to_string();
+        assert_eq!(by(&v4).len(), 2);
+    }
+
+    /// Every source answering, from a primed cache and a local NVD.
+    #[tokio::test]
+    async fn ratings_list_red_hat_nvd_cve_org_then_github() {
+        use sandogasa_cli::cache::{DiskCache, url_key};
+        use wiremock::matchers::{method, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let cve = "CVE-2026-1";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("cveId", cve))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "vulnerabilities": [{"cve": {"id": cve, "metrics": {"cvssMetricV31": [{
+                    "source": "secalert@redhat.com", "type": "Secondary",
+                    "cvssData": {"version": "3.1", "baseScore": 8.1, "baseSeverity": "HIGH"},
+                }]}}}]
+            })))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::at(Some(dir.path().to_path_buf()), false, None);
+        let record = r#"{"cveMetadata": {"cveId": "CVE-2026-1", "state": "PUBLISHED",
+                "assignerShortName": "redhat"},
+            "containers": {
+                "cna": {"metrics": [{"cvssV3_1": {"baseScore": 8.1, "baseSeverity": "HIGH"}}]},
+                "adp": [{"metrics": [{"cvssV3_1": {"baseScore": 7.8, "baseSeverity": "HIGH"}}],
+                    "providerMetadata": {"shortName": "CISA-ADP"}}]}}"#;
+        for (url, body) in [
+            (redhat_url(cve), r#"{"threat_severity": "Important"}"#),
+            (cveorg::record_url(cve), record),
+            (
+                crate::advisory::ghsa_search_url(cve),
+                r#"[{"ghsa_id": "GHSA-aaaa-bbbb-cccc", "severity": "high"}]"#,
+            ),
+        ] {
+            cache.store(&url_key(&url), body);
+        }
+        sandogasa_cli::install_crypto_provider();
+        let http = reqwest::Client::new();
+        let sources = Sources::new(&http, &cache, None);
+        let mut nvd = NvdCache::with(
+            sandogasa_nvd::NvdClient::with_base_url(&server.uri()),
+            DiskCache::at(None, false, None),
+            std::time::Duration::ZERO,
+            false,
+        );
+        let listed: Vec<String> = ratings(cve, &mut nvd, &sources)
+            .await
+            .iter()
+            .map(Rating::to_string)
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "Red Hat: Important",
+                "NVD: CVSS 3.1 8.1 high (secalert@redhat.com)",
+                // The CNA's 8.1 is the one NVD quotes.
+                "cve.org: CVSS 3.1 7.8 high (CISA-ADP)",
+                "GHSA-aaaa-bbbb-cccc: high",
+            ]
+        );
     }
 }

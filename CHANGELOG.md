@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### sandogasa-cve: cve.org as a source
+
+New in the library, for the cve.org entries here, with nothing removed
+or changed in signature:
+
+- `cveorg`: `record_url`, `parse` and `Record` (state, CNA, title,
+  description, references, and each party's CVSS score as a `Score`);
+  `Record::is_rejected`; `Record::as_nvd`, the record in the shape of
+  NVD's answer with none of NVD's analysis, and `STAND_IN_STATUS`, the
+  status it carries;
+- `Sources::cveorg`, kept in the caller's disk cache like the other
+  sources' answers;
+- `severity::cveorg_ratings`. `severity::ratings` now lists Red Hat,
+  NVD, cve.org, GitHub, and asks them together.
+
+A record's `affected` versions are not read; DEVELOPMENT.md says why.
+
 ### cbspkg sig-repo clones a package's repo into an empty -C directory
 
 `cbspkg sig-repo <package> --sig proposed-updates -C <dir>` created the

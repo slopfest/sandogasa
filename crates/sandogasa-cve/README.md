@@ -35,10 +35,21 @@ Where a CVE is fixed, and whether a build has that fix.
   of the fix commits OSV records (`Copies::git_verdict`). Answers that
   never change are kept under `$XDG_CACHE_HOME/sandogasa-cve/`, shared
   by every tool.
+- **`cveorg`** — cve.org's own record of a CVE (`parse`, `Record`):
+  its state (published or rejected), the CNA's title, description and
+  references, and every party's CVSS score, the CNA's first.
+  `Record::as_nvd` gives it in the shape of NVD's answer, with none of
+  NVD's product data, for a caller that reads a CVE through
+  `sandogasa-nvd` and has no NVD record to read.
 - **`severity`** — how severe a CVE is according to each source that
   says (`ratings`): Red Hat's security data, NVD's answer (with the
-  CNA's and others' scores), and GitHub's advisory database, in that
-  order, each as a `Rating` with a `Level` and the source's own words.
+  CNA's and others' scores), cve.org's record (the CNA's score, then
+  each other party's, such as CISA's), and GitHub's advisory database,
+  in that order, each as a `Rating` with a `Level` and the source's own
+  words.
+- **`sources`** — `Sources`, the lookups beyond NVD with the client,
+  disk cache and GitHub token they share: GitHub's advisories, OSV, Red
+  Hat's security data and cve.org's record.
 - **`version`** — `Nvr` parsing and `version_gte` on upstream version
   strings.
 
