@@ -19,7 +19,9 @@ Where a CVE is fixed, and whether a build has that fix.
   summary; `first_sentence` of a CVE's description.
 - **`cache`** — `NvdCache`, NVD answers paced to its rate limit (5 per
   30 s bare, 50 with an API key), retried once after a refusal, kept
-  on disk for a day under the calling tool's cache directory;
+  on disk for a day under the calling tool's cache directory when they
+  have a record of the CVE (an empty answer, NVD's for a CVE it has not
+  copied from cve.org yet, serves only the run it was given in);
   `check_api_key`, what NVD says to a configured key.
 - **`advisory`** — GitHub Security Advisories by CVE (`ghsa_records`,
   `ghsa_range`) and a fixed-version candidate read out of advisory

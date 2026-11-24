@@ -73,6 +73,22 @@ while NVD still shows the record or does not answer, and the bug says
 which of the two said it. The reason in `configs/fedora-cve-triage/run.toml`
 no longer says the status is NVD's.
 
+### sandogasa-cve asks NVD again for a CVE it had no record of
+
+A CVE NVD had not copied from cve.org yet stayed missing for a day. NVD
+answers such a lookup with an empty list, and `NvdCache` kept that
+answer on disk like any other, so a `cpu-sig-tracker jira` draft made
+an hour later, after NVD had published the record, still had no NVD
+rating, and fedora-cve-triage still read the CVE without NVD's product
+data.
+
+An answer with no record of the CVE is no longer kept on disk, and one
+kept before is passed over, so NVD is asked again on the next run.
+Within a run the answer is still remembered, so the checks do not each
+ask. A run pays one request, at NVD's pace, for each CVE NVD does not
+have. This applies to every user of `NvdCache`: fedora-cve-triage,
+cpu-sig-tracker and ebranch.
+
 ### sandogasa-cve: cve.org as a source
 
 New in the library, for the cve.org entries here, with nothing removed

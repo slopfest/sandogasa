@@ -7,6 +7,11 @@
 //! a whole window and asks once more, and records a CVE refused twice
 //! so a run can say which bugs went unjudged for want of data rather
 //! than because nothing applied.
+//!
+//! Only an answer with a record of the CVE is kept on disk. NVD copies a
+//! new CVE from cve.org some hours after it is published and answers
+//! with an empty list until then; kept for a day, that answer would
+//! hide the record long after NVD has it.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -143,15 +148,22 @@ impl<T> NvdCache<T> {
     /// The cached value for `cve_id`, fetching and `map`ping the NVD
     /// response on a miss. `None` means the fetch failed (a warning
     /// has already been printed).
+    ///
+    /// An answer with no record of the CVE is remembered for the run,
+    /// so that it is asked for once, and not kept on disk, so that the
+    /// next run asks NVD again. One already on disk is passed over the
+    /// same way.
     pub async fn get(
         &mut self,
         cve_id: &str,
         map: impl FnOnce(sandogasa_nvd::models::CveResponse) -> T,
     ) -> Option<&T> {
         if !self.cache.contains_key(cve_id) {
-            // A day-old answer on disk spares the request and the wait.
+            // A day-old answer on disk spares the request and the wait,
+            // when it has a record of the CVE.
             if let Some(body) = self.disk.load(&format!("{cve_id}.json"))
                 && let Ok(resp) = serde_json::from_str::<sandogasa_nvd::models::CveResponse>(&body)
+                && !resp.vulnerabilities.is_empty()
             {
                 if self.verbose {
                     eprintln!("Using cached NVD answer for {cve_id}...");
@@ -171,7 +183,9 @@ impl<T> NvdCache<T> {
             let body = self.fetch(cve_id).await?;
             match serde_json::from_str::<sandogasa_nvd::models::CveResponse>(&body) {
                 Ok(resp) => {
-                    self.disk.store(&format!("{cve_id}.json"), &body);
+                    if !resp.vulnerabilities.is_empty() {
+                        self.disk.store(&format!("{cve_id}.json"), &body);
+                    }
                     self.cache.insert(cve_id.to_string(), map(resp));
                 }
                 Err(e) => {
@@ -303,5 +317,74 @@ mod tests {
         assert!(!nvd.client.has_api_key());
         assert_eq!(nvd.interval, Duration::from_secs(6));
         assert!(nvd.refused.is_empty());
+    }
+
+    /// NVD answers with an empty list for a CVE it has not copied from
+    /// cve.org yet. That answer serves the run it was given in and no
+    /// later one, so the record is read as soon as NVD has it.
+    #[tokio::test]
+    async fn an_answer_with_no_record_is_asked_for_again_the_next_run() {
+        use wiremock::matchers::{method, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        fn records(r: sandogasa_nvd::models::CveResponse) -> usize {
+            r.vulnerabilities.len()
+        }
+        let cve = "CVE-2026-1";
+        let server = MockServer::start().await;
+        // Nothing yet for the first two requests, then the record.
+        Mock::given(method("GET"))
+            .and(query_param("cveId", cve))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalResults": 0, "vulnerabilities": []
+            })))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param("cveId", cve))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "totalResults": 1, "vulnerabilities": [{"cve": {"id": cve}}]
+            })))
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let disk = || DiskCache::at(Some(dir.path().to_path_buf()), false, Some(NVD_TTL));
+        // Each run has a cache of its own over the same directory, and
+        // makes one request, so NVD's pace is never waited out.
+        let run = || {
+            NvdCache::with(
+                NvdClient::with_base_url(&server.uri()),
+                disk(),
+                Duration::ZERO,
+                false,
+            )
+        };
+        let asked = || async { server.received_requests().await.unwrap_or_default().len() };
+        // An empty answer an earlier version kept is passed over.
+        disk().store(
+            &format!("{cve}.json"),
+            r#"{"totalResults": 0, "vulnerabilities": []}"#,
+        );
+
+        let mut first = run();
+        assert_eq!(first.get(cve, records).await, Some(&0));
+        assert_eq!(asked().await, 1, "the kept empty answer is not used");
+        // Within the run it is remembered: every check asking about the
+        // CVE does not wait on NVD again.
+        assert_eq!(first.get(cve, records).await, Some(&0));
+        assert_eq!(asked().await, 1);
+
+        // The next run asks again, and again hears nothing.
+        let mut second = run();
+        assert_eq!(second.get(cve, records).await, Some(&0));
+        assert_eq!(asked().await, 2);
+
+        // NVD has the record now: it is read, and kept.
+        let mut third = run();
+        assert_eq!(third.get(cve, records).await, Some(&1));
+        assert_eq!(asked().await, 3);
+        let mut fourth = run();
+        assert_eq!(fourth.get(cve, records).await, Some(&1));
+        assert_eq!(asked().await, 3, "a record is served from disk");
     }
 }
