@@ -24,7 +24,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use sandogasa_cbs::Collection;
-use sandogasa_cbs::lookaside::{Source, parse_sources, url};
+use sandogasa_cbs::lookaside::{Source, parse_sources};
+
+use crate::fetch::Lookasides;
 use sandogasa_cli::explain::Ui;
 
 use crate::add_pkg::{Checkout, VariantArgs, resolve};
@@ -619,106 +621,20 @@ fn verrel(args: &VerrelArgs) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Fetch what the checkout's `sources` file names and the checkout
-/// does not have, from the SIG lookaside at `base`, each checked
-/// against its sum before it takes its name. A file that is there with
-/// another sum is the packager's, perhaps regenerated: an error, never
-/// overwritten. Nothing is fetched in a dry run.
+/// does not have, from the lookasides `crate::fetch` asks, with a
+/// reminder to upload any found outside the SIG lookaside.
 fn fetch_sources(
     ui: &Ui,
     repo: &Path,
     package: &str,
-    base: &str,
+    lookasides: &Lookasides,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Ok(text) = std::fs::read_to_string(repo.join("sources")) else {
         return Ok(());
     };
     let sources = parse_sources(&text);
-    if let Some(other) = sources.iter().find(|s| s.hash != "sha512") {
-        return Err(format!(
-            "{} is listed with {}; the SIG lookaside keeps sha512 sums",
-            other.name, other.hash
-        )
-        .into());
-    }
-    let mut missing: Vec<&Source> = Vec::new();
-    for source in &sources {
-        if !repo.join(&source.name).exists() {
-            missing.push(source);
-        } else if !crate::upload_sources::matches(repo, source) {
-            return Err(format!(
-                "{} in the checkout does not match its sha512 sum in `sources`: update \
-                 `sources` for it, or remove it to fetch the one `sources` names",
-                source.name
-            )
-            .into());
-        }
-    }
-    if missing.is_empty() {
-        return Ok(());
-    }
-    ui.step(&format!(
-        "Fetch the {} source file(s) the checkout lacks from the SIG lookaside",
-        missing.len()
-    ));
-    let http = sandogasa_cli::http::blocking_builder(concat!(
-        env!("CARGO_PKG_NAME"),
-        "/",
-        env!("CARGO_PKG_VERSION")
-    ))
-    .build()?;
-    for source in missing {
-        let at = url(base, package, source);
-        ui.show_command(
-            &[
-                "curl",
-                "--fail",
-                "--location",
-                "--output",
-                &source.name,
-                &at,
-            ]
-            .map(String::from),
-        );
-        if ui.dry_run {
-            continue;
-        }
-        if !ui.explain {
-            eprintln!("Fetching {} from the SIG lookaside…", source.name);
-        }
-        let mut resp = http
-            .get(&at)
-            .send()
-            .map_err(|e| format!("cannot reach the SIG lookaside: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!(
-                "the SIG lookaside answered HTTP {} for {}; upload it with \
-                 `cbspkg upload-sources`, or put it in the checkout",
-                resp.status().as_u16(),
-                source.name
-            )
-            .into());
-        }
-        // Streamed to a file beside it, which takes the name only once
-        // its sum is right: a tarball can be hundreds of megabytes.
-        let partial = format!(".{}.part", source.name);
-        let mut file = std::fs::File::create(repo.join(&partial))?;
-        resp.copy_to(&mut file)?;
-        drop(file);
-        let candidate = Source {
-            name: partial.clone(),
-            ..source.clone()
-        };
-        if !crate::upload_sources::matches(repo, &candidate) {
-            let _ = std::fs::remove_file(repo.join(&partial));
-            return Err(format!(
-                "{} from the SIG lookaside does not match its sha512 sum in `sources`",
-                source.name
-            )
-            .into());
-        }
-        std::fs::rename(repo.join(&partial), repo.join(&source.name))?;
-    }
-    Ok(())
+    let all: Vec<&Source> = sources.iter().collect();
+    crate::fetch::fetch_missing(ui, repo, package, &all, lookasides, true)
 }
 
 /// Build each collection's SRPM; a dry run says where rpmbuild would
@@ -729,12 +645,7 @@ fn srpm(ui: &Ui, p: &Prepared) -> Result<Vec<Built>, Box<dyn std::error::Error>>
         ("rpmspec", "sudo dnf install rpm-build", Some("--version")),
         ("sha512sum", "sudo dnf install coreutils", Some("--version")),
     ])?;
-    fetch_sources(
-        ui,
-        &p.repo,
-        &p.checkout.package,
-        &crate::upload_sources::lookaside_base(),
-    )?;
+    fetch_sources(ui, &p.repo, &p.checkout.package, &Lookasides::from_env())?;
     // Reading the version-release changes nothing: done in a dry run too.
     let verrels = verrels(
         &Ui {
@@ -1317,21 +1228,38 @@ mod tests {
                 dry_run: false,
                 quiet: false,
             };
-            fetch_sources(&ui, &f.repo, "rsync", &server.url()).unwrap();
+            fetch_sources(
+                &ui,
+                &f.repo,
+                "rsync",
+                &at(&server.url(), &server.url(), &server.url()),
+            )
+            .unwrap();
             good.assert();
             assert_eq!(
                 std::fs::read_to_string(f.repo.join(FILE)).unwrap(),
                 "data\n"
             );
             // There now: not fetched again.
-            fetch_sources(&ui, &f.repo, "rsync", &server.url()).unwrap();
+            fetch_sources(
+                &ui,
+                &f.repo,
+                "rsync",
+                &at(&server.url(), &server.url(), &server.url()),
+            )
+            .unwrap();
 
             // One there with another sum is the packager's: kept, and an
             // error rather than overwritten.
             std::fs::write(f.repo.join(FILE), "regenerated\n").unwrap();
-            let err = fetch_sources(&ui, &f.repo, "rsync", &server.url())
-                .unwrap_err()
-                .to_string();
+            let err = fetch_sources(
+                &ui,
+                &f.repo,
+                "rsync",
+                &at(&server.url(), &server.url(), &server.url()),
+            )
+            .unwrap_err()
+            .to_string();
             assert!(err.contains("in the checkout does not match"), "{err}");
             assert_eq!(
                 std::fs::read_to_string(f.repo.join(FILE)).unwrap(),
@@ -1344,9 +1272,14 @@ mod tests {
                 .mock("GET", path.as_str())
                 .with_body("other\n")
                 .create();
-            let err = fetch_sources(&ui, &f.repo, "rsync", &server.url())
-                .unwrap_err()
-                .to_string();
+            let err = fetch_sources(
+                &ui,
+                &f.repo,
+                "rsync",
+                &at(&server.url(), &server.url(), &server.url()),
+            )
+            .unwrap_err()
+            .to_string();
             assert!(
                 err.contains("from the SIG lookaside does not match"),
                 "{err}"
@@ -1356,17 +1289,189 @@ mod tests {
 
             server.reset();
             server.mock("GET", path.as_str()).with_status(404).create();
-            let err = fetch_sources(&ui, &f.repo, "rsync", &server.url())
-                .unwrap_err()
-                .to_string();
+            let err = fetch_sources(
+                &ui,
+                &f.repo,
+                "rsync",
+                &at(&server.url(), &server.url(), &server.url()),
+            )
+            .unwrap_err()
+            .to_string();
             assert!(err.contains("HTTP 404"), "{err}");
             // A dry run fetches nothing.
             let dry = Ui {
                 dry_run: true,
                 ..ui
             };
-            fetch_sources(&dry, &f.repo, "rsync", &server.url()).unwrap();
+            fetch_sources(
+                &dry,
+                &f.repo,
+                "rsync",
+                &at(&server.url(), &server.url(), &server.url()),
+            )
+            .unwrap();
             assert!(!f.repo.join(FILE).exists());
+        }
+
+        /// Lookasides at these addresses, in the order they are asked.
+        fn at(sig: &str, stream: &str, fedora: &str) -> Lookasides {
+            Lookasides {
+                sig: sig.to_string(),
+                stream: stream.to_string(),
+                fedora: fedora.to_string(),
+            }
+        }
+
+        /// A package new to the SIG: what the SIG lookaside lacks comes
+        /// from CentOS Stream's, then Fedora's, checked the same way,
+        /// beside what the SIG lookaside has; one none has is an error
+        /// naming every address asked.
+        #[test]
+        #[serial_test::serial]
+        fn what_the_sig_lookaside_lacks_comes_from_stream_or_fedora() {
+            const PATCHES: &str = "rsync-patches-3.2.7.tar.gz";
+            /// `printf 'more\n' | sha512sum`
+            const PATCHES_SUM: &str = "e7f4d6004415336a9b6b585a38acdc4137a0e5c15f772e51a85a1980b7ccf538\
+                                       0ddf6259619d68ce8f3c3f2771c33a9b6afe37998ff39ad26ea98d0086b72685";
+            let f = fixture(&[(
+                "sources",
+                &format!("SHA512 ({FILE}) = {SUM}\nSHA512 ({PATCHES}) = {PATCHES_SUM}\n"),
+            )]);
+            let mut sig = mockito::Server::new();
+            let mut stream = mockito::Server::new();
+            let mut fedora = mockito::Server::new();
+            let sig_path =
+                |name: &str, sum: &str| format!("/sources/rsync/{name}/sha512/{sum}/{name}");
+            let rpms_path =
+                |name: &str, sum: &str| format!("/rpms/rsync/{name}/sha512/{sum}/{name}");
+            let sig_has = sig
+                .mock("GET", sig_path(FILE, SUM).as_str())
+                .with_body("data\n")
+                .expect(1)
+                .create();
+            let sig_lacks = sig
+                .mock("GET", sig_path(PATCHES, PATCHES_SUM).as_str())
+                .with_status(404)
+                .expect(1)
+                .create();
+            let stream_has = stream
+                .mock("GET", rpms_path(PATCHES, PATCHES_SUM).as_str())
+                .with_body("more\n")
+                .expect(1)
+                .create();
+            let ui = Ui {
+                explain: false,
+                dry_run: false,
+                quiet: false,
+            };
+            let all = at(&sig.url(), &stream.url(), &fedora.url());
+            fetch_sources(&ui, &f.repo, "rsync", &all).unwrap();
+            sig_has.assert();
+            sig_lacks.assert();
+            stream_has.assert();
+            assert_eq!(
+                std::fs::read_to_string(f.repo.join(FILE)).unwrap(),
+                "data\n"
+            );
+            assert_eq!(
+                std::fs::read_to_string(f.repo.join(PATCHES)).unwrap(),
+                "more\n"
+            );
+
+            // Stream's copy is checked against the sum as well.
+            std::fs::remove_file(f.repo.join(PATCHES)).unwrap();
+            stream.reset();
+            stream
+                .mock("GET", rpms_path(PATCHES, PATCHES_SUM).as_str())
+                .with_body("other\n")
+                .create();
+            let err = fetch_sources(&ui, &f.repo, "rsync", &all)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("from CentOS Stream's lookaside does not match"),
+                "{err}"
+            );
+            assert!(!f.repo.join(PATCHES).exists());
+            assert!(!f.repo.join(format!(".{PATCHES}.part")).exists());
+
+            // A package following Fedora: Stream's lacks the file too,
+            // and Fedora's has it. Stream's lookaside out of reach is
+            // no reason not to ask Fedora's.
+            stream.reset();
+            stream
+                .mock("GET", mockito::Matcher::Any)
+                .with_status(404)
+                .create();
+            let fedora_has = fedora
+                .mock("GET", rpms_path(PATCHES, PATCHES_SUM).as_str())
+                .with_body("more\n")
+                .expect(2)
+                .create();
+            fetch_sources(&ui, &f.repo, "rsync", &all).unwrap();
+            std::fs::remove_file(f.repo.join(PATCHES)).unwrap();
+            let unreachable = at(&sig.url(), "http://127.0.0.1:9", &fedora.url());
+            fetch_sources(&ui, &f.repo, "rsync", &unreachable).unwrap();
+            fedora_has.assert();
+            assert_eq!(
+                std::fs::read_to_string(f.repo.join(PATCHES)).unwrap(),
+                "more\n"
+            );
+
+            // In none: every address is named, and a file fetched
+            // elsewhere in the same run is kept, for upload-sources.
+            std::fs::remove_file(f.repo.join(FILE)).unwrap();
+            std::fs::remove_file(f.repo.join(PATCHES)).unwrap();
+            sig.reset();
+            sig.mock("GET", mockito::Matcher::Any)
+                .with_status(404)
+                .create();
+            stream.reset();
+            stream
+                .mock("GET", rpms_path(FILE, SUM).as_str())
+                .with_body("data\n")
+                .create();
+            stream
+                .mock("GET", rpms_path(PATCHES, PATCHES_SUM).as_str())
+                .with_status(404)
+                .create();
+            fedora.reset();
+            fedora
+                .mock("GET", mockito::Matcher::Any)
+                .with_status(404)
+                .create();
+            let err = fetch_sources(&ui, &f.repo, "rsync", &all)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("no lookaside has"), "{err}");
+            assert!(err.contains(&stream.url()), "{err}");
+            assert!(err.contains(&fedora.url()), "{err}");
+            assert_eq!(
+                std::fs::read_to_string(f.repo.join(FILE)).unwrap(),
+                "data\n"
+            );
+            let err = fetch_sources(&ui, &f.repo, "rsync", &unreachable)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("CentOS Stream's lookaside unreachable"),
+                "{err}"
+            );
+
+            // The SIG lookaside out of reach, or answering anything but
+            // 404, is an error before the others are asked.
+            let err = fetch_sources(&ui, &f.repo, "rsync", &at("http://127.0.0.1:9", "", ""))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("cannot reach the SIG lookaside"), "{err}");
+            sig.reset();
+            sig.mock("GET", mockito::Matcher::Any)
+                .with_status(500)
+                .create();
+            let err = fetch_sources(&ui, &f.repo, "rsync", &all)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("answered HTTP 500"), "{err}");
         }
 
         #[test]
@@ -1378,7 +1483,8 @@ mod tests {
                 dry_run: true,
                 quiet: false,
             };
-            let err = fetch_sources(&ui, &f.repo, "rsync", "http://127.0.0.1:9")
+            let nowhere = "http://127.0.0.1:9";
+            let err = fetch_sources(&ui, &f.repo, "rsync", &at(nowhere, nowhere, nowhere))
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("listed with md5"), "{err}");

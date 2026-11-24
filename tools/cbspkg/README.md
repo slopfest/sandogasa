@@ -71,7 +71,7 @@ cargo install cbspkg
 ```
 
 `add-pkg`, `build` and `upload-sources` need `koji`, `cbs` and
-`centos-lookaside-upload-sig` (centos-packager), `centpkg`, and a CBS
+`centos-lookaside-upload-sig` (centos-packager), and a CBS
 login (`~/.centos.cert`, from `centos-cert`). `srpm`, `mockbuild` and
 `verrel` need `koji` with the `cbs` profile, to read CBS, and
 `rpm-build`; `mockbuild` needs `mock` and mock-centos-sig-configs.
@@ -500,9 +500,13 @@ with `koji -p cbs call getBuildConfig`: Hyperscale's Stream collections
 set `dist` itself (`.hs.el10`), while Proposed Updates and Extras set a
 `distprefix` or `distsuffix` (`~proposed`, `s`) that `srpm` wraps
 around `.el<N>`. A source file the `sources` file names and the
-checkout lacks is fetched from the SIG lookaside first, checked against
-its sha512; one the checkout has with another sum is an error, not
-replaced. A branch building into several collections gets an SRPM for
+checkout lacks is fetched from the SIG lookaside first, or, when the
+SIG lookaside lacks it, from CentOS Stream's, then Fedora's, as
+`centpkg sources` or `fedpkg sources` would, a few files at a time;
+each is checked against its sha512. A file found outside the SIG
+lookaside is named at the end with a reminder to run `upload-sources`
+before building in CBS, which fetches from the SIG lookaside alone. One the checkout has with another sum is
+an error, not replaced. A branch building into several collections gets an SRPM for
 each. The spec and sources are the working tree's, so `--branch` must
 name the branch checked out, as all three commands require. A spec
 using `%autorelease` or `%autochangelog` is read, and its SRPM built,
@@ -556,14 +560,11 @@ lookaside. The `sources` file is read from the branch's commit, and
 the lookaside is asked for each file first, so files already there are
 left alone and a second run does nothing.
 
-A file the checkout lacks, or has with another sum, is fetched with
-`centpkg sources`, from CentOS Stream's lookaside. That fetches the
-checked-out branch's files, so when the branch is not checked out,
-`upload-sources` checks it out for it (tracking the SIG remote's when
-there is no local branch) and switches back afterwards, whether or not
-the fetch worked; the fetched files are untracked, so they stay. A
-checkout with uncommitted changes is not switched: that stops it with
-what to do instead. Every file is checked against its sha512 before
+A file the checkout lacks is fetched first, as `srpm` fetches it: from
+CentOS Stream's lookaside, or failing that Fedora's, where `centpkg
+sources` and `fedpkg sources` fetch, whichever branch is checked out.
+One the checkout has with another sum is an error, not replaced. Every
+file is checked against its sha512 before
 `centos-lookaside-upload-sig -f <file> -n <pkg>` uploads it. The
 upload is confirmed at a terminal, showing each command, and refused
 without one. `--explain` and `--dry-run` show each step's command.

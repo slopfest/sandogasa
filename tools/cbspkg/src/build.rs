@@ -382,7 +382,7 @@ fn from_git(
 
     // CBS fetches the sources from the SIG lookaside, scratch builds
     // too (#99).
-    if !crate::upload_sources::upload_missing(ui, repo, checkout, &remote, &commit)? {
+    if !crate::upload_sources::upload_missing(ui, repo, checkout, &commit)? {
         return Ok((None, commit));
     }
     if !args.scratch

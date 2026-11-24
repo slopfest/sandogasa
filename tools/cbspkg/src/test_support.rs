@@ -123,6 +123,8 @@ impl Fixture {
             ("GIT_CONFIG_GLOBAL", "/dev/null"),
             ("GIT_CONFIG_NOSYSTEM", "1"),
             ("CBSPKG_LOOKASIDE_BASE", "http://127.0.0.1:9"),
+            ("CBSPKG_STREAM_LOOKASIDE_BASE", "http://127.0.0.1:9"),
+            ("CBSPKG_FEDORA_LOOKASIDE_BASE", "http://127.0.0.1:9"),
             ("CBSPKG_GITLAB_BASE", "http://127.0.0.1:9"),
             ("CBSPKG_CBS_HUB", "http://127.0.0.1:9"),
         ])
@@ -131,7 +133,6 @@ impl Fixture {
         // it; anything else fails.
         install_fake_bin(&bin, "koji", &[("--help", "")]);
         install_fake_bin(&bin, "cbs", &[("--help", "")]);
-        install_fake_bin(&bin, "centpkg", &[("--help", "")]);
         install_fake_bin(&bin, "fedrq", &[("--help", "")]);
         install_fake_bin(&bin, "rpmspec", &[("--version", "")]);
         for name in [

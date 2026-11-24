@@ -9,6 +9,15 @@
 /// The SIGs' lookaside cache.
 pub const SIG_LOOKASIDE: &str = "https://git.centos.org";
 
+/// CentOS Stream's lookaside cache, where `centpkg sources` fetches a
+/// Stream package's files. A package new to a SIG has its files here,
+/// or in [`FEDORA_LOOKASIDE`], before anyone uploads them to
+/// [`SIG_LOOKASIDE`].
+pub const STREAM_LOOKASIDE: &str = "https://sources.stream.centos.org/sources";
+
+/// Fedora's lookaside cache, where `fedpkg sources` fetches.
+pub const FEDORA_LOOKASIDE: &str = "https://src.fedoraproject.org/repo/pkgs";
+
 /// One file a `sources` file names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
@@ -40,6 +49,19 @@ pub fn parse_sources(text: &str) -> Vec<Source> {
 pub fn url(base: &str, package: &str, source: &Source) -> String {
     format!(
         "{}/sources/{package}/{name}/{hash}/{sum}/{name}",
+        base.trim_end_matches('/'),
+        name = source.name,
+        hash = source.hash,
+        sum = source.sum,
+    )
+}
+
+/// Where a namespaced lookaside at `base`, CentOS Stream's or Fedora's,
+/// keeps `source` of `package`: under the `rpms` namespace, which the
+/// SIG lookaside does not have.
+pub fn rpms_url(base: &str, package: &str, source: &Source) -> String {
+    format!(
+        "{}/rpms/{package}/{name}/{hash}/{sum}/{name}",
         base.trim_end_matches('/'),
         name = source.name,
         hash = source.hash,
@@ -79,6 +101,16 @@ mod tests {
         assert_eq!(
             upload_argv("rsync-3.2.7.tar.gz", "rsync").join(" "),
             "centos-lookaside-upload-sig -f rsync-3.2.7.tar.gz -n rsync"
+        );
+        // As `centpkg sources` fetches it, with the `rpms` namespace.
+        assert_eq!(
+            rpms_url(STREAM_LOOKASIDE, "rsync", &sources[1]),
+            "https://sources.stream.centos.org/sources/rpms/rsync/rsync-3.2.7.tar.gz/sha512/c2afba/rsync-3.2.7.tar.gz"
+        );
+        // And `fedpkg sources`.
+        assert_eq!(
+            rpms_url(FEDORA_LOOKASIDE, "rsync", &sources[1]),
+            "https://src.fedoraproject.org/repo/pkgs/rpms/rsync/rsync-3.2.7.tar.gz/sha512/c2afba/rsync-3.2.7.tar.gz"
         );
         assert!(parse_sources("SHA512 (../evil) = x\n").is_empty());
     }

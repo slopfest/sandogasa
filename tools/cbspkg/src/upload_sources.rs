@@ -6,9 +6,10 @@
 //! A SIG build fetches its sources from the SIGs' lookaside cache, not
 //! CentOS Stream's, so a package's first SIG build fails on a 404 for
 //! every file (rsync's first, task 6077804) until each is uploaded with
-//! `centos-lookaside-upload-sig`. The files usually come from Stream,
-//! so a file the checkout lacks is fetched with `centpkg sources` first,
-//! and every one is checked against its sum before it is uploaded. Like
+//! `centos-lookaside-upload-sig`. The files usually come from Stream or
+//! Fedora, so a file the checkout lacks is fetched from their
+//! lookasides first, as `srpm` fetches it (`crate::fetch`), and every
+//! one is checked against its sum before it is uploaded. Like
 //! the CBS writes, the upload is confirmed at a terminal. `build` runs
 //! the same check before building.
 
@@ -42,17 +43,24 @@ pub struct UploadSourcesArgs {
     pub repo: Option<PathBuf>,
 }
 
-/// The checkouts around `centpkg sources`: to the branch, and back.
-#[derive(Debug, PartialEq)]
-pub struct Switch {
-    pub there: Vec<String>,
-    pub back: Vec<String>,
-}
-
 /// The SIG lookaside: `CBSPKG_LOOKASIDE_BASE`, for testing against a
 /// local server, else git.centos.org.
 pub fn lookaside_base() -> String {
     std::env::var("CBSPKG_LOOKASIDE_BASE").unwrap_or_else(|_| SIG_LOOKASIDE.to_string())
+}
+
+/// CentOS Stream's lookaside: `CBSPKG_STREAM_LOOKASIDE_BASE`, for
+/// testing against a local server, else sources.stream.centos.org.
+pub fn stream_lookaside_base() -> String {
+    std::env::var("CBSPKG_STREAM_LOOKASIDE_BASE")
+        .unwrap_or_else(|_| sandogasa_cbs::lookaside::STREAM_LOOKASIDE.to_string())
+}
+
+/// Fedora's lookaside: `CBSPKG_FEDORA_LOOKASIDE_BASE`, for testing
+/// against a local server, else src.fedoraproject.org.
+pub fn fedora_lookaside_base() -> String {
+    std::env::var("CBSPKG_FEDORA_LOOKASIDE_BASE")
+        .unwrap_or_else(|_| sandogasa_cbs::lookaside::FEDORA_LOOKASIDE.to_string())
 }
 
 /// What the SIG lookaside lacks, to follow "The SIG lookaside", and the
@@ -137,52 +145,6 @@ pub fn matches(repo: &Path, source: &Source) -> bool {
         .ok()
         .and_then(|o| parse_sha512sum(&String::from_utf8_lossy(&o.stdout)))
         .is_some_and(|sum| sum.eq_ignore_ascii_case(&source.sum))
-}
-
-/// How to get `branch` (at `head`'s `commit`) checked out for
-/// `centpkg sources`, which fetches the checked-out branch's files, and
-/// back, or `None` when HEAD is at `commit` already.
-/// `current` is `git rev-parse --abbrev-ref HEAD` (`HEAD` when
-/// detached); `has_local` whether `branch` exists locally, else it is
-/// checked out tracking `remote`'s. A checkout with uncommitted changes
-/// (`dirty`) is not switched: that is an error saying how to proceed.
-/// The same as cpu-sig-tracker's `mr` does for the pre-push hook.
-pub fn switch_for_sources(
-    current: &str,
-    head: &str,
-    commit: &str,
-    branch: &str,
-    has_local: bool,
-    remote: &str,
-    dirty: bool,
-) -> Result<Option<Switch>, String> {
-    if head == commit {
-        return Ok(None);
-    }
-    if dirty {
-        return Err(format!(
-            "fetching {branch}'s sources means checking it out (`centpkg sources` fetches the \
-             checked-out branch's), and the checkout has uncommitted changes: commit or stash \
-             them, or run `git checkout {branch}` yourself"
-        ));
-    }
-    let argv = |args: &[&str]| args.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-    let there = if has_local {
-        argv(&["git", "checkout", "--quiet", branch])
-    } else {
-        argv(&[
-            "git",
-            "checkout",
-            "--quiet",
-            "--track",
-            &format!("{remote}/{branch}"),
-        ])
-    };
-    let back_to = if current == "HEAD" { head } else { current };
-    Ok(Some(Switch {
-        there,
-        back: argv(&["git", "checkout", "--quiet", back_to]),
-    }))
 }
 
 /// Which of `sources` the SIG lookaside lacks, asking it for each
@@ -270,15 +232,13 @@ pub fn upload(
 }
 
 /// Upload whichever of the files the `sources` file at `commit` names
-/// the SIG lookaside lacks, fetching any the checkout lacks with
-/// `centpkg sources` first (on the branch, switching to it and back when
-/// it is not checked out), after confirming at a terminal. `Ok(false)`
-/// when the person declined.
+/// the SIG lookaside lacks, fetching any the checkout lacks first, from
+/// CentOS Stream's or Fedora's lookaside as `srpm` does, after
+/// confirming at a terminal. `Ok(false)` when the person declined.
 pub fn upload_missing(
     ui: &Ui,
     repo: &Path,
     checkout: &Checkout,
-    remote: &str,
     commit: &str,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let package = &checkout.package;
@@ -291,57 +251,16 @@ pub fn upload_missing(
         println!("{package}'s sources are in the SIG lookaside already.");
         return Ok(true);
     }
-
-    // The files themselves, from CentOS Stream's lookaside when the
-    // checkout lacks them. `centpkg sources` fetches what the checked-out
-    // branch's `sources` names, so the branch is checked out for it and
-    // the checkout put back after; the files it fetches are untracked,
-    // so they stay for the upload.
-    if missing.iter().any(|s| !matches(repo, s)) {
-        sandogasa_cli::require_tools(&[("centpkg", "sudo dnf install centpkg", Some("--help"))])?;
-        let branch = &checkout.branch;
-        let switch = switch_for_sources(
-            &git(repo, &["rev-parse", "--abbrev-ref", "HEAD"])?,
-            &git(repo, &["rev-parse", "HEAD"])?,
-            commit,
-            branch,
-            git(
-                repo,
-                &[
-                    "rev-parse",
-                    "--verify",
-                    "--quiet",
-                    &format!("refs/heads/{branch}"),
-                ],
-            )
-            .is_ok(),
-            remote,
-            !git(repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty(),
-        )?;
-        if let Some(Switch { there, .. }) = &switch {
-            ui.step(&format!(
-                "Check out {branch}: `centpkg sources` fetches the checked-out branch's files"
-            ));
-            ui.run_required(there, repo)?;
-        }
-        ui.step("Fetch them from CentOS Stream's lookaside");
-        let fetched = ui.run_required(&["centpkg", "sources"].map(String::from), repo);
-        if let Some(Switch { back, .. }) = &switch {
-            ui.step("Switch the checkout back");
-            ui.run_required(back, repo)?;
-        }
-        fetched?;
-        if !ui.dry_run
-            && let Some(bad) = missing.iter().find(|s| !matches(repo, s))
-        {
-            return Err(format!(
-                "{} does not have the sum `sources` names after `centpkg sources`; it may \
-                 not be in CentOS Stream's lookaside: upload it by hand",
-                bad.name
-            )
-            .into());
-        }
-    }
+    // No reminder to upload: that is the next step.
+    let wanted: Vec<&Source> = missing.iter().collect();
+    crate::fetch::fetch_missing(
+        ui,
+        repo,
+        package,
+        &wanted,
+        &crate::fetch::Lookasides::from_env(),
+        false,
+    )?;
     upload(ui, repo, package, &missing)
 }
 
@@ -355,7 +274,7 @@ fn run_inner(args: &UploadSourcesArgs) -> Result<(), Box<dyn std::error::Error>>
     sandogasa_cli::require_tools(&[("git", "sudo dnf install git-core", Some("--version"))])?;
     let checkout = resolve(&repo, args.branch.as_deref(), None, None)?;
     let located = crate::build::locate(&checkout, &repo)?;
-    upload_missing(&ui, &repo, &checkout, &located.remote, &located.commit)?;
+    upload_missing(&ui, &repo, &checkout, &located.commit)?;
     Ok(())
 }
 
@@ -424,40 +343,58 @@ mod tests {
         let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
         std::fs::write(f.repo.join(FILE), "data\n").unwrap();
         let (_server, mock, _env) = lookaside(404);
-        // centpkg is not needed: the file is there, with its sum.
-        f.fake("centpkg", &[]);
+        // Nothing to fetch: the file is there, with its sum.
         run_inner(&dry_run(None, &f)).unwrap();
         mock.assert();
     }
 
+    /// A file the checkout lacks is fetched as `srpm` fetches it, from
+    /// the branch's `sources` even when another branch is checked out,
+    /// before anything is uploaded; one there with another sum is the
+    /// packager's, and an error.
     #[test]
     #[serial_test::serial]
-    fn a_missing_source_the_checkout_lacks_is_fetched_with_centpkg_first() {
-        let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
-        // A file with the wrong contents is fetched again too.
-        std::fs::write(f.repo.join(FILE), "other\n").unwrap();
-        let (_server, _mock, _env) = lookaside(404);
-        run_inner(&dry_run(None, &f)).unwrap();
-        // Without centpkg it cannot be.
-        f.fake("centpkg", &[]);
-        let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
-        assert!(err.contains("centpkg (install"), "{err}");
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn the_branch_is_checked_out_for_centpkg_unless_the_checkout_is_dirty() {
+    fn a_missing_source_the_checkout_lacks_is_fetched_first() {
         let f = Fixture::proposed(BRANCH, &[("sources", &sources())]);
         f.git(&["checkout", "--quiet", "-b", "other"]);
-        std::fs::write(f.repo.join("rsync.spec"), "Name: y\n").unwrap();
+        std::fs::remove_file(f.repo.join("sources")).unwrap();
         f.git(&["commit", "--quiet", "-am", "elsewhere"]);
-        let (_server, _mock, _env) = lookaside(404);
+        let mut sig = mockito::Server::new();
+        let mut stream = mockito::Server::new();
+        let at = format!("/sources/rsync/{FILE}/sha512/{SUM}/{FILE}");
+        sig.mock("HEAD", at.as_str()).with_status(404).create();
+        sig.mock("GET", at.as_str()).with_status(404).create();
+        let fetched = stream
+            .mock(
+                "GET",
+                format!("/rpms/rsync/{FILE}/sha512/{SUM}/{FILE}").as_str(),
+            )
+            .with_body("data\n")
+            .expect(1)
+            .create();
+        let _env = EnvGuard::new(&[
+            ("CBSPKG_LOOKASIDE_BASE", &sig.url()),
+            ("CBSPKG_STREAM_LOOKASIDE_BASE", &stream.url()),
+        ]);
+        // A dry run shows the fetches and fetches nothing.
         run_inner(&dry_run(Some(BRANCH), &f)).unwrap();
-        std::fs::write(f.repo.join("rsync.spec"), "Name: z\n").unwrap();
-        let err = run_inner(&dry_run(Some(BRANCH), &f))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("uncommitted changes"), "{err}");
+        assert!(!f.repo.join(FILE).exists());
+        // A real one fetches, then stops at the CBS login the fake koji
+        // refuses, before uploading.
+        let real = UploadSourcesArgs {
+            dry_run: false,
+            ..dry_run(Some(BRANCH), &f)
+        };
+        assert!(run_inner(&real).is_err());
+        fetched.assert();
+        assert_eq!(
+            std::fs::read_to_string(f.repo.join(FILE)).unwrap(),
+            "data\n"
+        );
+
+        std::fs::write(f.repo.join(FILE), "other\n").unwrap();
+        let err = run_inner(&real).unwrap_err().to_string();
+        assert!(err.contains("in the checkout does not match"), "{err}");
     }
 
     #[test]
@@ -498,6 +435,20 @@ mod tests {
         assert_eq!(lookaside_base(), SIG_LOOKASIDE);
         let _env = EnvGuard::new(&[("CBSPKG_LOOKASIDE_BASE", "http://127.0.0.1:1")]);
         assert_eq!(lookaside_base(), "http://127.0.0.1:1");
+        let _env = EnvGuard::new(&[]).unset(&["CBSPKG_STREAM_LOOKASIDE_BASE"]);
+        assert_eq!(
+            stream_lookaside_base(),
+            sandogasa_cbs::lookaside::STREAM_LOOKASIDE
+        );
+        let _env = EnvGuard::new(&[("CBSPKG_STREAM_LOOKASIDE_BASE", "http://127.0.0.1:2")]);
+        assert_eq!(stream_lookaside_base(), "http://127.0.0.1:2");
+        let _env = EnvGuard::new(&[]).unset(&["CBSPKG_FEDORA_LOOKASIDE_BASE"]);
+        assert_eq!(
+            fedora_lookaside_base(),
+            sandogasa_cbs::lookaside::FEDORA_LOOKASIDE
+        );
+        let _env = EnvGuard::new(&[("CBSPKG_FEDORA_LOOKASIDE_BASE", "http://127.0.0.1:3")]);
+        assert_eq!(fedora_lookaside_base(), "http://127.0.0.1:3");
     }
 
     #[test]
@@ -538,57 +489,5 @@ mod tests {
         let has = |s: &Source| in_lookaside(&http, &url(&server.url(), "rsync", s)).unwrap();
         assert!(has(&sources[0]));
         assert!(!has(&sources[1]));
-    }
-
-    #[test]
-    fn the_branch_is_checked_out_for_centpkg_sources_and_the_checkout_put_back() {
-        let line = |a: &Vec<String>| a.join(" ");
-        // rsync's c10s build from a checkout on the c9s branch.
-        let Switch { there, back } = switch_for_sources(
-            "c9s-proposed-RHEL-303761",
-            "3afcfa97",
-            "e4441b13",
-            "c10s-CVE-2026-119741",
-            true,
-            "sig",
-            false,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(line(&there), "git checkout --quiet c10s-CVE-2026-119741");
-        assert_eq!(line(&back), "git checkout --quiet c9s-proposed-RHEL-303761");
-        // Only on the SIG's remote: checked out tracking it.
-        let Switch { there, .. } = switch_for_sources(
-            "c9s",
-            "3afcfa97",
-            "e4441b13",
-            "c10s-proposed-RHEL-303721",
-            false,
-            "sig",
-            false,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            line(&there),
-            "git checkout --quiet --track sig/c10s-proposed-RHEL-303721"
-        );
-        // A detached HEAD goes back to its commit.
-        let Switch { back, .. } =
-            switch_for_sources("HEAD", "3afcfa97", "e4441b13", "b", true, "sig", false)
-                .unwrap()
-                .unwrap();
-        assert_eq!(line(&back), "git checkout --quiet 3afcfa97");
-        // At the commit already: nothing to switch.
-        assert_eq!(
-            switch_for_sources("x", "e4441b13", "e4441b13", "b", true, "sig", true),
-            Ok(None)
-        );
-        let err =
-            switch_for_sources("x", "3afcfa97", "e4441b13", "b", true, "sig", true).unwrap_err();
-        assert!(
-            err.contains("uncommitted changes") && err.contains("git checkout b"),
-            "{err}"
-        );
     }
 }

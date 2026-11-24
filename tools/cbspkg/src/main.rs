@@ -10,6 +10,7 @@ mod checkout;
 mod config;
 mod configure;
 mod depcheck;
+mod fetch;
 mod local;
 mod new_sources;
 mod next;

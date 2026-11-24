@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### cbspkg srpm fetches a new package's sources from CentOS Stream or Fedora
+
+`cbspkg srpm` stopped short of an SRPM for a package new to its SIG,
+such as a Proposed Update `cpu-sig-tracker import` had just started
+(ghostscript, 2026-11-23): its files were only in CentOS Stream's
+lookaside, and `srpm` looked in the SIG's alone, with nothing to say
+that `centpkg sources` was the step to take (#234). A Hyperscale
+package following Fedora was in the same position with Fedora's
+lookaside.
+
+A file the SIG lookaside answers 404 for is now fetched from CentOS
+Stream's lookaside, or failing that Fedora's, at the addresses
+`centpkg sources` and `fedpkg sources` use, and checked against its
+sha512 the same way, so whichever lookaside answers, the file is the
+one `sources` names. `srpm` says which lookaside each file came from,
+and names any found outside the SIG's, since CBS builds from the SIG
+lookaside alone and `cbspkg upload-sources` has to put them there
+first. A file no lookaside has is an error naming every address asked.
+Up to four files are fetched at once, and `--explain` and `--dry-run`
+show the `curl` commands for each lookaside.
+
+`cbspkg upload-sources`, and `build` before it uploads, fetch the files
+the checkout lacks the same way. They used to run `centpkg sources`,
+which knows only CentOS Stream's lookaside, so a package following
+Fedora could not have its files uploaded, and which reads the
+checked-out branch's `sources`, so the checkout was switched to the
+branch and back for it. Neither is needed now, and cbspkg no longer
+needs `centpkg`. A file in the checkout with another sum than
+`sources` names is now an error, as it is for `srpm`, rather than
+fetched again over it.
+
+`sandogasa-cbs` gains `lookaside::STREAM_LOOKASIDE`,
+`lookaside::FEDORA_LOOKASIDE` and `lookaside::rpms_url`, the address of
+a file in either, under the `rpms` namespace the SIG lookaside does not
+have.
+
 ### A command fed input that it does not read reports its own exit status
 
 `sandogasa-cli`'s `run_required_with_input`, which dbranch uses to
