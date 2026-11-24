@@ -276,7 +276,7 @@ pub fn priority_label<'a>(priorities: impl IntoIterator<Item = &'a str>) -> Opti
 pub fn cve_line(cve: &str, ratings: &[Rating]) -> String {
     let rated = match ratings.first() {
         Some(r) => format!("{} ({r})", r.level.as_str()),
-        None => "not rated yet".to_string(),
+        None => UNRATED.trim_start_matches("— ").to_string(),
     };
     format!(
         "{CVE_LINE} [{cve}](https://access.redhat.com/security/cve/{cve}) — {rated}; \
@@ -323,6 +323,48 @@ pub fn rated_cve_lines(cves: &[String], verbose: bool) -> Vec<String> {
         .collect()
 }
 
+/// What a CVE line says of a CVE no source has rated yet.
+const UNRATED: &str = "— not rated yet";
+
+/// A body's CVE lines with each one not rated yet rated again by
+/// `rate` (given the CVEs, it returns their lines, as
+/// [`rated_cve_lines`] does), the others as they are, sorted as
+/// file-issue writes them. `None` when no line is unrated, or none of
+/// the unrated ones has a rating yet, so the body is only rewritten
+/// when a line changes.
+pub fn rerated_cve_lines(
+    body: &str,
+    rate: impl FnOnce(&[String]) -> Vec<String>,
+) -> Option<Vec<String>> {
+    let lines: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with(CVE_LINE))
+        .collect();
+    let unrated = cves_in(lines.iter().copied().filter(|l| l.contains(UNRATED)));
+    if unrated.is_empty() {
+        return None;
+    }
+    let rerated: Vec<String> = rate(&unrated)
+        .into_iter()
+        .filter(|l| !l.contains(UNRATED))
+        .collect();
+    if rerated.is_empty() {
+        return None;
+    }
+    let mut out: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| {
+            let cve = cves_in([*l]);
+            !rerated.iter().any(|r| cves_in([r.as_str()]) == cve)
+        })
+        .collect();
+    out.extend(rerated.iter().map(String::as_str));
+    sort_cve_lines(&mut out);
+    Some(out.iter().map(|l| l.to_string()).collect())
+}
+
 /// The label changes that make `labels` carry `want` as their only
 /// priority: `(add, remove)`, both empty when they already do.
 pub fn priority_change(labels: &[String], want: &str) -> (Vec<String>, Vec<String>) {
@@ -343,6 +385,52 @@ pub fn priority_change(labels: &[String], want: &str) -> (Vec<String>, Vec<Strin
 mod tests {
     use super::*;
     use sandogasa_cve::severity::Level;
+
+    /// #241: zstd's issues, filed the day CVE-2026-124851 was
+    /// published, said "not rated yet" for good.
+    #[test]
+    fn unrated_cve_lines_are_rated_again_and_the_rest_kept() {
+        let rated = |cve: &str| {
+            cve_line(
+                cve,
+                &[sandogasa_cve::severity::Rating {
+                    level: Level::High,
+                    source: "cve.org".to_string(),
+                    detail: "CVSS 3.1 7.5 high (CISA-ADP)".to_string(),
+                }],
+            )
+        };
+        let body = format!(
+            "- **MR**: x\n{}\n{}\n- **Release**: c10s\n",
+            cve_line("CVE-2026-124851", &[]),
+            rated("CVE-2026-1000"),
+        );
+        let mut asked = Vec::new();
+        let lines = rerated_cve_lines(&body, |cves| {
+            asked = cves.to_vec();
+            cves.iter().map(|c| rated(c)).collect()
+        })
+        .expect("a line rated");
+        // Only the unrated CVE is asked about; the lines are sorted.
+        assert_eq!(asked, ["CVE-2026-124851"]);
+        assert_eq!(lines, [rated("CVE-2026-1000"), rated("CVE-2026-124851")]);
+        assert_eq!(
+            cve_priority_label(&lines.join("\n")).as_deref(),
+            Some("priority::major")
+        );
+
+        // Still unrated everywhere: the body is left as it is.
+        assert!(
+            rerated_cve_lines(&body, |cves| cves
+                .iter()
+                .map(|c| cve_line(c, &[]))
+                .collect())
+            .is_none()
+        );
+        // Nothing unrated: nothing is asked.
+        let all_rated = format!("{}\n", rated("CVE-2026-1000"));
+        assert!(rerated_cve_lines(&all_rated, |_| panic!("nothing to rate")).is_none());
+    }
 
     #[test]
     fn a_cve_lines_severity_names_the_priority_label() {

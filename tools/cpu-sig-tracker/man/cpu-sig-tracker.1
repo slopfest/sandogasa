@@ -1,6 +1,6 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH cpu-sig-tracker 1 2026-11-23 "sandogasa 0.29.0" "Sandogasa Manual"
+.TH cpu-sig-tracker 1 2026-11-24 "sandogasa 0.29.0" "Sandogasa Manual"
 .SH NAME
 cpu\-sig\-tracker \- Track CentOS Proposed Updates SIG package state across Koji, GitLab and JIRA
 .SH SYNOPSIS
@@ -51,7 +51,7 @@ Print progress to stderr
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SS cpu-sig-tracker file-issue
-\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-branch\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-embargoed\fR] [\fB\-\-note\fR] [\fB\-\-release\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-type\fR] [\fB\-\-assign\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIMR_URL\fR]
+\fBcpu\-sig\-tracker file\-issue\fR [\fB\-\-affected\fR] [\fB\-\-branch\fR] [\fB\-\-expected\-fix\fR] [\fB\-\-jira\fR] [\fB\-\-embargoed\fR] [\fB\-\-note\fR] [\fB\-\-priority\fR] [\fB\-\-release\fR] [\fB\-C\fR|\fB\-\-repo\fR] [\fB\-\-type\fR] [\fB\-\-assign\fR] [\fB\-\-dry\-run\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIMR_URL\fR]
 .PP
 File a tracking issue in the proposed_updates GitLab group for a given Merge Request URL
 .TP
@@ -79,6 +79,25 @@ File it confidential, for a fix still under embargo: hidden from the public, and
 .TP
 \fB\-\-note\fR \fI<NOTE>\fR
 Free\-form context note prepended to the issue body as a lead paragraph before the structured metadata
+.TP
+\fB\-\-priority\fR \fI<PRIORITY>\fR
+The update\*(Aqs priority (default: the RHEL issue\*(Aqs, else the CVEs\*(Aq rating; asked at a terminal when nothing rates them)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+blocker
+.IP \(bu 2
+critical
+.IP \(bu 2
+major
+.IP \(bu 2
+normal
+.IP \(bu 2
+minor
+.RE
 .TP
 \fB\-\-release\fR \fI<RELEASE>\fR
 Override the release auto\-derived from the MR target branch (e.g. `c10s`)

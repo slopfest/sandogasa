@@ -472,8 +472,21 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     };
                     settled.warn_left_out();
                     let cves = settled.cves;
-                    let new_cve_lines = (no_cve_lines && !cves.is_empty())
-                        .then(|| crate::triage::rated_cve_lines(&cves, args.verbose));
+                    // A body with CVE lines has its unrated ones rated
+                    // again (#241): cve.org or NVD may have rated the CVE
+                    // since the issue was filed.
+                    let new_cve_lines = if no_cve_lines {
+                        (!cves.is_empty())
+                            .then(|| crate::triage::rated_cve_lines(&cves, args.verbose))
+                    } else {
+                        crate::triage::rerated_cve_lines(body, |unrated| {
+                            crate::triage::rated_cve_lines(unrated, args.verbose)
+                        })
+                    };
+                    // The priority by the lines as they will read.
+                    let cve_text = new_cve_lines
+                        .as_ref()
+                        .map_or_else(|| body.to_string(), |l| l.join("\n"));
                     // The builds, for a body that names them unknown (#101):
                     // stock's build expected to carry the fix, named by the
                     // SIG's, and stock's current build while stock lacks
@@ -497,7 +510,7 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                                 .iter()
                                 .filter_map(|(_, i)| i.as_ref()?.priority.as_deref()),
                         )
-                        .or_else(|| crate::triage::cve_priority_label(body))
+                        .or_else(|| crate::triage::cve_priority_label(&cve_text))
                         .as_deref(),
                     );
                     let changed = maybe_refresh_issue(RefreshCtx {
@@ -3344,6 +3357,27 @@ name = "PackageKit"
         // Refreshed again, the line is the body's own and stays put.
         let again = refreshed_body(args(Box::leak(out.clone().into_boxed_str()), None));
         assert_eq!(again, out);
+
+        // Rated since (#241): the rated line takes the unrated one's
+        // place, once, rather than joining it.
+        let rated = crate::triage::cve_line(
+            "CVE-2026-119741",
+            &[sandogasa_cve::severity::Rating {
+                level: sandogasa_cve::severity::Level::High,
+                source: "cve.org".to_string(),
+                detail: "CVSS 3.1 7.5 high (CISA-ADP)".to_string(),
+            }],
+        );
+        let rerated = crate::triage::rerated_cve_lines(&out, |_| vec![rated.clone()])
+            .expect("the line is rated now");
+        let rerated: &'static [String] = Box::leak(rerated.into_boxed_slice());
+        let after = refreshed_body(args(Box::leak(out.clone().into_boxed_str()), Some(rerated)));
+        assert!(
+            after.contains(&format!("— New\n{rated}\n- **Release**: c10s\n")),
+            "{after}"
+        );
+        assert!(!after.contains("not rated yet"), "{after}");
+        assert_eq!(after.matches("CVE-2026-119741](").count(), 1, "{after}");
     }
 
     #[test]

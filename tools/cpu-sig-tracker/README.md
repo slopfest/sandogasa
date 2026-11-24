@@ -160,7 +160,11 @@ advisory it does not really fix; it is a label of its own, so
 `priority::` label (`priority::blocker`, `::critical`, `::major`,
 `::normal`, `::minor`; the most urgent of them), or, with no RHEL
 issue to take it from, the most severe CVE's, as `jira` sets a RHEL
-issue's priority (Red Hat's Important is `priority::major`). The issue is assigned
+issue's priority (Red Hat's Important is `priority::major`).
+`--priority` sets it instead; one that disagrees with that evidence is
+confirmed at a terminal, defaulting to the evidence. When no source
+rates the CVEs yet, the priority is asked at a terminal (Enter for
+none), and left off without one. The issue is assigned
 to you (the GitLab token's user) with `--assign`; at a terminal you are
 asked, defaulting to yes; otherwise it is left unassigned.
 
@@ -620,8 +624,10 @@ CVE only the merge request's description names is asked about at a
 terminal, unless the `- **Not fixed here**:` line names it, and left
 out with a warning under `--json` or without one),
 the `security` label when it has no type label, and the `priority::`
-label for its RHEL issues' priority, replacing one that no longer
-matches.
+label for its RHEL issues' priority, else its CVEs' rating, replacing
+one that no longer matches. A CVE line that says "not rated yet" is
+rated again, so the line and the priority follow once a source rates
+the CVE.
 `--include-closed` extends the refresh scan to historical tracking
 issues so their dates can be backfilled after the fact.
 

@@ -71,6 +71,43 @@ impl IssueType {
     }
 }
 
+/// How urgent the update is, in Jira's words, for `--priority`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Priority {
+    Blocker,
+    Critical,
+    Major,
+    Normal,
+    Minor,
+}
+
+/// Every priority, most urgent first, in the order they are offered.
+const PRIORITY_CHOICES: [Priority; 5] = [
+    Priority::Blocker,
+    Priority::Critical,
+    Priority::Major,
+    Priority::Normal,
+    Priority::Minor,
+];
+
+impl Priority {
+    /// Its name as Jira gives it: `Major`.
+    fn jira_name(self) -> &'static str {
+        match self {
+            Priority::Blocker => "Blocker",
+            Priority::Critical => "Critical",
+            Priority::Major => "Major",
+            Priority::Normal => "Normal",
+            Priority::Minor => "Minor",
+        }
+    }
+
+    /// Its label: `priority::major`.
+    fn label(self) -> String {
+        crate::triage::priority_label([self.jira_name()]).unwrap_or_default()
+    }
+}
+
 #[derive(clap::Args)]
 pub struct FileIssueArgs {
     /// Full Merge Request URL to track, e.g.
@@ -119,6 +156,11 @@ pub struct FileIssueArgs {
     /// a lead paragraph before the structured metadata.
     #[arg(long, help_heading = "Issue")]
     pub note: Option<String>,
+
+    /// The update's priority (default: the RHEL issue's, else the
+    /// CVEs' rating; asked at a terminal when nothing rates them)
+    #[arg(long, value_enum, help_heading = "Issue")]
+    pub priority: Option<Priority>,
 
     /// Override the release auto-derived from the MR target
     /// branch (e.g. `c10s`).
@@ -453,6 +495,7 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
             .filter_map(|(_, s)| s.as_ref()?.priority.as_deref()),
     )
     .or_else(|| crate::triage::cve_priority_label(&cve_lines.join("\n")));
+    let priority = settle_priority(args.priority, priority, &cves, interactive, &ask_priority);
     // The builds, from the evidence when not named (#101): stock's build
     // expected to carry the fix, named by the SIG's in -release or
     // -testing, and stock's current build, the affected one while the
@@ -896,6 +939,109 @@ fn settle_build(
     }
 }
 
+/// The priority label: `--priority`'s when given, else `derived` (the
+/// RHEL issues' priority, else the CVEs' rating). A flag that disagrees
+/// with it is confirmed at a terminal (`interactive`), defaulting to the
+/// evidence; without one it is kept and the disagreement reported. With
+/// neither, an update fixing `cves` no source has rated yet asks at a
+/// terminal (`ask`, where none is the default), and without one goes
+/// unprioritized until `status --refresh` finds them rated (#241).
+fn settle_priority(
+    explicit: Option<Priority>,
+    derived: Option<String>,
+    cves: &[String],
+    interactive: bool,
+    ask: &dyn Fn(&[String]) -> Option<Priority>,
+) -> Option<String> {
+    match (explicit, derived) {
+        (None, Some(d)) => {
+            eprintln!("priority: {d}, from the RHEL issue or the CVEs' rating");
+            Some(d)
+        }
+        (None, None) if cves.is_empty() => None,
+        (None, None) if interactive => ask(cves).map(Priority::label),
+        (None, None) => {
+            eprintln!(
+                "note: no source rates {} yet, so the issue has no priority: pass \
+                 --priority, or `status --refresh` sets it once one does",
+                cves.join(", ")
+            );
+            None
+        }
+        (Some(e), Some(d)) if e.label() != d => {
+            let question = format!(
+                "--priority is {}, but the RHEL issue or the CVEs' rating say {d}. Use {d}?",
+                e.label()
+            );
+            if interactive && sandogasa_cli::confirm(&question, true).unwrap_or(false) {
+                Some(d)
+            } else {
+                if !interactive {
+                    eprintln!(
+                        "note: keeping --priority {}, though the RHEL issue or the CVEs' \
+                         rating say {d}",
+                        e.label()
+                    );
+                }
+                Some(e.label())
+            }
+        }
+        (Some(e), _) => Some(e.label()),
+    }
+}
+
+/// The priority an answer picks: its number in [`PRIORITY_CHOICES`] or
+/// its name. `Ok(None)` for an empty answer, which picks none; `Err` for
+/// one that picks nothing.
+fn pick_priority(answer: &str) -> Result<Option<Priority>, ()> {
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(n) = answer.parse::<usize>() {
+        return n
+            .checked_sub(1)
+            .and_then(|i| PRIORITY_CHOICES.get(i).copied())
+            .map(Some)
+            .ok_or(());
+    }
+    PRIORITY_CHOICES
+        .into_iter()
+        .find(|p| p.jira_name().eq_ignore_ascii_case(answer))
+        .map(Some)
+        .ok_or(())
+}
+
+/// Ask for a priority at the terminal for `cves`, which nothing rates
+/// yet; none at an empty answer or the end of input.
+fn ask_priority(cves: &[String]) -> Option<Priority> {
+    use std::io::Write;
+    let mut err = std::io::stderr();
+    let _ = writeln!(
+        err,
+        "No source rates {} yet. What priority does the update have?",
+        cves.join(", ")
+    );
+    for (i, p) in PRIORITY_CHOICES.iter().enumerate() {
+        let _ = writeln!(err, "  {}) {}", i + 1, p.jira_name());
+    }
+    loop {
+        let _ = write!(
+            err,
+            "Priority [1-{}, Enter for none]: ",
+            PRIORITY_CHOICES.len()
+        );
+        let _ = err.flush();
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        if let Ok(p) = pick_priority(&line) {
+            return p;
+        }
+    }
+}
+
 /// Whether to assign the new issue to the person filing it: yes with
 /// `--assign`, else asked at a terminal (defaulting to yes), else no.
 fn wants_assignment(assign: bool, interactive: bool) -> bool {
@@ -956,6 +1102,57 @@ fn format_body(f: &BodyFields<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #241: a CVE published the day it was filed for has no rating,
+    /// so nothing gave the issue a priority, nor could anyone.
+    #[test]
+    fn the_priority_comes_from_the_flag_the_evidence_or_a_question() {
+        let cves = ["CVE-2026-124851".to_string()];
+        let never = |_: &[String]| -> Option<Priority> { panic!("not asked") };
+        let major = Some("priority::major".to_string());
+        // The evidence alone, and the flag alone.
+        assert_eq!(
+            settle_priority(None, major.clone(), &cves, true, &never),
+            major
+        );
+        assert_eq!(
+            settle_priority(Some(Priority::Critical), None, &cves, true, &never).as_deref(),
+            Some("priority::critical")
+        );
+        // Neither: asked at a terminal, where none is an answer too.
+        let ask = |c: &[String]| {
+            assert_eq!(c, ["CVE-2026-124851"]);
+            Some(Priority::Normal)
+        };
+        assert_eq!(
+            settle_priority(None, None, &cves, true, &ask).as_deref(),
+            Some("priority::normal")
+        );
+        assert_eq!(settle_priority(None, None, &cves, true, &|_| None), None);
+        // Without a terminal, or without a CVE, nothing is asked.
+        assert_eq!(settle_priority(None, None, &cves, false, &never), None);
+        assert_eq!(settle_priority(None, None, &[], true, &never), None);
+        // A flag that disagrees is kept without a terminal.
+        assert_eq!(
+            settle_priority(Some(Priority::Minor), major.clone(), &cves, false, &never).as_deref(),
+            Some("priority::minor")
+        );
+        // Agreeing, it is simply used.
+        assert_eq!(
+            settle_priority(Some(Priority::Major), major.clone(), &cves, true, &never),
+            major
+        );
+    }
+
+    #[test]
+    fn a_priority_is_picked_by_number_or_name_and_none_by_enter() {
+        assert_eq!(pick_priority("3\n"), Ok(Some(Priority::Major)));
+        assert_eq!(pick_priority("critical"), Ok(Some(Priority::Critical)));
+        assert_eq!(pick_priority("\n"), Ok(None));
+        assert_eq!(pick_priority("6"), Err(()));
+        assert_eq!(pick_priority("0"), Err(()));
+        assert_eq!(pick_priority("urgent"), Err(()));
+    }
 
     #[test]
     fn package_from_project_basic() {
@@ -1456,6 +1653,7 @@ mod tests {
         ]);
 
         let args = FileIssueArgs {
+            priority: None,
             mr_url: Some(
                 "https://gitlab.example/redhat/centos-stream/rpms/xz/-/merge_requests/42"
                     .to_string(),
@@ -1534,6 +1732,7 @@ mod tests {
             ("CPU_SIG_TRACKER_JIRA_BASE", &server.uri()),
         ]);
         let args = FileIssueArgs {
+            priority: None,
             mr_url: Some(
                 "https://gitlab.example/redhat/centos-stream/rpms/rsync/-/merge_requests/90"
                     .to_string(),
@@ -1807,6 +2006,7 @@ mod tests {
 
     fn branch_args(branch: &str, repo: &std::path::Path) -> FileIssueArgs {
         FileIssueArgs {
+            priority: None,
             mr_url: None,
             branch: Some(branch.to_string()),
             repo: Some(repo.to_path_buf()),

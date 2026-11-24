@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### cpu-sig-tracker gives an issue for a CVE nothing rated yet a priority
+
+A tracking issue filed for a CVE no source had rated yet got no
+`priority::` label, and never got one later (#241). zstd's two issues
+for CVE-2026-124851, filed the day it was published, said "not rated
+yet" on both CVE lines and had no priority: `file-issue` had nothing to
+take it from and no way to be told one, and `status --refresh` only
+wrote CVE lines into an issue that had none, so it never looked at the
+CVE again.
+
+`status --refresh` now rates a "not rated yet" line again, and once a
+source rates the CVE, rewrites the line and sets the priority from it,
+as for any rated CVE. `file-issue` takes `--priority` (Jira's names:
+`blocker`, `critical`, `major`, `normal`, `minor`); one that disagrees
+with the RHEL issue's priority or the CVEs' rating is confirmed at a
+terminal, defaulting to the evidence, and kept, with a note, without
+one. When nothing rates the CVEs yet, it asks at a terminal, with none
+as the default.
+
 ### cve.org's ratings keep another party's score equal to the one NVD passes on
 
 When a CVE's CNA and another party, such as CISA, gave it the same CVSS
