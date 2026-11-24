@@ -22,6 +22,17 @@ Red Hat had not assessed the CVE either. `jira`, `file-issue` and
 
 The four sources are asked together, so the extra one adds no time.
 
+### cpu-sig-tracker's site asks cve.org whether a CVE is public
+
+`sync-updates` lists an update only once every CVE it fixes is
+disclosed, and for a CVE Red Hat's security data has no record of it
+asked NVD. NVD has a CVE hours after it is published, and answers 503
+under load, which left the update out of that run. It now asks cve.org,
+where a CVE is published: a record there means public, and no record
+means not yet, without asking NVD, which cannot have a CVE cve.org has
+not published. NVD is still asked when cve.org does not answer, and the
+update is left out only when neither does.
+
 ### sandogasa-cve: cve.org as a source
 
 New in the library, for the cve.org entries here, with nothing removed

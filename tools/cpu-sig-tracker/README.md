@@ -657,9 +657,10 @@ would change instead. Nothing embargoed is listed. Tracking issues are
 read anonymously, so a confidential one (`file-issue --embargoed`) is
 never seen. An update is listed only once it is public: every CVE it
 fixes disclosed, by Red Hat's security data (a `public_date` that has
-passed) or, when Red Hat has no record, by NVD, and its upstream merge
-request readable anonymously. When Red Hat, NVD or GitLab cannot be
-reached, the update is left out of that run with a warning. A Jira
+passed) or, when Red Hat has no record, by cve.org having published it,
+and its upstream merge request readable anonymously. NVD is asked only
+when cve.org does not answer. When Red Hat, both of those, or GitLab
+cannot be reached, the update is left out of that run with a warning. A Jira
 issue the public cannot read is not linked, but no longer keeps the
 update off the list. Needs `koji` with the `cbs` profile.
 

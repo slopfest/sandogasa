@@ -14,8 +14,8 @@
 //! Nothing embargoed may leak through it. Tracking issues are listed
 //! anonymously, so a confidential one is never seen, and its flag is
 //! checked as well. An update is listed only once it is public: every
-//! CVE it fixes disclosed (Red Hat's security data, else NVD), and its
-//! upstream merge request readable anonymously (`crate::disclosure`,
+//! CVE it fixes disclosed (Red Hat's security data, else cve.org, else
+//! NVD), and its upstream merge request readable anonymously (`crate::disclosure`,
 //! #80). A source that cannot be reached leaves the update out of that
 //! run. Whether its Jira issue can be read only decides whether it is
 //! linked: Product Security's trackers stay private after disclosure,
@@ -752,6 +752,15 @@ mod tests {
             .respond_with(ResponseTemplate::new(404))
             .mount(server)
             .await;
+        // Reserved, not published: cve.org has no record of it, and
+        // that settles it without NVD.
+        Mock::given(method("GET"))
+            .and(path("/api/cve/CVE-2026-22222"))
+            .respond_with(
+                ResponseTemplate::new(404).set_body_json(json!({"error": "CVE_RECORD_DNE"})),
+            )
+            .mount(server)
+            .await;
         Mock::given(method("GET"))
             .and(path("/rest/json/cves/2.0"))
             .respond_with(ResponseTemplate::new(404))
@@ -826,6 +835,7 @@ mod tests {
             ("CPU_SIG_TRACKER_GITLAB_BASE", &uri),
             ("CPU_SIG_TRACKER_JIRA_BASE", &uri),
             ("CPU_SIG_TRACKER_REDHAT_BASE", &uri),
+            ("CPU_SIG_TRACKER_CVEORG_BASE", &uri),
             ("CPU_SIG_TRACKER_NVD_BASE", &uri),
         ])
     }
