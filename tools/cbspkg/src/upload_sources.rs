@@ -55,14 +55,16 @@ pub fn lookaside_base() -> String {
     std::env::var("CBSPKG_LOOKASIDE_BASE").unwrap_or_else(|_| SIG_LOOKASIDE.to_string())
 }
 
-/// The files the SIG lookaside lacks, for a sentence, and the pronoun
-/// for them: `x.tar.gz` and "it", or "2 files: x.tar.gz, y.tar.gz"
-/// and "them".
+/// What the SIG lookaside lacks, to follow "The SIG lookaside", and the
+/// pronoun for it: one file by name ("lacks x.tar.gz, which CBS needs
+/// to build", "it"), several by count ("lacks 2 files CBS needs to
+/// build", "them"), for the caller to list one per line, so a long list
+/// does not run on in one sentence.
 pub fn lacking(names: &[&str]) -> (String, &'static str) {
     match names {
-        [one] => (one.to_string(), "it"),
+        [one] => (format!("lacks {one}, which CBS needs to build"), "it"),
         _ => (
-            format!("{} files: {}", names.len(), names.join(", ")),
+            format!("lacks {} files CBS needs to build", names.len()),
             "them",
         ),
     }
@@ -237,7 +239,8 @@ pub fn upload(
         }
         let names: Vec<&str> = missing.iter().map(|s| s.name.as_str()).collect();
         let (what, it) = lacking(&names);
-        println!("The SIG lookaside lacks {what}, which CBS needs to build. To upload {it}:");
+        // Each command names its file, so several are not listed again.
+        println!("The SIG lookaside {what}. To upload {it}:");
         for source in missing {
             sandogasa_cli::explain::print_command(&upload_argv(&source.name, package));
         }
@@ -478,10 +481,13 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn what_the_lookaside_lacks_is_named_as_one_file_or_several() {
-        assert_eq!(lacking(&["a.tar.gz"]), ("a.tar.gz".to_string(), "it"));
+        assert_eq!(
+            lacking(&["a.tar.gz"]),
+            ("lacks a.tar.gz, which CBS needs to build".to_string(), "it")
+        );
         assert_eq!(
             lacking(&["a.tar.gz", "b.tar.gz"]),
-            ("2 files: a.tar.gz, b.tar.gz".to_string(), "them")
+            ("lacks 2 files CBS needs to build".to_string(), "them")
         );
     }
 

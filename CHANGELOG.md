@@ -7,9 +7,10 @@
 Asking before an upload, `cbspkg upload-sources` printed "The SIG
 lookaside lacks:" and then the upload commands in plain text, so the
 list read as a list of commands the lookaside lacked. It now names the
-files ("The SIG lookaside lacks linux-firmware-20261019.tar.xz, which
-CBS needs to build. To upload it:") and shows each command in bold
-green after a `$`, as `--explain` shows the commands it runs.
+file ("The SIG lookaside lacks linux-firmware-20261019.tar.xz, which
+CBS needs to build. To upload it:"), or counts several, each named by
+its command, and shows each command in bold green after a `$`, as
+`--explain` shows the commands it runs.
 
 `sandogasa-cli`'s `explain` module gains `print_command` and
 `eprint_command`, which print a command that way whether or not the run
