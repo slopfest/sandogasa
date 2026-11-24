@@ -72,6 +72,21 @@ pub fn proposed_updates_candidate_tag(release: &str) -> Result<String, String> {
     proposed_updates_tag_with_suffix(release, Stage::Candidate)
 }
 
+/// Load the inventory at `path`, or, when there is none, say how to
+/// write one: `dump-inventory` for `release` when one was asked for,
+/// else for both streams.
+pub fn load_inventory(path: &str, release: Option<&str>) -> Result<Inventory, String> {
+    if !std::path::Path::new(path).exists() {
+        let releases = release.unwrap_or("c9s,c10s");
+        return Err(format!(
+            "no inventory at {path}; write one with \
+             `cpu-sig-tracker dump-inventory --release {releases} -o {path}`, \
+             or name another with --inventory"
+        ));
+    }
+    sandogasa_inventory::load(path)
+}
+
 fn proposed_updates_tag_with_suffix(release: &str, stage: Stage) -> Result<String, String> {
     let major = release
         .strip_prefix('c')
@@ -289,6 +304,36 @@ fn prune_workload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_inventory_says_how_to_write_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inventory.toml");
+        let path = path.to_str().unwrap();
+        let err = load_inventory(path, None).unwrap_err();
+        assert!(
+            err.contains(&format!(
+                "`cpu-sig-tracker dump-inventory --release c9s,c10s -o {path}`"
+            )),
+            "{err}"
+        );
+        let err = load_inventory(path, Some("c10s")).unwrap_err();
+        assert!(err.contains("--release c10s -o"), "{err}");
+    }
+
+    #[test]
+    fn an_existing_inventory_is_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inventory.toml");
+        std::fs::write(
+            &path,
+            "[inventory]\nname = \"t\"\ndescription = \"t\"\nmaintainer = \"t\"\n\
+             [inventory.workloads.c10s]\npackages = [\"zstd\"]\n",
+        )
+        .unwrap();
+        let inv = load_inventory(path.to_str().unwrap(), None).unwrap();
+        assert_eq!(inv.workload_names(), vec!["c10s".to_string()]);
+    }
 
     fn build_inv_with_workload(release: &str, packages: &[&str]) -> Inventory {
         let mut inv = Inventory {

@@ -211,7 +211,7 @@ pub(crate) fn build_rows(args: &ListIssuesArgs) -> Result<Vec<Row>, Box<dyn std:
     let inventory = args
         .inventory
         .as_deref()
-        .map(sandogasa_inventory::load)
+        .map(|p| crate::dump_inventory::load_inventory(p, args.release.as_deref()))
         .transpose()?;
     let group_client = gitlab::group_client(&gitlab_base(), PROPOSED_UPDATES_GROUP)?;
     let releases: Vec<String> = match (&args.release, &inventory) {

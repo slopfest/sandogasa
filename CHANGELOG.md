@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cpu-sig-tracker says how to write the inventory it cannot find
+
+`status` and `ping` read `inventory.toml` unless told otherwise, and
+run where there is none they stopped at "failed to read
+inventory.toml: No such file or directory", with nothing to say that
+`dump-inventory` writes it (#238). They now name the command:
+`cpu-sig-tracker dump-inventory --release c9s,c10s -o inventory.toml`,
+with the `--release` asked for in place of both streams. `list-issues
+--inventory` with a path that does not exist says the same.
+
 ### cpu-sig-tracker rates, describes and titles a CVE from cve.org as well
 
 A Jira draft or a tracking issue for a CVE published the same day could

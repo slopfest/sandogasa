@@ -166,7 +166,8 @@ pub fn run(args: &StatusArgs) -> ExitCode {
 }
 
 pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
-    let inventory = sandogasa_inventory::load(&args.inventory)?;
+    let inventory =
+        crate::dump_inventory::load_inventory(&args.inventory, args.release.as_deref())?;
 
     let releases: Vec<String> = match &args.release {
         Some(r) => {

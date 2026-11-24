@@ -628,7 +628,8 @@ fn stream_of(release: &str) -> &str {
 }
 
 fn scan(args: &PingArgs) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
-    let inventory = sandogasa_inventory::load(&args.inventory)?;
+    let inventory =
+        crate::dump_inventory::load_inventory(&args.inventory, args.release.as_deref())?;
     let releases: Vec<String> = match &args.release {
         Some(r) if !inventory.inventory.workloads.contains_key(r) => {
             return Err(format!(
