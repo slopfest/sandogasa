@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+name: Bug
+description: A tool or crate does something wrong
+labels: [bug]
+body:
+  - type: input
+    id: component
+    attributes:
+      label: Tool or crate
+      description: Which tool or library crate, e.g. fedora-cve-triage or sandogasa-bodhi
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `<tool> --version`, or for a library crate its version in Cargo.lock
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what it did, and what you expected instead. Paste output as text.
+    validations:
+      required: true
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Configuration, the package, bug or update involved, how often it happens

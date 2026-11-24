@@ -1,0 +1,73 @@
+# What CONTRIBUTING.md asks of a pull request that a maintainer would
+# otherwise check by hand: a linked issue, and "Allow edits by
+# maintainers" left on, so review can end with a commit on the branch.
+#
+# pull_request_target runs this file as it is on main, with the base
+# repository's context, so it reports at once on a first-time
+# contributor's pull request, before anyone approves its CI. That is
+# safe only because it never checks out or runs the pull request's
+# code: it reads the event's metadata, and the token has no
+# permissions. Keep it that way.
+name: Contribution checks
+
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  check:
+    name: issue link and maintainer edits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the pull request's metadata
+        # Passed through the environment, never interpolated into the
+        # script, since the body and labels are the contributor's text.
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          CAN_MODIFY: ${{ github.event.pull_request.maintainer_can_modify }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          HEAD_OWNER_TYPE: ${{ github.event.pull_request.head.repo.owner.type }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          failed=0
+          say() { echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          # The issue: a closing keyword or Refs, then #N or the
+          # issue's URL in this repository ("Fixes: #239" counts too).
+          ref='(^|[^[:alnum:]_])(fix(es|ed)?|close[sd]?|resolve[sd]?|refs?):?[[:space:]]+'
+          target="(#[0-9]+|https://github\.com/${BASE_REPO}/issues/[0-9]+)"
+          # A link in an HTML comment is neither shown nor linked.
+          shown=$(printf '%s' "$BODY" | perl -0pe 's/<!--.*?-->//gs')
+          if [ "$AUTHOR_TYPE" = Bot ]; then
+            say "Issue link: not asked of a bot."
+          elif [[ " $LABELS " == *" no-issue "* ]]; then
+            say "Issue link: not needed, a maintainer marked this \`no-issue\`."
+          elif printf '%s' "$shown" | grep -Eqi "${ref}${target}"; then
+            say "Issue link: found."
+          else
+            failed=1
+            echo "::error::The description links no issue. Add 'Fixes #N' for a bug or 'Resolves #N' for a feature, opening the issue first if there is none; see CONTRIBUTING.md. A typo or broken-link fix can go without: a maintainer will mark it no-issue."
+            say "Issue link: **missing**. Add \`Fixes #N\` (a bug) or \`Resolves #N\` (a feature) to the description."
+          fi
+
+          # Maintainer edits: only a fork can turn them off, and GitHub
+          # cannot offer them on a fork an organization owns.
+          if [ -z "$HEAD_REPO" ]; then
+            say "Maintainer edits: the fork is gone, so there is nothing to edit."
+          elif [ "$HEAD_REPO" = "$BASE_REPO" ]; then
+            say "Maintainer edits: a branch of this repository."
+          elif [ "$HEAD_OWNER_TYPE" = Organization ]; then
+            say "Maintainer edits: unavailable for an organization's fork; a maintainer may ask for changes rather than push them."
+          elif [ "$CAN_MODIFY" = true ]; then
+            say "Maintainer edits: allowed."
+          else
+            failed=1
+            echo "::error::'Allow edits by maintainers' is off. Check it in the pull request's sidebar, so a maintainer can add a commit to land it; see CONTRIBUTING.md. Then push or edit the description: a re-run reads the pull request as it was."
+            say "Maintainer edits: **off**. Check \"Allow edits by maintainers\" in the sidebar."
+          fi
+
+          exit "$failed"

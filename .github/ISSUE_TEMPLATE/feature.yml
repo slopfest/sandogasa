@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+name: Feature
+description: Something a tool or crate should do that it does not
+labels: [enhancement]
+body:
+  - type: input
+    id: component
+    attributes:
+      label: Tool or crate
+      description: Which tool or library crate, or "new tool"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what is in the way today
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you propose
+      description: How the tool could behave. Say if you plan to send the pull request yourself.

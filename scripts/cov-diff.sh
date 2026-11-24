@@ -2,12 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 #
 # Line coverage of the Rust files a change touches: every file changed
-# since BASE (default: where HEAD left origin/main), committed or not,
+# since BASE (default: where HEAD left main), committed or not,
 # plus new files not yet added. Runs the tests of the crates those files
 # belong to once, under cargo-llvm-cov, and lists each file's coverage,
 # marking those under the workspace gate. This is the per-issue check
 # CLAUDE.md asks for before a commit that closes an issue; `make cov`
 # remains the release gate over the whole workspace.
+#
+# main is the main repository's, read from whichever remote points at
+# it: in a fork's clone that is usually `upstream`, while `origin` is
+# the fork, whose main may be behind or ahead. origin/main when no
+# remote points there.
 #
 # Usage: scripts/cov-diff.sh [BASE]
 # Exits 1 when a changed file is under the gate, 2 on a usage error.
@@ -18,7 +23,14 @@ cd "$(dirname "$0")/.."
 gate=$(sed -n '/"--fail-under-lines",/{n;s/[^0-9.]//g;p;}' .cargo/config.toml)
 [ -n "$gate" ] || { echo "error: no --fail-under-lines in .cargo/config.toml" >&2; exit 2; }
 
-base=${1:-$(git merge-base HEAD origin/main)}
+if [ -z "${1:-}" ]; then
+  remote=$(git remote -v |
+    awk '$2 ~ /[\/:]michel-slm\/sandogasa(\.git)?$/ && $3 == "(fetch)" {print $1; exit}')
+  main=${remote:-origin}/main
+  git rev-parse --verify --quiet "$main^{commit}" >/dev/null ||
+    { echo "error: no $main; fetch it, or pass BASE" >&2; exit 2; }
+fi
+base=${1:-$(git merge-base HEAD "$main")}
 git rev-parse --verify --quiet "$base^{commit}" >/dev/null ||
   { echo "error: $base is not a commit" >&2; exit 2; }
 

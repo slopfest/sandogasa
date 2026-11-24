@@ -14,8 +14,10 @@ Issues and pull requests: <https://github.com/michel-slm/sandogasa>.
 
 A contribution should fix or implement **one identified thing**. Open an
 issue first (or comment on an existing one) describing the bug or the
-feature, and reference it from the pull request — `Fixes #123` for a bug,
-`Refs #123` otherwise.
+feature, and reference it from the pull request: `Fixes #123` for a bug,
+`Resolves #123` for a feature, `Refs #123` for work toward one that does
+not finish it. The issue forms label a new issue as a bug or a feature;
+a maintainer adds the label for the tools or crates it touches.
 
 This is not bureaucracy: these tools write to Bugzilla, Bodhi, dist-git,
 GitLab and Debian archives on a maintainer's behalf, so a change needs a
@@ -30,7 +32,8 @@ In particular, please don't send:
 - rewrites of a tool's approach without discussing the design first.
 
 Small, obvious corrections (a typo, a broken link, a stale doc line) are
-fine to send directly without an issue.
+fine to send directly without an issue. A maintainer marks such a pull
+request `no-issue` so the contribution check lets it through.
 
 ## What a contribution includes
 
@@ -69,7 +72,8 @@ what broke, with a migration hint.
 Before opening a pull request, please also run:
 
 ```sh
-make check      # fmt --check, clippy, test, packaging-test
+make check      # fmt, clippy, tests, spelling, packaging test, and more
+make cov-diff   # line coverage of the files you changed
 make man        # if you changed any CLI
 ```
 
@@ -81,8 +85,37 @@ are `make fmt`, `make clippy`, `make test` and `make packaging-test`.
 
 The packaging test re-runs the suite the way a packaging build does: no
 external network, and the distro tools (`koji`, `fedrq`, `gbp`, `dput`,
-…) replaced by failing stubs. Workspace coverage is expected to stay at
-or above 80% line coverage, checked with `make cov` at release time.
+…) replaced by failing stubs. Line coverage must stay at or above 85%.
+`make cov-diff` lists the coverage of each file your change touches
+since it left this repository's `main` and marks any under 85%: add the
+missing tests, or say in the pull request why a file can't reach it. In
+a fork's clone, add this repository as a remote and fetch it
+(`git remote add upstream https://github.com/michel-slm/sandogasa`),
+so the script compares against its `main` rather than your fork's. `make cov` measures
+the whole workspace, as the release does.
+
+Project text uses en-US spelling, checked by `make spell`
+([typos](https://github.com/crate-ci/typos)).
+
+## Pull requests
+
+- **Link the issue** in the description (`Fixes #123`, `Resolves #123`),
+  as above. The template asks for it.
+- **Leave "Allow edits by maintainers" checked.** Review here often ends
+  with a maintainer adding a commit or two to your branch, rather than a
+  round of requests, so the pull request can land with its follow-ups
+  fixed. GitHub cannot offer the option for a fork owned by an
+  organization, so the check below lets such a pull request through;
+  forking to your own account instead makes the review quicker.
+- **Expect a wait on your first pull request.** GitHub runs CI for a
+  first-time contributor only once a maintainer approves it; later pull
+  requests run at once.
+
+A check named *Contribution checks* reports the first two: it fails
+while maintainer edits are off, or while the description links no issue
+and the pull request is not marked `no-issue`. Fix either and it passes
+on the next push or edit of the description; re-running the old check
+reads the pull request as it was.
 
 ## Commits
 
@@ -131,7 +164,11 @@ If you work with a coding agent, point it at [`AGENTS.md`](AGENTS.md)
 (the same file as `.claude/CLAUDE.md`), which carries this project's
 conventions in the form agents tend to read: commit and changelog
 rules, code style, the offline-test requirement, and the layout of the
-workspace.
+workspace. Its first section says what applies to an agent working for
+an outside contributor: much of the rest is the maintainer's release and
+tracker procedure. An agent can open the issue, link it, and run the
+checks above as well as you can; `Assisted-by` goes on every commit it
+helped with.
 
 **Only a human signs off.** An AI agent must not add a `Signed-off-by`
 trailer: the DCO is a legal certification only a person can make. If you
