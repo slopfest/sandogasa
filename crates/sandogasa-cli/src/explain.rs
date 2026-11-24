@@ -67,20 +67,7 @@ impl Ui {
         if !self.narrating() {
             return;
         }
-        let prompt = Style::new().fg_color(Some(AnsiColor::BrightBlack.into()));
-        let cmd = Style::new().fg_color(Some(AnsiColor::Green.into())).bold();
-        let line = argv
-            .iter()
-            .map(|a| shell_quote(a))
-            .collect::<Vec<_>>()
-            .join(" ");
-        anstream::println!(
-            "    {}${} {}{line}{}",
-            prompt.render(),
-            prompt.render_reset(),
-            cmd.render(),
-            cmd.render_reset()
-        );
+        print_command(argv);
     }
 
     /// In `--explain`, pause for Enter before proceeding; a no-op
@@ -305,8 +292,6 @@ impl Ui {
         if !self.narrating() {
             return;
         }
-        let prompt = Style::new().fg_color(Some(AnsiColor::BrightBlack.into()));
-        let cmd = Style::new().fg_color(Some(AnsiColor::Green.into())).bold();
         let line = argv
             .iter()
             .enumerate()
@@ -319,13 +304,7 @@ impl Ui {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        anstream::println!(
-            "    {}${} {}{line}{}",
-            prompt.render(),
-            prompt.render_reset(),
-            cmd.render(),
-            cmd.render_reset()
-        );
+        anstream::println!("{}", styled_line(&line));
     }
 
     /// Run a command that must succeed; otherwise return a
@@ -359,6 +338,39 @@ pub fn command_line(argv: &[String]) -> String {
         .join(" ")
 }
 
+/// `argv` as [`Ui::show_command`] prints it while narrating: indented,
+/// after a dim `$`, in bold green, so a command the tool tells the user
+/// to run, or asks before running, stands out the same way.
+fn styled_command(argv: &[String]) -> String {
+    styled_line(&command_line(argv))
+}
+
+/// A command line already quoted, styled as [`styled_command`] says.
+fn styled_line(line: &str) -> String {
+    let prompt = Style::new().fg_color(Some(AnsiColor::BrightBlack.into()));
+    let cmd = Style::new().fg_color(Some(AnsiColor::Green.into())).bold();
+    format!(
+        "    {}${} {}{line}{}",
+        prompt.render(),
+        prompt.render_reset(),
+        cmd.render(),
+        cmd.render_reset()
+    )
+}
+
+/// Print `argv` to stdout as `--explain` shows a command, whether or
+/// not the run is narrating: for a command in a confirmation, or one
+/// the user is told to run next. The color is stripped where stdout is
+/// not a terminal.
+pub fn print_command(argv: &[String]) {
+    anstream::println!("{}", styled_command(argv));
+}
+
+/// [`print_command`] to stderr, for a command in a note or a warning.
+pub fn eprint_command(argv: &[String]) {
+    anstream::eprintln!("{}", styled_command(argv));
+}
+
 /// Quote an argument for display so the printed line is copy-paste
 /// safe. Leaves shell-safe tokens (including Debian version chars
 /// `~+:`) unquoted; single-quotes anything else.
@@ -388,6 +400,60 @@ mod tests {
             "../damo_3.2.8-1~questing+1.dsc"
         );
         assert_eq!(shell_quote("3.2.8-1~questing+1"), "3.2.8-1~questing+1");
+    }
+
+    #[test]
+    fn input_is_fed_to_the_command_and_narrated_as_a_pipe() {
+        let ui = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: false,
+        };
+        let sh = |script: &str| ["sh", "-c", script].map(String::from).to_vec();
+        ui.run_required_with_input(
+            "hello\n",
+            &sh("read x; test \"$x\" = hello"),
+            Path::new("."),
+        )
+        .unwrap();
+        let err = ui
+            .run_required_with_input("hello\n", &sh("exit 3"), Path::new("."))
+            .unwrap_err();
+        let failure = err.downcast_ref::<StageFailure>().unwrap();
+        assert_eq!(failure.code, 3);
+        assert_eq!(failure.command, "echo hello | sh -c exit 3");
+        // A dry run narrates the pipe and runs nothing.
+        let dry = Ui {
+            dry_run: true,
+            ..ui
+        };
+        dry.run_required_with_input("hello\n", &sh("exit 3"), Path::new("."))
+            .unwrap();
+    }
+
+    #[test]
+    fn a_diff_is_shown_only_while_explaining_a_real_run() {
+        // Neither runs git here: one is not explaining, the other a dry
+        // run, where nothing was edited.
+        let plain = Ui {
+            explain: false,
+            dry_run: false,
+            quiet: false,
+        };
+        plain.explain_diff(Path::new("/nonexistent"), &["x"]);
+        let dry = Ui {
+            explain: true,
+            dry_run: true,
+            quiet: false,
+        };
+        dry.explain_diff_cached(Path::new("/nonexistent"), &["x"]);
+    }
+
+    #[test]
+    fn a_command_is_printed_to_either_stream() {
+        let argv = ["cbspkg", "upload-sources"].map(String::from);
+        print_command(&argv);
+        eprint_command(&argv);
     }
 
     #[test]
@@ -462,6 +528,15 @@ mod tests {
             .map(String::from)
             .to_vec();
         assert_eq!(command_line(&argv), "cbs build t 'git+https://x/y.git#abc'");
+        // As --explain shows it: after a `$`, the same quoting, in color.
+        let styled = styled_command(&argv);
+        assert!(styled.starts_with("    "), "{styled:?}");
+        assert!(styled.contains("$\u{1b}"), "{styled:?}");
+        assert!(styled.contains(&command_line(&argv)), "{styled:?}");
+        assert!(
+            styled.contains("\u{1b}[32m") || styled.contains("\u{1b}[1m"),
+            "{styled:?}"
+        );
     }
 
     #[test]

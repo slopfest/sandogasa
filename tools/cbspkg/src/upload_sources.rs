@@ -55,6 +55,19 @@ pub fn lookaside_base() -> String {
     std::env::var("CBSPKG_LOOKASIDE_BASE").unwrap_or_else(|_| SIG_LOOKASIDE.to_string())
 }
 
+/// The files the SIG lookaside lacks, for a sentence, and the pronoun
+/// for them: `x.tar.gz` and "it", or "2 files: x.tar.gz, y.tar.gz"
+/// and "them".
+pub fn lacking(names: &[&str]) -> (String, &'static str) {
+    match names {
+        [one] => (one.to_string(), "it"),
+        _ => (
+            format!("{} files: {}", names.len(), names.join(", ")),
+            "them",
+        ),
+    }
+}
+
 /// The sha512 `sha512sum` prints for a file.
 pub fn parse_sha512sum(output: &str) -> Option<String> {
     output
@@ -222,14 +235,13 @@ pub fn upload(
                 "uploading to the SIG lookaside is confirmed at a terminal; run it in one".into(),
             );
         }
-        println!("The SIG lookaside lacks:");
+        let names: Vec<&str> = missing.iter().map(|s| s.name.as_str()).collect();
+        let (what, it) = lacking(&names);
+        println!("The SIG lookaside lacks {what}, which CBS needs to build. To upload {it}:");
         for source in missing {
-            println!(
-                "  {}",
-                sandogasa_cli::explain::command_line(&upload_argv(&source.name, package))
-            );
+            sandogasa_cli::explain::print_command(&upload_argv(&source.name, package));
         }
-        if !sandogasa_cli::confirm("Upload them?", true)? {
+        if !sandogasa_cli::confirm(&format!("Upload {it}?"), true)? {
             println!("Nothing uploaded.");
             return Ok(false);
         }
@@ -461,6 +473,16 @@ mod tests {
         let (_server, _mock, _env) = lookaside(500);
         let err = run_inner(&dry_run(None, &f)).unwrap_err().to_string();
         assert!(err.contains("answered HTTP 500"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn what_the_lookaside_lacks_is_named_as_one_file_or_several() {
+        assert_eq!(lacking(&["a.tar.gz"]), ("a.tar.gz".to_string(), "it"));
+        assert_eq!(
+            lacking(&["a.tar.gz", "b.tar.gz"]),
+            ("2 files: a.tar.gz, b.tar.gz".to_string(), "them")
+        );
     }
 
     #[test]
