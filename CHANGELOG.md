@@ -48,7 +48,11 @@ cannot be changed once filed, so `--summary` is the way to word it.
 
 A CVE no source describes either still gets no draft, and the message
 says so and suggests checking the id, in place of asking for a `--cve`
-that was given.
+that was given. When no source answered at all, it says so and
+suggests trying again later, since that says nothing about the id.
+Each source is asked once per CVE: the description used to be asked
+for a second time, which for a CVE NVD did not answer about meant
+another request at NVD's pace, six seconds later.
 
 Any summary `jira` makes now fits the 255 characters Jira takes, after
 `RFE: ` is added for an enhancement and whichever source gave the
@@ -116,6 +120,9 @@ or changed in signature:
   sources' answers;
 - `severity::cveorg_ratings`. `severity::ratings` now lists Red Hat,
   NVD, cve.org, GitHub, and asks them together;
+- `severity::ratings_from`, the same ratings from answers the caller
+  holds already, for a caller that reads more than the ratings from
+  them and so asks each source once;
 - `facts::first_sentence`, the first sentence of a CVE's description,
   moved from fedora-cve-triage so cpu-sig-tracker can name an issue by
   it.

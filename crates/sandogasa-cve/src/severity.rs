@@ -167,6 +167,28 @@ pub fn cveorg_ratings(record: &cveorg::Record, nvd: Option<&sandogasa_nvd::Cvss>
         .collect()
 }
 
+/// The ratings in the sources' answers, in the order to trust them:
+/// Red Hat's security data, NVD's answer, cve.org's record, GitHub's
+/// advisories. For a caller that has asked the sources already and
+/// reads more than the ratings from their answers, so it asks each
+/// once. A cve.org score NVD only passes on is not listed twice.
+pub fn ratings_from(
+    redhat: Option<&str>,
+    nvd: Option<&sandogasa_nvd::models::CveResponse>,
+    cveorg: Option<&cveorg::Record>,
+    ghsa: Option<&str>,
+) -> Vec<Rating> {
+    let mut out = Vec::new();
+    out.extend(redhat.and_then(redhat_rating));
+    out.extend(nvd.and_then(nvd_rating));
+    if let Some(record) = cveorg {
+        let nvd_score = nvd.and_then(|r| r.cvss());
+        out.extend(cveorg_ratings(record, nvd_score.as_ref()));
+    }
+    out.extend(ghsa.and_then(ghsa_rating));
+    out
+}
+
 /// Every rating the sources give `cve_id`, in the order to trust them:
 /// Red Hat, NVD, cve.org, GitHub. Empty when none has rated it. The
 /// sources are asked together, so none waits for another's answer.
@@ -181,15 +203,7 @@ pub async fn ratings(
         sources.cveorg(cve_id),
         sources.ghsa_json(cve_id),
     );
-    let mut out = Vec::new();
-    out.extend(redhat.as_deref().and_then(redhat_rating));
-    out.extend(nvd.and_then(nvd_rating));
-    if let Some(record) = &record {
-        let nvd_score = nvd.and_then(|r| r.cvss());
-        out.extend(cveorg_ratings(record, nvd_score.as_ref()));
-    }
-    out.extend(ghsa.as_deref().and_then(ghsa_rating));
-    out
+    ratings_from(redhat.as_deref(), nvd, record.as_ref(), ghsa.as_deref())
 }
 
 #[cfg(test)]

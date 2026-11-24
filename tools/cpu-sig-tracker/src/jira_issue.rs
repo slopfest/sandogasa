@@ -708,8 +708,14 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     let Some(summary) = summary_for(args, &target, &uncovered, cve_title.as_deref()) else {
-        let why = match uncovered.as_slice() {
-            [cve] if rejected.contains(cve) => format!("no draft: {}", rejected_why(&rejected)),
+        let why = match (uncovered.as_slice(), facts.as_slice()) {
+            ([cve], _) if rejected.contains(cve) => {
+                format!("no draft: {}", rejected_why(&rejected))
+            }
+            ([cve], [(_, f)]) if !f.answered => format!(
+                "no draft: none of Red Hat, NVD, cve.org or GitHub answered about {cve}; \
+                 try again later, or pass --summary to draft an issue"
+            ),
             _ => no_draft_why(&uncovered, &target.branch),
         };
         if args.file {
@@ -1046,6 +1052,9 @@ struct CveFacts {
     ghsa: Option<String>,
     /// cve.org lists it as rejected: its CNA withdrew the id.
     rejected: bool,
+    /// Some source answered at all; none did when they could not be
+    /// reached, which says nothing about the id.
+    answered: bool,
 }
 
 /// What names an issue for the one CVE it fixes: the CVE's title
@@ -1153,20 +1162,30 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
         ),
         Err(_) => sandogasa_cve::NvdCache::new("cpu-sig-tracker", String::new(), verbose, false),
     };
-    let ratings = sandogasa_cve::severity::ratings(cve, &mut nvd, &sources).await;
-    // Already fetched for the rating, so read from the cache.
-    let record = sources.cveorg(cve).await;
+    // Each source asked once: a failed answer is not kept, so asking
+    // again for the description would ask again, and NVD at its pace.
+    let (redhat, nvd_answer, record, ghsa) = tokio::join!(
+        sources.redhat_cve(cve),
+        nvd.get(cve, |r| r),
+        sources.cveorg(cve),
+        sources.ghsa_json(cve),
+    );
+    let ratings = sandogasa_cve::severity::ratings_from(
+        redhat.as_deref(),
+        nvd_answer,
+        record.as_ref(),
+        ghsa.as_deref(),
+    );
+    let answered = redhat.is_some() || nvd_answer.is_some() || record.is_some() || ghsa.is_some();
+    let nvd_description = nvd_answer
+        .and_then(|r| r.english_description())
+        .map(str::to_string);
     let rejected = record.as_ref().is_some_and(|r| r.is_rejected());
     // A rejected record's text says why the id was withdrawn, not what
     // the vulnerability is, so it neither describes nor titles one.
     let record = record.filter(|r| !r.is_rejected());
-    let description = nvd
-        .get(cve, |r| r)
-        .await
-        .and_then(|r| r.english_description().map(str::to_string))
-        .or_else(|| record.as_ref().and_then(|r| r.description.clone()));
-    let redhat = sources.redhat_cve(cve).await;
-    let ghsa = sources.ghsa_json(cve).await;
+    let description =
+        nvd_description.or_else(|| record.as_ref().and_then(|r| r.description.clone()));
     CveFacts {
         ratings,
         description,
@@ -1174,6 +1193,7 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
         redhat,
         ghsa,
         rejected,
+        answered,
     }
 }
 
@@ -2312,6 +2332,64 @@ mod tests {
         );
         let why = rejected_why(&["CVE-2024-35918"]);
         assert!(why.contains("CVE-2024-35918 as rejected"), "{why}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn each_source_is_asked_once_for_a_cve_none_has() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            // A failed answer is not kept, so a second lookup for the
+            // description would ask again, and NVD only after its pace.
+            Mock::given(method("GET"))
+                .and(path("/api/cve/CVE-2026-70007"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/rest/json/cves/2.0"))
+                .respond_with(ResponseTemplate::new(404))
+                .expect(1)
+                .mount(&server)
+                .await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _env = guard(&server, home.path(), None);
+        let facts = runtime.block_on(cve_facts("CVE-2026-70007", false));
+        assert!(!facts.answered, "no source answered");
+        assert!(facts.ratings.is_empty() && facts.description.is_none());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_cve_no_source_answers_about_gets_no_draft() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/rest/api/2/search/jql"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"issues": [], "isLast": true})),
+                )
+                .mount(&server)
+                .await;
+            mount_no_filing(&server).await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _g = guard(&server, home.path(), None);
+        let mut a = args("zstd");
+        a.branch = Some("c9s".into());
+        a.cve = vec!["CVE-2026-70007".into()];
+        run_inner(&a).expect("reports that there is nothing to draft");
+        a.file = true;
+        a.yes = true;
+        let err = run_inner(&a).unwrap_err().to_string();
+        assert!(
+            err.contains("none of Red Hat, NVD, cve.org or GitHub answered"),
+            "{err}"
+        );
     }
 
     #[test]
