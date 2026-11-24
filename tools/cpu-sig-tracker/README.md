@@ -277,9 +277,15 @@ drafts one issue covering every CVE without one:
   else the CVE's title as Red Hat's bug for it reads (`rsync: Denial
   of Service via crafted checksums during delta transfer
   (CVE-2026-119741)`), or GitHub's advisory's when Red Hat has none,
-  or the title its CNA gave it on cve.org when neither has one.
-  Several CVEs need `--summary` or an MR, as no one CVE's title names
-  the change. Without a summary there is no draft, only the search;
+  or the title its CNA gave it on cve.org when neither has one. A CVE
+  no source titles is named by the first sentence of its description
+  (`zstd: information disclosure vulnerability in Zstandard versions
+  1.5.1 through 1.5.7 allows … (CVE-2026-124851)`), or by the package
+  and the CVE alone when that is over Jira's 255 characters, with a
+  note to pass `--summary` to word it, as a summary cannot be changed
+  once filed. Several CVEs need `--summary` or an MR, as no one CVE's
+  title names the change. Without a summary (several CVEs, no CVE, or
+  one no source describes) there is no draft, only the search;
 - the package as the component;
 - one affected version, `CentOS Stream N` (`rhel-8.10` for c8s): RHEL
   allows a single affected version, trims issues listing more in a way

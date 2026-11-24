@@ -47,6 +47,28 @@ pub fn cve_id_in(summary: &str) -> Option<&str> {
     })
 }
 
+/// The first sentence of a CVE's description: "Mongoose is a MongoDB
+/// object modeling tool designed to work in an asynchronous
+/// environment." A full stop inside a version or after an abbreviation
+/// (`1.5.7`, `e.g.`, `Inc.`) does not end it. `None` for empty text.
+pub fn first_sentence(text: &str) -> Option<String> {
+    /// Words a full stop follows without ending the sentence.
+    const ABBREVIATIONS: [&str; 9] = ["Inc", "Ltd", "Corp", "Co", "e.g", "i.e", "etc", "vs", "v"];
+    let text = text.trim();
+    let end = text
+        .match_indices(". ")
+        .map(|(i, _)| i)
+        .find(|&i| {
+            let word = text[..i].rsplit(char::is_whitespace).next().unwrap_or("");
+            let next = text[i + 2..].chars().next();
+            !ABBREVIATIONS.contains(&word) && next.is_some_and(char::is_uppercase)
+        })
+        .map(|i| i + 1)
+        .unwrap_or(text.len());
+    let sentence = text[..end].trim();
+    (!sentence.is_empty()).then(|| sentence.to_string())
+}
+
 /// Whether a bug is a security tracker: keyworded `Security` or
 /// `SecurityTracking`, or a summary that opens with a CVE id.
 pub fn is_security_tracker(summary: &str, keywords: &[String]) -> bool {
@@ -570,6 +592,43 @@ mod tests {
         // A recorded fix or an open top infers nothing.
         assert!(inferred_from_ranges(&[r(Some("0.9.0"), Some("0.8.0"))]).is_empty());
         assert!(inferred_from_ranges(&[r(None, None)]).is_empty());
+    }
+
+    #[test]
+    fn a_description_s_first_sentence_is_read() {
+        assert_eq!(
+            first_sentence(
+                "Mongoose is a MongoDB object modeling tool. Prior to 6.13.12, it leaks."
+            )
+            .as_deref(),
+            Some("Mongoose is a MongoDB object modeling tool.")
+        );
+        assert_eq!(
+            first_sentence("No full stop").as_deref(),
+            Some("No full stop")
+        );
+        assert_eq!(first_sentence("  "), None);
+        // Abbreviations and versions do not end the sentence.
+        assert_eq!(
+            first_sentence("Foo Inc. Bar before 1.2. allows XSS, e.g. via x. Then more.")
+                .as_deref(),
+            Some("Foo Inc. Bar before 1.2. allows XSS, e.g. via x.")
+        );
+        // Recorded: cve.org's description of CVE-2026-124851 (zstd).
+        assert_eq!(
+            first_sentence(
+                "An information disclosure vulnerability in Zstandard versions 1.5.1 through \
+                 1.5.7 allows specially crafted compressed data to expose the contents of an \
+                 internal buffer through decompressed output. The buffer is 64 KiB in the \
+                 default configuration."
+            )
+            .as_deref(),
+            Some(
+                "An information disclosure vulnerability in Zstandard versions 1.5.1 through \
+                 1.5.7 allows specially crafted compressed data to expose the contents of an \
+                 internal buffer through decompressed output."
+            )
+        );
     }
 
     #[test]

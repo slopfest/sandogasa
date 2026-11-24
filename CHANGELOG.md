@@ -22,6 +22,28 @@ Red Hat had not assessed the CVE either. `jira`, `file-issue` and
 
 The four sources are asked together, so the extra one adds no time.
 
+### cpu-sig-tracker jira drafts an issue for a CVE nothing titles
+
+`cpu-sig-tracker jira --cve CVE-2026-124851 --branch c9s zstd`, run the
+day the CVE was published, printed "No draft: pass --summary (or --cve)
+to draft an issue", although `--cve` was given. The summary of an issue
+for one CVE came from the CVE's title, and nothing titled this one: Red
+Hat and GitHub had no record, NVD had not copied it yet, and its record
+on cve.org has a description and no title. The description was fetched
+and never shown.
+
+Such a CVE is now named by the first sentence of its description,
+without its article and full stop, in the shape the other titles have:
+`zstd: information disclosure vulnerability in Zstandard versions 1.5.1
+through 1.5.7 allows … (CVE-2026-124851)`. When that is over the 255
+characters Jira takes, the summary is the package and the CVE alone. A
+note with the draft says the summary was made this way and that it
+cannot be changed once filed, so `--summary` is the way to word it.
+
+A CVE no source describes either still gets no draft, and the message
+says so and suggests checking the id, in place of asking for a `--cve`
+that was given.
+
 ### cpu-sig-tracker's site asks cve.org whether a CVE is public
 
 `sync-updates` lists an update only once every CVE it fixes is
@@ -64,7 +86,10 @@ or changed in signature:
 - `Sources::cveorg`, kept in the caller's disk cache like the other
   sources' answers;
 - `severity::cveorg_ratings`. `severity::ratings` now lists Red Hat,
-  NVD, cve.org, GitHub, and asks them together.
+  NVD, cve.org, GitHub, and asks them together;
+- `facts::first_sentence`, the first sentence of a CVE's description,
+  moved from fedora-cve-triage so cpu-sig-tracker can name an issue by
+  it.
 
 A record's `affected` versions are not read; DEVELOPMENT.md says why.
 

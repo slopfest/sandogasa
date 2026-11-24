@@ -29,6 +29,9 @@ use crate::file_issue::IssueType;
 /// The Jira project Proposed Updates file in.
 const PROJECT: &str = "RHEL";
 
+/// The longest summary Jira takes, in characters.
+const SUMMARY_MAX: usize = 255;
+
 #[derive(clap::Args)]
 pub struct JiraArgs {
     /// A package name, with --branch; or the URL of a CentOS Stream
@@ -663,6 +666,18 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
             not_applicable.join(", ")
         ));
     }
+    // A single CVE can name the issue; several need a person to.
+    let (cve_title, title_note) = match facts.as_slice() {
+        [(cve, f)] => cve_summary(&target.package, cve, f),
+        _ => (None, None),
+    };
+    // Said only when that title is what the summary is made from.
+    if let Some(note) = title_note
+        && args.summary.is_none()
+        && target.mr_title.is_none()
+    {
+        notes.push(note);
+    }
     let search_report = render_search(&target, &lookups, logged_in, &notes);
     let redhat_states: Vec<serde_json::Value> = facts
         .iter()
@@ -670,28 +685,8 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
         .map(|((cve, _), s)| serde_json::json!({"cve": cve, "state": s.as_ref().map(state_word)}))
         .collect();
 
-    // A single CVE can name the issue; several need a person to.
-    let cve_title = match facts.as_slice() {
-        [(cve, f)] => cve_title(
-            &target.package,
-            cve,
-            f.redhat.as_deref(),
-            f.ghsa.as_deref(),
-            f.title.as_deref(),
-        ),
-        _ => None,
-    };
     let Some(summary) = summary_for(args, &target, &uncovered, cve_title.as_deref()) else {
-        let why = if uncovered.len() > 1 {
-            format!(
-                "no draft: {} CVEs have no issue on {}; pass --summary to name one \
-                 issue covering them all",
-                uncovered.len(),
-                target.branch
-            )
-        } else {
-            "no draft: pass --summary (or --cve) to draft an issue".to_string()
-        };
+        let why = no_draft_why(&uncovered, &target.branch);
         if args.file {
             return Err(why.into());
         }
@@ -843,7 +838,7 @@ pub fn with_not_counted(
 
 /// The summary: `--summary`; else, for one CVE or none, the MR's title
 /// with the CVE in front when the title does not name it, or the CVE's
-/// own title ([`cve_title`]); for several, the MR's title as it is,
+/// own title ([`cve_summary`]); for several, the MR's title as it is,
 /// since no one CVE's title names a change fixing them all. `RFE: ` goes
 /// in front for an enhancement, as Red Hat's RFEs read. An explicit
 /// summary is never rewritten; one for an enhancement without the
@@ -869,6 +864,45 @@ fn summary_for(
         }
         _ => Some(derived_summary(target.mr_title.as_deref()?, None, rfe)),
     }
+}
+
+/// Why there is no draft, for the report and for a `--file` that is
+/// refused: nothing names the issue. Of the CVEs with no issue yet
+/// (`uncovered`), one that came this far has neither a title nor a
+/// description in any source, which a mistyped id would look like.
+fn no_draft_why(uncovered: &[&str], branch: &str) -> String {
+    match uncovered {
+        [] => "no draft: pass --summary (or --cve) to draft an issue".to_string(),
+        [cve] => format!(
+            "no draft: no source titles or describes {cve} (check the id); pass --summary \
+             to draft an issue"
+        ),
+        _ => format!(
+            "no draft: {} CVEs have no issue on {branch}; pass --summary to name one \
+             issue covering them all",
+            uncovered.len()
+        ),
+    }
+}
+
+/// `<package>: <what> (<CVE>)`, the shape of a summary naming a CVE:
+/// the package said once however often `what` opens with it
+/// (`rsync: rsync: Denial of Service …`), and the CVE added only when
+/// `what` does not name it. `None` when nothing is left of `what`.
+fn titled(package: &str, cve: &str, what: &str) -> Option<String> {
+    let prefix = format!("{}: ", package.to_ascii_lowercase());
+    let mut what = what.trim();
+    while what.to_ascii_lowercase().starts_with(&prefix) {
+        what = what[prefix.len()..].trim_start();
+    }
+    if what.is_empty() {
+        return None;
+    }
+    let mut title = format!("{package}: {what}");
+    if !title.to_ascii_uppercase().contains(cve) {
+        title.push_str(&format!(" ({cve})"));
+    }
+    Some(title)
 }
 
 /// A CVE's title for an issue summary, as Red Hat's bug for it reads:
@@ -897,19 +931,31 @@ pub fn cve_title(
     let raw = from_redhat
         .or_else(from_ghsa)
         .or_else(|| cveorg.map(str::to_string))?;
-    let prefix = format!("{}: ", package.to_ascii_lowercase());
-    let mut what = raw.trim();
-    while what.to_ascii_lowercase().starts_with(&prefix) {
-        what = what[prefix.len()..].trim_start();
+    titled(package, cve, &raw)
+}
+
+/// A title made from a CVE's description, for a CVE no source titles:
+/// its first sentence, without the article it opens with or its full
+/// stop, in the shape [`cve_title`] gives
+/// (`zstd: information disclosure vulnerability in Zstandard … (CVE-2026-124851)`).
+/// Only the package and the CVE (`zstd: CVE-2026-124851`) when that is
+/// longer than Jira takes for a summary. `None` when there is nothing
+/// to make one from.
+pub fn described_title(package: &str, cve: &str, description: &str) -> Option<String> {
+    let sentence = sandogasa_cve::facts::first_sentence(description)?;
+    let mut what = sentence.trim_end_matches('.').trim();
+    for article in ["A ", "An ", "The "] {
+        if let Some(rest) = what.strip_prefix(article) {
+            what = rest.trim_start();
+            break;
+        }
     }
-    if what.is_empty() {
-        return None;
-    }
-    let mut title = format!("{package}: {what}");
-    if !title.to_ascii_uppercase().contains(cve) {
-        title.push_str(&format!(" ({cve})"));
-    }
-    Some(title)
+    let title = titled(package, cve, what)?;
+    Some(if title.chars().count() > SUMMARY_MAX {
+        format!("{package}: {cve}")
+    } else {
+        title
+    })
 }
 
 /// A summary made from an MR title: the CVE in front when the title
@@ -938,6 +984,41 @@ struct CveFacts {
     redhat: Option<String>,
     /// GitHub's advisories for it, as JSON.
     ghsa: Option<String>,
+}
+
+/// What names an issue for the one CVE it fixes: the CVE's title
+/// ([`cve_title`]) or, when no source titles it, one made from its
+/// description ([`described_title`]), with a note saying so, since a
+/// summary made that way is the tool's wording and cannot be changed
+/// once the issue is filed. Neither when no source describes the CVE
+/// either.
+fn cve_summary(package: &str, cve: &str, facts: &CveFacts) -> (Option<String>, Option<String>) {
+    if let Some(title) = cve_title(
+        package,
+        cve,
+        facts.redhat.as_deref(),
+        facts.ghsa.as_deref(),
+        facts.title.as_deref(),
+    ) {
+        return (Some(title), None);
+    }
+    let Some(title) = facts
+        .description
+        .as_deref()
+        .and_then(|d| described_title(package, cve, d))
+    else {
+        return (None, None);
+    };
+    let how = if title == format!("{package}: {cve}") {
+        "the summary only names it"
+    } else {
+        "the summary is the first sentence of its description"
+    };
+    let note = format!(
+        "nothing titles {cve}, so {how}; it cannot be changed once filed: pass --summary \
+         to word it"
+    );
+    (Some(title), Some(note))
 }
 
 /// Every severity rating of `cve`, Red Hat's first: what a tracking
@@ -1745,6 +1826,118 @@ mod tests {
             Some("xz: CVE-2024-3094 backdoor")
         );
         assert_eq!(cve_title("rsync", "CVE-1", None, None, None), None);
+    }
+
+    /// cve.org's description of CVE-2026-124851, which no source titled
+    /// on the day it was published.
+    const ZSTD: &str = "An information disclosure vulnerability in Zstandard versions 1.5.1 \
+        through 1.5.7 allows specially crafted compressed data to expose the contents of an \
+        internal buffer through decompressed output. The buffer is 64 KiB in the default \
+        configuration and may contain uninitialized memory.";
+
+    #[test]
+    fn a_cve_nothing_titles_is_named_by_its_description_s_first_sentence() {
+        assert_eq!(
+            described_title("zstd", "CVE-2026-124851", ZSTD).as_deref(),
+            Some(
+                "zstd: information disclosure vulnerability in Zstandard versions 1.5.1 \
+                 through 1.5.7 allows specially crafted compressed data to expose the \
+                 contents of an internal buffer through decompressed output (CVE-2026-124851)"
+            )
+        );
+        // A description with no full stop, opening with the package and
+        // naming the CVE, is not given either a second time.
+        assert_eq!(
+            described_title("xz", "CVE-2024-3094", "xz: The CVE-2024-3094 backdoor").as_deref(),
+            Some("xz: The CVE-2024-3094 backdoor")
+        );
+        assert_eq!(
+            described_title("xz", "CVE-1", "The liblzma build was tampered with.").as_deref(),
+            Some("xz: liblzma build was tampered with (CVE-1)")
+        );
+        // Longer than Jira takes: only what is certain.
+        let long = format!("A flaw in {}.", "very ".repeat(60));
+        assert_eq!(
+            described_title("zstd", "CVE-1", &long).as_deref(),
+            Some("zstd: CVE-1")
+        );
+        let fits = format!("{}.", "x".repeat(SUMMARY_MAX - "zstd:  (CVE-1)".len()));
+        assert_eq!(
+            described_title("zstd", "CVE-1", &fits).map(|t| t.chars().count()),
+            Some(SUMMARY_MAX)
+        );
+        assert_eq!(described_title("zstd", "CVE-1", "  "), None);
+    }
+
+    #[test]
+    fn a_title_made_from_the_description_comes_with_a_note() {
+        // A source's own title is used as it is, with nothing to say.
+        let titled = CveFacts {
+            title: Some("Zstandard buffer disclosure".into()),
+            description: Some(ZSTD.into()),
+            ..CveFacts::default()
+        };
+        assert_eq!(
+            cve_summary("zstd", "CVE-2026-124851", &titled),
+            (
+                Some("zstd: Zstandard buffer disclosure (CVE-2026-124851)".to_string()),
+                None
+            )
+        );
+        // Only a description: its first sentence, and a note.
+        let described = CveFacts {
+            description: Some(ZSTD.into()),
+            ..CveFacts::default()
+        };
+        let (title, note) = cve_summary("zstd", "CVE-2026-124851", &described);
+        assert!(
+            title
+                .as_deref()
+                .is_some_and(|t| t.starts_with("zstd: information disclosure vulnerability")),
+            "{title:?}"
+        );
+        assert_eq!(
+            note.as_deref(),
+            Some(
+                "nothing titles CVE-2026-124851, so the summary is the first sentence of its \
+                 description; it cannot be changed once filed: pass --summary to word it"
+            )
+        );
+        // One too long to be a summary: the note says what was done instead.
+        let long = CveFacts {
+            description: Some(format!("A flaw in {}.", "very ".repeat(60))),
+            ..CveFacts::default()
+        };
+        let (title, note) = cve_summary("zstd", "CVE-1", &long);
+        assert_eq!(title.as_deref(), Some("zstd: CVE-1"));
+        assert!(
+            note.is_some_and(|n| n.contains("so the summary only names it")),
+            "the short form is said"
+        );
+        // Nothing known of the CVE: nothing to call the issue.
+        assert_eq!(
+            cve_summary("zstd", "CVE-1", &CveFacts::default()),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn no_draft_says_what_is_missing() {
+        assert_eq!(
+            no_draft_why(&[], "c9s"),
+            "no draft: pass --summary (or --cve) to draft an issue"
+        );
+        // A CVE was given: asking for one again would not help.
+        assert_eq!(
+            no_draft_why(&["CVE-2026-1"], "c9s"),
+            "no draft: no source titles or describes CVE-2026-1 (check the id); pass \
+             --summary to draft an issue"
+        );
+        assert_eq!(
+            no_draft_why(&["CVE-1", "CVE-2"], "c9s"),
+            "no draft: 2 CVEs have no issue on c9s; pass --summary to name one issue \
+             covering them all"
+        );
     }
 
     #[test]

@@ -16,7 +16,7 @@ Where a CVE is fixed, and whether a build has that fix.
   range closed at the top, the single release the references point at
   (`release_tag_candidates`) — for one `CveFix` a tool can judge a build
   against; `cve_id_in` and `is_security_tracker` for reading a Bugzilla
-  summary.
+  summary; `first_sentence` of a CVE's description.
 - **`cache`** — `NvdCache`, NVD answers paced to its rate limit (5 per
   30 s bare, 50 with an API key), retried once after a refusal, kept
   on disk for a day under the calling tool's cache directory;
