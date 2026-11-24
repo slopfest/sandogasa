@@ -33,6 +33,24 @@ means not yet, without asking NVD, which cannot have a CVE cve.org has
 not published. NVD is still asked when cve.org does not answer, and the
 update is left out only when neither does.
 
+### fedora-cve-triage reads a CVE from cve.org when NVD has no record
+
+When NVD refused a lookup twice, or had not copied a new CVE yet, every
+check passed the bug over for want of data, and the run could only say
+so at the end. Each CVE is now also looked up on cve.org, while NVD's
+pace is waited out, and when NVD gives no record cve.org's is read in
+its place: the description and the references, which is all the
+JavaScript, tool-name and fixed-version lookups start from. It has none
+of NVD's product data, so a check that needs the affected products
+still passes the bug over, as it does for a CVE NVD has not analyzed;
+the fixed-version prompt reads `NVD: no record; read from cve.org`, and
+the closing summary names the CVEs read this way after a refusal.
+
+`rejected-cve` also closes a bug whose CVE cve.org marks `REJECTED`
+while NVD still shows the record or does not answer, and the bug says
+which of the two said it. The reason in `configs/fedora-cve-triage/run.toml`
+no longer says the status is NVD's.
+
 ### sandogasa-cve: cve.org as a source
 
 New in the library, for the cve.org entries here, with nothing removed
