@@ -27,8 +27,8 @@ use sandogasa_cbs::Collection;
 use sandogasa_cli::explain::Ui;
 
 use crate::local::{
-    build_config_argv, build_configs, host_macros, readable_spec, rpmspec_argv, rpmspec_query,
-    tag_macros,
+    build_config_argv, build_configs, host_macros, legacy_patch_macros, readable_spec,
+    rpmspec_argv, rpmspec_query, tag_macros,
 };
 
 /// The query format giving `epoch:version-release` (epoch `0` when the
@@ -236,6 +236,7 @@ fn problems(
     for (collection, config) in collections.iter().zip(&configs) {
         let mut macros = host_macros(&tag_macros(config), collection.major);
         macros.push(sourcedir.clone());
+        macros.extend(legacy_patch_macros(&text));
         let target = collection.target();
         let out = match rpmspec_query(ui, &tree.path, &rpmspec_argv(&spec, &macros, EVR_QF)) {
             Ok(out) => out,
@@ -624,5 +625,59 @@ mod tests {
             "[ \"$1\" = --help ] && exit 0\necho 'bad history' >&2\nexit 1\n",
         );
         assert_eq!(checked(&f, &head, false, false), Ok(true));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn a_spec_with_obsolete_patch_lines_is_read_as_cbs_reads_it() {
+        // rsync's spec with Stream's `%patch1`: rpmspec from rpm 4.20 on
+        // refuses it unless `%patch1` is defined as the new spelling.
+        let (f, _) = rsync("3", "3", "2");
+        f.git(&["checkout", "--quiet", "c10s-proposed-RHEL-1"]);
+        std::fs::write(
+            f.repo.join("rsync.spec"),
+            "Name: rsync\n%prep\n%patch1 -p1\n",
+        )
+        .unwrap();
+        f.git(&["commit", "--quiet", "-am", "patch"]);
+        let commit = f.git(&["rev-parse", "HEAD"]);
+        f.fake(
+            "rpmspec",
+            &[
+                ("--version", ""),
+                // The define is the last before the bare query's dist,
+                // and the last before the spec in the built one.
+                ("patch1 %%patch -P 1 --define dist %{nil}", "3.4.1-3"),
+                (
+                    "patch1 %%patch -P 1 /",
+                    "0:3.4.1-3~proposed.el10\nA Packager <a@example.com> - 3.4.1-3",
+                ),
+                ("--srpm", "!error: %patchN is obsolete, use %patch N"),
+            ],
+        );
+        assert_eq!(checked(&f, &commit, false, false), Ok(true));
+        // Without the define, the Release check would have been skipped
+        // with a warning and passed all the same; the lagging Release
+        // shows the spec was read.
+        std::fs::write(
+            f.repo.join("rsync.spec"),
+            "Name: rsync\n%prep\n%patch1 -p1\n# again\n",
+        )
+        .unwrap();
+        f.git(&["commit", "--quiet", "-am", "again"]);
+        let commit = f.git(&["rev-parse", "HEAD"]);
+        f.fake(
+            "rpmspec",
+            &[
+                ("--version", ""),
+                ("patch1 %%patch -P 1 --define dist %{nil}", "3.4.1-2"),
+                (
+                    "patch1 %%patch -P 1 /",
+                    "0:3.4.1-2~proposed.el10\nA Packager <a@example.com> - 3.4.1-3",
+                ),
+                ("--srpm", "!error: %patchN is obsolete, use %patch N"),
+            ],
+        );
+        assert!(checked(&f, &commit, false, false).is_err());
     }
 }

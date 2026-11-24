@@ -211,6 +211,28 @@ pub fn host_macros(tag: &[(String, String)], major: u32) -> Vec<(String, String)
     macros
 }
 
+/// A `patchN` macro standing for `%patch -P N`, for each obsolete
+/// `%patchN` line `spec_text` uses. rpm 4.20 and later refuse to read a
+/// spec with one ("%patchN is obsolete"), and CentOS Stream's specs
+/// still have them; a macro by that name is expanded before rpm looks,
+/// so the spec reads on the host as it does in CBS's buildroot, where
+/// the older rpm takes the line as it is.
+pub fn legacy_patch_macros(spec_text: &str) -> Vec<(String, String)> {
+    let mut numbers = std::collections::BTreeSet::new();
+    for (at, _) in spec_text.match_indices("%patch") {
+        let rest = &spec_text[at + "%patch".len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        let next = rest[digits.len()..].chars().next();
+        if !digits.is_empty() && !next.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+            numbers.insert(digits);
+        }
+    }
+    numbers
+        .into_iter()
+        .map(|n| (format!("patch{n}"), format!("%%patch -P {n}")))
+        .collect()
+}
+
 /// `macros` as `--define 'name value'` arguments.
 pub fn define_args(macros: &[(String, String)]) -> Vec<String> {
     macros
@@ -518,15 +540,20 @@ fn prepare(ui: &Ui, target: &Target<'_>) -> Result<Prepared, Box<dyn std::error:
         eprintln!("Reading CBS's build settings for {}…", tags.join(", "));
     }
     let configs = build_configs(&tags)?;
+    let text = std::fs::read_to_string(repo.join(&spec))?;
+    let legacy = legacy_patch_macros(&text);
     let collections = checkout
         .collections
         .iter()
         .cloned()
-        .zip(configs.iter().map(tag_macros))
+        .zip(configs.iter().map(|c| {
+            let mut macros = tag_macros(c);
+            macros.extend(legacy.iter().cloned());
+            macros
+        }))
         .collect();
     // %autorelease and %autochangelog are filled in from the
     // checkout's history first, as fedpkg, centpkg and CBS do (#153).
-    let text = std::fs::read_to_string(repo.join(&spec))?;
     let (spec, processed) = if uses_rpmautospec(&text) {
         ui.step(&format!(
             "Fill in {spec}'s %autorelease and %autochangelog from the branch's history"
@@ -846,6 +873,22 @@ mod tests {
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn each_obsolete_patch_line_gets_a_macro_spelling_it_anew() {
+        let spec = "Patch1: a.patch\nPatch12: b.patch\n%prep\n%patch1 -p1\n\
+                    %patch12 -p1 -b .x\n%patch1 -R\n%patch -P 3 -p1\n%patch\n\
+                    %patches_x\n%patch4x\n%patch5\n";
+        assert_eq!(
+            legacy_patch_macros(spec),
+            [
+                ("patch1".to_string(), "%%patch -P 1".to_string()),
+                ("patch12".to_string(), "%%patch -P 12".to_string()),
+                ("patch5".to_string(), "%%patch -P 5".to_string()),
+            ]
+        );
+        assert!(legacy_patch_macros("%patch -P1 -p1\n").is_empty());
     }
 
     #[test]

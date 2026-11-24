@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### cbspkg reads a spec that still has `%patch1` lines
+
+On a host with rpm 4.20 or later, such as current Fedora, `cbspkg
+build` skipped its Release check for a spec from CentOS Stream with a
+warning, "rpmspec could not read the spec: error: %patchN is obsolete",
+and building the SRPM locally failed outright (#237). rpm now refuses
+the `%patch1` spelling Stream's specs still use, while the rpm in CBS's
+buildroots takes it as it is.
+
+cbspkg now defines a `patch1` macro meaning `%patch -P 1`, one for each
+such line in the spec, whenever it runs `rpmspec` or `rpmbuild -bs`,
+so the spec reads on the host as it does in CBS. The spec itself is
+not changed, and neither is the copy in the SRPM; `--explain` shows
+the extra `--define`s with the rest of the command.
+
 ### cpu-sig-tracker says how to write the inventory it cannot find
 
 `status` and `ping` read `inventory.toml` unless told otherwise, and
