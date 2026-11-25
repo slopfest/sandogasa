@@ -105,6 +105,13 @@ impl<T> NvdCache<T> {
         }
     }
 
+    /// Wait `interval` between requests instead of NVD's own pace: for
+    /// a test's server, which keeps no rate limit.
+    pub fn with_interval(mut self, interval: Duration) -> Self {
+        self.interval = interval;
+        self
+    }
+
     /// NVD's answer for `cve_id`, asking once more after a refusal:
     /// the rate limit is a spent window, not a verdict on the CVE. A
     /// second refusal is recorded in `refused` so the run can say
@@ -198,6 +205,13 @@ impl<T> NvdCache<T> {
                 }
             }
         }
+        self.cache.get(cve_id)
+    }
+
+    /// The value already in hand for `cve_id`, without asking NVD:
+    /// what an earlier [`get`](Self::get) fetched or read from disk.
+    /// `None` when that failed, or `cve_id` was never asked for.
+    pub fn cached(&self, cve_id: &str) -> Option<&T> {
         self.cache.get(cve_id)
     }
 }

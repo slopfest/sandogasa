@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### cpu-sig-tracker asks about a draft's CVEs together
+
+A `cpu-sig-tracker jira` draft for an update fixing several CVEs asked
+NVD about them back to back, and the later requests could be refused,
+leaving those CVEs without NVD's rating and description (#242). Each
+CVE was looked up on its own, with a new NVD client that did not know
+the others had just asked, and the CVEs' lookups did not overlap, so a
+draft took as long as every CVE in turn. `status --refresh`, rating
+CVE lines again, did the same.
+
+A run now asks NVD through one client, which keeps NVD's pace of one
+request per 6 s between CVEs, and across issues in `status --refresh`,
+where a CVE two issues name is asked about once. Red Hat, cve.org and
+GitHub are asked about four CVEs at a time, and a draft with several
+CVEs says it is rating them, since NVD's pace makes that take a while.
+sandogasa-cve's `NvdCache` gains `cached`, which reads an answer already
+fetched without asking NVD, and `with_interval`, a pace for a test's
+server.
+
 ### cpu-sig-tracker gives an issue for a CVE nothing rated yet a priority
 
 A tracking issue filed for a CVE no source had rated yet got no

@@ -310,16 +310,21 @@ pub fn parse_cve_lines(body: &str) -> Vec<String> {
 }
 
 /// The CVE lines for `cves`, each rated by Red Hat, NVD, cve.org and
-/// GitHub (what `jira` rates a CVE by).
-pub fn rated_cve_lines(cves: &[String], verbose: bool) -> Vec<String> {
+/// GitHub (what `jira` rates a CVE by), asking NVD through `nvd` so its
+/// pace holds across calls.
+pub fn rated_cve_lines(
+    cves: &[String],
+    nvd: &mut crate::jira_issue::Nvd,
+    verbose: bool,
+) -> Vec<String> {
     let Ok(runtime) = crate::jira::runtime() else {
         return cves.iter().map(|c| cve_line(c, &[])).collect();
     };
+    let names: Vec<&str> = cves.iter().map(String::as_str).collect();
+    let ratings = runtime.block_on(crate::jira_issue::cves_ratings(&names, nvd, verbose));
     cves.iter()
-        .map(|cve| {
-            let ratings = runtime.block_on(crate::jira_issue::cve_ratings(cve, verbose));
-            cve_line(cve, &ratings)
-        })
+        .zip(ratings)
+        .map(|(cve, ratings)| cve_line(cve, &ratings))
         .collect()
 }
 

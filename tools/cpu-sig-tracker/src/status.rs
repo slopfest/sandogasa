@@ -261,6 +261,9 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
             unbuilt_for_release(release, &packages, &pu_nvrs, &testing_nvrs, args.verbose)
         };
 
+        // One NVD client for every issue's CVEs, so NVD's pace holds
+        // between issues, and a CVE two issues name is asked about once.
+        let mut nvd = crate::jira_issue::nvd_cache(args.verbose);
         for issue in active {
             let Some(package) = gitlab::package_from_issue_url(&issue.web_url) else {
                 continue;
@@ -477,10 +480,10 @@ pub(crate) fn build_rows(args: &StatusArgs) -> Result<Vec<Row>, Box<dyn std::err
                     // since the issue was filed.
                     let new_cve_lines = if no_cve_lines {
                         (!cves.is_empty())
-                            .then(|| crate::triage::rated_cve_lines(&cves, args.verbose))
+                            .then(|| crate::triage::rated_cve_lines(&cves, &mut nvd, args.verbose))
                     } else {
                         crate::triage::rerated_cve_lines(body, |unrated| {
-                            crate::triage::rated_cve_lines(unrated, args.verbose)
+                            crate::triage::rated_cve_lines(unrated, &mut nvd, args.verbose)
                         })
                     };
                     // The priority by the lines as they will read.

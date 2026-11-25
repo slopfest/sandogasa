@@ -486,7 +486,8 @@ pub(crate) fn run_inner(args: &FileIssueArgs) -> Result<(), Box<dyn std::error::
     );
     settled.warn_left_out();
     let cves = settled.cves;
-    let mut cve_lines = crate::triage::rated_cve_lines(&cves, args.verbose);
+    let mut nvd = crate::jira_issue::nvd_cache(args.verbose);
+    let mut cve_lines = crate::triage::rated_cve_lines(&cves, &mut nvd, args.verbose);
     cve_lines.extend(change.advisory.clone());
     // The RHEL issues' priority, else, with none to take it from, the
     // CVEs' severity, as `jira` would set it.

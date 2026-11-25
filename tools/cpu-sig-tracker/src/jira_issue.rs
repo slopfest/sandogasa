@@ -629,7 +629,12 @@ fn run_inner(args: &JiraArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let facts: Vec<(&str, CveFacts)> = uncovered
         .iter()
-        .map(|cve| (*cve, runtime.block_on(cve_facts(cve, args.verbose))))
+        .copied()
+        .zip(runtime.block_on(cves_facts(
+            &uncovered,
+            &mut nvd_cache(args.verbose),
+            args.verbose,
+        )))
         .collect();
     let states: Vec<Option<RhelState>> = facts
         .iter()
@@ -1092,10 +1097,14 @@ fn cve_summary(package: &str, cve: &str, facts: &CveFacts) -> (Option<String>, O
     (Some(title), Some(note))
 }
 
-/// Every severity rating of `cve`, Red Hat's first: what a tracking
-/// issue's CVE line gives (`triage`).
-pub(crate) async fn cve_ratings(cve: &str, verbose: bool) -> Vec<Rating> {
-    cve_facts(cve, verbose).await.ratings
+/// Every severity rating of each of `cves`, Red Hat's first: what a
+/// tracking issue's CVE lines give (`triage`).
+pub(crate) async fn cves_ratings(cves: &[&str], nvd: &mut Nvd, verbose: bool) -> Vec<Vec<Rating>> {
+    cves_facts(cves, nvd, verbose)
+        .await
+        .into_iter()
+        .map(|f| f.ratings)
+        .collect()
 }
 
 /// Where the CVE sources are asked: the `CPU_SIG_TRACKER_*_BASE`
@@ -1116,36 +1125,20 @@ fn cve_endpoints() -> sandogasa_cve::sources::Endpoints {
     e
 }
 
-/// Every severity rating of `cve`, its description (NVD's, or cve.org's
-/// when NVD has no record of it yet or does not answer), and Red Hat's
-/// security data on it.
-async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
-    if verbose {
-        eprintln!("[cpu-sig-tracker] rating {cve}: Red Hat, NVD, cve.org, GitHub");
-    }
-    let http = match sandogasa_cli::http::builder(concat!(
-        env!("CARGO_PKG_NAME"),
-        "/",
-        env!("CARGO_PKG_VERSION")
-    ))
-    .build()
-    {
-        Ok(h) => h,
-        Err(e) => {
-            eprintln!("warning: no HTTP client for the severity lookup ({e})");
-            return CveFacts::default();
-        }
-    };
-    let cache = sandogasa_cli::cache::DiskCache::new(
-        "cpu-sig-tracker",
-        "advisories",
-        Some(sandogasa_cve::cache::NVD_TTL),
-        false,
-    );
-    let token = std::env::var("GITHUB_TOKEN").ok();
-    let sources = sandogasa_cve::sources::Sources::new(&http, &cache, token.as_deref())
-        .with_endpoints(cve_endpoints());
-    let mut nvd = match std::env::var("CPU_SIG_TRACKER_NVD_BASE") {
+/// How many CVEs are asked about Red Hat's, cve.org's and GitHub's
+/// sources at once.
+const CVE_JOBS: usize = 4;
+
+/// The pace of a test's NVD (`CPU_SIG_TRACKER_NVD_BASE`).
+const TEST_NVD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// NVD's client, with its answers and its pace: one per run, so the pace
+/// holds across every CVE the run asks about.
+pub(crate) type Nvd = sandogasa_cve::NvdCache<sandogasa_nvd::models::CveResponse>;
+
+/// NVD's client, at `CPU_SIG_TRACKER_NVD_BASE` for a test.
+pub(crate) fn nvd_cache(verbose: bool) -> Nvd {
+    match std::env::var("CPU_SIG_TRACKER_NVD_BASE") {
         Ok(base) => sandogasa_cve::NvdCache::with(
             sandogasa_nvd::NvdClient::with_base_url(&format!(
                 "{}/rest/json/cves/2.0",
@@ -1155,17 +1148,46 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
             sandogasa_cli::cache::DiskCache::at(None, false, None),
             sandogasa_cve::cache::NVD_BACKOFF,
             verbose,
-        ),
+        )
+        // A test's server has no rate limit to keep: a short pace, so a
+        // test can see it kept without waiting NVD's 6 s.
+        .with_interval(TEST_NVD_INTERVAL),
         Err(_) => sandogasa_cve::NvdCache::new("cpu-sig-tracker", String::new(), verbose, false),
-    };
-    // Each source asked once: a failed answer is not kept, so asking
-    // again for the description would ask again, and NVD at its pace.
-    let (redhat, nvd_answer, record, ghsa) = tokio::join!(
+    }
+}
+
+/// What Red Hat, cve.org and GitHub say about `cve`, asked together.
+async fn other_sources(
+    http: &reqwest::Client,
+    token: Option<&str>,
+    cve: &str,
+) -> (
+    Option<String>,
+    Option<sandogasa_cve::cveorg::Record>,
+    Option<String>,
+) {
+    let cache = sandogasa_cli::cache::DiskCache::new(
+        "cpu-sig-tracker",
+        "advisories",
+        Some(sandogasa_cve::cache::NVD_TTL),
+        false,
+    );
+    let sources =
+        sandogasa_cve::sources::Sources::new(http, &cache, token).with_endpoints(cve_endpoints());
+    tokio::join!(
         sources.redhat_cve(cve),
-        nvd.get(cve, |r| r),
         sources.cveorg(cve),
         sources.ghsa_json(cve),
-    );
+    )
+}
+
+/// What the sources' answers say about a CVE.
+fn facts_from(
+    redhat: Option<String>,
+    nvd_answer: Option<&sandogasa_nvd::models::CveResponse>,
+    record: Option<sandogasa_cve::cveorg::Record>,
+    ghsa: Option<String>,
+) -> CveFacts {
     let ratings = sandogasa_cve::severity::ratings_from(
         redhat.as_deref(),
         nvd_answer,
@@ -1191,6 +1213,88 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
         rejected,
         answered,
     }
+}
+
+/// Each of `cves`' severity ratings, its description (NVD's, or
+/// cve.org's when NVD has no record of it yet or does not answer), and
+/// Red Hat's security data on it, in the order given.
+///
+/// One NVD client asks about the CVEs in turn, so NVD's pace holds
+/// across them, while Red Hat, cve.org and GitHub are asked about
+/// [`CVE_JOBS`] CVEs at a time. Each source is asked once per CVE: a
+/// failed answer is not kept, so asking again for the description
+/// would ask again, and NVD at its pace.
+async fn cves_facts(cves: &[&str], nvd: &mut Nvd, verbose: bool) -> Vec<CveFacts> {
+    if cves.is_empty() {
+        return Vec::new();
+    }
+    // NVD's pace makes several CVEs slow enough to notice.
+    if verbose || cves.len() > 1 {
+        eprintln!(
+            "Rating {} by Red Hat, NVD, cve.org and GitHub (NVD answers one \
+             request per 6 s)...",
+            cves.join(", ")
+        );
+    }
+    let http = match sandogasa_cli::http::builder(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ))
+    .build()
+    {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("warning: no HTTP client for the severity lookup ({e})");
+            return cves.iter().map(|_| CveFacts::default()).collect();
+        }
+    };
+    let token = std::env::var("GITHUB_TOKEN").ok();
+    // `Sources` is not `Send`, so its tasks run on a LocalSet: one
+    // thread, but the work is waiting on the network, so the requests
+    // in flight together are what matters.
+    let local = tokio::task::LocalSet::new();
+    let answers = local
+        .run_until(async {
+            let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(CVE_JOBS));
+            let tasks: Vec<_> = cves
+                .iter()
+                .map(|cve| {
+                    let (http, token, permits, cve) = (
+                        http.clone(),
+                        token.clone(),
+                        permits.clone(),
+                        cve.to_string(),
+                    );
+                    tokio::task::spawn_local(async move {
+                        let _permit = permits.acquire_owned().await;
+                        other_sources(&http, token.as_deref(), &cve).await
+                    })
+                })
+                .collect();
+            // NVD in turn, at its pace, while the others are asked.
+            let nvd_asked = async {
+                for cve in cves {
+                    nvd.get(cve, |r| r).await;
+                }
+            };
+            let others = async {
+                let mut answers = Vec::with_capacity(tasks.len());
+                for (cve, task) in cves.iter().zip(tasks) {
+                    answers.push(task.await.unwrap_or_else(|e| {
+                        eprintln!("warning: asking about {cve} failed ({e})");
+                        (None, None, None)
+                    }));
+                }
+                answers
+            };
+            tokio::join!(nvd_asked, others).1
+        })
+        .await;
+    cves.iter()
+        .zip(answers)
+        .map(|(cve, (redhat, record, ghsa))| facts_from(redhat, nvd.cached(cve), record, ghsa))
+        .collect()
 }
 
 /// What the create metadata says is wrong with the draft: a required
@@ -2318,7 +2422,13 @@ mod tests {
         });
         let home = tempfile::tempdir().unwrap();
         let _env = guard(&server, home.path(), None);
-        let facts = runtime.block_on(cve_facts("CVE-2024-35918", false));
+        let facts = runtime
+            .block_on(cves_facts(
+                &["CVE-2024-35918"],
+                &mut nvd_cache(false),
+                false,
+            ))
+            .remove(0);
         assert!(facts.rejected);
         assert_eq!(facts.description, None);
         assert_eq!(facts.title, None);
@@ -2328,6 +2438,62 @@ mod tests {
         );
         let why = rejected_why(&["CVE-2024-35918"]);
         assert!(why.contains("CVE-2024-35918 as rejected"), "{why}");
+    }
+
+    /// A draft's CVEs share one NVD client, so NVD's pace holds between
+    /// them, and each source is asked once about each; the answers come
+    /// back in the order the CVEs were given.
+    #[test]
+    #[serial_test::serial]
+    fn a_draft_s_cves_are_asked_about_together_at_nvd_s_pace() {
+        let cves = ["CVE-2026-70011", "CVE-2026-70012"];
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            for cve in cves {
+                let record = json!({
+                    "cveMetadata": {"cveId": cve, "state": "PUBLISHED"},
+                    "containers": {"cna": {"title": format!("title of {cve}")}}
+                });
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/cve/{cve}")))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(record))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+            Mock::given(method("GET"))
+                .and(path("/rest/json/cves/2.0"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"totalResults": 0, "vulnerabilities": []})),
+                )
+                .expect(2)
+                .mount(&server)
+                .await;
+        });
+        let home = tempfile::tempdir().unwrap();
+        let _env = guard(&server, home.path(), None);
+        let started = std::time::Instant::now();
+        let mut nvd = nvd_cache(false);
+        let facts = runtime.block_on(cves_facts(&cves, &mut nvd, false));
+        // Two NVD requests, one pace apart.
+        assert!(
+            started.elapsed() >= TEST_NVD_INTERVAL,
+            "NVD's pace was not kept between CVEs: {:?}",
+            started.elapsed()
+        );
+        let titles: Vec<_> = facts.iter().map(|f| f.title.clone()).collect();
+        assert_eq!(titles, cves.map(|c| Some(format!("title of {c}"))).to_vec());
+        // The same client asked again, as `status --refresh` does for
+        // the next issue: what it has is not asked for again.
+        runtime.block_on(cves_facts(&cves[..1], &mut nvd, false));
+        runtime.block_on(server.verify());
+        assert!(
+            runtime
+                .block_on(cves_facts(&[], &mut nvd, false))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2353,7 +2519,13 @@ mod tests {
         });
         let home = tempfile::tempdir().unwrap();
         let _env = guard(&server, home.path(), None);
-        let facts = runtime.block_on(cve_facts("CVE-2026-70007", false));
+        let facts = runtime
+            .block_on(cves_facts(
+                &["CVE-2026-70007"],
+                &mut nvd_cache(false),
+                false,
+            ))
+            .remove(0);
         assert!(!facts.answered, "no source answered");
         assert!(facts.ratings.is_empty() && facts.description.is_none());
     }
