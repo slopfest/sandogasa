@@ -1151,12 +1151,8 @@ async fn cve_facts(cve: &str, verbose: bool) -> CveFacts {
                 "{}/rest/json/cves/2.0",
                 base.trim_end_matches('/')
             )),
-            sandogasa_cli::cache::DiskCache::new(
-                "cpu-sig-tracker",
-                "nvd",
-                Some(sandogasa_cve::cache::NVD_TTL),
-                false,
-            ),
+            // A test's NVD: its answers stay out of the user's cache.
+            sandogasa_cli::cache::DiskCache::at(None, false, None),
             sandogasa_cve::cache::NVD_BACKOFF,
             verbose,
         ),

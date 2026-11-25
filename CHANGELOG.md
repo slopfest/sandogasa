@@ -224,7 +224,7 @@ while NVD still shows the record or does not answer, and the bug says
 which of the two said it. The reason in `configs/fedora-cve-triage/run.toml`
 no longer says the status is NVD's.
 
-### sandogasa-cve asks NVD again for a CVE it had no record of
+### sandogasa-cve asks NVD again within the hour for a CVE it had no record of
 
 A CVE NVD had not copied from cve.org yet stayed missing for a day. NVD
 answers such a lookup with an empty list, and `NvdCache` kept that
@@ -233,12 +233,19 @@ an hour later, after NVD had published the record, still had no NVD
 rating, and fedora-cve-triage still read the CVE without NVD's product
 data.
 
-An answer with no record of the CVE is no longer kept on disk, and one
-kept before is passed over, so NVD is asked again on the next run.
-Within a run the answer is still remembered, so the checks do not each
-ask. A run pays one request, at NVD's pace, for each CVE NVD does not
-have. This applies to every user of `NvdCache`: fedora-cve-triage,
+An answer with no record of the CVE is now kept on disk for an hour
+rather than a day, so the first run after that asks NVD again. Runs
+within the hour still reuse it, so fedora-cve-triage, run again over
+the bot's newest bugs, does not wait 6 s for each CVE NVD lacks (#244).
+Within a run the answer is remembered, so the checks do not each ask.
+This applies to every user of `NvdCache`: fedora-cve-triage,
 cpu-sig-tracker and ebranch.
+
+### sandogasa-cli: a cached entry's age
+
+`DiskCache::load_aged` returns an entry with its age, for a caller that
+holds some answers to a shorter life than the cache's own, as
+`NvdCache` does an answer with no record of the CVE.
 
 ### sandogasa-cve: cve.org as a source
 

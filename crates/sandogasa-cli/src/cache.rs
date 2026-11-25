@@ -86,22 +86,29 @@ impl DiskCache {
     /// The stored body for `key`, if present and — when the cache has
     /// a life — young enough.
     pub fn load(&self, key: &str) -> Option<String> {
+        self.load_aged(key).map(|(body, _)| body)
+    }
+
+    /// The stored body for `key` and how old it is, if present and —
+    /// when the cache has a life — young enough: for an answer that
+    /// ages faster than the others in the same cache, such as NVD
+    /// saying it has no record of a CVE yet, which the caller holds to
+    /// a shorter life of its own.
+    pub fn load_aged(&self, key: &str) -> Option<(String, Duration)> {
         if self.refresh {
             return None;
         }
         let path = self.path(key)?;
-        if let Some(ttl) = self.ttl {
-            let age = std::fs::metadata(&path)
-                .ok()?
-                .modified()
-                .ok()?
-                .elapsed()
-                .ok()?;
-            if age > ttl {
-                return None;
-            }
+        let age = std::fs::metadata(&path)
+            .ok()?
+            .modified()
+            .ok()?
+            .elapsed()
+            .unwrap_or_default();
+        if self.ttl.is_some_and(|ttl| age > ttl) {
+            return None;
         }
-        std::fs::read_to_string(path).ok()
+        Some((std::fs::read_to_string(path).ok()?, age))
     }
 
     /// Store a body, atomically (a reader never sees a half-written
@@ -355,6 +362,28 @@ mod tests {
         let none = DiskCache::at(None, false, None);
         none.store("k", "{}");
         assert_eq!(none.load("k"), None);
+    }
+
+    #[test]
+    fn an_entry_is_read_with_its_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let disk = DiskCache::at(Some(dir.path().to_path_buf()), false, Some(DAY));
+        let hour = Duration::from_secs(60 * 60);
+        disk.store("k", "body");
+        let (body, age) = disk.load_aged("k").unwrap();
+        assert_eq!(body, "body");
+        assert!(age < hour);
+        backdate(&dir.path().join("k"), 2 * hour);
+        let (_, age) = disk.load_aged("k").unwrap();
+        assert!(age >= 2 * hour && age < 3 * hour);
+        // Past the cache's life, or under --refresh, nothing is read.
+        backdate(&dir.path().join("k"), 2 * DAY);
+        assert_eq!(disk.load_aged("k"), None);
+        let fresh = DiskCache::at(Some(dir.path().to_path_buf()), true, None);
+        assert_eq!(fresh.load_aged("k"), None);
+        // A cache without a life reads any age.
+        let forever = DiskCache::at(Some(dir.path().to_path_buf()), false, None);
+        assert!(forever.load_aged("k").is_some());
     }
 
     #[test]

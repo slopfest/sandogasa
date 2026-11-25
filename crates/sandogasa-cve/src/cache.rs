@@ -8,10 +8,12 @@
 //! so a run can say which bugs went unjudged for want of data rather
 //! than because nothing applied.
 //!
-//! Only an answer with a record of the CVE is kept on disk. NVD copies a
-//! new CVE from cve.org some hours after it is published and answers
-//! with an empty list until then; kept for a day, that answer would
-//! hide the record long after NVD has it.
+//! An answer with a record of the CVE is kept on disk for a day; one
+//! without, for an hour. NVD copies a new CVE from cve.org some hours
+//! after it is published and answers with an empty list until then:
+//! kept for a day, that answer would hide the record long after NVD has
+//! it, and not kept at all, every run would wait on NVD again for each
+//! CVE it has not copied yet.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -64,9 +66,13 @@ pub fn nvd_throttled(e: &reqwest::Error) -> bool {
 
 /// How long an NVD answer, or an advisory page, may serve from disk.
 pub const NVD_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long NVD's answer that it has no record of a CVE yet may serve
+/// from disk: long enough that runs close together ask once, short
+/// enough that the record is read within the hour NVD copies it.
+pub const NVD_NO_RECORD_TTL: Duration = Duration::from_secs(60 * 60);
 impl<T> NvdCache<T> {
     /// A cache for `tool` (its XDG cache directory holds the answers
-    /// for a day), asking NVD with `api_key` when one is configured —
+    /// for a day, or an hour when NVD has no record of the CVE), asking NVD with `api_key` when one is configured —
     /// which lifts the pace from one request per 6 s to one per 0.6 s.
     pub fn new(tool: &str, api_key: String, verbose: bool, refresh: bool) -> Self {
         Self::with(
@@ -149,21 +155,21 @@ impl<T> NvdCache<T> {
     /// response on a miss. `None` means the fetch failed (a warning
     /// has already been printed).
     ///
-    /// An answer with no record of the CVE is remembered for the run,
-    /// so that it is asked for once, and not kept on disk, so that the
-    /// next run asks NVD again. One already on disk is passed over the
-    /// same way.
+    /// An answer with no record of the CVE serves from disk for
+    /// [`NVD_NO_RECORD_TTL`] rather than the day a record serves, so
+    /// runs close together ask NVD once and a later run asks again.
     pub async fn get(
         &mut self,
         cve_id: &str,
         map: impl FnOnce(sandogasa_nvd::models::CveResponse) -> T,
     ) -> Option<&T> {
         if !self.cache.contains_key(cve_id) {
-            // A day-old answer on disk spares the request and the wait,
-            // when it has a record of the CVE.
-            if let Some(body) = self.disk.load(&format!("{cve_id}.json"))
+            // An answer on disk spares the request and the wait: up to
+            // a day old with a record of the CVE, an hour without.
+            let key = format!("{cve_id}.json");
+            if let Some((body, age)) = self.disk.load_aged(&key)
                 && let Ok(resp) = serde_json::from_str::<sandogasa_nvd::models::CveResponse>(&body)
-                && !resp.vulnerabilities.is_empty()
+                && (!resp.vulnerabilities.is_empty() || age <= NVD_NO_RECORD_TTL)
             {
                 if self.verbose {
                     eprintln!("Using cached NVD answer for {cve_id}...");
@@ -183,9 +189,7 @@ impl<T> NvdCache<T> {
             let body = self.fetch(cve_id).await?;
             match serde_json::from_str::<sandogasa_nvd::models::CveResponse>(&body) {
                 Ok(resp) => {
-                    if !resp.vulnerabilities.is_empty() {
-                        self.disk.store(&format!("{cve_id}.json"), &body);
-                    }
+                    self.disk.store(&key, &body);
                     self.cache.insert(cve_id.to_string(), map(resp));
                 }
                 Err(e) => {
@@ -320,16 +324,24 @@ mod tests {
     }
 
     /// NVD answers with an empty list for a CVE it has not copied from
-    /// cve.org yet. That answer serves the run it was given in and no
-    /// later one, so the record is read as soon as NVD has it.
+    /// cve.org yet. That answer serves runs within the hour, so they do
+    /// not each wait on NVD, and no later one, so the record is read
+    /// soon after NVD has it.
     #[tokio::test]
-    async fn an_answer_with_no_record_is_asked_for_again_the_next_run() {
+    async fn an_answer_with_no_record_serves_for_an_hour() {
         use wiremock::matchers::{method, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
         fn records(r: sandogasa_nvd::models::CveResponse) -> usize {
             r.vulnerabilities.len()
         }
-        let cve = "CVE-2026-1";
+        /// Make the kept answer for `cve` `ago` old.
+        fn backdate(dir: &std::path::Path, cve: &str, ago: Duration) {
+            std::fs::File::open(dir.join(format!("{cve}.json")))
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - ago)
+                .unwrap();
+        }
+        let cve = "CVE-2026-1000";
         let server = MockServer::start().await;
         // Nothing yet for the first two requests, then the record.
         Mock::given(method("GET"))
@@ -348,43 +360,42 @@ mod tests {
             .mount(&server)
             .await;
         let dir = tempfile::tempdir().unwrap();
-        let disk = || DiskCache::at(Some(dir.path().to_path_buf()), false, Some(NVD_TTL));
         // Each run has a cache of its own over the same directory, and
-        // makes one request, so NVD's pace is never waited out.
+        // makes at most one request, so NVD's pace is never waited out.
         let run = || {
             NvdCache::with(
                 NvdClient::with_base_url(&server.uri()),
-                disk(),
+                DiskCache::at(Some(dir.path().to_path_buf()), false, Some(NVD_TTL)),
                 Duration::ZERO,
                 false,
             )
         };
         let asked = || async { server.received_requests().await.unwrap_or_default().len() };
-        // An empty answer an earlier version kept is passed over.
-        disk().store(
-            &format!("{cve}.json"),
-            r#"{"totalResults": 0, "vulnerabilities": []}"#,
-        );
+        let hour = NVD_NO_RECORD_TTL;
 
         let mut first = run();
         assert_eq!(first.get(cve, records).await, Some(&0));
-        assert_eq!(asked().await, 1, "the kept empty answer is not used");
-        // Within the run it is remembered: every check asking about the
-        // CVE does not wait on NVD again.
+        assert_eq!(asked().await, 1);
+        // Within the run it is remembered.
         assert_eq!(first.get(cve, records).await, Some(&0));
         assert_eq!(asked().await, 1);
 
-        // The next run asks again, and again hears nothing.
-        let mut second = run();
-        assert_eq!(second.get(cve, records).await, Some(&0));
+        // A run within the hour reuses it.
+        backdate(dir.path(), cve, hour / 2);
+        assert_eq!(run().get(cve, records).await, Some(&0));
+        assert_eq!(asked().await, 1, "an empty answer serves for the hour");
+
+        // Past the hour, the next run asks again, and again hears nothing.
+        backdate(dir.path(), cve, hour * 2);
+        assert_eq!(run().get(cve, records).await, Some(&0));
         assert_eq!(asked().await, 2);
 
-        // NVD has the record now: it is read, and kept.
-        let mut third = run();
-        assert_eq!(third.get(cve, records).await, Some(&1));
+        // NVD has the record now: it is read, and kept for the day.
+        backdate(dir.path(), cve, hour * 2);
+        assert_eq!(run().get(cve, records).await, Some(&1));
         assert_eq!(asked().await, 3);
-        let mut fourth = run();
-        assert_eq!(fourth.get(cve, records).await, Some(&1));
-        assert_eq!(asked().await, 3, "a record is served from disk");
+        backdate(dir.path(), cve, hour * 2);
+        assert_eq!(run().get(cve, records).await, Some(&1));
+        assert_eq!(asked().await, 3, "a record serves for the day");
     }
 }

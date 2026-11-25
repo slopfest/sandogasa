@@ -20,7 +20,8 @@ attempts and the backoff (doubling from a base delay, honoring a
 nothing, for tests.
 
 The `cache` module keeps answers between runs (`DiskCache`, one file
-per key, each cache with its own lifetime) and lets a tool expire what
+per key, each cache with its own lifetime; `load_aged` also returns an
+entry's age, for an answer the caller holds to a shorter life) and lets a tool expire what
 it keeps: `mark_used(entry)` records a use in a stamp beside the entry
 (`.<name>.last-used`, never inside it), `last_used(entry)` reads it
 back (an entry never marked counts from its modification time), and
