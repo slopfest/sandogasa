@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### fedora-cve-triage reads a restricted bug's comments with its key
+
+A Security Restricted bug, such as 2408207, was triaged again on every
+run, and its finding offered for posting again, with the warning "could
+not read comments (... 401 Unauthorized ...)" (#268). The search found
+it with the configured API key, but the step that reads a Triaged bug's
+comments, to see whether its finding was already recorded, read them
+anonymously, and Bugzilla refuses a restricted bug's comments to an
+anonymous reader. It now reads them with the same key. Fixes #268.
+
 ### fedora-cve-triage selects a SIG's bugs by the group's name
 
 Clearing out a SIG's CVE bugs meant working out by hand which address
