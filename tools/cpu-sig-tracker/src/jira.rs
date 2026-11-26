@@ -26,24 +26,24 @@ pub fn logged_in() -> bool {
 }
 
 /// The email and token [`client`] logs in with: the environment's,
-/// else the config's email with the keyring's token (#79) or the
-/// file's, else none.
+/// else the config's email (or the one the sandogasa tools share, #259)
+/// with the keyring's token (#79) or the file's, else none.
 fn credentials() -> (Option<String>, Option<String>) {
     if let Ok(t) = std::env::var("JIRA_TOKEN") {
         return (std::env::var("JIRA_EMAIL").ok(), Some(t));
     }
-    match crate::config::load().ok().and_then(|c| c.jira) {
-        Some(j) => {
-            let token = sandogasa_config::secret::resolve(
-                crate::secrets::keyring(),
-                None,
-                &crate::secrets::jira(j.email.as_deref()),
-                Some(&j.access_token),
-            );
-            (j.email, token)
-        }
-        None => (None, None),
+    let jira = crate::config::load().ok().and_then(|c| c.jira);
+    let email = crate::config::jira_email(jira.as_ref());
+    if jira.is_none() && email.is_none() {
+        return (None, None);
     }
+    let token = sandogasa_config::secret::resolve(
+        crate::secrets::keyring(),
+        None,
+        &crate::secrets::jira(email.as_deref()),
+        jira.as_ref().map(|j| j.access_token.as_str()),
+    );
+    (email, token)
 }
 
 /// A token with the account's email is an Atlassian Cloud API token:

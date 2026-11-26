@@ -42,7 +42,7 @@ pub fn slots(c: &mut crate::config::Config) -> Vec<Slot<'_>> {
         });
     }
     if let Some(j) = c.jira.as_mut() {
-        let entry = jira(j.email.as_deref());
+        let entry = jira(crate::config::jira_email(Some(j)).as_deref());
         slots.push(Slot {
             table: "jira",
             key: "access_token",

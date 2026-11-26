@@ -567,6 +567,49 @@ is not packaged in Fedora, `secret-service` is missing from EPEL 9, and
 `secret-tool` is there everywhere the tools are, and is what a person
 types to check an entry.
 
+## Who the user is is kept once, per service
+
+An account a tool asks for (the Jira email, later the Bugzilla email and
+the Fedora login, #259) is the person's, not the tool's, so it is kept
+once in `~/.config/sandogasa/config.toml` (over
+`/etc/sandogasa/config.toml`), per service host as the keyring keys
+secrets, through `sandogasa_config::identity`:
+
+- **Read the tool's own field, then the shared value**
+  (`identity::lookup`), so a setup from before the shared file keeps
+  working, and an email kept for one tool on purpose still wins. A
+  keyring entry with an `account` is looked up under the account
+  resolved this way, at login and in the `config` slot alike, or the
+  token is not found once the email has moved.
+- **In `config`, offer `identity::choose` and save with
+  `identity::settle`.** The offer is the tool's own value, else the
+  shared one, else the value other tools' files hold, with a note
+  saying where it came from; when those differ, they are listed and
+  nothing is offered. `settle` saves the answer to the shared file once
+  the service accepted it and the tool's own config is saved, so a
+  failed save moves nothing, asking (through
+  `sandogasa_cli::ask_to_reenable`, or the decline `ConfigArgs::reenable`
+  gives for a `--token` run) before replacing a different shared value
+  and before removing another tool's equal copy. Declined, the tool
+  keeps the answer as its own. The tool's own copy is then taken out of
+  its file. Replacing an identity that keys keyring entries
+  (`Identity::keys_secrets`) says that tokens kept under the old account
+  stay there.
+- **A credential that needs no account takes no shared one.**
+  cpu-sig-tracker's Jira token kept without an account is a self-hosted
+  personal access token, sent alone as a bearer, so a shared email for
+  that host is not added to it.
+- **A raw merge of the shared file beneath each tool's would not
+  work**: the tools name the same identity differently (`[jira] email`,
+  `[bugzilla] email`, `users.<profile>.bugzilla_email`), so each
+  field's place is in a table instead.
+- **When a tool starts keeping an identity, add it to
+  `identity::FIELDS`**, sorted by tool, with the key's path in its
+  file, and test in the tool that its config struct reads that path
+  (`fields_of`; cpu-sig-tracker's `identity_fields_match_the_config`).
+  `choose` and `settle` find other tools' copies through it, so a field
+  left out is never offered or tidied away.
+
 ## Config files layer: /etc, then ~/.config, then the command line
 
 Every tool's config is read in layers: an optional system-wide

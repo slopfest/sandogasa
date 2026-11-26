@@ -57,11 +57,25 @@ place a scoped token is honored; anonymous reads go to the site. The
 tokens are kept in the desktop keyring (through `secret-tool`), as
 entries shared with the other sandogasa tools that use the same
 service, e.g. `secret-tool lookup application sandogasa service
-gitlab.com`; the Jira email and anything without a keyring to use
-(no `secret-tool`, no Secret Service) go to
-`~/.config/cpu-sig-tracker/config.toml`, with 0600 permissions. A token
-found in that file is moved to the keyring the next time `config`
-runs. The `GITLAB_TOKEN`, and `JIRA_EMAIL` with `JIRA_TOKEN`,
+gitlab.com`; anything without a keyring to use (no `secret-tool`, no
+Secret Service) goes to `~/.config/cpu-sig-tracker/config.toml`, with
+0600 permissions. A token found in that file is moved to the keyring
+the next time `config` runs. The Jira email is the one the sandogasa
+tools share, kept per Jira site in `~/.config/sandogasa/config.toml`
+(beneath it, `/etc/sandogasa/config.toml`):
+
+```toml
+[jira."redhat.atlassian.net"]
+email = "someone@example.com"
+```
+
+`config` offers it from there, or from another tool's config, and saves
+the accepted email there, offering to remove the copies other tools
+hold. An email in `[jira]` of the tool's own file is read first: one
+found there is moved to the shared file the next time `config` runs,
+unless it differs from the shared one and is kept for this tool alone.
+A token kept in the keyring without an email (a self-hosted Jira's
+personal access token) is used alone, whatever the shared file holds. The `GITLAB_TOKEN`, and `JIRA_EMAIL` with `JIRA_TOKEN`,
 environment variables override both. Anonymous JIRA
 access works for public issues. Links to issues use the
 `redhat.atlassian.net` host throughout.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 pub mod credentials;
+pub mod identity;
 pub mod secret;
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -114,11 +115,27 @@ impl ConfigFile {
     /// the tool's own `config.toml`. Permissions are not enforced,
     /// since such a file is not where credentials belong.
     pub fn try_for_tool_file(tool_name: &str, file_name: &str) -> Option<Self> {
-        Some(Self {
-            path: dirs::config_dir()?.join(tool_name).join(file_name),
+        Some(Self::in_dirs(
+            &dirs::config_dir()?,
+            &system_root(),
+            tool_name,
+            file_name,
+        ))
+    }
+
+    /// `tool_name`'s `file_name` under `config_home` over `etc`: what
+    /// [`Self::try_for_tool_file`] gives for the real directories.
+    pub(crate) fn in_dirs(
+        config_home: &Path,
+        etc: &Path,
+        tool_name: &str,
+        file_name: &str,
+    ) -> Self {
+        Self {
+            path: config_home.join(tool_name).join(file_name),
             secure: file_name == "config.toml",
-            system_path: Some(system_root().join(tool_name).join(file_name)),
-        })
+            system_path: Some(etc.join(tool_name).join(file_name)),
+        }
     }
 
     /// Create a `ConfigFile` with an explicit path.
@@ -638,7 +655,7 @@ fn merge_tables(mut base: toml::Table, over: toml::Table) -> toml::Table {
 
 /// Read a TOML file into a table, `Ok(None)` when it doesn't
 /// exist.
-fn read_optional_table(path: &Path) -> Result<Option<toml::Table>, String> {
+pub(crate) fn read_optional_table(path: &Path) -> Result<Option<toml::Table>, String> {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -781,7 +798,7 @@ fn remove_if_empty(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
 /// so a config a repository ships under `configs/<tool>/` can be
 /// tried beneath the real user file before it is installed
 /// (`SANDOGASA_ETC=$PWD/configs`).
-fn system_root() -> PathBuf {
+pub(crate) fn system_root() -> PathBuf {
     root_from(std::env::var_os(SYSTEM_ROOT_VAR), "/etc")
 }
 

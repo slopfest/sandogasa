@@ -51,6 +51,19 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
   as `[table] key`: `saved` gives the value to offer from the user's
   file and the keyring, and `save` stores the answer. `NoKeyring`,
   like `MemoryStore`, is for tests: a keyring that cannot be used.
+- **identity** — who the person running the tools is, kept once for
+  every tool in `~/.config/sandogasa/config.toml` over
+  `/etc/sandogasa/config.toml`, per service host as the keyring keys
+  secrets (`[jira."redhat.atlassian.net"] email = …`). `lookup` gives
+  the shared value, which a tool reads after its own field. A `config`
+  command offers what `choose` gives (the tool's own value, else the
+  shared one, else the one other tools' files hold, with a note saying
+  where it came from), then `settle`s the answer: saved to the shared
+  file, asking before replacing a different shared value (declined, the
+  tool keeps it as its own), and before removing other tools' equal
+  copies. `FIELDS` lists where each tool keeps each identity, as
+  `secret::USERS` lists who keeps each secret; each tool checks its
+  entries against its config struct through `fields_of`.
 - **prompt_field** — prompt the user for a config value with support for
   sensitive (hidden) input and optional sync validation.
   `prompt_optional_field` and `prompt_optional_field_validated` take

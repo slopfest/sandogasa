@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### cpu-sig-tracker keeps the Jira email where every sandogasa tool can read it
+
+The Jira account email lived in cpu-sig-tracker's own config, so cbspkg,
+which is to comment on RHEL Jira issues (#156), would have had to ask
+for it again, as several tools already ask for the same Bugzilla email
+and Fedora login each. sandogasa-config now has a shared file,
+`~/.config/sandogasa/config.toml` over `/etc/sandogasa/config.toml`,
+holding the person's accounts per service host, as the keyring holds
+their tokens (`[jira."redhat.atlassian.net"] email = …`). A tool reads
+its own field first and the shared value after it, so nothing set up
+before has to change. `cpu-sig-tracker config` offers the email from
+there, or from another tool, saves the accepted email there, and moves
+an email found in its own file over, asking before replacing a
+different shared value or removing another tool's copy; an email that
+differs and is kept is used by cpu-sig-tracker alone. The other tools'
+accounts follow in a later change. Refs #259.
+
+Changing the Jira email at `config` while pressing Enter to keep the
+token lost the token: it was taken to be in the keyring already, though
+only under the old account's entry, and removed from the file. A token
+kept that way is now stored under the new account's entry.
+
 ### fedora-cve-triage asks nobody about a series the CVE may not reach
 
 bodhi-check asked the assignee of four ImageMagick bugs about EPEL 8 and

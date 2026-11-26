@@ -609,10 +609,14 @@ pub fn settle<'a>(
             }
             continue;
         }
+        // Left where it was only when the slot's entry is where it was
+        // found: an entry keyed by an account the prompts changed is a
+        // different one, which does not hold it yet.
         if let Before::Set {
             keyring: Some(held),
         } = before
             && *held == *s.value
+            && store.lookup(&s.entry).ok().flatten().as_ref() == Some(held)
         {
             s.value.clear();
             out_of_file.push((s.table, s.key));
@@ -1297,6 +1301,49 @@ mod tests {
                 required: false,
             },
         ]
+    }
+
+    /// A token found under one account's entry and kept, Enter at its
+    /// prompt, while the account changed: stored under the new account's
+    /// entry, which did not hold it, rather than taken for already kept.
+    #[test]
+    fn a_kept_token_follows_a_changed_account() {
+        let store = MemoryStore::default();
+        let old = SecretRef::for_url("https://jira.example", "sandogasa: Jira API token")
+            .account("old@example.com");
+        let new = old.clone().account("new@example.com");
+        store.store(&old, "tok").unwrap();
+        let mut value = String::new();
+        let before = fill(
+            &store,
+            "cpu-sig-tracker",
+            vec![Slot {
+                table: "jira",
+                key: "access_token",
+                what: "JIRA API token",
+                entry: old.clone(),
+                value: &mut value,
+                required: false,
+            }],
+            false,
+            &never,
+        );
+        assert_eq!(value, "tok");
+        let out = settle(
+            &store,
+            "cpu-sig-tracker",
+            vec![Slot {
+                table: "jira",
+                key: "access_token",
+                what: "JIRA API token",
+                entry: new.clone(),
+                value: &mut value,
+                required: false,
+            }],
+            &before,
+        );
+        assert_eq!(out, [("jira", "access_token")]);
+        assert_eq!(store.lookup(&new).unwrap().as_deref(), Some("tok"));
     }
 
     /// One `config` run end to end: an old file's secrets are offered

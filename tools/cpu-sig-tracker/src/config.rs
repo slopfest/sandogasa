@@ -47,6 +47,26 @@ pub struct JiraConfig {
     pub access_token: String,
 }
 
+/// The Jira account email: the tool's own, else the one shared by the
+/// sandogasa tools for this Jira site (#259). None for a token the
+/// keyring keeps without an account: a self-hosted Jira's personal
+/// access token, sent alone as a bearer.
+pub fn jira_email(jira: Option<&JiraConfig>) -> Option<String> {
+    jira.and_then(|j| j.email.clone()).or_else(|| {
+        let keyring = crate::secrets::keyring();
+        if let Ok(Some(_)) = keyring.lookup(&crate::secrets::jira(None)) {
+            return None;
+        }
+        sandogasa_config::identity::lookup(&sandogasa_config::identity::JIRA_EMAIL, &jira_host())
+    })
+}
+
+/// The Jira site's host, which the shared email and the keyring's token
+/// are kept under.
+pub fn jira_host() -> String {
+    sandogasa_config::identity::host_of(&crate::utils::jira_base())
+}
+
 pub fn config_file() -> sandogasa_config::ConfigFile {
     sandogasa_config::ConfigFile::for_tool("cpu-sig-tracker")
 }

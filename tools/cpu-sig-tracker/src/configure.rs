@@ -6,10 +6,13 @@
 
 use std::process::ExitCode;
 
+use sandogasa_config::identity;
 use sandogasa_config::secret::{self, Before};
 
 use crate::config::{self, Config, GitlabConfig, JiraConfig};
 use crate::utils::{gitlab_base, jira_base};
+
+const TOOL: &str = "cpu-sig-tracker";
 
 pub fn run(args: &sandogasa_cli::ConfigArgs) -> ExitCode {
     match run_inner(args) {
@@ -53,8 +56,30 @@ fn run_inner(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error:
         }),
         false => prompt_jira(existing.jira.as_ref(), args.review_secret(&jira_host))?,
     };
+    // The email in use, to share once the rest is saved: not on a run
+    // about the other instance's token, and not while Jira is off.
+    let email = match keep(&jira_host) {
+        true => None,
+        false => jira
+            .as_ref()
+            .filter(|j| j.access_token != secret::OFF)
+            .and_then(|j| config::jira_email(Some(j))),
+    };
     let mut cfg = to_save(gitlab_token, jira, existing.jira);
-    save(&mut cfg, &before)
+    let path = config::config_path();
+    let existed = path.exists();
+    save(&mut cfg, &before)?;
+    if let Some(e) = email {
+        share_email(&e, &args.reenable())?;
+    }
+    // Said once everything is settled: sharing the email can leave the
+    // file just saved empty, and then removed.
+    if path.exists() {
+        eprintln!("Saved to {}", path.display());
+    } else if existed {
+        eprintln!("Nothing else to keep in {}; removed it.", path.display());
+    }
+    Ok(())
 }
 
 /// The settings saved in the user's file alone, never `/etc`'s, which
@@ -65,6 +90,14 @@ fn run_inner(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error:
 fn saved(review: bool, ask: &dyn Fn(&str, bool) -> bool) -> (Config, Vec<Before>) {
     let mut existing: Config = config::config_file().load_user().ok().unwrap_or_default();
     existing.gitlab.get_or_insert_with(Default::default);
+    // Set up with only the shared email (#259) and the keyring's token:
+    // the table is there for the token to be found under that account.
+    if existing.jira.is_none() && config::jira_email(None).is_some() {
+        existing.jira = Some(JiraConfig {
+            email: None,
+            access_token: String::new(),
+        });
+    }
     let before = secret::fill(
         crate::secrets::keyring(),
         "cpu-sig-tracker",
@@ -96,9 +129,10 @@ fn to_save(gitlab_token: String, jira: Option<JiraConfig>, before: Option<JiraCo
 }
 
 /// Keep the tokens in the keyring when there is one, `before` being how
-/// each stood before the prompts, and save the rest.
+/// each stood before the prompts, and save the rest. The caller says
+/// where it went, once the email is shared.
 fn save(cfg: &mut Config, before: &[Before]) -> Result<(), Box<dyn std::error::Error>> {
-    let kept = secret::save_with(
+    secret::save_with(
         &config::config_file(),
         crate::secrets::keyring(),
         "cpu-sig-tracker",
@@ -106,12 +140,6 @@ fn save(cfg: &mut Config, before: &[Before]) -> Result<(), Box<dyn std::error::E
         before,
         crate::secrets::slots,
     )?;
-    let path = config::config_path();
-    if kept {
-        eprintln!("Saved to {}", path.display());
-    } else {
-        eprintln!("Nothing else to keep in {}; removed it.", path.display());
-    }
     Ok(())
 }
 
@@ -157,6 +185,10 @@ fn prompt_gitlab_token(
 ///
 /// A token turned off for the tool (skipped at an earlier run) is left
 /// off, unasked, on a plain run; `--all` offers it again.
+///
+/// The email is the one the sandogasa tools share (#259): offered from
+/// there, or from another tool, when the tool has none of its own.
+/// [`run_inner`] moves it there once everything is saved.
 fn prompt_jira(
     existing: Option<&JiraConfig>,
     all: bool,
@@ -172,7 +204,7 @@ fn prompt_jira(
     // which is why this falls back to asking for both rather than
     // replacing the token alone.
     if let Some(cfg) = existing.filter(|_| !all) {
-        let email = cfg.email.clone();
+        let email = config::jira_email(Some(cfg));
         let checked = sandogasa_cli::credential::validated_key_blocking(
             "JIRA",
             "API token",
@@ -207,8 +239,15 @@ fn prompt_jira(
     );
     // With --all, or after a refusal, the saved pair is offered as the
     // default: Enter keeps each half.
-    let review = existing.is_some();
-    let saved_email = existing.and_then(|c| c.email.clone()).unwrap_or_default();
+    let own = existing.and_then(|c| c.email.clone()).unwrap_or_default();
+    let choice = identity::choose(&identity::JIRA_EMAIL, &config::jira_host(), TOOL, &own);
+    if let Some(note) = choice.note(&identity::JIRA_EMAIL) {
+        println!("{note}");
+    }
+    // Reached after a refusal or with --all, or with nothing saved: an
+    // email offered is always asked about, Enter keeping it.
+    let review = true;
+    let saved_email = choice.value().to_string();
     let email = sandogasa_config::ask(
         &sandogasa_config::Setting::new("Atlassian account", "email (empty to skip)")
             .optional()
@@ -237,6 +276,24 @@ fn prompt_jira(
         email: Some(email),
         access_token: token,
     }))
+}
+
+/// Make the accepted `email` the shared one (#259), after the rest of
+/// the config is saved, asking through `ask` before replacing a
+/// different shared value or removing other tools' copies. The tool's
+/// own file loses its copy unless it keeps it as its own.
+fn share_email(
+    email: &str,
+    ask: &dyn Fn(&str, bool) -> bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    identity::settle(
+        &identity::JIRA_EMAIL,
+        &config::jira_host(),
+        TOOL,
+        email,
+        ask,
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -412,6 +469,108 @@ mod tests {
             Some("jira-shared")
         );
         clear_keyring();
+    }
+
+    /// Where the identity registry says the tool keeps the Jira email
+    /// is where its config reads it from.
+    #[test]
+    fn identity_fields_match_the_config() {
+        let fields: Vec<_> = identity::fields_of(TOOL).collect();
+        assert_eq!(fields.len(), 1);
+        for field in fields {
+            let (last, tables) = field.path.split_last().unwrap();
+            let text = format!("[{}]\n{last} = \"x@example.com\"\n", tables.join("."));
+            let cfg: Config = toml::from_str(&text).unwrap();
+            assert_eq!(field.identity, &identity::JIRA_EMAIL);
+            assert_eq!(cfg.jira.unwrap().email.as_deref(), Some("x@example.com"));
+        }
+    }
+
+    fn write_shared(text: &str) {
+        let dir = dirs::config_dir().unwrap().join("sandogasa");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), text).unwrap();
+    }
+
+    /// An email in the tool's file moves to the shared file once
+    /// accepted; afterwards the tool logs in with the shared email and
+    /// the keyring's token, its own file holding no Jira table at all.
+    #[test]
+    #[serial_test::serial]
+    fn the_jira_email_moves_to_the_shared_file_and_is_read_from_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = env(dir.path());
+        clear_keyring();
+        write_config(
+            "[gitlab]\naccess_token = \"glpat-1\"\n\n[jira]\nemail = \"me@example.com\"\n",
+        );
+        let entry = crate::secrets::jira(Some("me@example.com"));
+        crate::secrets::keyring()
+            .store(&entry, "jira-kept")
+            .unwrap();
+        let unasked = |q: &str, _: bool| -> bool { panic!("asked {q}") };
+
+        share_email("me@example.com", &unasked).unwrap();
+        let shared = std::fs::read_to_string(dir.path().join("sandogasa/config.toml")).unwrap();
+        assert_eq!(
+            shared,
+            "[jira.\"jira.configure.test\"]\nemail = \"me@example.com\"\n"
+        );
+        let text = read_config();
+        assert!(!text.contains("[jira]"), "{text}");
+
+        // No [jira] table: still logged in, as the shared account.
+        assert!(crate::jira::logged_in());
+        assert_eq!(config::jira_email(None).as_deref(), Some("me@example.com"));
+        // config finds the keyring's token under that account.
+        let (existing, before) = saved(false, &unasked);
+        assert_eq!(existing.jira.as_ref().unwrap().access_token, "jira-kept");
+        assert_eq!(
+            before[1],
+            Before::Set {
+                keyring: Some("jira-kept".into())
+            }
+        );
+        clear_keyring();
+    }
+
+    /// The tool's own email, differing from the shared one and kept on
+    /// purpose, wins over it.
+    #[test]
+    #[serial_test::serial]
+    fn an_own_jira_email_overrides_the_shared_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = env(dir.path());
+        clear_keyring();
+        write_shared("[jira.\"jira.configure.test\"]\nemail = \"me@example.com\"\n");
+        write_config("[jira]\nemail = \"work@example.com\"\n");
+        // Kept before, given again: kept, unasked.
+        share_email("work@example.com", &|q, _| panic!("asked {q}")).unwrap();
+        assert!(read_config().contains("work@example.com"));
+        assert_eq!(
+            config::jira_email(config::load().unwrap().jira.as_ref()).as_deref(),
+            Some("work@example.com")
+        );
+        assert!(!crate::jira::logged_in(), "no token for that account");
+    }
+
+    /// A token kept without an account is a self-hosted Jira's personal
+    /// access token, sent alone as a bearer: a shared email for the host
+    /// does not turn it into an Atlassian Cloud login.
+    #[test]
+    #[serial_test::serial]
+    fn a_personal_access_token_takes_no_shared_email() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = env(dir.path());
+        clear_keyring();
+        write_shared("[jira.\"jira.configure.test\"]\nemail = \"me@example.com\"\n");
+        write_config("[jira]\n");
+        let pat = crate::secrets::jira(None);
+        crate::secrets::keyring().store(&pat, "pat").unwrap();
+        assert_eq!(config::jira_email(None), None);
+        assert!(crate::jira::logged_in());
+        crate::secrets::keyring().clear(&pat).unwrap();
+        assert_eq!(config::jira_email(None).as_deref(), Some("me@example.com"));
     }
 
     /// The GitLab token is required: turned off, it is offered again on

@@ -533,6 +533,15 @@ fn wrap(out: &mut String, text: &str, first: &str, rest: &str) {
     out.push('\n');
 }
 
+/// `text` wrapped at 78 columns, for a message printed with `println!`
+/// or `eprintln!`.
+pub(crate) fn wrapped(text: &str) -> String {
+    let mut out = String::new();
+    wrap(&mut out, text, "", "");
+    out.truncate(out.trim_end().len());
+    out
+}
+
 /// The lowercased host of `url`, with or without a scheme.
 fn host(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
