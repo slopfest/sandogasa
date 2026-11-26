@@ -117,9 +117,10 @@ pub struct FetchWindow {
     /// UTC unix seconds, exclusive upper bound.
     pub to: f64,
     pub fetched: DateTime<Utc>,
-    /// True when the fetch was scoped (--owner/--package/
-    /// --inventory) — such a window is NOT full coverage, and
-    /// merge/report warn when mixing it with unfiltered ones.
+    /// True when the fetch was scoped (the retired `fetch` command's
+    /// --owner/--package/--inventory) — such a window is NOT full
+    /// coverage, and report warns when a dataset mixes it with
+    /// unfiltered ones.
     pub filtered: bool,
 }
 

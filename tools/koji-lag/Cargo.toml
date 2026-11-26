@@ -14,7 +14,6 @@ quick-xml = { workspace = true }
 rusqlite = { workspace = true }
 clap = { workspace = true }
 sandogasa-cli = { workspace = true }
-sandogasa-inventory = { workspace = true }
 sandogasa-koji = { workspace = true }
 sandogasa-kojihub = { workspace = true }
 schemars = { workspace = true }

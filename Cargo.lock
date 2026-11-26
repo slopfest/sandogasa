@@ -1278,7 +1278,6 @@ dependencies = [
  "rusqlite",
  "sandogasa-build",
  "sandogasa-cli",
- "sandogasa-inventory",
  "sandogasa-koji",
  "sandogasa-kojihub",
  "schemars",

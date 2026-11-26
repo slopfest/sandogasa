@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### koji-lag no longer depends on sandogasa-inventory
+
+Building the workspace with cargo 1.100 warned that koji-lag did not
+use its `sandogasa-inventory` dependency (#260). koji-lag stopped
+reading inventories when its `fetch` command was retired (abbc3891),
+and the dependency was left behind; it is removed. Fixes #260.
+
 ### cpu-sig-tracker asks about a draft's CVEs together
 
 A `cpu-sig-tracker jira` draft for an update fixing several CVEs asked
