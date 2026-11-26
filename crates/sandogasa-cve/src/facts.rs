@@ -300,7 +300,9 @@ impl Resolved {
     pub fn describe(&self) -> String {
         let inferred = matches!(
             self.source,
-            VersionSource::Advisory { inferred: true, .. } | VersionSource::Ranges
+            VersionSource::Advisory { inferred: true, .. }
+                | VersionSource::Ranges
+                | VersionSource::Cna { inferred: true }
         );
         self.fixed
             .iter()
@@ -336,6 +338,61 @@ pub enum VersionSource {
     /// The first release on a bundled copy's line whose tag (`tag`)
     /// contains one of the fix commits OSV records, found with git.
     Git { tag: String },
+    /// The CVE's CNA gives the fix per series in its `affected` ranges
+    /// on cve.org (#272) — or, `inferred`, only ranges closed at the
+    /// top, whose bounds stand in for the fix (see
+    /// [`inferred_from_ranges`]).
+    Cna { inferred: bool },
+}
+
+/// What a CVE's CNA ranges (see `cveorg::Record::ranges`) settle for
+/// `product`: a fixed version and a range per series, judged as NVD's
+/// would be, the upper bound of a range closed at the top standing in
+/// for its series' fix. The ranges are those named for `product`, case
+/// and punctuation aside; a record naming another product says nothing
+/// about this one, however few products it names (a CVE in CPython
+/// filed against a package bundling it is not that package's). They
+/// come back under `product`'s name, which is what the caller compares
+/// by. `None` when nothing matches.
+pub fn resolved_from_cna(
+    ranges: &[sandogasa_nvd::VulnerableRange],
+    product: &str,
+) -> Option<Resolved> {
+    let squash = |s: &str| {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    let mine: Vec<sandogasa_nvd::VulnerableRange> = ranges
+        .iter()
+        .filter(|r| squash(&r.product) == squash(product))
+        .cloned()
+        .map(|mut r| {
+            r.product = product.to_string();
+            r
+        })
+        .collect();
+    let mut fixed: Vec<sandogasa_nvd::FixedVersion> = mine
+        .iter()
+        .filter_map(|r| {
+            Some(sandogasa_nvd::FixedVersion {
+                product: r.product.clone(),
+                version: r.end_excluding.clone()?,
+            })
+        })
+        .collect();
+    let with_fix = !fixed.is_empty();
+    // A series closed at the top beside one with a fix still has its
+    // bound stand in for its own fix.
+    fixed.extend(inferred_from_ranges(&mine));
+    (!fixed.is_empty()).then_some(Resolved {
+        fixed,
+        ranges: mine,
+        source: VersionSource::Cna {
+            inferred: !with_fix,
+        },
+    })
 }
 
 /// What GitHub's advisories for a CVE settle: the first advisory with a
@@ -451,6 +508,94 @@ pub fn in_vulnerable_range(range: &sandogasa_nvd::VulnerableRange, version: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cna_range(product: &str, start: Option<&str>, end: &str) -> sandogasa_nvd::VulnerableRange {
+        sandogasa_nvd::VulnerableRange {
+            product: product.to_string(),
+            start_including: start.map(str::to_string),
+            end_excluding: Some(end.to_string()),
+            end_including: None,
+        }
+    }
+
+    /// CVE-2026-123273: fixed in 7.1.2-35 and, for ImageMagick 6, in
+    /// 6.9.13-60. EPEL 8 and 9 had 6.9.13.60, which the CNA's ranges
+    /// show as fixed and a lone 7.1.2-35 could not (#272).
+    #[test]
+    fn the_cna_s_ranges_give_a_fix_per_series() {
+        let ranges = [
+            cna_range("imagemagick", Some("7.0.0"), "7.1.2-35"),
+            cna_range("imagemagick", None, "6.9.13-60"),
+        ];
+        let found = resolved_from_cna(&ranges, "ImageMagick").unwrap();
+        assert!(matches!(
+            found.source,
+            VersionSource::Cna { inferred: false }
+        ));
+        let fixes: Vec<&str> = found.fixed.iter().map(|f| f.version.as_str()).collect();
+        assert_eq!(fixes, ["7.1.2-35", "6.9.13-60"]);
+        assert!(found.fixed.iter().all(|f| f.product == "ImageMagick"));
+        let fixed = |v: &str| {
+            found
+                .fixed
+                .iter()
+                .any(|f| crate::version::version_gte(v, &f.version))
+                && !found.ranges.iter().any(|r| in_vulnerable_range(r, v))
+        };
+        assert!(fixed("6.9.13.60"));
+        assert!(fixed("7.1.2.35"));
+        assert!(!fixed("6.9.13.59"));
+        // Past the 6.x fix, but inside the 7.x range: not fixed.
+        assert!(!fixed("7.1.2.34"));
+        assert_eq!(
+            found.describe(),
+            "ImageMagick 7.1.2-35, ImageMagick 6.9.13-60"
+        );
+    }
+
+    #[test]
+    fn the_cna_s_ranges_are_matched_to_the_product() {
+        let two = [
+            cna_range("libfoo", None, "1.2"),
+            cna_range("foo-tools", None, "3.4"),
+        ];
+        // By name, case and punctuation aside.
+        let found = resolved_from_cna(&two, "LibFoo").unwrap();
+        assert_eq!(found.fixed.len(), 1);
+        assert_eq!(found.fixed[0].version, "1.2");
+        assert!(resolved_from_cna(&two, "foo_tools").is_some());
+        // Two products, neither named: nothing.
+        assert!(resolved_from_cna(&two, "bar").is_none());
+        // One product, named otherwise: still not this one's.
+        let one = [cna_range("cpython", None, "3.13.5")];
+        assert!(resolved_from_cna(&one, "asahi-installer").is_none());
+        assert!(resolved_from_cna(&[], "ImageMagick").is_none());
+    }
+
+    #[test]
+    fn a_cna_range_closed_at_the_top_stands_in_for_the_fix() {
+        let closed = [sandogasa_nvd::VulnerableRange {
+            product: "freetype".to_string(),
+            start_including: Some("0.0.0".to_string()),
+            end_excluding: None,
+            end_including: Some("2.13.0".to_string()),
+        }];
+        let found = resolved_from_cna(&closed, "freetype").unwrap();
+        assert!(matches!(
+            found.source,
+            VersionSource::Cna { inferred: true }
+        ));
+        assert_eq!(found.describe(), "freetype > 2.13.0");
+        // Beside a series with a fix, the closed series' bound still
+        // stands in for its own.
+        let mixed = [
+            closed[0].clone(),
+            cna_range("freetype", Some("3.0"), "3.1.5"),
+        ];
+        let found = resolved_from_cna(&mixed, "freetype").unwrap();
+        let fixes: Vec<&str> = found.fixed.iter().map(|f| f.version.as_str()).collect();
+        assert_eq!(fixes, ["3.1.5", "2.13.0"]);
+    }
 
     fn ghsa(
         id: &str,

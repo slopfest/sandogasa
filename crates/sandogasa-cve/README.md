@@ -5,7 +5,9 @@ Where a CVE is fixed, and whether a build has that fix.
 - **`facts`** — `CveFacts` from an NVD response (fixed versions,
   vulnerable ranges, affected products, status, references);
   `Resolved` and `VersionSource` for a fix found elsewhere (GitHub's
-  advisory database, a configured version, a range closed at the top);
+  advisory database, the CNA's affected ranges on cve.org
+  (`resolved_from_cna`), a configured version, a range closed at the
+  top);
   `is_fix(version, fixed, ranges)`, the judgment every user shares — at
   or past a fixed version *and* outside every range still marked
   vulnerable, so one series' fix does not vouch for another series'
@@ -39,7 +41,11 @@ Where a CVE is fixed, and whether a build has that fix.
   by every tool.
 - **`cveorg`** — cve.org's own record of a CVE (`parse`, `Record`):
   its state (published or rejected), the CNA's title, description and
-  references, and every party's CVSS score, the CNA's first.
+  references, every party's CVSS score, the CNA's first, and the CNA's
+  affected ranges in their plainest shape (`Record::ranges`: a start
+  version with a `lessThan` or `lessThanOrEqual` bound; a product with
+  an entry in any other shape is left out, as are distributors'
+  entries).
   `Record::as_nvd` gives it in the shape of NVD's answer, with none of
   NVD's product data, for a caller that reads a CVE through
   `sandogasa-nvd` and has no NVD record to read.

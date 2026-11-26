@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage reads a fix per series from the CVE's own record
+
+bodhi-check told the assignee of bug 2568087 (ImageMagick,
+CVE-2026-123273) that EPEL 8 and 9 were still unfixed, when both had
+ImageMagick 6.9.13.60, past the 6.x fix (#272). The record says "before
+7.1.2-35 and 6.9.13-60", and its CNA's `affected` data gives both
+ranges, but NVD had not analyzed the CVE, and the CNA's data was not
+read, so the only fix known was 7.1.2-35. The CNA's ranges are now read
+where NVD has none, in their plainest shape only (a start version and
+an upper bound per series); every other shape is left unread. A fixed
+version supplied by hand or confirmed at the prompt still decides,
+unless the CNA gives it too. Fixes #272.
+
+sandogasa-cve's `cveorg::Record` gains `ranges`, and `facts` gains
+`resolved_from_cna` and `VersionSource::Cna`.
+
 ### fedora-cve-triage leaves a bug alone once its finding is answered
 
 bodhi-check asked the assignee of bug 2442157 (ImageMagick, CVE-2026-25637)

@@ -83,12 +83,11 @@ keep it honest:
   rejection is asked of the record (`Record::is_rejected`), so that it
   is reported as cve.org's word.
 
-### Parked: fixed versions from the CNA's `affected` data
+### Fixed versions from the CNA's `affected` data: one shape only
 
 A record's `affected` list is the CNA's own account of which versions
-are vulnerable, available before NVD's CPE data. It is not read,
-because CNAs write it in ways that cannot be judged alike. Six records
-sampled on 2026-11-23 had five:
+are vulnerable, available before NVD's CPE data. CNAs write it in ways
+that cannot be judged alike. Six records sampled on 2026-11-23 had five:
 
 - the range inside the version string: `{"version": "< 2.32.4",
   "status": "affected"}` (GitHub's CNA, CVE-2024-47081);
@@ -102,10 +101,39 @@ sampled on 2026-11-23 had five:
   product (`0:3.4.1-2.el10`, `lessThan: "*"`, `status: "unaffected"`)
   (Red Hat, CVE-2024-12084).
 
-`vendor` and `product` are free text (`n/a`, `Apache Log4j2`), so
-matching one to a Fedora component needs more than
-`product_matches_component` does today. Building this means a parser per
-spelling that refuses what it does not recognize, the downstream entries
-left out as `DOWNSTREAM_VENDORS` leaves them out of NVD's, and a place
-in `fix_facts` after NVD's own data. What it decides closes bugs, so a
-range read wrongly is worse than none.
+This was parked at first, since a range read wrongly can close a bug.
+Not reading it was wrong in the other direction (#272): CVE-2026-123273
+is fixed in ImageMagick 7.1.2-35 and 6.9.13-60, NVD had not analyzed
+it, and with only the 7.x fix known, fedora-cve-triage told a
+maintainer whose EPEL 8 and 9 builds of 6.9.13.60 were fixed that they
+were not. The CNA's two ranges, `7.0.0` to `7.1.2-35` and `0` to
+`6.9.13-60`, said so.
+
+So `Record::ranges` reads one shape, the second and third above: status
+`affected`, `versionType` `semver` or `custom` (or none), a plain
+`version` as the start (`0` for none), and a plain `lessThan` or
+`lessThanOrEqual`. A plain version starts with a digit and holds only
+the characters versions are made of; a range in the string, a
+wildcard, a git hash or a NEVR (`.el`) is not one. Everything else is
+refused. An entry whose product is missing or `n/a` is left out.
+
+A product with any `affected` entry in another shape is left out
+whole, not entry by entry: reading only its other series would leave
+the refused one with no range, and a fix in another series could then
+vouch for its builds. Entries from a distributor (`DOWNSTREAM_VENDORS`)
+are left out, as they are from NVD's data, since their versions are
+their packages'.
+
+`resolved_from_cna` matches the ranges to the caller's product by name
+only (case and punctuation aside). A record naming one product is not
+taken to be about whatever product the caller asks for: a CVE in
+CPython filed against a package that bundles it would otherwise be
+judged by that package's own version. A series closed at the top has
+its bound stand in for its fix, beside the series that have one.
+
+Callers use it only where NVD gives no fix and no ranges, like every
+source here other than NVD: NVD's CPE data stays authoritative. So far
+only fedora-cve-triage does, before GitHub's advisories, and a version
+supplied by hand or confirmed at the prompt decides there unless it is
+one of the CNA's own fixes; `fix_facts`, which the other tools use,
+does not read it yet.

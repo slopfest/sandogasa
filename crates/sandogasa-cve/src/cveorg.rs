@@ -12,8 +12,9 @@
 //! did not).
 //!
 //! `affected`, the CNA's own account of which versions are vulnerable,
-//! is not read: CNAs write it too many ways to judge a build by (see
-//! DEVELOPMENT.md).
+//! is read only in its plainest shape, a start version with an upper
+//! bound ([`Record::ranges`]); CNAs write it many other ways that
+//! cannot be judged alike, and those are refused (see DEVELOPMENT.md).
 
 use serde_json::Value;
 
@@ -57,6 +58,9 @@ pub struct Record {
     pub references: Vec<String>,
     /// One score per party that gave one, the CNA's first.
     pub scores: Vec<Score>,
+    /// The CNA's affected ranges in the one shape read (see
+    /// [`cna_ranges`]), each with its product, lower case.
+    pub ranges: Vec<sandogasa_nvd::VulnerableRange>,
 }
 
 impl Record {
@@ -157,6 +161,7 @@ pub fn parse(json: &str) -> Option<Record> {
         scores.extend(score(adp, &by, org.as_deref()));
     }
 
+    let ranges = cna_ranges(&cna["affected"]);
     Some(Record {
         id,
         state,
@@ -166,7 +171,96 @@ pub fn parse(json: &str) -> Option<Record> {
         description: english(&cna["descriptions"]).or_else(|| english(&cna["rejectedReasons"])),
         references,
         scores,
+        ranges,
     })
+}
+
+/// Whether `v` reads as a plain version a build's can be compared
+/// with: digits first, and only the characters versions are made of.
+/// Refuses a range written into the string (`< 2.32.4`), a wildcard
+/// (`5.4.*`, `*`), an abbreviated or full git hash (hex digits and
+/// letters with no dot, seven or more), and a downstream NEVR
+/// (`0:3.4.1-2.el10`). An all-decimal string is a version, however long
+/// (`202401151200`).
+fn plain_version(v: &str) -> bool {
+    let hash = v.len() >= 7
+        && !v.contains('.')
+        && v.chars().all(|c| c.is_ascii_hexdigit())
+        && v.chars().any(|c| c.is_ascii_alphabetic());
+    v.starts_with(|c: char| c.is_ascii_digit())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+' | '~'))
+        && !v.contains(".el")
+        && !hash
+}
+
+/// One `affected` version entry in the shape read, as a range; `None`
+/// for any other shape (see [`cna_ranges`]).
+fn cna_range(product: &str, v: &Value) -> Option<sandogasa_nvd::VulnerableRange> {
+    if let Some(kind) = text(&v["versionType"])
+        && kind != "semver"
+        && kind != "custom"
+    {
+        return None;
+    }
+    let start = text(&v["version"]).filter(|s| plain_version(s))?;
+    let (end_excluding, end_including) = match (text(&v["lessThan"]), text(&v["lessThanOrEqual"])) {
+        (Some(end), None) if plain_version(&end) => (Some(end), None),
+        (None, Some(end)) if plain_version(&end) => (None, Some(end)),
+        _ => return None,
+    };
+    Some(sandogasa_nvd::VulnerableRange {
+        product: product.to_lowercase(),
+        start_including: (start != "0").then_some(start),
+        end_excluding,
+        end_including,
+    })
+}
+
+/// The CNA's `affected` entries in the one shape read: status
+/// `affected`, type `semver` or `custom` (or none), a plain `version`
+/// as the start (`0` for none) and a plain `lessThan` (the fix) or
+/// `lessThanOrEqual` (the last affected) above it.
+///
+/// A product with any `affected` entry in another shape (a single
+/// version, a range in the version string, git hashes, wildcards) is
+/// left out whole: reading only its other series would leave the
+/// refused one with no range, and a fix in another series could then
+/// vouch for its builds. Entries marked `unaffected`, entries with no
+/// product (or `n/a`), and entries from a distributor
+/// (`DOWNSTREAM_VENDORS`, whose versions are its packages') are left
+/// out too (#272).
+fn cna_ranges(affected: &Value) -> Vec<sandogasa_nvd::VulnerableRange> {
+    let squash = |s: &str| {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    let mut ranges: Vec<sandogasa_nvd::VulnerableRange> = Vec::new();
+    let mut refused: Vec<String> = Vec::new();
+    for entry in affected.as_array().into_iter().flatten() {
+        let Some(product) = text(&entry["product"]).filter(|p| !p.eq_ignore_ascii_case("n/a"))
+        else {
+            continue;
+        };
+        if text(&entry["vendor"]).is_some_and(|v| {
+            sandogasa_nvd::models::DOWNSTREAM_VENDORS.contains(&squash(&v).as_str())
+        }) {
+            continue;
+        }
+        for v in entry["versions"].as_array().into_iter().flatten() {
+            if text(&v["status"]).as_deref() != Some("affected") {
+                continue;
+            }
+            match cna_range(&product, v) {
+                Some(range) => ranges.push(range),
+                None => refused.push(product.to_lowercase()),
+            }
+        }
+    }
+    ranges.retain(|r| !refused.contains(&r.product));
+    ranges
 }
 
 /// A JSON string, trimmed; `None` when it is absent or empty.
@@ -248,6 +342,130 @@ mod tests {
                     {"url": "https://github.com/tukaani-project/xz/issues/92"},
                     {"url": "https://www.openwall.com/lists/oss-security/2024/03/29/4"}],
                  "providerMetadata": {"shortName": "CVE"}}]}}"#;
+
+    /// CVE-2026-123273's own data: ImageMagick fixed in two series.
+    #[test]
+    fn the_cna_s_ranges_are_read_series_by_series() {
+        let r = parse(
+            r#"{"cveMetadata": {"cveId": "CVE-2026-123273", "state": "PUBLISHED"},
+            "containers": {"cna": {"affected": [{"vendor": "ImageMagick",
+                "product": "ImageMagick", "versions": [
+                {"version": "7.0.0", "lessThan": "7.1.2-35", "status": "affected",
+                 "versionType": "custom"},
+                {"version": "0", "lessThan": "6.9.13-60", "status": "affected",
+                 "versionType": "custom"}]}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(r.ranges.len(), 2);
+        assert_eq!(r.ranges[0].product, "imagemagick");
+        assert_eq!(r.ranges[0].start_including.as_deref(), Some("7.0.0"));
+        assert_eq!(r.ranges[0].end_excluding.as_deref(), Some("7.1.2-35"));
+        assert_eq!(r.ranges[1].start_including, None);
+        assert_eq!(r.ranges[1].end_excluding.as_deref(), Some("6.9.13-60"));
+    }
+
+    /// A distributor's entry gives its packages' versions, not upstream's.
+    #[test]
+    fn a_distributor_s_ranges_are_left_out() {
+        let r = parse(
+            r#"{"cveMetadata": {"cveId": "CVE-1", "state": "PUBLISHED"},
+            "containers": {"cna": {"affected": [
+                {"vendor": "Red Hat", "product": "rsync",
+                 "versions": [{"version": "0", "lessThan": "3.2.7", "status": "affected"}]},
+                {"vendor": "Samba", "product": "rsync",
+                 "versions": [{"version": "0", "lessThan": "3.4.0", "status": "affected"}]}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(r.ranges.len(), 1);
+        assert_eq!(r.ranges[0].end_excluding.as_deref(), Some("3.4.0"));
+    }
+
+    /// The shapes sampled for DEVELOPMENT.md on 2026-11-23, and others
+    /// that cannot be judged alike, are refused rather than guessed at.
+    #[test]
+    fn every_other_shape_of_the_cna_s_data_is_refused() {
+        let record = |versions: &str, product: &str| {
+            parse(&format!(
+                r#"{{"cveMetadata": {{"cveId": "CVE-1", "state": "PUBLISHED"}},
+                "containers": {{"cna": {{"affected": [{{"product": "{product}",
+                "versions": [{versions}]}}]}}}}}}"#
+            ))
+            .unwrap()
+            .ranges
+        };
+        for versions in [
+            // A range inside the version string (GitHub's CNA).
+            r#"{"version": "< 2.32.4", "status": "affected"}"#,
+            // A single affected version: no fix, no range.
+            r#"{"version": "1.2.3", "status": "affected"}"#,
+            // Git hashes (Linux).
+            r#"{"version": "1da177e4c3f41524e886b7f1b8a0c1fc7321cac2",
+                "lessThan": "8c4ee0fbcd7b2edb8e1c9f6ecb2bf0bcf1da7e05", "status": "affected",
+                "versionType": "git"}"#,
+            // Wildcards.
+            r#"{"version": "5.4", "lessThanOrEqual": "5.4.*", "status": "affected",
+                "versionType": "semver"}"#,
+            r#"{"version": "0", "lessThan": "*", "status": "affected"}"#,
+            // A downstream NEVR (Red Hat's CNA).
+            r#"{"version": "0:3.4.1-2.el10", "lessThan": "*", "status": "unaffected",
+                "versionType": "rpm"}"#,
+            // An `unaffected` range.
+            r#"{"version": "6.0", "lessThan": "6.0.8", "status": "unaffected"}"#,
+        ] {
+            assert!(record(versions, "foo").is_empty(), "{versions}");
+        }
+        // Both bounds at once is not a shape any CNA was seen to use.
+        assert!(
+            record(
+                r#"{"version": "1", "lessThan": "2", "lessThanOrEqual": "2", "status": "affected"}"#,
+                "foo"
+            )
+            .is_empty()
+        );
+        // No product to match: left out.
+        assert!(
+            record(
+                r#"{"version": "0", "lessThan": "2", "status": "affected"}"#,
+                "n/a"
+            )
+            .is_empty()
+        );
+        // One series refused leaves the product out whole: otherwise
+        // 6.x's fix could vouch for unfixed 7.x builds.
+        assert!(
+            record(
+                r#"{"version": "0", "lessThan": "6.9.13-60", "status": "affected"},
+                   {"version": "7.0.0", "lessThan": "*", "status": "affected"}"#,
+                "ImageMagick"
+            )
+            .is_empty()
+        );
+        // Abbreviated hashes, and an all-decimal version that is not one.
+        assert!(
+            record(
+                r#"{"version": "0", "lessThan": "1234abc", "status": "affected"}"#,
+                "foo"
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            record(
+                r#"{"version": "0", "lessThan": "202401151200", "status": "affected"}"#,
+                "foo"
+            )[0]
+            .end_excluding
+            .as_deref(),
+            Some("202401151200")
+        );
+        // A range closed at the top with no fix (CVE-2025-27363's shape).
+        let closed = record(
+            r#"{"version": "0.0.0", "lessThanOrEqual": "2.13.0", "status": "affected",
+                "versionType": "semver"}"#,
+            "FreeType",
+        );
+        assert_eq!(closed[0].end_including.as_deref(), Some("2.13.0"));
+        assert_eq!(closed[0].start_including.as_deref(), Some("0.0.0"));
+    }
 
     #[test]
     fn a_record_gives_the_cna_s_title_description_references_and_score() {
