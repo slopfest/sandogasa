@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### fedora-cve-triage asks nobody about a series the CVE may not reach
+
+bodhi-check asked the assignee of four ImageMagick bugs about EPEL 8 and
+9, which ship ImageMagick 6.9.13, because their CVEs name fixes only in
+7.x ("< 7.1.2-15", no lower bound). None of the four reached ImageMagick
+6: two were in coders it never had, one in an option it lacks, and one
+in a cast its code does not make. For a component listed in the new
+`older_series` setting of `[check."bodhi-check"]` (the shipped
+`/etc/fedora-cve-triage/run.toml` lists ImageMagick), when every
+release left unfixed ships an older major series than every fix the CVE
+names, with no range placing it inside, bodhi-check now writes nothing
+to the bug. It lists it under "May not reach the older series these releases
+ship" and keeps it in `$XDG_STATE_HOME/fedora-cve-triage/to-check.json`
+until a run judges it some other way, for a person to check the source
+first. Reading that source is the rest of #271. Refs #271.
+
 ### fedora-cve-triage reads a fix per series from the CVE's own record
 
 bodhi-check told the assignee of bug 2568087 (ImageMagick,
