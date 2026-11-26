@@ -1793,11 +1793,8 @@ fn configure_gitlab(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
 
     // Into the keyring when there is one, out of the file then.
     let path = cf.path();
-    if secret.save(&cf, keyring(), token, &before)? {
-        eprintln!("Saved to {}", path.display());
-    } else {
-        eprintln!("Nothing else to keep in {}; removed it.", path.display());
-    }
+    secret.save(&cf, keyring(), token, &before)?;
+    eprintln!("{}", sandogasa_config::saved_line(path));
 
     Ok(())
 }

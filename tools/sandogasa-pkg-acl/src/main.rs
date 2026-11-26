@@ -331,14 +331,7 @@ async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
                     &username,
                     &args.reenable(),
                 )?;
-                if cf.path().exists() {
-                    println!("Saved to {}", cf.path().display());
-                } else {
-                    println!(
-                        "Nothing else to keep in {}; removed it.",
-                        cf.path().display()
-                    );
-                }
+                println!("{}", sandogasa_config::saved_line(cf.path()));
                 return Ok(());
             }
             Err(e) => {

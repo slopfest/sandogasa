@@ -290,14 +290,7 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         )
         .map_err(|e| format!("failed to share the e-mail: {e}"))?;
     }
-    if cf.path().exists() {
-        println!("\nConfig saved to {}", cf.path().display());
-    } else {
-        println!(
-            "\nNothing else to keep in {}; removed it.",
-            cf.path().display()
-        );
-    }
+    println!("\n{}", sandogasa_config::saved_line(cf.path()));
     Ok(())
 }
 

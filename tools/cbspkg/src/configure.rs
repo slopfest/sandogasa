@@ -58,19 +58,15 @@ fn run_inner(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error:
     }
     // Into the keyring when there is one, out of the file then; the
     // file's [packages] stay as they are.
-    let kept = secret.save(&cf, config::keyring(), token, &before)?;
-    report_saved(!kept, cf.path());
+    secret.save(&cf, config::keyring(), token, &before)?;
+    report_saved(cf.path());
     Ok(())
 }
 
 /// Where the settings went: the file, or nowhere, when it was left with
 /// nothing in it and removed.
-fn report_saved(removed: bool, path: &std::path::Path) {
-    if removed {
-        eprintln!("Nothing else to keep in {}; removed it.", path.display());
-    } else {
-        eprintln!("Saved to {}", path.display());
-    }
+fn report_saved(path: &std::path::Path) {
+    eprintln!("{}", sandogasa_config::saved_line(path));
 }
 
 #[cfg(test)]
@@ -212,8 +208,10 @@ mod tests {
 
     #[test]
     fn where_the_settings_went_is_reported_either_way() {
-        let path = std::path::Path::new("/nonexistent/cbspkg/config.toml");
-        report_saved(true, path);
-        report_saved(false, path);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        report_saved(&path);
+        std::fs::write(&path, "").unwrap();
+        report_saved(&path);
     }
 }

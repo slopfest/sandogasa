@@ -316,14 +316,7 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
     }
-    if cf.path().exists() {
-        eprintln!("Saved to {}", cf.path().display());
-    } else {
-        eprintln!(
-            "Nothing else to keep in {}; removed it.",
-            cf.path().display()
-        );
-    }
+    eprintln!("{}", sandogasa_config::saved_line(cf.path()));
     Ok(())
 }
 

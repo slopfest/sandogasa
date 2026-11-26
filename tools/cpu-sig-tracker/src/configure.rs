@@ -74,10 +74,8 @@ fn run_inner(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std::error:
     }
     // Said once everything is settled: sharing the email can leave the
     // file just saved empty, and then removed.
-    if path.exists() {
-        eprintln!("Saved to {}", path.display());
-    } else if existed {
-        eprintln!("Nothing else to keep in {}; removed it.", path.display());
+    if existed || path.exists() {
+        eprintln!("{}", sandogasa_config::saved_line(&path));
     }
     Ok(())
 }

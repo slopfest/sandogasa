@@ -135,15 +135,8 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     )
     .key;
 
-    let removed = save(&cf, config, &before).map_err(|e| format!("failed to save config: {e}"))?;
-    if removed {
-        println!(
-            "\nNothing else to keep in {}; removed it.",
-            cf.path().display()
-        );
-    } else {
-        println!("\nConfig saved to {}", cf.path().display());
-    }
+    save(&cf, config, &before).map_err(|e| format!("failed to save config: {e}"))?;
+    println!("\n{}", sandogasa_config::saved_line(cf.path()));
     Ok(())
 }
 

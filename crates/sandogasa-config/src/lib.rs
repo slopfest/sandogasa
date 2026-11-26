@@ -522,6 +522,19 @@ fn apply_erasures(raw: &str) -> String {
     out
 }
 
+/// What a `config` command says about the tool's file once everything
+/// is saved: where it went, or, when nothing was left in it and it was
+/// removed, that, wrapped at 78 columns.
+pub fn saved_line(path: &Path) -> String {
+    match path.exists() {
+        true => format!("Saved to {}", path.display()),
+        false => credentials::wrapped(&format!(
+            "Nothing else to keep in {}; removed it.",
+            path.display()
+        )),
+    }
+}
+
 /// Print `prompt` and read one answer, hidden if `sensitive`, with
 /// passed-through backspaces applied and surrounding space trimmed: what
 /// [`ask`] reads through, for a tool passing [`ask_with`] its reader.
@@ -813,6 +826,21 @@ fn root_from(override_dir: Option<std::ffi::OsString>, default: &str) -> PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_saved_line_says_where_the_file_went_wrapped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("a-directory-long-enough-to-wrap/config.toml");
+        let gone = saved_line(&path);
+        assert!(gone.starts_with("Nothing else to keep in"), "{gone}");
+        assert!(gone.ends_with("; removed it."), "{gone}");
+        assert!(gone.lines().all(|l| l.chars().count() <= 78), "{gone}");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "").unwrap();
+        assert_eq!(saved_line(&path), format!("Saved to {}", path.display()));
+    }
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Deserialize, Serialize, PartialEq)]

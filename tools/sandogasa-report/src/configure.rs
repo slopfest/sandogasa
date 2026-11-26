@@ -394,14 +394,8 @@ fn run_inner(args: &ConfigArgs, read: &mut Reader<'_>) -> Result<(), Box<dyn std
         return Ok(());
     }
 
-    if write_overlay(&overlay_cf, &as_read, &overlay, &out_of_file)? {
-        eprintln!(
-            "\nNothing else to keep in {}; removed it.",
-            overlay_path.display()
-        );
-    } else {
-        eprintln!("\nSaved overlay to {}", overlay_path.display());
-    }
+    write_overlay(&overlay_cf, &as_read, &overlay, &out_of_file)?;
+    eprintln!("\n{}", sandogasa_config::saved_line(&overlay_path));
     Ok(())
 }
 
