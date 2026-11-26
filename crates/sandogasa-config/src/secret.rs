@@ -401,10 +401,13 @@ pub fn keep_for_file(
     match keep(store, secret, &value) {
         Kept::Keyring => {
             eprintln!(
-                "{what}: kept in the desktop keyring, as \"{}\" for {}, not in the \
-                 config file.",
-                secret.label(),
-                secret.service()
+                "{}",
+                crate::credentials::wrapped(&format!(
+                    "{what}: kept in the desktop keyring, as \"{}\" for {}, not in \
+                     the config file.",
+                    secret.label(),
+                    secret.service()
+                ))
             );
             String::new()
         }

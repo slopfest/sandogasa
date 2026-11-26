@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### config prompts list a tool's permissions one group per line when they don't fit
+
+A `config` prompt said what to grant a token as one list item per tool,
+wrapped onto further lines when long, so cpu-sig-tracker's Jira scopes
+broke across two lines mid-list. An item too long for one line now names
+the tool, with each group of permissions as a bullet under it. The line
+saying a token was kept in the desktop keyring wraps at 78 columns too.
+
 ### cpu-sig-tracker keeps the Jira email where every sandogasa tool can read it
 
 The Jira account email lived in cpu-sig-tracker's own config, so cbspkg,

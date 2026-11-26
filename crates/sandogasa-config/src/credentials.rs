@@ -394,20 +394,10 @@ pub fn token_help(label: &str, tool: &str, base: &str) -> String {
     // what one token needs for all of them.
     out.push_str("  What to grant:\n");
     if let Some(own) = service.uses.iter().find(|u| u.tool == tool) {
-        wrap(
-            &mut out,
-            &format!("- {tool} (this tool): {}", own.needs),
-            "  ",
-            "    ",
-        );
+        needs(&mut out, &format!("{tool} (this tool)"), own.needs);
     }
     for u in service.uses.iter().filter(|u| u.tool != tool) {
-        wrap(
-            &mut out,
-            &format!("- {}: {}", u.tool, u.needs),
-            "  ",
-            "    ",
-        );
+        needs(&mut out, u.tool, u.needs);
     }
     if !service.all.is_empty() && service.uses.len() > 1 {
         out.push_str("  For all of them:\n");
@@ -512,7 +502,6 @@ pub fn markdown() -> String {
 /// Append `text` to `out` wrapped at 78 columns, its first line after
 /// `first`, the others after `rest`, each ending in a newline.
 fn wrap(out: &mut String, text: &str, first: &str, rest: &str) {
-    const WIDTH: usize = 78;
     let mut line = first.to_string();
     let mut empty = true;
     for word in text.split_whitespace() {
@@ -533,6 +522,42 @@ fn wrap(out: &mut String, text: &str, first: &str, rest: &str) {
     out.push('\n');
 }
 
+/// Append one tool's item to the "What to grant" list: on one line
+/// when it fits, else the tool alone, with each group of `needs` (the
+/// parts between semicolons, outside parentheses) a bullet under it.
+fn needs(out: &mut String, who: &str, needs: &str) {
+    let line = format!("  - {who}: {needs}");
+    if line.chars().count() <= WIDTH {
+        out.push_str(&line);
+        out.push('\n');
+        return;
+    }
+    out.push_str(&format!("  - {who}:\n"));
+    for group in groups(needs) {
+        wrap(out, &format!("- {group}"), "    ", "      ");
+    }
+}
+
+/// `needs` split at each semicolon outside parentheses, trimmed.
+fn groups(needs: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0);
+    for (i, c) in needs.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ';' if depth == 0 => {
+                parts.push(needs[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(needs[start..].trim());
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
 /// `text` wrapped at 78 columns, for a message printed with `println!`
 /// or `eprintln!`.
 pub(crate) fn wrapped(text: &str) -> String {
@@ -541,6 +566,9 @@ pub(crate) fn wrapped(text: &str) -> String {
     out.truncate(out.trim_end().len());
     out
 }
+
+/// The width [`wrap`] and the "What to grant" list keep to.
+const WIDTH: usize = 78;
 
 /// The lowercased host of `url`, with or without a scheme.
 fn host(url: &str) -> String {
@@ -659,6 +687,16 @@ mod tests {
             "https://redhat.atlassian.net",
         );
         assert!(!jira.contains("For all of them"), "{jira}");
+        // Too long for one line: a bullet per group of what it needs.
+        assert!(
+            jira.ends_with(
+                "  What to grant:\n\
+                 \x20 - cpu-sig-tracker (this tool):\n\
+                 \x20   - read:jira-user, read:jira-work\n\
+                 \x20   - write:jira-work to file issues\n"
+            ),
+            "{jira}"
+        );
         // Atlassian's page serves every site, whichever one is asked about.
         assert!(
             jira.starts_with(
@@ -668,6 +706,16 @@ mod tests {
             "{jira}"
         );
         assert_eq!(token_help("sandogasa: nothing", "x", "https://x"), "");
+    }
+
+    /// A semicolon in parentheses is part of its group.
+    #[test]
+    fn groups_split_at_semicolons_outside_parentheses() {
+        assert_eq!(
+            groups("an API key (Red Hat's; RPM Fusion's for X); more ; "),
+            ["an API key (Red Hat's; RPM Fusion's for X)", "more"]
+        );
+        assert_eq!(groups("api"), ["api"]);
     }
 
     /// A secret several tools share says what one token needs for all
