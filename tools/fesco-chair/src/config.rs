@@ -262,6 +262,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_string_lossy().to_string();
         let _env = sandogasa_config::test_support::EnvGuard::new(&[("XDG_CONFIG_HOME", &root)]);
+        // The keyring in memory is every test's: start and end with no
+        // entry, as the others expect.
+        let keyring = crate::secrets::keyring();
+        keyring.clear(&crate::secrets::forgejo()).unwrap();
         let answers = sandogasa_config::test_support::Answers::new(&["token-1"]);
         #[derive(clap::Parser)]
         struct Cli {
@@ -278,10 +282,9 @@ mod tests {
         .unwrap();
         assert!(checked.get());
         assert_eq!(answers.left(), 0);
-        let kept = crate::secrets::keyring()
-            .lookup(&crate::secrets::forgejo())
-            .unwrap();
+        let kept = keyring.lookup(&crate::secrets::forgejo()).unwrap();
         assert_eq!(kept.as_deref(), Some("token-1"));
         assert!(!dir.path().join("fesco-chair/config.toml").exists());
+        keyring.clear(&crate::secrets::forgejo()).unwrap();
     }
 }

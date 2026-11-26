@@ -1654,6 +1654,10 @@ mod tests {
             .lookup(&crate::secrets::bugzilla(&server.uri()))
             .unwrap();
         assert_eq!(kept.as_deref(), Some("key-1"));
+        // The keyring in memory is every test's: leave no entry behind.
+        crate::secrets::keyring()
+            .clear(&crate::secrets::bugzilla(&server.uri()))
+            .unwrap();
     }
 
     /// Each reader takes its table from the config file, the FAS
