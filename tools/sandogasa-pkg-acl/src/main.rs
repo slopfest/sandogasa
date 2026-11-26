@@ -199,15 +199,18 @@ fn resolve_token() -> Result<String, Box<dyn std::error::Error>> {
     })
 }
 
-/// Return the cached username from the config file, if available.
+/// The dist-git username: the one `config` saved from the token, else
+/// the Fedora account the sandogasa tools share (#259).
 fn resolve_username() -> Option<String> {
-    let cf = ConfigFile::for_tool(TOOL_NAME);
-    let config: AppConfig = cf.load().ok()?;
-    if config.dist_git.username.is_empty() {
-        None
-    } else {
-        Some(config.dist_git.username)
-    }
+    let own = ConfigFile::for_tool(TOOL_NAME)
+        .load::<AppConfig>()
+        .map(|c| c.dist_git.username)
+        .unwrap_or_default();
+    sandogasa_config::identity::resolve(
+        &sandogasa_config::identity::FAS_USERNAME,
+        sandogasa_config::identity::FAS_HOST,
+        &own,
+    )
 }
 
 fn resolve_target(
@@ -316,13 +319,25 @@ async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), Box<dyn std:
         match client.verify_token().await {
             Ok(username) => {
                 println!("OK (authenticated as {username})");
-                if save_keeping_token(&cf, token, username, &before)? {
+                save_keeping_token(&cf, token, username.clone(), &before)?;
+                // The account the token belongs to is the Fedora account
+                // the sandogasa tools share (#259); `--token` runs ask
+                // nothing about it.
+                use sandogasa_config::identity;
+                identity::settle(
+                    &identity::FAS_USERNAME,
+                    identity::FAS_HOST,
+                    TOOL_NAME,
+                    &username,
+                    &args.reenable(),
+                )?;
+                if cf.path().exists() {
+                    println!("Saved to {}", cf.path().display());
+                } else {
                     println!(
                         "Nothing else to keep in {}; removed it.",
                         cf.path().display()
                     );
-                } else {
-                    println!("Saved to {}", cf.path().display());
                 }
                 return Ok(());
             }

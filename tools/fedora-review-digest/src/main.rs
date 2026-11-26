@@ -5,16 +5,20 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use sandogasa_config::ConfigFile;
+use sandogasa_config::{ConfigFile, identity};
 
 use fedora_review_digest::bugzilla::{self, Verdict};
 use fedora_review_digest::checklist::{self, Item, Mark, Resolution, ReviewedIssue};
 use fedora_review_digest::review::{Generator, Review};
 use fedora_review_digest::{config, cratesio, hackage, pyp2spec, pypi, runner};
 use sandogasa_bugzilla::BzClient;
+
 use sandogasa_review::resolve_interactive;
 
 use fedora_review_digest::secrets::BUGZILLA_URL;
+
+/// The name the tool's config is kept under.
+const TOOL: &str = "fedora-review-digest";
 
 // The keyring lives here, not in the library: the library is built
 // without cfg(test) for this binary's tests, so a keyring it chose
@@ -250,7 +254,7 @@ fn refusal_text(why: &str) -> String {
 /// `~/.config/fedora-review-digest/config.toml`.
 fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     use sandogasa_config::{Setting, ask};
-    let cf = ConfigFile::for_tool("fedora-review-digest");
+    let cf = ConfigFile::for_tool(TOOL);
     // The user file alone, so saving does not copy /etc's values into it.
     let mut cfg: config::Config = cf.load_user().unwrap_or_default();
     // With --token, only the key is asked about, again.
@@ -274,16 +278,24 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
         review,
     )
     .map_err(|e| e.to_string())?;
+    // The email is the one the sandogasa tools share (#259): offered
+    // from there, or from another tool, when this one has none.
+    let email_host = identity::host_of(BUGZILLA_URL);
     if !args.tokens_only() {
-        cfg.bugzilla.email = ask(
-            &Setting::new("Bugzilla", "email").validated(&sandogasa_config::validate_email),
+        cfg.bugzilla.email = identity::prompt(
+            &identity::BUGZILLA_EMAIL,
+            &email_host,
+            TOOL,
             cfg.bugzilla.email.trim(),
+            &Setting::new("Bugzilla", "email").validated(&sandogasa_config::validate_email),
             args.all,
         )
         .map_err(|e| e.to_string())?;
     }
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let email = cfg.bugzilla.email.clone();
+    let email = identity::resolve(&identity::BUGZILLA_EMAIL, &email_host, &cfg.bugzilla.email)
+        .unwrap_or_default();
+    let answer = cfg.bugzilla.email.clone();
     // Checked against the address too (`key_verdict`).
     cfg.bugzilla.api_key = sandogasa_cli::credential::validated_key_blocking(
         "Bugzilla",
@@ -292,7 +304,19 @@ fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
         |key| key_verdict(&rt, key, &email),
     )
     .key;
-    if config::save(&cf, keyring(), &mut cfg, &before).map_err(|e| e.to_string())? {
+    config::save(&cf, keyring(), &mut cfg, &before).map_err(|e| e.to_string())?;
+    // Moved to the shared file once the rest is saved.
+    if !args.tokens_only() {
+        identity::settle(
+            &identity::BUGZILLA_EMAIL,
+            &email_host,
+            TOOL,
+            &answer,
+            &args.reenable(),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    if cf.path().exists() {
         eprintln!("Saved to {}", cf.path().display());
     } else {
         eprintln!(

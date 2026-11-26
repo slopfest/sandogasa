@@ -61,8 +61,12 @@ Saved to /home/user/.config/sandogasa-pkg-acl/config.toml
 ```
 
 The token goes in the desktop keyring, as an entry shared with
-poi-tracker, and the config file keeps only the username it belongs
-to; without a keyring the token is kept in the config file. The token
+poi-tracker; without a keyring it is kept in the config file. The
+username it belongs to is the Fedora account every sandogasa tool
+shares, saved in `~/.config/sandogasa/config.toml` as
+`[fas."accounts.fedoraproject.org"] username`, asking before it
+replaces a different one there; declined, the config file keeps it for
+sandogasa-pkg-acl alone. The token
 can also be passed via the `PAGURE_API_TOKEN` environment variable,
 which wins over both.
 

@@ -37,7 +37,8 @@ pub struct BugzillaConfig {
     /// Empty when the key is in the keyring (#79).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
-    #[serde(default)]
+    /// Empty when the shared file holds it (#259).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub email: String,
     #[serde(default)]
     pub url: String,
@@ -128,14 +129,16 @@ pub fn resolve_url() -> String {
         .unwrap_or_else(|| BugzillaConfig::DEFAULT_URL.to_string())
 }
 
-/// Read the user's configured Bugzilla email (used to claim
-/// ownership when closing bugs). Returns `None` if the file
-/// isn't present, can't be parsed, or has no email set.
+/// The user's Bugzilla email (used to claim ownership when closing
+/// bugs): poi-tracker's own, else the one the sandogasa tools share for
+/// its Bugzilla (#259). `None` when neither is set.
 pub fn resolve_email() -> Option<String> {
-    load()
-        .ok()
-        .map(|c| c.bugzilla.email)
-        .filter(|e| !e.is_empty())
+    let own = load().map(|c| c.bugzilla.email).unwrap_or_default();
+    sandogasa_config::identity::resolve(
+        &sandogasa_config::identity::BUGZILLA_EMAIL,
+        &sandogasa_config::identity::host_of(&resolve_url()),
+        &own,
+    )
 }
 
 /// Interactive config setup. Prompts for what is missing (with
@@ -195,17 +198,24 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     }
 
     // Email is optional — it's only used by `triage-retired
-    // --claim` to set `assigned_to` on closed bugs.
+    // --claim` to set `assigned_to` on closed bugs. It is the one the
+    // sandogasa tools share (#259), offered from there or from another
+    // tool when poi-tracker has none.
+    let email_host = sandogasa_config::identity::host_of(&config.bugzilla.url);
     if !args.tokens_only() {
-        config.bugzilla.email = ask(
+        config.bugzilla.email = sandogasa_config::identity::prompt(
+            &sandogasa_config::identity::BUGZILLA_EMAIL,
+            &email_host,
+            env!("CARGO_PKG_NAME"),
+            &config.bugzilla.email,
             &Setting::new("Bugzilla", "email (optional, for --claim)")
                 .optional()
                 .validated(&sandogasa_config::validate_email),
-            &config.bugzilla.email,
             args.all,
         )
         .map_err(|e| format!("failed to read e-mail: {e}"))?;
     }
+    let email = config.bugzilla.email.clone();
 
     // The dist-git token is optional — only `adopt` needs it.
     if asked(&distgit_host) {
@@ -267,15 +277,26 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         .key;
     }
 
-    let removed = save_keeping_secrets(&cf, config, &before)
+    save_keeping_secrets(&cf, config, &before)
         .map_err(|e| format!("failed to save config: {e}"))?;
-    if removed {
+    // Moved to the shared file once the rest is saved.
+    if !args.tokens_only() {
+        sandogasa_config::identity::settle(
+            &sandogasa_config::identity::BUGZILLA_EMAIL,
+            &email_host,
+            env!("CARGO_PKG_NAME"),
+            &email,
+            &args.reenable(),
+        )
+        .map_err(|e| format!("failed to share the e-mail: {e}"))?;
+    }
+    if cf.path().exists() {
+        println!("\nConfig saved to {}", cf.path().display());
+    } else {
         println!(
             "\nNothing else to keep in {}; removed it.",
             cf.path().display()
         );
-    } else {
-        println!("\nConfig saved to {}", cf.path().display());
     }
     Ok(())
 }
@@ -329,6 +350,28 @@ fn save_keeping_secrets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where the identity registry says the tool keeps the Bugzilla
+    /// email, and the instance's URL, is where its config reads them
+    /// from; an empty email, the shared file holding it (#259), is not
+    /// written.
+    #[test]
+    fn identity_fields_match_the_config() {
+        use sandogasa_config::identity;
+        let fields: Vec<_> = identity::fields_of("poi-tracker").collect();
+        assert_eq!(fields.len(), 1);
+        let field = fields[0];
+        assert_eq!(field.identity, &identity::BUGZILLA_EMAIL);
+        let config: PoiTrackerConfig = toml::from_str(&field.toml("x@example.com")).unwrap();
+        assert_eq!(config.bugzilla.email, "x@example.com");
+        assert_eq!(field.url, ["bugzilla", "url"]);
+        assert_eq!(
+            identity::host_of(BugzillaConfig::DEFAULT_URL),
+            identity::REDHAT_BUGZILLA
+        );
+        let text = toml::to_string(&BugzillaConfig::default()).unwrap();
+        assert!(!text.contains("email"), "{text}");
+    }
 
     /// `--token` names a host poi-tracker keeps a secret for; another
     /// is refused, naming them, before anything is asked.

@@ -42,10 +42,16 @@ config` to set them up and verify them, or let `--post` prompt and save
 them on first use. The key is kept in the desktop keyring (through
 `secret-tool`), as the bugzilla.redhat.com entry every sandogasa tool
 reads (`secret-tool lookup application sandogasa service
-bugzilla.redhat.com`); the email, and the key when there is no keyring
-to use, go to `~/.config/fedora-review-digest/config.toml`
-(`[bugzilla] email`, `api_key`). A key found in that file is moved to
-the keyring the next time `config` runs.
+bugzilla.redhat.com`); the key, when there is no keyring to use, goes
+to `~/.config/fedora-review-digest/config.toml` (`[bugzilla] api_key`).
+A key found in that file is moved to the keyring the next time `config`
+runs. The email is the one every sandogasa tool shares, kept in
+`~/.config/sandogasa/config.toml` (over `/etc/sandogasa/config.toml`)
+as `[bugzilla."bugzilla.redhat.com"] email`: `config` offers it from
+there, or from another tool's config, and moves it there, offering to
+remove the copies other tools hold, and one `--post` asks for is saved
+there too. An email in the tool's own `[bugzilla]` table is read first,
+and stays there when it differs from the shared one on purpose.
 
 ## Usage
 

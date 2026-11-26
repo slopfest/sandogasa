@@ -54,9 +54,11 @@ Shared config file management and interactive prompting for sandogasa CLI tools.
 - **identity** — who the person running the tools is, kept once for
   every tool in `~/.config/sandogasa/config.toml` over
   `/etc/sandogasa/config.toml`, per service host as the keyring keys
-  secrets (`[jira."redhat.atlassian.net"] email = …`). `lookup` gives
-  the shared value, which a tool reads after its own field. A `config`
-  command offers what `choose` gives (the tool's own value, else the
+  secrets (`[jira."redhat.atlassian.net"] email = …`): the Jira email,
+  the Bugzilla email and the Fedora account (`JIRA_EMAIL`,
+  `BUGZILLA_EMAIL`, `FAS_USERNAME`). `resolve` gives the tool's own
+  value, else the shared one (`lookup`). A `config` command asks with
+  `prompt`, offering what `choose` gives (the tool's own value, else the
   shared one, else the one other tools' files hold, with a note saying
   where it came from), then `settle`s the answer: saved to the shared
   file, asking before replacing a different shared value (declined, the

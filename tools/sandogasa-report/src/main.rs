@@ -1149,11 +1149,22 @@ fn run_report(cli: &ReportArgs) -> ExitCode {
             for agg in &mut bugzillas {
                 agg.fedora_versions.sort();
                 let host = agg.config.host();
+                // The profile's own email, else the one the sandogasa
+                // tools share when the report is on their user (#259).
+                let shared = bugzilla::shared_email(
+                    user,
+                    &sandogasa_config::identity::host_of(&agg.config.instance),
+                );
                 let email = if agg.config.is_redhat() {
-                    bugzilla::resolve_email(user, bz_email_override, cli.verbose)
+                    bugzilla::resolve_email(
+                        user,
+                        bz_email_override.or(shared.as_deref()),
+                        cli.verbose,
+                    )
                 } else {
                     profile
                         .and_then(|p| p.bugzilla_emails.get(&host).cloned())
+                        .or(shared)
                         .ok_or_else(|| {
                             format!(
                                 "no Bugzilla email for {host}: set \

@@ -569,23 +569,33 @@ types to check an entry.
 
 ## Who the user is is kept once, per service
 
-An account a tool asks for (the Jira email, later the Bugzilla email and
-the Fedora login, #259) is the person's, not the tool's, so it is kept
+An account a tool asks for (the Jira email, the Bugzilla email, the
+Fedora account, #259) is the person's, not the tool's, so it is kept
 once in `~/.config/sandogasa/config.toml` (over
 `/etc/sandogasa/config.toml`), per service host as the keyring keys
 secrets, through `sandogasa_config::identity`:
 
 - **Read the tool's own field, then the shared value**
-  (`identity::lookup`), so a setup from before the shared file keeps
+  (`identity::resolve`), so a setup from before the shared file keeps
   working, and an email kept for one tool on purpose still wins. A
   keyring entry with an `account` is looked up under the account
   resolved this way, at login and in the `config` slot alike, or the
   token is not found once the email has moved.
-- **In `config`, offer `identity::choose` and save with
-  `identity::settle`.** The offer is the tool's own value, else the
-  shared one, else the value other tools' files hold, with a note
-  saying where it came from; when those differ, they are listed and
-  nothing is offered. `settle` saves the answer to the shared file once
+- **In `config`, ask with `identity::prompt` and save with
+  `identity::settle`.** The offer (`identity::choose`) is the tool's own
+  value, else the shared one, else the value other tools' files hold,
+  with a note saying where it came from; when those differ, they are
+  listed and nothing is offered. The tool's own value and the shared one
+  are kept unasked on a plain run, as a saved setting is, so moving the
+  value out of the tool's file does not make every later run ask for
+  it. An own value differing from the shared one is kept too, but with
+  a line saying so: it may be an override, or an address from before
+  the shared file, and only the person can tell. A value the tool takes from evidence rather than asks for
+  (sandogasa-pkg-acl's dist-git username, from the token) goes straight
+  to `settle`. A field the tool writes back after `settle` is cleared
+  first when told `Kept::Shared`, and every such field is
+  `skip_serializing_if = "String::is_empty"`, so a later save does not
+  put it back. `settle` saves the answer to the shared file once
   the service accepted it and the tool's own config is saved, so a
   failed save moves nothing, asking (through
   `sandogasa_cli::ask_to_reenable`, or the decline `ConfigArgs::reenable`
@@ -605,10 +615,18 @@ secrets, through `sandogasa_config::identity`:
   field's place is in a table instead.
 - **When a tool starts keeping an identity, add it to
   `identity::FIELDS`**, sorted by tool, with the key's path in its
-  file, and test in the tool that its config struct reads that path
-  (`fields_of`; cpu-sig-tracker's `identity_fields_match_the_config`).
-  `choose` and `settle` find other tools' copies through it, so a field
-  left out is never offered or tidied away.
+  file, the path of its setting for the instance's URL if it has one,
+  and the host it uses otherwise; test in the tool that its config
+  struct reads that path (`fields_of` and `Field::toml`; each tool's
+  `identity_fields_match_the_config`). `choose` and `settle` find other
+  tools' copies through it, so a field left out is never offered or
+  tidied away, and a copy kept for another instance (ebranch's email on
+  RPM Fusion's Bugzilla) is neither offered nor removed for this one.
+- **An identity describing other people stays the tool's.**
+  sandogasa-report's `users.<profile>` tables are about whoever a report
+  is on, so nothing moves out of them; a profile without an email of its
+  own takes the shared one only when its FAS username is the shared
+  one.
 
 ## Config files layer: /etc, then ~/.config, then the command line
 

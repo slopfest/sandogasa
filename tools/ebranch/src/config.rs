@@ -11,6 +11,9 @@
 use sandogasa_config::secret::{Before, SecretRef, Slot};
 use serde::{Deserialize, Serialize};
 
+/// The name the tool's config is kept under.
+const TOOL: &str = "ebranch";
+
 /// Top-level config structure.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct EbranchConfig {
@@ -120,8 +123,8 @@ pub struct PackagerConfig {
     /// FAS username, the default for `--fas`. It is what dist-git is
     /// asked about when deciding whether a branch request is a
     /// question for somebody else, and what a co-maintainer offer
-    /// names.
-    #[serde(default)]
+    /// names. Empty when the shared file holds it (#259).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fas: String,
     /// Whether they hold provenpackager.
     ///
@@ -268,8 +271,8 @@ pub struct BugzillaConfig {
     pub url: String,
     /// The Bugzilla account to assign a request to when it is the
     /// asker's own bookkeeping rather than something to ask of a
-    /// maintainer.
-    #[serde(default)]
+    /// maintainer. Empty when the shared file holds it (#259).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub email: String,
 }
 
@@ -456,13 +459,29 @@ pub async fn ask_and_save_forgejo_token(url: &str) -> Result<Option<String>, Str
     Ok(Some(token))
 }
 
-/// The Bugzilla account to claim bookkeeping requests as, if set.
-pub fn bugzilla_email() -> Option<String> {
-    sandogasa_config::ConfigFile::for_tool("ebranch")
+/// The Bugzilla account to claim bookkeeping requests on the Bugzilla
+/// at `url` as, if set: ebranch's own when it is for that Bugzilla,
+/// else the one the sandogasa tools share for it (#259).
+pub fn bugzilla_email(url: &str) -> Option<String> {
+    let bz = sandogasa_config::ConfigFile::for_tool(TOOL)
         .load::<EbranchConfig>()
-        .ok()
-        .map(|c| c.bugzilla.email)
-        .filter(|e| !e.is_empty())
+        .map(|c| c.bugzilla)
+        .unwrap_or_default();
+    let host = bugzilla_host(url);
+    let own = match bugzilla_host(&bz.url) == host {
+        true => bz.email,
+        false => String::new(),
+    };
+    sandogasa_config::identity::resolve(&sandogasa_config::identity::BUGZILLA_EMAIL, &host, &own)
+}
+
+/// The host the Bugzilla account is kept under, for the Bugzilla at
+/// `url` (Red Hat's when empty).
+fn bugzilla_host(url: &str) -> String {
+    match url.trim() {
+        "" => sandogasa_config::identity::REDHAT_BUGZILLA.to_string(),
+        url => sandogasa_config::identity::host_of(url),
+    }
 }
 
 /// FAS group → Matrix room: the built-in list from
@@ -482,8 +501,13 @@ pub fn is_provenpackager() -> bool {
 }
 
 /// The configured FAS username, if any: the fallback for `--fas`.
+/// ebranch's own, else the one the sandogasa tools share (#259).
 pub fn packager_fas() -> Option<String> {
-    Some(packager().fas).filter(|f| !f.is_empty())
+    sandogasa_config::identity::resolve(
+        &sandogasa_config::identity::FAS_USERNAME,
+        sandogasa_config::identity::FAS_HOST,
+        &packager().fas,
+    )
 }
 
 /// The `[packager]` table as configured.
@@ -549,7 +573,7 @@ pub fn resolve_api_key(cli_key: Option<&str>, bugzilla_url: &str) -> Result<Stri
 pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
     use sandogasa_config::{Setting, ask};
     let review = args.all;
-    let cf = sandogasa_config::ConfigFile::for_tool("ebranch");
+    let cf = sandogasa_config::ConfigFile::for_tool(TOOL);
     let mut config: EbranchConfig = cf.load_user().unwrap_or_default();
 
     println!("ebranch configuration\n");
@@ -650,17 +674,25 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         .key;
     }
 
+    // The Bugzilla account and the FAS username are the ones the
+    // sandogasa tools share (#259): offered from there, or from another
+    // tool, when ebranch has none, and moved there once saved.
+    let email_host = bugzilla_host(&config.bugzilla.url);
     if !args.tokens_only() {
+        use sandogasa_config::identity;
         // Bugzilla account: optional, and only ever used to assign a
         // request the asker files about their own work to themselves.
-        config.bugzilla.email = ask(
+        config.bugzilla.email = identity::prompt(
+            &identity::BUGZILLA_EMAIL,
+            &email_host,
+            TOOL,
+            &config.bugzilla.email,
             &Setting::new(
                 "Bugzilla",
                 "account e-mail (optional, to claim your own requests)",
             )
             .optional()
             .validated(&sandogasa_config::validate_email),
-            &config.bugzilla.email,
             review,
         )
         .map_err(|e| format!("failed to read e-mail: {e}"))?;
@@ -668,9 +700,12 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
         // FAS: who is asking. Everything dist-git is asked about a
         // package needs this, so it is worth having in the file rather
         // than on every command line.
-        config.packager.fas = ask(
-            &Setting::new("FAS", "username (optional, the default for --fas)").optional(),
+        config.packager.fas = identity::prompt(
+            &identity::FAS_USERNAME,
+            identity::FAS_HOST,
+            TOOL,
             &config.packager.fas,
+            &Setting::new("FAS", "username (optional, the default for --fas)").optional(),
             review,
         )
         .map_err(|e| format!("failed to read FAS username: {e}"))?;
@@ -843,7 +878,24 @@ pub async fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> 
     }
 
     // Into the keyring when there is one, out of the file then.
-    if save_with_secrets(&cf, &mut config, &filled)? {
+    let (email, fas) = (config.bugzilla.email.clone(), config.packager.fas.clone());
+    save_with_secrets(&cf, &mut config, &filled)?;
+    if !args.tokens_only() {
+        use sandogasa_config::identity;
+        let ask = args.reenable();
+        identity::settle(&identity::BUGZILLA_EMAIL, &email_host, TOOL, &email, &ask)
+            .and_then(|_| {
+                identity::settle(
+                    &identity::FAS_USERNAME,
+                    identity::FAS_HOST,
+                    TOOL,
+                    &fas,
+                    &ask,
+                )
+            })
+            .map_err(|e| format!("failed to share the account: {e}"))?;
+    }
+    if cf.path().exists() {
         println!("\nConfig saved to {}", cf.path().display());
     } else {
         println!(
@@ -984,6 +1036,33 @@ fn with_builtin_rooms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where the identity registry says ebranch keeps the Bugzilla
+    /// account and the FAS username is where its config reads them
+    /// from; empty ones, the shared file holding them (#259), are not
+    /// written.
+    #[test]
+    fn identity_fields_match_the_config() {
+        use sandogasa_config::identity;
+        let fields: Vec<_> = identity::fields_of(TOOL).collect();
+        assert_eq!(fields.len(), 2);
+        for field in fields {
+            let config: EbranchConfig = toml::from_str(&field.toml("x")).unwrap();
+            let read = match field.identity {
+                i if i == &identity::BUGZILLA_EMAIL => config.bugzilla.email,
+                i if i == &identity::FAS_USERNAME => config.packager.fas,
+                i => panic!("{i:?}"),
+            };
+            assert_eq!(read, "x");
+        }
+        let text = toml::to_string(&EbranchConfig::default()).unwrap();
+        assert!(!text.contains("email") && !text.contains("fas"), "{text}");
+        assert_eq!(bugzilla_host(""), identity::REDHAT_BUGZILLA);
+        assert_eq!(
+            bugzilla_host("https://bugzilla.rpmfusion.org/"),
+            "bugzilla.rpmfusion.org"
+        );
+    }
 
     /// `--token` names one of the hosts ebranch keeps a secret for;
     /// another is refused, naming them, before anything is asked.

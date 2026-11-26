@@ -1606,7 +1606,7 @@ fn branch_request_options(c: &BranchRequestCommon) -> Result<branch_request::Opt
         dry_run: c.dry_run,
         verbose: c.verbose,
         base_branch: resolve::base_branch_for(c.base_branch.as_deref(), Some(&c.branch), None),
-        email: config::bugzilla_email(),
+        email: config::bugzilla_email(&c.bugzilla_url),
         provenpackager: config::is_provenpackager(),
         distgit_url: "https://src.fedoraproject.org".to_string(),
         forge_url: forge.url,

@@ -227,7 +227,14 @@ service bugzilla.redhat.com`, `… service src.fedoraproject.org`);
 without a keyring they stay in the config file. `--token <host>`
 (`--token src.fedoraproject.org`) asks again only for the secret kept
 for that host and leaves the other settings alone;
-[docs/tokens.md](../../docs/tokens.md) lists what each needs.
+[docs/tokens.md](../../docs/tokens.md) lists what each needs. The
+email is the one every sandogasa tool shares for that Bugzilla, kept in
+`~/.config/sandogasa/config.toml` (over `/etc/sandogasa/config.toml`)
+as `[bugzilla."bugzilla.redhat.com"] email`: `config` offers it from
+there, or from another tool's config, and moves it there, offering to
+remove the copies other tools hold. An email in poi-tracker's own
+`[bugzilla]` table is read first, and stays there when it differs from
+the shared one on purpose.
 Lookup order at runtime: `--api-key` flag → `BUGZILLA_API_KEY`
 env var → keyring → config file (for the dist-git token:
 `--api-token` → `PAGURE_API_TOKEN` → keyring → config file).

@@ -1757,9 +1757,17 @@ granted — but only once dist-git has been asked which branches it
 covers: a scope of `epel*` reaches `epel10`, one of `epel9` does not,
 and a scope that cannot be read asks a maintainer as before. A request filed that way is assigned to you as it is filed —
 it is your own bookkeeping, not a question for the maintainer — if
-`[bugzilla] email` is set in the config file, which `ebranch config`
-asks for. `--fas` can be left off entirely when `[packager] fas` is
-set, which is what the dist-git questions above are asked with.
+your Bugzilla email is set, which `ebranch config` asks for. `--fas`
+can be left off entirely when your FAS username is set, which is what
+the dist-git questions above are asked with. Both are the ones every
+sandogasa tool shares, kept in `~/.config/sandogasa/config.toml` (over
+`/etc/sandogasa/config.toml`) as `[bugzilla."<host>"] email`, for the
+Bugzilla `[bugzilla] url` names, and `[fas."accounts.fedoraproject.org"]
+username`: `config` offers them from there, or from another tool's
+config, and moves them there, offering to remove the copies other tools
+hold. A `[bugzilla] email` or `[packager] fas` in ebranch's own file is
+read first, and stays there when it differs from the shared one on
+purpose.
 
 With `provenpackager = true` under `[packager]`, a request for a build
 of an already-branched package adds a line saying you could do that

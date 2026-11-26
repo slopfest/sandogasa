@@ -51,26 +51,115 @@ pub const JIRA_EMAIL: Identity = Identity {
     keys_secrets: true,
 };
 
+/// The Bugzilla account (its login email), per Bugzilla instance.
+pub const BUGZILLA_EMAIL: Identity = Identity {
+    table: "bugzilla",
+    key: "email",
+    what: "Bugzilla account email",
+    keys_secrets: false,
+};
+
+/// The Fedora account (FAS) username, kept under [`FAS_HOST`]. It is
+/// also the login on Fedora's dist-git.
+pub const FAS_USERNAME: Identity = Identity {
+    table: "fas",
+    key: "username",
+    what: "Fedora account (FAS) username",
+    keys_secrets: false,
+};
+
+/// The host the Fedora account is kept under.
+pub const FAS_HOST: &str = "accounts.fedoraproject.org";
+
+/// Red Hat's Bugzilla, the instance the tools use unless told otherwise.
+pub const REDHAT_BUGZILLA: &str = "bugzilla.redhat.com";
+
 /// Where one tool keeps an identity in its own config file. The field
-/// holds the value for the one instance the tool works with, whichever
-/// host that is: [`choose`] and [`settle`] take another tool's copy as
-/// being for the same host.
+/// holds the value for the one instance the tool works with: the host
+/// its `url` setting names, else `host`. With neither (`host` empty),
+/// [`choose`] and [`settle`] take another tool's copy as being for the
+/// host asked about.
 #[derive(Debug)]
 pub struct Field {
     pub tool: &'static str,
     pub identity: &'static Identity,
     /// The key's path in the tool's file (`["jira", "email"]`).
     pub path: &'static [&'static str],
+    /// The path of the tool's setting for the instance's URL
+    /// (`["bugzilla", "url"]`), empty when it has none.
+    pub url: &'static [&'static str],
+    /// The host the tool works with when `url` sets none; empty for any.
+    pub host: &'static str,
+}
+
+impl Field {
+    /// A config file setting this field to `value`, for a tool's test
+    /// that its config reads the field from where this says it is.
+    pub fn toml(&self, value: &str) -> String {
+        let mut item = toml::Value::String(value.to_string());
+        for key in self.path.iter().rev() {
+            let mut t = toml::Table::new();
+            t.insert(key.to_string(), item);
+            item = toml::Value::Table(t);
+        }
+        toml::to_string(&item).expect("a table")
+    }
 }
 
 /// Every tool field holding a shared identity, sorted by tool. Each tool
 /// listed checks its entries against its config struct in its own tests,
 /// through [`fields_of`].
-pub const FIELDS: &[Field] = &[Field {
-    tool: "cpu-sig-tracker",
-    identity: &JIRA_EMAIL,
-    path: &["jira", "email"],
-}];
+pub const FIELDS: &[Field] = &[
+    Field {
+        tool: "cpu-sig-tracker",
+        identity: &JIRA_EMAIL,
+        path: &["jira", "email"],
+        url: &[],
+        host: "",
+    },
+    Field {
+        tool: "ebranch",
+        identity: &BUGZILLA_EMAIL,
+        path: &["bugzilla", "email"],
+        url: &["bugzilla", "url"],
+        host: REDHAT_BUGZILLA,
+    },
+    Field {
+        tool: "ebranch",
+        identity: &FAS_USERNAME,
+        path: &["packager", "fas"],
+        url: &[],
+        host: FAS_HOST,
+    },
+    Field {
+        tool: "fedora-cve-triage",
+        identity: &BUGZILLA_EMAIL,
+        path: &["bugzilla", "email"],
+        url: &[],
+        host: REDHAT_BUGZILLA,
+    },
+    Field {
+        tool: "fedora-review-digest",
+        identity: &BUGZILLA_EMAIL,
+        path: &["bugzilla", "email"],
+        url: &[],
+        host: REDHAT_BUGZILLA,
+    },
+    Field {
+        tool: "poi-tracker",
+        identity: &BUGZILLA_EMAIL,
+        path: &["bugzilla", "email"],
+        url: &["bugzilla", "url"],
+        host: REDHAT_BUGZILLA,
+    },
+    Field {
+        tool: "sandogasa-pkg-acl",
+        identity: &FAS_USERNAME,
+        path: &["dist-git", "username"],
+        url: &[],
+        host: FAS_HOST,
+    },
+];
 
 /// Where a default offered for an identity came from.
 #[derive(Debug, PartialEq, Eq)]
@@ -169,6 +258,43 @@ pub fn choose(identity: &Identity, host: &str, tool: &str, own: &str) -> Choice 
     }
 }
 
+/// The value a tool uses: its own (`own`, empty for none), else the
+/// shared one for `host`.
+pub fn resolve(identity: &Identity, host: &str, own: &str) -> Option<String> {
+    match own.trim() {
+        "" => lookup(identity, host),
+        v => Some(v.to_string()),
+    }
+}
+
+/// Ask `tool`'s `config` for `identity` at `host` with `setting`, given
+/// the value its own file holds (`own`, empty for none), and return the
+/// answer, for the tool to save and then pass to [`settle`].
+///
+/// Its own value is kept unasked, as [`crate::ask`] keeps a saved one,
+/// and so is the shared value when the tool has none, saying where it
+/// comes from; `all` (`config --all`) asks about either. A value only
+/// other tools hold is offered and asked about, and so is nothing.
+pub fn prompt(
+    identity: &Identity,
+    host: &str,
+    tool: &str,
+    own: &str,
+    setting: &crate::Setting<'_>,
+    all: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let choice = choose(identity, host, tool, own);
+    let shared = lookup(identity, host);
+    prompt_with(
+        identity,
+        setting,
+        choice,
+        shared.as_deref(),
+        all,
+        &mut |prompt, sensitive| crate::read_line_from_terminal(prompt, sensitive),
+    )
+}
+
 /// Save `answer` for `identity` at `host` as `tool`'s `config` got it,
 /// and tidy up the copies:
 ///
@@ -241,25 +367,81 @@ fn lookup_in(dirs: &Dirs, identity: &Identity, host: &str) -> Option<String> {
     value_at(&table, &[identity.table, host, identity.key])
 }
 
-/// The values the tools other than `tool` hold for `identity` in their
-/// own (user) files, by tool. The host is not checked: each tool's file
-/// holds the value for the one instance it works with.
-fn copies(dirs: &Dirs, identity: &Identity, tool: &str) -> Vec<(&'static str, String)> {
+/// [`prompt`], with the choice made, the shared value (`shared`), and
+/// reading answers through `read`.
+fn prompt_with(
+    identity: &Identity,
+    setting: &crate::Setting<'_>,
+    choice: Choice,
+    shared: Option<&str>,
+    all: bool,
+    read: &mut dyn FnMut(&str, bool) -> std::io::Result<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // The tool's own value differing from the shared one is kept, as an
+    // override may be meant; but it may as well be an address from
+    // before the shared file, so it is never kept without a word.
+    if let (Choice::Offer(v, Source::Own), Some(s)) = (&choice, shared)
+        && v != s
+    {
+        println!(
+            "{}",
+            wrapped(&format!(
+                "  The {} here, {v}, differs from the one the sandogasa tools share, {s}; \
+                 `config --all` asks which to use.",
+                identity.what
+            ))
+        );
+    }
+    if let (Choice::Offer(v, Source::Shared), false) = (&choice, all) {
+        println!(
+            "{} {}: {v} (shared by the sandogasa tools)",
+            setting.section, setting.label
+        );
+        return Ok(v.clone());
+    }
+    let review = all || !matches!(choice, Choice::Offer(_, Source::Own));
+    if let (Some(note), true) = (choice.note(identity), review) {
+        println!("{note}");
+    }
+    crate::ask_with(setting, choice.value(), review, read)
+}
+
+/// The host `field`'s tool works with: the one its URL setting names,
+/// else its default; `None` for a field that takes any.
+fn field_host(dirs: &Dirs, field: &Field) -> Option<String> {
+    let named = (!field.url.is_empty())
+        .then(|| dirs.file(field.tool).read_merged().ok().flatten())
+        .flatten()
+        .and_then(|t| value_at(&t, field.url));
+    match named {
+        Some(url) => Some(host_of(&url)),
+        None if field.host.is_empty() => None,
+        None => Some(field.host.to_string()),
+    }
+}
+
+/// The values the tools other than `tool` hold for `identity` at `host`
+/// in their own (user) files, by tool. A tool's file holds the value for
+/// the one instance it works with, so one working with another host is
+/// left out.
+fn copies(dirs: &Dirs, identity: &Identity, host: &str, tool: &str) -> Vec<(&'static str, String)> {
     FIELDS
         .iter()
         .filter(|f| f.identity == identity && f.tool != tool)
+        .filter(|f| field_host(dirs, f).is_none_or(|h| h == host))
         .filter_map(|f| Some((f.tool, own_copy(dirs, f.tool, identity)?)))
         .collect()
 }
 
 fn choose_in(dirs: &Dirs, identity: &Identity, host: &str, tool: &str, own: &str) -> Choice {
+    let own = own.trim();
     if !own.is_empty() {
         return Choice::Offer(own.to_string(), Source::Own);
     }
     if let Some(v) = lookup_in(dirs, identity, host) {
         return Choice::Offer(v, Source::Shared);
     }
-    let found = copies(dirs, identity, tool);
+    let found = copies(dirs, identity, host, tool);
     match found.as_slice() {
         [] => Choice::Nothing,
         [(t, v), rest @ ..] if rest.iter().all(|(_, other)| other == v) => {
@@ -301,6 +483,7 @@ fn settle_in(
     answer: &str,
     ask: &dyn Fn(&str, bool) -> bool,
 ) -> Result<Kept, Box<dyn std::error::Error>> {
+    let answer = answer.trim();
     if answer.is_empty() {
         return Ok(Kept::Shared);
     }
@@ -345,7 +528,7 @@ fn settle_in(
             }
         }
     }
-    for (other, value) in copies(dirs, identity, tool) {
+    for (other, value) in copies(dirs, identity, host, tool) {
         if value != answer {
             eprintln!(
                 "{}",
@@ -425,10 +608,18 @@ mod tests {
     }
 
     #[test]
+    fn a_field_writes_its_own_path() {
+        let f = fields_of("sandogasa-pkg-acl").next().unwrap();
+        let t: toml::Table = toml::from_str(&f.toml("me")).unwrap();
+        assert_eq!(value_at(&t, f.path).as_deref(), Some("me"));
+    }
+
+    #[test]
     fn fields_are_sorted_by_tool() {
         let tools: Vec<&str> = FIELDS.iter().map(|f| f.tool).collect();
         assert!(tools.is_sorted(), "{tools:?}");
         assert_eq!(fields_of("cpu-sig-tracker").count(), 1);
+        assert_eq!(fields_of("ebranch").count(), 2);
         assert_eq!(fields_of("dbranch").count(), 0);
     }
 
@@ -680,5 +871,194 @@ mod tests {
         )
         .unwrap();
         assert!(read(&d.home, "cpu-sig-tracker").contains("work@example.com"));
+    }
+
+    /// A tool working with another Bugzilla holds that one's email: it
+    /// is neither offered nor tidied away for Red Hat's.
+    #[test]
+    fn a_copy_for_another_host_is_left_out() {
+        let (_tmp, d) = dirs();
+        write(
+            &d.home,
+            "poi-tracker",
+            "[bugzilla]\nemail = \"fusion@example.com\"\n\
+             url = \"https://bugzilla.rpmfusion.org\"\n",
+        );
+        write(
+            &d.home,
+            "ebranch",
+            "[bugzilla]\nemail = \"me@example.com\"\n",
+        );
+        let choice = choose_in(
+            &d,
+            &BUGZILLA_EMAIL,
+            REDHAT_BUGZILLA,
+            "fedora-cve-triage",
+            "",
+        );
+        assert_eq!(
+            choice,
+            Choice::Offer("me@example.com".into(), Source::Tool("ebranch"))
+        );
+        assert_eq!(
+            choose_in(
+                &d,
+                &BUGZILLA_EMAIL,
+                "bugzilla.rpmfusion.org",
+                "fedora-cve-triage",
+                ""
+            ),
+            Choice::Offer("fusion@example.com".into(), Source::Tool("poi-tracker"))
+        );
+        settle_in(
+            &d,
+            &BUGZILLA_EMAIL,
+            REDHAT_BUGZILLA,
+            "fedora-cve-triage",
+            "me@example.com",
+            &|q, _| {
+                assert!(q.contains("ebranch's config"), "{q}");
+                true
+            },
+        )
+        .unwrap();
+        assert!(!d.home.join("ebranch/config.toml").exists());
+        assert!(read(&d.home, "poi-tracker").contains("fusion@example.com"));
+        // The Fedora account is kept under its own host.
+        write(
+            &d.home,
+            "sandogasa-pkg-acl",
+            "[dist-git]\nusername = \"someone\"\n",
+        );
+        assert_eq!(
+            choose_in(&d, &FAS_USERNAME, FAS_HOST, "ebranch", "").value(),
+            "someone"
+        );
+    }
+
+    fn setting() -> crate::Setting<'static> {
+        crate::Setting::new("Bugzilla", "email")
+    }
+
+    /// Answers `answers` in turn, failing the test past the last.
+    fn answering(
+        answers: &'static [&'static str],
+    ) -> impl FnMut(&str, bool) -> std::io::Result<String> {
+        let mut left = answers.iter().copied();
+        move |prompt, _| {
+            Ok(left
+                .next()
+                .unwrap_or_else(|| panic!("asked {prompt}"))
+                .into())
+        }
+    }
+
+    #[test]
+    fn a_kept_or_shared_value_is_not_asked_about_on_a_plain_run() {
+        let own = Choice::Offer("own@example.com".into(), Source::Own);
+        let answer = prompt_with(
+            &BUGZILLA_EMAIL,
+            &setting(),
+            own,
+            None,
+            false,
+            &mut answering(&[]),
+        );
+        assert_eq!(answer.unwrap(), "own@example.com");
+        let shared = Choice::Offer("shared@example.com".into(), Source::Shared);
+        let answer = prompt_with(
+            &BUGZILLA_EMAIL,
+            &setting(),
+            shared,
+            None,
+            false,
+            &mut answering(&[]),
+        );
+        assert_eq!(answer.unwrap(), "shared@example.com");
+        // --all asks, Enter keeping it.
+        let shared = Choice::Offer("shared@example.com".into(), Source::Shared);
+        let answer = prompt_with(
+            &BUGZILLA_EMAIL,
+            &setting(),
+            shared,
+            None,
+            true,
+            &mut answering(&[""]),
+        );
+        assert_eq!(answer.unwrap(), "shared@example.com");
+    }
+
+    #[test]
+    fn another_tools_value_or_none_is_asked_about() {
+        let tool = Choice::Offer("tool@example.com".into(), Source::Tool("ebranch"));
+        let answer = prompt_with(
+            &BUGZILLA_EMAIL,
+            &setting(),
+            tool,
+            None,
+            false,
+            &mut answering(&[""]),
+        );
+        assert_eq!(answer.unwrap(), "tool@example.com");
+        let differ = Choice::Differ(vec![("a", "x@example.com".into())]);
+        let answer = prompt_with(
+            &BUGZILLA_EMAIL,
+            &setting(),
+            differ,
+            None,
+            false,
+            &mut answering(&["new@example.com"]),
+        );
+        assert_eq!(answer.unwrap(), "new@example.com");
+    }
+
+    #[test]
+    fn a_tools_own_value_comes_before_the_shared_one() {
+        assert_eq!(
+            resolve(&BUGZILLA_EMAIL, "no-such-host.invalid", " own@example.com "),
+            Some("own@example.com".into())
+        );
+    }
+
+    /// A tool's own value differing from the shared one is still kept
+    /// unasked on a plain run (with a note), and asked about with --all.
+    #[test]
+    fn a_differing_own_value_is_kept_and_asked_about_with_all() {
+        let own = || Choice::Offer("old@example.com".into(), Source::Own);
+        let shared = Some("new@example.com");
+        let kept = prompt_with(
+            &BUGZILLA_EMAIL,
+            &setting(),
+            own(),
+            shared,
+            false,
+            &mut answering(&[]),
+        );
+        assert_eq!(kept.unwrap(), "old@example.com");
+        let asked = prompt_with(
+            &BUGZILLA_EMAIL,
+            &setting(),
+            own(),
+            shared,
+            true,
+            &mut answering(&["new@example.com"]),
+        );
+        assert_eq!(asked.unwrap(), "new@example.com");
+    }
+
+    /// Whitespace is no value: not offered as the tool's own, and not
+    /// saved as the shared one.
+    #[test]
+    fn a_blank_value_is_none() {
+        let (_tmp, d) = dirs();
+        assert_eq!(
+            choose_in(&d, &FAS_USERNAME, FAS_HOST, "ebranch", " "),
+            Choice::Nothing
+        );
+        settle_in(&d, &FAS_USERNAME, FAS_HOST, "ebranch", "  ", &|q, _| {
+            panic!("asked {q}")
+        })
+        .unwrap();
+        assert!(!d.home.join("sandogasa/config.toml").exists());
     }
 }

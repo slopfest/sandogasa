@@ -78,7 +78,8 @@ pub struct DistGitConfig {
     /// Empty when the token is in the keyring (#79).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_token: String,
-    #[serde(default)]
+    /// Empty when the shared file holds it (#259).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub username: String,
 }
 
@@ -291,6 +292,18 @@ ngompa = "admin"
         let loaded: AppConfig = cf.load().unwrap();
         assert_eq!(loaded.dist_git.api_token, "tok-123");
         assert_eq!(loaded.dist_git.username, "salimma");
+    }
+
+    #[test]
+    fn identity_fields_match_the_config() {
+        use sandogasa_config::identity;
+        let fields: Vec<_> = identity::fields_of("sandogasa-pkg-acl").collect();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].identity, &identity::FAS_USERNAME);
+        let config: AppConfig = toml::from_str(&fields[0].toml("someone")).unwrap();
+        assert_eq!(config.dist_git.username, "someone");
+        let text = toml::to_string(&AppConfig::default()).unwrap();
+        assert!(!text.contains("username"), "{text}");
     }
 
     #[test]

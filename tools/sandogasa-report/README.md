@@ -487,8 +487,8 @@ might look like:
 fas = "salimma"                       # default if omitted: the profile key
 bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 
-# Emails on other Bugzilla instances, by host. No fallback: FASJSON
-# only knows Red Hat's.
+# Emails on other Bugzilla instances, by host. FASJSON only knows
+# Red Hat's.
 [users.michel.bugzilla_emails]
 "bugzilla.opensuse.org" = "michel@example.com"
 
@@ -515,6 +515,15 @@ bugzilla_email = "michel@example.com" # optional; FASJSON fallback otherwise
 [forgejo_tokens]
 "codeberg.org" = "..."
 ```
+
+A profile with no Bugzilla email of its own, for an instance, takes the
+one the sandogasa tools share
+(`[bugzilla."<host>"] email` in `~/.config/sandogasa/config.toml`,
+which the other tools' `config` commands write), when its FAS username
+is the shared one (`[fas."accounts.fedoraproject.org"] username`): the
+shared accounts are the person's running the tools, so a report on
+anyone else takes nothing from them. Red Hat's Bugzilla then falls back
+to FASJSON as before.
 
 ### GitHub domain shorthand
 

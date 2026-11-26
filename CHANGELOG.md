@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### The Bugzilla email and the Fedora account are kept once, for every sandogasa tool
+
+fedora-cve-triage, poi-tracker, fedora-review-digest and ebranch each
+asked for the same Bugzilla email, and ebranch and sandogasa-pkg-acl
+each kept the same Fedora account, so someone running several tools set
+each one in every tool, and a change meant finding every copy. Like the
+Jira email before them, both are now kept once in
+`~/.config/sandogasa/config.toml` (over `/etc/sandogasa/config.toml`),
+per service host:
+
+```toml
+[bugzilla."bugzilla.redhat.com"]
+email = "someone@example.com"
+
+[fas."accounts.fedoraproject.org"]
+username = "someone"
+```
+
+Each tool reads its own field first and the shared value after it, so
+an existing setup keeps working. Their `config` commands offer the
+shared value, or the one another tool holds, and move the answer to the
+shared file, asking before replacing a different shared value or
+removing another tool's copy; declined, the tool keeps its own. Once
+moved, the value is not asked about again on a plain `config` run, as a
+saved one is not. A tool's own value that differs from the shared one
+is kept, as it may be meant for that tool alone, but `config` now says
+that it differs, and `config --all` asks which to use. fedora-review-digest's `--post` takes the shared email
+too, and saves one it asks for there. sandogasa-pkg-acl saves the
+account its dist-git token belongs to. sandogasa-report's profiles
+describe other people as well, so nothing moves out of them; a profile
+without a Bugzilla email of its own takes the shared one when its FAS
+username is the shared one, before asking FASJSON.
+
+A tool's copy for another Bugzilla than the one asked about, such as
+ebranch's or poi-tracker's set up for RPM Fusion's, is neither offered
+nor removed: `identity::FIELDS` now records the setting naming each
+tool's instance and the host it uses otherwise. Forge usernames stay in
+sandogasa-report's profiles, the only place they are kept.
+
+Resolves #259
+
 ### config prompts list a tool's permissions one group per line when they don't fit
 
 A `config` prompt said what to grant a token as one list item per tool,

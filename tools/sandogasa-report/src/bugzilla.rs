@@ -106,6 +106,24 @@ impl From<&sandogasa_bugzilla::models::Bug> for BugEntry {
     }
 }
 
+/// The Bugzilla email the sandogasa tools share for `host` (#259), when
+/// `fas` is the person running the tools: the Fedora account they share
+/// is `fas`. A report on someone else takes nothing from it.
+pub fn shared_email(fas: &str, host: &str) -> Option<String> {
+    shared_email_with(fas, host, &sandogasa_config::identity::lookup)
+}
+
+/// [`shared_email`], reading the shared file through `lookup`.
+fn shared_email_with(
+    fas: &str,
+    host: &str,
+    lookup: &dyn Fn(&sandogasa_config::identity::Identity, &str) -> Option<String>,
+) -> Option<String> {
+    use sandogasa_config::identity::{BUGZILLA_EMAIL, FAS_HOST, FAS_USERNAME};
+    let me = lookup(&FAS_USERNAME, FAS_HOST)?;
+    (me == fas).then(|| lookup(&BUGZILLA_EMAIL, host))?
+}
+
 /// Resolve the Bugzilla email for a FAS user.
 ///
 /// Checks (in order):
@@ -564,6 +582,32 @@ mod tests {
     use super::*;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// The shared Bugzilla email is the one of the person the shared
+    /// Fedora account names, and of nobody else.
+    #[test]
+    fn the_shared_email_is_only_for_the_shared_account() {
+        use sandogasa_config::identity::{BUGZILLA_EMAIL, FAS_USERNAME, Identity};
+        let lookup = |i: &Identity, host: &str| match (i, host) {
+            (i, _) if i == &FAS_USERNAME => Some("me".to_string()),
+            (i, "bugzilla.redhat.com") if i == &BUGZILLA_EMAIL => {
+                Some("me@example.com".to_string())
+            }
+            _ => None,
+        };
+        assert_eq!(
+            shared_email_with("me", "bugzilla.redhat.com", &lookup).as_deref(),
+            Some("me@example.com")
+        );
+        assert_eq!(
+            shared_email_with("someone-else", "bugzilla.redhat.com", &lookup),
+            None
+        );
+        assert_eq!(
+            shared_email_with("me", "bugzilla.opensuse.org", &lookup),
+            None
+        );
+    }
 
     #[test]
     fn format_summary_shows_table() {
