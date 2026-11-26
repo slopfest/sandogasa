@@ -409,6 +409,26 @@ request, and a failed read leaves the release unchecked: the four
 bugs close against FEDORA-EPEL-2025-56e972fca8, the EPEL 10.2 update
 whose build was the first made with a fixed golang. Fixes #229.
 
+### fedora-cve-triage judges a renamed package by the build that replaced it
+
+A package whose binaries had moved to another source package was judged
+only by its own last build, and when that build lacked the fix, the bug
+was left to a person with a note to move it, although users install
+the other package's build: golang-github-facebook-time's binaries now
+come from facebook-time, whose builds were made with golang 1.26.5 to
+1.26.10. When one package ships the binaries now, its build on the
+branch is asked the same question of its buildroot. A build with the
+fix closes the bug as fixed, naming both packages and the build, and
+bodhi-check dates the fix by that package's updates: its first update
+with a fixed build is the one that brought the fix, never a sign the
+bug was never real, and a release that package has no update on is
+judged by the old package's own updates. A build without the fix
+reports the bug real, saying it belongs with that package. When the
+old package's own build had the fix too, the finding says both, and
+bodhi-check still dates the fix by the old package's updates, which
+brought it first. A family tracker's verdict, which covers every
+release, is left as it was. Resolves #227.
+
 ### fedora-cve-triage judges a renamed package by its own build
 
 After the change for #226, a package whose binaries had moved to
