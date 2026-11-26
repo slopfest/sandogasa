@@ -66,8 +66,8 @@ waits on something outside this repository, which it names),
 
 Contributors only need the kind, and the forms set it. The rest is the
 maintainers' bookkeeping, done when an issue is filed or triaged;
-[`AGENTS.md`](AGENTS.md) has their procedure, including the sweep
-before each release.
+[`AGENTS.md`](AGENTS.md) has their procedure, and
+[`RELEASING.md`](RELEASING.md) the sweep before each release.
 
 ## What a contribution includes
 
@@ -226,6 +226,6 @@ data — since accountability for license compliance sits with you.
 ## Maintainer notes
 
 Release mechanics (version bumps, `cargo semver-checks`, publishing
-order, tagging) live in [`AGENTS.md`](AGENTS.md), along with the
-conventions this file summarizes. Per-tool design decisions live in each tool's
+order, tagging) live in [`RELEASING.md`](RELEASING.md), and the
+conventions this file summarizes in [`AGENTS.md`](AGENTS.md). Per-tool design decisions live in each tool's
 `DEVELOPMENT.md`; scheduled removals are tracked in `DEPRECATIONS.md`.

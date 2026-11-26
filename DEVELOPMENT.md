@@ -275,6 +275,10 @@ Decisions, 2026-09-21:
   rewrite — a nested `match` does the same job — and the MSRV drops
   back to what the rest of the tree needs (TODO.md tracks this).
 
+### Debian is a ceiling too
+
+**Debian is a ceiling too, and a closer one than it looks.** dbranch is headed for Debian, and debcargo turns `rust-version` straight into `rustc:native (>= X)` plus `Breaks: rustc (<< X~)`, so an MSRV above what the archive ships makes the package unbuildable there rather than merely awkward. Read it with `apt-cache policy rustc` on a Debian box (testing had 1.96.1 on 2026-10-13, against our 1.95 — one minor of headroom). Check it alongside Fedora and RHEL before raising `rust-version`, and treat exceeding it as the same deliberate, recorded decision.
+
 ## Only dbranch ships binaries, and `precise-builds` is why it can
 
 Each release attaches statically linked musl builds of `dbranch` for
@@ -802,3 +806,24 @@ defaulted at all, per the rule above.
 When adding a new tool, use `parse_with_defaults` from the start;
 when adding flags, nothing extra is needed — any long flag is
 automatically defaultable.
+
+## Dependency bumps clear Fedora and Debian first
+
+Moved from the agent instructions, where they were rules to follow on
+every bump.
+
+- For every candidate major dep bump (whether taken or deferred), check Fedora availability of the new version so we don't get blocked later: `fedrq pkgs -b <branch> -F nev rust-<crate>` across rawhide, the active Fedora branches, and epel9/epel10. Record the result in TODO.md next to the bump entry, and explicitly flag any dep whose new version is not packaged at all or has not reached stable on every branch (e.g. still in Bodhi testing — check `https://bodhi.fedoraproject.org/updates/?packages=rust-<crate>`) so the Fedora packaging work can be done first
+- **Debian is the second archive to check, and dbranch is why.** We aim to ship dbranch in Debian — it is not in the archive yet (ITP pending) — so a dependency bump has to clear Debian's archive as well as Fedora's — and not only on version. Check three things before taking a bump: that Debian has the new version (`apt-cache policy librust-<crate>-dev` on a Debian box, or `rmadison -s unstable rust-<crate>`), that `rust-version` stays at or under Debian's rustc (`apt-cache policy rustc`), since debcargo turns the MSRV straight into `rustc:native (>= X)` plus `Breaks: rustc (<< X~)` and an MSRV above the archive makes the package unbuildable rather than merely awkward, and that the chain still builds — `debcargo package` the tool and its new dependency set, then upload to the Debusine workspace (see TODO.md for the current one). Record the Debian answer in TODO.md beside the Fedora one. A dependency Fedora carries and Debian does not is as blocking as the reverse
+
+## The coverage gate, and how it got to 85%
+
+The gate is raised as coverage grows, with a little headroom so an
+honest refactor does not fight it: 80% at v0.24.0, 81.5% at v0.25.0,
+82% on 2026-10-01, raised to 82.5% the same day once the ebranch
+injection work measured 82.59%, and to 85% on 2026-11-12 once a
+coverage sweep measured 86.94%. v0.28.0's release gate measured
+81.67%, about 950 lines short, all of it in code added over the release
+(cbspkg at 54%, cpu-sig-tracker's jira_issue, mr and sync_updates),
+and every line of it had gone through an issue's commit: reviews check
+correctness, not coverage, which is why `make cov-diff` runs with each
+issue's review.
