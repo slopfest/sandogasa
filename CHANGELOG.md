@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### fedora-review-digest posts with the Bugzilla key it just asked for
+
+`fedora-review-digest --post` with no Bugzilla API key set asked for
+one, checked it and kept it in the desktop keyring, then posted with an
+empty key, so the post failed on the run that asked; the next run found
+the key in the keyring and worked. Keeping the key moved it out of the
+settings the post read it from. It now posts with the key it checked.
+This was so since v0.28.1, wherever there is a desktop keyring.
+
+Fixes #281
+
 ### The Bugzilla email and the Fedora account are kept once, for every sandogasa tool
 
 fedora-cve-triage, poi-tracker, fedora-review-digest and ebranch each

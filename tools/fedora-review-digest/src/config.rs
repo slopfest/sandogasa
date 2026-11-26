@@ -165,12 +165,14 @@ pub fn credentials(
             cfg.bugzilla.api_key.clone(),
             |key| validate(key, &email),
         );
-        cfg.bugzilla.api_key = checked.key;
+        cfg.bugzilla.api_key = checked.key.clone();
         // None was found, so there is nothing to turn off: a new key.
+        // Saving moves it to the keyring, out of `cfg`, so the key to
+        // post with is the one checked.
         save(&file, store, &mut cfg, &[Before::Absent])?;
         share(&typed_email)?;
         return Ok(Credentials {
-            api_key: cfg.bugzilla.api_key.clone(),
+            api_key: checked.key,
             email,
         });
     } else if dirty {
@@ -304,5 +306,55 @@ mod tests {
         assert_eq!(cfg.bugzilla.email, "x@example.com");
         let empty = serde_json::to_string(&Config::default()).unwrap();
         assert!(!empty.contains("email"), "{empty}");
+    }
+
+    /// With no key and no email anywhere, --post asks for both, checks
+    /// the key with the email before keeping it, keeps the key in the
+    /// keyring and moves the email to the shared file (#259).
+    #[test]
+    #[serial_test::serial]
+    fn post_asks_for_what_is_missing_and_keeps_it() {
+        use sandogasa_cli::credential::KeyVerdict;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[
+            ("XDG_CONFIG_HOME", root),
+            ("BUGZILLA_API_KEY", ""),
+            ("BUGZILLA_EMAIL", ""),
+        ]);
+        let answers = sandogasa_config::test_support::Answers::new(&["key-1", "me@example.com"]);
+        let store = sandogasa_config::secret::MemoryStore::default();
+        let check = |key: &str, email: &str| {
+            assert_eq!((key, email), ("key-1", "me@example.com"));
+            KeyVerdict::Accepted("valid.".into())
+        };
+        let creds = credentials(&store, &check).unwrap();
+        assert_eq!(answers.left(), 0);
+        assert_eq!(
+            (creds.api_key.as_str(), creds.email.as_str()),
+            ("key-1", "me@example.com")
+        );
+        assert_eq!(
+            store
+                .lookup(&crate::secrets::bugzilla())
+                .unwrap()
+                .as_deref(),
+            Some("key-1")
+        );
+        let shared = std::fs::read_to_string(dir.path().join("sandogasa/config.toml")).unwrap();
+        assert!(shared.contains("me@example.com"), "{shared}");
+        assert!(!dir.path().join("fedora-review-digest/config.toml").exists());
+        // Asked for the email alone, with the key in the keyring: saved
+        // too, unchecked.
+        std::fs::remove_file(dir.path().join("sandogasa/config.toml")).unwrap();
+        let answers = sandogasa_config::test_support::Answers::new(&["you@example.com"]);
+        let unchecked = |_: &str, _: &str| panic!("checked a kept key");
+        assert_eq!(
+            credentials(&store, &unchecked).unwrap().email,
+            "you@example.com"
+        );
+        assert_eq!(answers.left(), 0);
+        let shared = std::fs::read_to_string(dir.path().join("sandogasa/config.toml")).unwrap();
+        assert!(shared.contains("you@example.com"), "{shared}");
     }
 }
