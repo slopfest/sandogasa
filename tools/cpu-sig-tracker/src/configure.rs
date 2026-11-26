@@ -643,4 +643,46 @@ mod tests {
         );
         clear_keyring();
     }
+
+    /// A first `config` asks for the GitLab token, checks it with the
+    /// GitLab in use, and keeps it in the keyring; Jira skipped with an
+    /// empty email is not set up, and nothing is left for the file.
+    #[test]
+    #[serial_test::serial]
+    fn config_checks_the_gitlab_token_and_skips_jira() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt.block_on(MockServer::start());
+        rt.block_on(
+            Mock::given(path("/api/v4/user"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 1})),
+                )
+                .expect(1)
+                .mount(&server),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let _env = env(dir.path());
+        let _gitlab = EnvGuard::new(&[("CPU_SIG_TRACKER_GITLAB_BASE", &server.uri())]);
+        clear_keyring();
+        let answers = sandogasa_config::test_support::Answers::new(&["glpat-1", ""]);
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args = <Cli as clap::Parser>::parse_from(["cpu-sig-tracker"]).config;
+
+        run_inner(&args).unwrap();
+
+        assert_eq!(answers.left(), 0, "{:?}", answers.asked());
+        let kept = crate::secrets::keyring()
+            .lookup(&crate::secrets::gitlab())
+            .unwrap();
+        assert_eq!(kept.as_deref(), Some("glpat-1"));
+        assert!(!config::config_path().exists());
+        assert!(!dir.path().join("sandogasa/config.toml").exists());
+        clear_keyring();
+        drop(rt);
+    }
 }

@@ -1599,4 +1599,102 @@ mod tests {
         assert_eq!(list, want);
         assert!(set);
     }
+
+    /// A first `config` checks the Bugzilla key with the Bugzilla in the
+    /// file and keeps it in the keyring, skips the optional settings
+    /// left empty, and moves the Bugzilla email to the shared file
+    /// (#259).
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn config_checks_the_key_and_moves_the_email() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({"code": 106, "message": "no product"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[("XDG_CONFIG_HOME", &root)]);
+        std::fs::create_dir_all(dir.path().join("ebranch")).unwrap();
+        std::fs::write(
+            dir.path().join("ebranch/config.toml"),
+            format!(
+                "[bugzilla]\nurl = \"{}\"\nemail = \"me@example.com\"\n",
+                server.uri()
+            ),
+        )
+        .unwrap();
+        // The key, then the FAS username, NVD key, Forgejo token and RPM
+        // Fusion key, all skipped.
+        let answers = sandogasa_config::test_support::Answers::new(&["key-1", "", "", "", ""]);
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args = <Cli as clap::Parser>::parse_from(["ebranch"]).config;
+
+        cmd_config(&args).await.unwrap();
+
+        assert_eq!(answers.left(), 0, "{:?}", answers.asked());
+        let own = std::fs::read_to_string(dir.path().join("ebranch/config.toml")).unwrap();
+        assert!(!own.contains("email"), "{own}");
+        assert!(!own.contains("key-1"), "{own}");
+        assert_eq!(
+            bugzilla_email(&server.uri()).as_deref(),
+            Some("me@example.com")
+        );
+        assert_eq!(bugzilla_email("https://bugzilla.rpmfusion.org"), None);
+        let kept = crate::secrets::keyring()
+            .lookup(&crate::secrets::bugzilla(&server.uri()))
+            .unwrap();
+        assert_eq!(kept.as_deref(), Some("key-1"));
+    }
+
+    /// Each reader takes its table from the config file, the FAS
+    /// username from the shared file when ebranch keeps none (#259).
+    #[test]
+    #[serial_test::serial]
+    fn the_readers_take_their_tables_from_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[("XDG_CONFIG_HOME", &root)]);
+        std::fs::create_dir_all(dir.path().join("ebranch")).unwrap();
+        std::fs::write(
+            dir.path().join("ebranch/config.toml"),
+            "[packager]\nprovenpackager = true\n\n\
+             [check-crate]\nexclude = [\"a\"]\n\n\
+             [check-crate.copr]\nfoo = \"me/foo\"\n\n\
+             [check-crate.in-tree]\nfoo = [\"bar\"]\n\n\
+             [matrix-rooms]\nsome-sig = \"#some:example.org\"\n\n\
+             [forgejo]\nurl = \"https://forge.example\"\ntoken = \"t\"\n",
+        )
+        .unwrap();
+        assert!(is_provenpackager());
+        assert_eq!(packager_fas(), None);
+        std::fs::create_dir_all(dir.path().join("sandogasa")).unwrap();
+        std::fs::write(
+            dir.path().join("sandogasa/config.toml"),
+            "[fas.\"accounts.fedoraproject.org\"]\nusername = \"someone\"\n",
+        )
+        .unwrap();
+        assert_eq!(packager_fas().as_deref(), Some("someone"));
+        assert_eq!(check_crate_excludes(), (vec!["a".to_string()], true));
+        assert_eq!(check_crate_copr("foo").as_deref(), Some("me/foo"));
+        assert_eq!(check_crate_copr("other"), None);
+        assert_eq!(check_crate_in_tree("foo"), ["bar"]);
+        assert!(check_crate_in_tree("other").is_empty());
+        assert_eq!(
+            matrix_rooms().get("some-sig").map(String::as_str),
+            Some("#some:example.org")
+        );
+        let forge = forgejo();
+        assert_eq!(forge.url, "https://forge.example");
+        assert_eq!(forge.token, "t");
+    }
 }

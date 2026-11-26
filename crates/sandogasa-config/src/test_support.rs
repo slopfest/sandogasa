@@ -82,6 +82,66 @@ impl Drop for EnvGuard {
     }
 }
 
+/// Answers for the prompts [`crate::ask`] and
+/// [`crate::read_line_from_terminal`] put, given in order, for this
+/// thread while the guard lives: a test drives a tool's `config` with
+/// them instead of a terminal. A prompt past the last answer is an
+/// error, so a run asking more than the test expects fails rather than
+/// waiting for input. A `#[tokio::test]` runs on the test's thread, so
+/// an async `config` reads them too.
+pub struct Answers {
+    _private: (),
+}
+
+thread_local! {
+    /// The answers left, and the prompts put so far.
+    static SCRIPT: std::cell::RefCell<Option<(std::collections::VecDeque<String>, Vec<String>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl Answers {
+    pub fn new(answers: &[&str]) -> Self {
+        SCRIPT.with(|s| {
+            *s.borrow_mut() = Some((answers.iter().map(|a| a.to_string()).collect(), Vec::new()));
+        });
+        Self { _private: () }
+    }
+
+    /// The prompts put so far, in order.
+    pub fn asked(&self) -> Vec<String> {
+        SCRIPT.with(|s| {
+            s.borrow()
+                .as_ref()
+                .map(|(_, p)| p.clone())
+                .unwrap_or_default()
+        })
+    }
+
+    /// How many answers are left unread.
+    pub fn left(&self) -> usize {
+        SCRIPT.with(|s| s.borrow().as_ref().map_or(0, |(a, _)| a.len()))
+    }
+}
+
+impl Drop for Answers {
+    fn drop(&mut self) {
+        SCRIPT.with(|s| *s.borrow_mut() = None);
+    }
+}
+
+/// The next answer for `prompt` when an [`Answers`] guard is live on
+/// this thread; `None` when none is, and the terminal is read.
+pub(crate) fn scripted(prompt: &str) -> Option<std::io::Result<String>> {
+    SCRIPT.with(|s| {
+        let mut s = s.borrow_mut();
+        let (answers, asked) = s.as_mut()?;
+        asked.push(prompt.to_string());
+        Some(answers.pop_front().ok_or_else(|| {
+            std::io::Error::other(format!("no answer left in the test for {prompt:?}"))
+        }))
+    })
+}
+
 /// A per-user directory and the system layer beneath it.
 struct Layer {
     /// The XDG variable naming the user's directory.
@@ -125,6 +185,24 @@ fn isolated(vars: &[(&str, &str)], layer: &Layer) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answers_are_read_in_turn_and_run_out_loudly() {
+        let answers = Answers::new(&["one", ""]);
+        assert_eq!(
+            crate::read_line_from_terminal("first: ", false).unwrap(),
+            "one"
+        );
+        assert_eq!(
+            crate::read_line_from_terminal("second: ", true).unwrap(),
+            ""
+        );
+        assert_eq!(answers.left(), 0);
+        assert!(crate::read_line_from_terminal("third: ", false).is_err());
+        assert_eq!(answers.asked(), ["first: ", "second: ", "third: "]);
+        drop(answers);
+        assert!(scripted("after").is_none());
+    }
 
     fn etc(vars: &[(&str, &str)]) -> Option<String> {
         isolated(vars, &CONFIG)

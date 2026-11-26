@@ -539,6 +539,11 @@ pub fn saved_line(path: &Path) -> String {
 /// passed-through backspaces applied and surrounding space trimmed: what
 /// [`ask`] reads through, for a tool passing [`ask_with`] its reader.
 pub fn read_line_from_terminal(prompt: &str, sensitive: bool) -> io::Result<String> {
+    #[cfg(feature = "test-support")]
+    if let Some(answer) = test_support::scripted(prompt) {
+        println!("{prompt}");
+        return answer;
+    }
     print!("{prompt}");
     io::stdout().flush()?;
     let raw = if sensitive {

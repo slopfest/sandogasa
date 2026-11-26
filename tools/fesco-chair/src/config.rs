@@ -93,6 +93,21 @@ fn for_prompts(
 /// with `--all` or `--token forge.fedoraproject.org`), validate it
 /// against the instance, and save.
 pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
+    config_with(args, &|token| {
+        use sandogasa_cli::credential::KeyVerdict;
+        match sandogasa_forgejo::validate_token(sources::FORGE_URL, token) {
+            Ok(true) => KeyVerdict::Accepted("valid.".to_string()),
+            Ok(false) => KeyVerdict::Refused(format!("{} rejected it.", sources::FORGE_URL)),
+            Err(e) => KeyVerdict::Unknown(format!("could not verify: {e}")),
+        }
+    })
+}
+
+/// [`cmd_config`], checking the token with `check`.
+fn config_with(
+    args: &sandogasa_cli::ConfigArgs,
+    check: &dyn Fn(&str) -> sandogasa_cli::credential::KeyVerdict,
+) -> Result<(), String> {
     let host = crate::secrets::forgejo().service().to_string();
     args.token.check([host.as_str()])?;
     let all = args.review_secret(&host);
@@ -124,14 +139,7 @@ pub fn cmd_config(args: &sandogasa_cli::ConfigArgs) -> Result<(), String> {
         "Forgejo",
         "token",
         std::mem::take(&mut config.forgejo.token),
-        |token| {
-            use sandogasa_cli::credential::KeyVerdict;
-            match sandogasa_forgejo::validate_token(sources::FORGE_URL, token) {
-                Ok(true) => KeyVerdict::Accepted("valid.".to_string()),
-                Ok(false) => KeyVerdict::Refused(format!("{} rejected it.", sources::FORGE_URL)),
-                Err(e) => KeyVerdict::Unknown(format!("could not verify: {e}")),
-            }
-        },
+        check,
     )
     .key;
 
@@ -243,5 +251,37 @@ mod tests {
         std::fs::write(cf.path(), "").unwrap();
         let empty: Config = cf.load().unwrap();
         assert!(empty.forgejo.token.is_empty());
+    }
+
+    /// A first `config` asks for the token, checks it, and keeps it in
+    /// the keyring, the file then left with nothing in it.
+    #[test]
+    #[serial_test::serial]
+    fn config_asks_checks_and_keeps_the_token() {
+        use sandogasa_cli::credential::KeyVerdict;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[("XDG_CONFIG_HOME", &root)]);
+        let answers = sandogasa_config::test_support::Answers::new(&["token-1"]);
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        let args = <Cli as clap::Parser>::parse_from(["fesco-chair"]).config;
+        let checked = std::cell::Cell::new(false);
+        config_with(&args, &|token| {
+            assert_eq!(token, "token-1");
+            checked.set(true);
+            KeyVerdict::Accepted("valid.".into())
+        })
+        .unwrap();
+        assert!(checked.get());
+        assert_eq!(answers.left(), 0);
+        let kept = crate::secrets::keyring()
+            .lookup(&crate::secrets::forgejo())
+            .unwrap();
+        assert_eq!(kept.as_deref(), Some("token-1"));
+        assert!(!dir.path().join("fesco-chair/config.toml").exists());
     }
 }

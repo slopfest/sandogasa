@@ -660,4 +660,66 @@ mod tests {
         assert_eq!(resolve_url(), BugzillaConfig::DEFAULT_URL);
         assert_eq!(resolve_email(), None);
     }
+
+    /// `config`'s options, parsed from `argv`.
+    fn args(argv: &[&str]) -> sandogasa_cli::ConfigArgs {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: sandogasa_cli::ConfigArgs,
+        }
+        <Cli as clap::Parser>::parse_from(argv).config
+    }
+
+    /// A first `config` asks for the key and the optional token, checks
+    /// the key with the Bugzilla in the file, keeps it in the keyring,
+    /// and moves the email to the shared file (#259).
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn config_checks_the_key_and_moves_the_email() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        // Bugzilla's answer to a bug with no fields, past the key check.
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(serde_json::json!({"code": 106, "message": "no product"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        let _env = sandogasa_config::test_support::EnvGuard::new(&[("XDG_CONFIG_HOME", &root)])
+            .unset(&["BUGZILLA_API_KEY"]);
+        std::fs::create_dir_all(dir.path().join("poi-tracker")).unwrap();
+        std::fs::write(
+            dir.path().join("poi-tracker/config.toml"),
+            format!(
+                "[bugzilla]\nurl = \"{}\"\nemail = \"me@example.com\"\n",
+                server.uri()
+            ),
+        )
+        .unwrap();
+        let answers = sandogasa_config::test_support::Answers::new(&["key-1", ""]);
+
+        cmd_config(&args(&["poi-tracker"])).await.unwrap();
+
+        assert_eq!(answers.left(), 0, "{:?}", answers.asked());
+        let own = std::fs::read_to_string(dir.path().join("poi-tracker/config.toml")).unwrap();
+        assert!(!own.contains("email"), "{own}");
+        assert!(!own.contains("key-1"), "{own}");
+        let shared = std::fs::read_to_string(dir.path().join("sandogasa/config.toml")).unwrap();
+        let host = sandogasa_config::identity::host_of(&server.uri());
+        assert!(
+            shared.contains(&format!("[bugzilla.\"{host}\"]")),
+            "{shared}"
+        );
+        assert!(shared.contains("me@example.com"), "{shared}");
+        assert_eq!(resolve_email().as_deref(), Some("me@example.com"));
+        let kept = crate::secrets::keyring()
+            .lookup(&crate::secrets::bugzilla(&server.uri()))
+            .unwrap();
+        assert_eq!(kept.as_deref(), Some("key-1"));
+    }
 }
