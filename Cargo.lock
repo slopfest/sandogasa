@@ -575,6 +575,7 @@ dependencies = [
  "sandogasa-config",
  "sandogasa-cve",
  "sandogasa-distgit",
+ "sandogasa-fasjson",
  "sandogasa-fedrq",
  "sandogasa-koji",
  "sandogasa-kojihub",

@@ -527,23 +527,10 @@ pub fn open_votes(
 }
 
 fn ensure_kerberos_ticket() -> Result<(), Box<dyn std::error::Error>> {
-    use sandogasa_fasjson::kerberos::{self, TicketStatus};
-    let status = kerberos::ticket_status();
-    if status == TicketStatus::Valid
-        || (status == TicketStatus::ExpiredRenewable && kerberos::renew_ticket().is_ok())
-    {
-        return Ok(());
-    }
-    let remedy = format!(
-        "no Kerberos ticket: FASJSON lists the {FESCO_GROUP} group's members; run `kinit <you>@FEDORAPROJECT.ORG` or pass --member"
-    );
-    let upn = kerberos::read_fedora_upn().ok_or_else(|| remedy.clone())?;
-    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return Err(remedy.into());
-    }
-    let principal = format!("{upn}@FEDORAPROJECT.ORG");
-    eprintln!("no Kerberos ticket; running kinit {principal}");
-    kerberos::acquire_ticket(&principal).map_err(|e| format!("{e}; {remedy}").into())
+    sandogasa_fasjson::kerberos::ensure_ticket(&format!(
+        "no Kerberos ticket: FASJSON lists the {FESCO_GROUP} group's members; run `fkinit -u <you>` (fedora-packager-kerberos) or pass --member"
+    ))
+    .map_err(Into::into)
 }
 
 /// Scan the tracker's open vote tickets and report on each.

@@ -52,6 +52,20 @@ pub struct FasUser {
     pub ircnicks: Vec<String>,
 }
 
+/// A Fedora Account System group.
+#[derive(Debug, Deserialize)]
+#[non_exhaustive]
+pub struct FasGroup {
+    pub groupname: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The group's mailing list. Fedora's dist-git Bugzilla sync uses it
+    /// as the group's Bugzilla address, putting it in the CC list of the
+    /// bugs of every package the group watches.
+    #[serde(default)]
+    pub mailing_list: Option<String>,
+}
+
 impl FasUser {
     /// The user's Matrix IDs (`@nick:homeserver`), from `ircnicks`;
     /// IRC handles are skipped.
@@ -124,6 +138,22 @@ mod tests {
         assert_eq!(resp.result.human_name.as_deref(), Some("Michel Lind"));
         assert_eq!(resp.result.emails.len(), 2);
         assert_eq!(resp.result.timezone.as_deref(), Some("Europe/Dublin"));
+    }
+
+    #[test]
+    fn a_group_parses_with_or_without_its_mailing_list() {
+        let group: FasGroup = serde_json::from_str(
+            r#"{"groupname": "rust-sig", "description": "Rust SIG",
+                "mailing_list": "rust@lists.fedoraproject.org", "url": null}"#,
+        )
+        .unwrap();
+        assert_eq!(group.groupname, "rust-sig");
+        assert_eq!(
+            group.mailing_list.as_deref(),
+            Some("rust@lists.fedoraproject.org")
+        );
+        let bare: FasGroup = serde_json::from_str(r#"{"groupname": "packager"}"#).unwrap();
+        assert!(bare.mailing_list.is_none());
     }
 
     #[test]

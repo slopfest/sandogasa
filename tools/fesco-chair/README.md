@@ -49,7 +49,8 @@ environment variables override the stored token (matching
 sandogasa-report's convention, so one env setup can serve both
 tools).
 
-`votes` also needs a Kerberos ticket for `FEDORAPROJECT.ORG` (`kinit`),
+`votes` also needs a Kerberos ticket for `FEDORAPROJECT.ORG` (`fkinit -u
+<FAS username>`, or at a terminal `votes` gets one for you),
 because it reads the eligible voters — the members of the `fesco` FAS
 group — from [FASJSON](https://fasjson.fedoraproject.org/); `--member`
 supplies the list by hand instead.

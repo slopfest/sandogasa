@@ -6,7 +6,10 @@ Account System JSON API, with Kerberos ticket management helpers.
 ## Features
 
 - Fetch user profiles (username, emails, human name) via FASJSON
-- Kerberos ticket status checking, renewal, and acquisition
+- Fetch a group (with its mailing list), its members, and a user's
+  groups
+- Kerberos ticket status checking, renewal, and acquisition, and
+  `ensure_ticket`, which does whichever of them is needed
 - Read Fedora UPN from `~/.fedora.upn`
 
 ## Authentication

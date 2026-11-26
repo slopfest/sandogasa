@@ -224,7 +224,8 @@ account in `~/.fedora.upn`, titled with its username unless `--title`
 says otherwise. Fedora Calendar has no API for adding entries, so
 `away` logs in to it as a browser would, with your Kerberos ticket
 instead of a password: get one with `fkinit -u <FAS username>`, or let
-`away` renew an expired one or run `kinit` for you, once it knows the
+`away` renew an expired one or run `fkinit` (or `kinit` where fkinit
+is not installed) for you, once it knows the
 days need filing. The login takes about ten seconds. An absence already filed for the same days is not
 filed again; one that overlaps only in part is listed, and filing
 another needs a "yes".

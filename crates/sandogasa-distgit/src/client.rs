@@ -587,6 +587,34 @@ impl DistGitClient {
         self.exists(&url).await
     }
 
+    /// The name of every group on the Pagure instance, walking its
+    /// pages. On Fedora's dist-git these are the groups that can be
+    /// given access to, or watch, a package: its SIGs and teams.
+    pub async fn groups(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        #[derive(serde::Deserialize)]
+        struct Pagination {
+            pages: u32,
+        }
+        #[derive(serde::Deserialize)]
+        struct Page {
+            groups: Vec<String>,
+            pagination: Option<Pagination>,
+        }
+        let mut names = Vec::new();
+        let mut page = 1;
+        loop {
+            let url = format!("{}/api/0/groups?per_page=100&page={page}", self.base_url);
+            let resp = self.get_transient_retry(&url).await?.error_for_status()?;
+            let answer: Page = resp.json().await?;
+            names.extend(answer.groups);
+            match answer.pagination {
+                Some(p) if page < p.pages => page += 1,
+                _ => break,
+            }
+        }
+        Ok(names)
+    }
+
     /// Fetch members of a Pagure group.
     pub async fn get_group_members(
         &self,
@@ -1787,6 +1815,32 @@ mod tests {
 
         let err = client.user_exists("salimma").await.unwrap_err().to_string();
         assert!(err.contains("403"), "unexpected error: {err}");
+    }
+
+    // ---- groups ----
+
+    #[tokio::test]
+    async fn every_page_of_groups_is_read() {
+        use wiremock::matchers::query_param;
+        let server = MockServer::start().await;
+        let client = DistGitClient::with_base_url(&server.uri());
+        for (page, groups) in [("1", vec!["go-sig", "kde-sig"]), ("2", vec!["rust-sig"])] {
+            Mock::given(method("GET"))
+                .and(path("/api/0/groups"))
+                .and(query_param("page", page))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "groups": groups,
+                    "pagination": {"page": page.parse::<u32>().unwrap(), "pages": 2},
+                    "total_groups": 3
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        assert_eq!(
+            client.groups().await.unwrap(),
+            ["go-sig", "kde-sig", "rust-sig"]
+        );
     }
 
     // ---- group_exists ----

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::io::{self, Write as _};
+use std::io;
 use std::process::ExitCode;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -999,47 +999,22 @@ async fn cmd_away(args: &calendar::AwayArgs) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-/// Ensure a valid Kerberos ticket exists, offering to renew or acquire one.
-fn ensure_kerberos_ticket() -> Result<(), Box<dyn std::error::Error>> {
-    match kerberos::ticket_status() {
-        kerberos::TicketStatus::Valid => Ok(()),
-        kerberos::TicketStatus::ExpiredRenewable => {
-            eprint!("Kerberos ticket expired but renewable. Renewing... ");
-            io::stderr().flush()?;
-            match kerberos::renew_ticket() {
-                Ok(()) => {
-                    eprintln!("OK");
-                    Ok(())
-                }
-                Err(_) => {
-                    eprintln!("failed");
-                    eprintln!("Ticket is no longer renewable. Acquiring a new one.");
-                    acquire_new_ticket()
-                }
-            }
-        }
-        kerberos::TicketStatus::None => {
-            eprintln!("No valid Kerberos ticket found.");
-            acquire_new_ticket()
-        }
-    }
-}
-
-/// Acquire a new Kerberos ticket, reading the principal from ~/.fedora.upn.
+/// Ensure a valid Kerberos ticket exists, renewing one or getting a new
+/// one (see [`kerberos::ensure_ticket`]).
 ///
-/// Retries on failure since the Fedora KDC can be slow to respond
-/// while also timing out aggressively on password input.
-fn acquire_new_ticket() -> Result<(), Box<dyn std::error::Error>> {
-    let upn = kerberos::read_fedora_upn()
-        .ok_or("no ~/.fedora.upn found — cannot determine Kerberos principal")?;
-    let principal = format!("{upn}@FEDORAPROJECT.ORG");
-
+/// A failed attempt at a terminal is offered again, since the Fedora KDC
+/// can be slow to respond while also timing out aggressively on password
+/// input.
+fn ensure_kerberos_ticket() -> Result<(), Box<dyn std::error::Error>> {
+    const REMEDY: &str = "no valid Kerberos ticket; run `fkinit -u <FAS username>` \
+                          (fedora-packager-kerberos) first";
     loop {
-        eprintln!("Running kinit {principal}...");
-        match kerberos::acquire_ticket(&principal) {
+        match kerberos::ensure_ticket(REMEDY) {
             Ok(()) => return Ok(()),
+            // Nothing to retry: no terminal, or no ~/.fedora.upn.
+            Err(e) if e == REMEDY => return Err(e.into()),
             Err(e) => {
-                eprintln!("kinit failed: {e}");
+                eprintln!("{e}");
                 if !sandogasa_cli::confirm("Try again?", true)? {
                     return Err("Kerberos authentication cancelled".into());
                 }

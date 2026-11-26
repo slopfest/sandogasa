@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### fedora-cve-triage selects a SIG's bugs by the group's name
+
+Clearing out a SIG's CVE bugs meant working out by hand which address
+Bugzilla knows the group by and passing it to `--cc` (#219). `run` takes
+`--sig GROUP,...`, which asks FASJSON for each group's mailing list, the
+address Fedora's dist-git Bugzilla sync puts on the bugs of the packages
+a group watches, and also selects the bugs assigned to it or with it in
+CC, besides those the config or other flags select. `--my-sigs` does the
+same for every group the user in `~/.fedora.upn` is in that is also a
+dist-git group, since only those watch packages (FAS groups such as
+`ambassadors` have mailing lists on no package's bugs), and claims bugs
+with that user's Bugzilla address from FASJSON when the config names
+none. The run lists each group with the address it resolved, and the
+groups left out for having no mailing list or for not being dist-git
+groups, before searching. Both need a Kerberos ticket, which the run
+offers to get at a terminal. Resolves #219.
+
+sandogasa-fasjson gains `FasjsonClient::group` and `user_groups`, a
+`FasGroup` model with the group's mailing list, and
+`kerberos::ensure_ticket`, which renews a ticket or gets a new one as
+needed; fesco-chair and sandogasa-hattrack now use it instead of their
+own copies, hattrack still offering a failed attempt again. A new ticket
+comes from `fkinit` where fedora-packager-kerberos is installed. For an
+account with a one-time password, the plain `kinit` both tools ran asks
+only "Enter OTP Token Value", which wants the password and the code
+typed together, and fails when given the code alone; fkinit asks for
+each.
+
+sandogasa-distgit gains `DistGitClient::groups`, every dist-git group.
+
 ### koji-lag no longer depends on sandogasa-inventory
 
 Building the workspace with cargo 1.100 warned that koji-lag did not
