@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### fedora-cve-triage leaves a bug alone once its finding is answered
+
+bodhi-check asked the assignee of bug 2442157 (ImageMagick, CVE-2026-25637)
+about EPEL 8 and 9 on 2026-11-23; they answered on 2026-11-25, and when
+the EPEL 10 builds went stable on 2026-11-26, the run posted the same
+finding and set the needinfo again, as if nobody had answered (#266).
+It read a bug's comments only for its own last finding. Now a bug where
+another person has commented since the account that posted the finding
+last did (Fedora's automation, such as Bodhi announcing an update, does
+not count) is left out of the run, nothing written to it, and listed
+before triaging with who answered, when and the first line, to be read
+and replied to by hand. A later comment from that account counts as the
+reply; `--recheck` triages such a bug regardless. Fixes #266.
+
 ### fedora-cve-triage reads a restricted bug's comments with its key
 
 A Security Restricted bug, such as 2408207, was triaged again on every
