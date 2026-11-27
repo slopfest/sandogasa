@@ -532,5 +532,13 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   `exploratory` or `priority::low`, saying why. CONTRIBUTING.md has
   what each means, and RELEASING.md what happens to milestones at
   release time.
-- **When a commit implements or obsoletes a tracked issue that its own `Fixes #N` or `Resolves #N` does not close, close the issue in the same sitting**, naming the commit and the first release tag that shipped it (`git tag --contains <sha> -l 'v*' | sort -V | head -1`; "not released yet" before there is one), rather than leaving it for the next sweep. An issue closed by a landed commit's own keyword needs no comment: the commit and its pull request are already on the issue's timeline
+- **When a commit implements or obsoletes a tracked issue that its own
+  `Fixes #N` or `Resolves #N` does not close, close the issue in the
+  same sitting**, rather than leaving it for the next sweep. Name the
+  commit and the first release tag that shipped it
+  (`git tag --contains <sha> -l 'v*' | sort -V | head -1`), or say
+  "not released yet" before there is one.
+  - An issue closed by a landed commit's own keyword needs no comment:
+    the commit and its pull request are already on the issue's
+    timeline.
 - **Releases follow `RELEASING.md`** at the repository root: the sweeps, gates, publishing, tagging and release-asset checks. Read it in full before cutting one
