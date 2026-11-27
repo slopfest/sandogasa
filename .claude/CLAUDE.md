@@ -122,7 +122,9 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   - Compare "check-wip missed builds that were already in Koji" against
     "a recorded build must not settle whether to look for a newer one":
     the second is accurate and means nothing to a stranger.
-- Changelog entries for released versions are immutable — never edit them. When making significant changes, add them to an `## Unreleased` section at the top of CHANGELOG.md. At release time, rename `Unreleased` to the version number
+- **Never edit a released version's CHANGELOG entries.** Add
+  significant changes to an `## Unreleased` section at the top of
+  CHANGELOG.md, and rename it to the version number at release time.
 - When a CHANGELOG entry covers a breaking change, the section heading must end with `(breaking)` (or `(breaking JSON)`, `(breaking config)`, etc. when the surface is narrower) so consumers can grep them out of a release at a glance. The body must enumerate what broke — renamed/removed items, changed function signatures, altered JSON shape, dropped CLI flags or config keys — not just describe the new behavior. Include a one-line migration hint when the path forward isn't obvious. This applies regardless of bump size: a pre-1.0 minor bump may still be the appropriate vehicle, but consumers shouldn't have to read the source diff to find out what they need to update
 - A README describes the tool **as it is now**. Keep out of it: rationale for
   recent changes, comparisons to how something used to behave, and arguments for
