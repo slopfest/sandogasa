@@ -526,6 +526,11 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   - The issue sweep also looks for unlabeled issues:
     `gh issue list --state all --json number,labels -q '[.[]|select(.labels|length==0)|.number]'`.
   - Background: on 2026-11-10, 35 issues from #1 to #123 had none.
-- **Give a new issue a milestone when it is filed** (`Next patch`, `Next minor` or `1.0`), if it is planned for a release; leave it off otherwise, and give it one of `blocked`, `exploratory` or `priority::low` saying why. An issue has at most one milestone. What happens to them at release time is in `RELEASING.md`
+- **Give a new issue a milestone when it is filed, if it is planned for
+  a release**: `Next patch`, `Next minor` or `1.0`, and at most one.
+  Leave it off otherwise, and give the issue one of `blocked`,
+  `exploratory` or `priority::low`, saying why. CONTRIBUTING.md has
+  what each means, and RELEASING.md what happens to milestones at
+  release time.
 - **When a commit implements or obsoletes a tracked issue that its own `Fixes #N` or `Resolves #N` does not close, close the issue in the same sitting**, naming the commit and the first release tag that shipped it (`git tag --contains <sha> -l 'v*' | sort -V | head -1`; "not released yet" before there is one), rather than leaving it for the next sweep. An issue closed by a landed commit's own keyword needs no comment: the commit and its pull request are already on the issue's timeline
 - **Releases follow `RELEASING.md`** at the repository root: the sweeps, gates, publishing, tagging and release-asset checks. Read it in full before cutting one
