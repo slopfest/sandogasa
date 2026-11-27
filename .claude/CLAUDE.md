@@ -397,9 +397,13 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
 
 ### fedrq in this workspace
 General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--forcearch`, EPEL 10 `@testing`) are in review-prompts, `rpm/dependencies.md`, "fedrq Pitfalls". What is specific to the tools here:
-- ebranch's resolve command queries `@koji-src:<tag>` for source RPMs automatically when given `--source-repo @koji:<tag>`
-- To list a side tag's own binaries without the inherited ones, resolve binary RPM names via `koji buildinfo <nvr>` rather than `fedrq pkgs -r @koji:<tag> '*'`
-- For EPEL 10+, ebranch's `@testing` probe fails silently and falls back to side tag or reverse dependency listing
+- **ebranch's resolve command queries `@koji-src:<tag>` for source RPMs
+  on its own** when given `--source-repo @koji:<tag>`.
+- **To list a side tag's own binaries without the inherited ones,
+  resolve binary RPM names with `koji buildinfo <nvr>`**, not
+  `fedrq pkgs -r @koji:<tag> '*'`.
+- **For EPEL 10 and later, ebranch's `@testing` probe fails silently**,
+  and falls back to side tag or reverse dependency listing.
 
 ## Dependencies and MSRV
 - Before starting feature work, run `cargo audit` and address any reported vulnerabilities first (patch bump or `cargo update -p <crate> --precise <version>`)
