@@ -953,8 +953,9 @@ is faked:
 - pure logic: injectable functions (a fetcher closure, a trait, canned
   fixtures) tested against recorded data;
 - a stand-in for an external CLI: a script the test writes and runs
-  through `sh`, never executed directly, which fails with "Text file
-  busy" when another test thread starts a process meanwhile.
+  through `sh`, never executed directly: a script run directly fails
+  with "Text file busy" when another test thread starts a process
+  meanwhile.
 
 `git` for a local fixture repo is fine, but a crate whose tests run it
 must declare it as a build dependency where it is packaged
