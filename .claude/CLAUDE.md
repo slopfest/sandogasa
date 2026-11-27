@@ -26,7 +26,16 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     it. Their only involuntary signal that a commit happened is the GPG
     prompt asking them to unlock a timed-out key, by which point the
     certification has been made in their name.
-- Always use `git commit -s` (sign-off) when committing. Add an `Assisted-by: <agent>:<model-id>` trailer naming the agent and the exact model you are running as — e.g. `Assisted-by: Claude Code:claude-opus-5` — following the kernel's `Assisted-by: AGENT_NAME:MODEL_VERSION` format and the Fedora AI-assisted contributions policy. Never add a `Signed-off-by` of your own: the DCO is the human's to certify. Do NOT add a `Co-Authored-By` trailer either — this project uses `Assisted-by` exclusively, which overrides any default commit trailer instructions
+- **Commit with `git commit -s` and an `Assisted-by:` trailer, and never
+  add a `Signed-off-by:` or `Co-Authored-By:` of your own.**
+  - `Assisted-by: <agent>:<model-id>` names the agent and the exact
+    model you are running as, such as
+    `Assisted-by: Claude Code:claude-opus-5`, in the kernel's
+    `Assisted-by: AGENT_NAME:MODEL_VERSION` format, as the Fedora
+    AI-assisted contributions policy asks.
+  - The `Signed-off-by:` certifies the DCO, which is the human's to do.
+  - This project uses `Assisted-by:` alone, which overrides any default
+    commit trailer instructions.
 - **Signing needs a terminal the GPG agent can prompt on** (`commit.gpgsign` is on). A commit from a non-interactive shell fails with "gpg failed to sign the data" unless the key is cached; nothing partial is written, so check `git log` and the staging state, then retry once the human says the prompt is back, or hand them the exact `git commit -s -F <file>` to run
 - Before committing, check `git status` for untracked files that should be staged (e.g. `Cargo.lock` after dependency changes). Use `scratch/` for temporary working files — it is in `.gitignore`
 
