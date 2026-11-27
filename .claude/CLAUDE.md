@@ -329,7 +329,14 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   Test fixtures for a model deserialize `serde_json::json!({…})`
   instead of using a literal. See DEVELOPMENT.md, "A response model is
   `#[non_exhaustive]`".
-- Tool README.md files must include an Installation section with `cargo install <crate>` (and any required external tools like `fedrq` or `koji`). Mention `cargo binstall` **only** for a tool that actually ships prebuilt binaries — that is, one carrying `[package.metadata.dist] dist = true`, which is `dbranch` alone today. Every other tool has no release artifact for binstall to find, so offering the command would send the reader to a 404
+- **A tool's README.md has an Installation section** with
+  `cargo install <crate>`, and any external tools it needs, such as
+  `fedrq` or `koji`.
+  - Mention `cargo binstall` only for a tool that ships prebuilt
+    binaries, one carrying `[package.metadata.dist] dist = true`
+    (DEVELOPMENT.md, "Only dbranch ships binaries"). Every other tool
+    has no release artifact for binstall to find, so the command would
+    send the reader to a 404.
 - **Never hand-edit `.github/workflows/release.yml`** — it is generated from `[workspace.metadata.dist]` in the root `Cargo.toml` by cargo-dist, the way the man pages are generated from clap. After changing any dist config, run `dist generate` and commit the result (cargo-dist installs in seconds with `cargo binstall cargo-dist`, which is also a fair demonstration of what this ships); `dist plan` shows what a release would produce and `dist build --artifacts=local --target=<triple>` builds one for real
 - Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
 - All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
