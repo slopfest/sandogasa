@@ -443,7 +443,17 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
     lint and fails only under the old compiler.
   - Background: v0.24.1 shipped with one and failed to build for EPEL 9
     that way.
-- **The MSRV is set by where the code has to build, not by the developer's toolchain**: Fedora rawhide (`fedrq pkgs -b rawhide -F nev rust`), the *released* RHEL 9 and RHEL 10 minors (`fedrq pkgs -b ubi9 -F nev rust`, `-b ubi10`), and Debian's rustc for dbranch (`apt-cache policy rustc`). Before adopting a language feature or std API, look up the release that stabilized it. Raising `rust-version` above any of them is a deliberate decision, recorded in CHANGELOG.md and TODO.md. DEVELOPMENT.md, "The MSRV is 1.95, and EPEL waits for RHEL's rust to catch up", has how to read each, including a pre-release EPEL minor's
+- **The MSRV is set by where the code has to build, not by the
+  developer's toolchain.** Before adopting a language feature or std
+  API, look up the release that stabilized it. Raising `rust-version`
+  above any of these is a deliberate decision, recorded in
+  CHANGELOG.md and TODO.md. DEVELOPMENT.md, "The MSRV is 1.95, and
+  EPEL waits for RHEL's rust to catch up", has how to read each,
+  including a pre-release EPEL minor's:
+  - Fedora rawhide: `fedrq pkgs -b rawhide -F nev rust`;
+  - the *released* RHEL 9 and RHEL 10 minors:
+    `fedrq pkgs -b ubi9 -F nev rust`, and `-b ubi10`;
+  - Debian's rustc, for dbranch: `apt-cache policy rustc`.
 
 ## Performance
 - **Batch or parallelise remote work from the first version, not after it proves slow.** Before writing a loop that calls a remote service or spawns a CLI once per item (build, RPM, bug, package, CVE), look for a batch form and use it:
