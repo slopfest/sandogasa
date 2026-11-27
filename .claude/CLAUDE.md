@@ -94,31 +94,34 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   the full wait** for the runs the push starts.
 
 ## Commit messages, CHANGELOG and documentation
-- **A commit subject says what changed. A commit body and a CHANGELOG entry
-  open with the symptom.** Both must read for someone who has never seen this
-  code, but they answer different questions:
-  - The **subject** names the change, because that is what a reader scanning
-    `git log`, release notes or `git blame` wants: "retire now offers to take
-    the issue it closes", "replace its hand-rolled XML-RPC with the shared Koji
-    client", "annotate the Copr script with why each package is in it". A
-    subject that describes the problem instead — "--copr generated a build
-    script with no reason for any package" — leaves them to work out what was
-    done about it.
-  - The **body's first paragraph, and a CHANGELOG entry's**, lead with the
-    symptom as an outsider would meet it: what the tool did or failed to do,
-    ideally with a concrete observation, and only then the mechanism. There is
-    room there to describe the problem properly, which is why the subject does
-    not have to.
-
-  Internal names (functions, fields, struct members) and terms the code invents
-  belong further down, in the paragraphs that explain the cause; that is where
-  detail is welcome and depth is worth having. Tells that an entry is written for
-  insiders: the subject names a function or a field; the first paragraph uses a
-  phrase that only exists in the source ("the version of interest", "the recorded
-  build"); the reader has to already know what a component does before the
-  sentence parses. Compare "check-wip missed builds that were already in Koji"
-  against "a recorded build must not settle whether to look for a newer one" —
-  the second is accurate and means nothing to a stranger
+- **A commit subject says what changed.** That is what a reader
+  scanning `git log`, release notes or `git blame` wants.
+  - Examples:
+    - "retire now offers to take the issue it closes"
+    - "replace its hand-rolled XML-RPC with the shared Koji client"
+    - "annotate the Copr script with why each package is in it"
+  - A subject that describes the problem instead, such as "--copr
+    generated a build script with no reason for any package", leaves
+    the reader to work out what was done about it.
+- **A commit body's first paragraph, and a CHANGELOG entry, open with
+  the symptom as an outsider would meet it**: what the tool did or
+  failed to do, ideally with a concrete observation, and only then the
+  mechanism. Both must read for someone who has never seen this code.
+  There is room there to describe the problem properly, which is why
+  the subject does not have to.
+- **Internal names and terms the code invents go further down**, in
+  the paragraphs that explain the cause, where detail is welcome and
+  depth is worth having. Internal names are functions, fields and
+  struct members.
+  - Tells that an entry is written for insiders:
+    - the subject names a function or a field;
+    - the first paragraph uses a phrase that only exists in the source
+      ("the version of interest", "the recorded build");
+    - the reader has to already know what a component does before the
+      sentence parses.
+  - Compare "check-wip missed builds that were already in Koji" against
+    "a recorded build must not settle whether to look for a newer one":
+    the second is accurate and means nothing to a stranger.
 - Changelog entries for released versions are immutable — never edit them. When making significant changes, add them to an `## Unreleased` section at the top of CHANGELOG.md. At release time, rename `Unreleased` to the version number
 - When a CHANGELOG entry covers a breaking change, the section heading must end with `(breaking)` (or `(breaking JSON)`, `(breaking config)`, etc. when the surface is narrower) so consumers can grep them out of a release at a glance. The body must enumerate what broke — renamed/removed items, changed function signatures, altered JSON shape, dropped CLI flags or config keys — not just describe the new behavior. Include a one-line migration hint when the path forward isn't obvious. This applies regardless of bump size: a pre-1.0 minor bump may still be the appropriate vehicle, but consumers shouldn't have to read the source diff to find out what they need to update
 - A README describes the tool **as it is now**. Keep out of it: rationale for
