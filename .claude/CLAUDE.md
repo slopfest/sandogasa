@@ -420,7 +420,12 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   exploitable for us, prefer a short-lived version range up to the
   fix. RELEASING.md, "Advisories and dependency ranges", has the full
   policy, and the re-test every release owes a range.
-- **A dependency bump has to clear Fedora's and Debian's archives** (dbranch is headed for Debian): check that both carry the new version, and that `rust-version` stays at or under Debian's rustc, before taking it, and record the answers in TODO.md. How to check each is in DEVELOPMENT.md, "Dependency bumps clear Fedora and Debian first"
+- **A dependency bump has to clear Fedora's and Debian's archives**
+  (dbranch is headed for Debian). Before taking it, check that both
+  carry the new version and that `rust-version` stays at or under
+  Debian's rustc, and record the answers in TODO.md. DEVELOPMENT.md,
+  "Dependency bumps clear Fedora and Debian first", has how to check
+  each.
 - Routine `cargo update` (semver-compatible bumps) should be a separate commit from feature work so it is easy to revert if something regresses
 - After any dependency change, run `cargo clippy --workspace && cargo cov` to verify nothing broke
 - The workspace declares its minimum supported Rust in `[workspace.package] rust-version` (every member inherits it), and `make msrv-check` — part of `make release-checks` — builds the whole workspace, tests included, with exactly that toolchain (`rustup toolchain install <msrv>` once). It is the only check that catches *syntax* newer than the MSRV: clippy's `incompatible_msrv` lint reads `rust-version` and flags std APIs, but a language feature such as an `if let` guard passes every lint and fails only under the old compiler. v0.24.1 shipped with one and failed to build for EPEL 9 that way
