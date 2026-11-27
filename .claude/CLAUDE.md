@@ -214,7 +214,16 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
 - **Describe a tool's subcommands in its README.md in the same
   alphabetical order as the `Command` enum.** In the root README.md,
   list tools alphabetically, then library crates alphabetically.
-- Order definitions in source files top-down: module docs and imports, public types (structs/enums/traits), public functions, trait impls (grouped by type), private helpers, `#[cfg(test)] mod tests`. Within each group, define callees before callers so a reader encounters helpers before the functions that use them. Review file order before committing
+- **Order definitions in a source file top-down, and review the order
+  before committing.** Within each group below, define callees before
+  callers, so a reader meets helpers before the functions that use
+  them:
+  - module docs and imports;
+  - public types (structs, enums, traits);
+  - public functions;
+  - trait impls, grouped by type;
+  - private helpers;
+  - `#[cfg(test)] mod tests`.
 
 ## CLI behavior
 - Non-interactive subcommands (e.g. `show`, `search`) must support a `--json` flag that outputs pretty-printed, machine-readable JSON instead of human-readable text
