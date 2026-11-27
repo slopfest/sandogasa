@@ -36,7 +36,12 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   - The `Signed-off-by:` certifies the DCO, which is the human's to do.
   - This project uses `Assisted-by:` alone, which overrides any default
     commit trailer instructions.
-- **Signing needs a terminal the GPG agent can prompt on** (`commit.gpgsign` is on). A commit from a non-interactive shell fails with "gpg failed to sign the data" unless the key is cached; nothing partial is written, so check `git log` and the staging state, then retry once the human says the prompt is back, or hand them the exact `git commit -s -F <file>` to run
+- **Signing needs a terminal the GPG agent can prompt on**
+  (`commit.gpgsign` is on). From a non-interactive shell, a commit fails
+  with "gpg failed to sign the data" unless the key is cached. Nothing
+  partial is written: check `git log` and the staging state, then retry
+  once the human says the prompt is back, or hand them the exact
+  `git commit -s -F <file>` to run.
 - Before committing, check `git status` for untracked files that should be staged (e.g. `Cargo.lock` after dependency changes). Use `scratch/` for temporary working files — it is in `.gitignore`
 
 ## Landing
