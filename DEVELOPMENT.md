@@ -780,7 +780,7 @@ visible flag or subcommand, so the pages cannot drift from `--help`
 unnoticed. Prose that belongs in the man page (a real DESCRIPTION, not
 the one-line `about`) goes in a doc comment on the tool's `Cli`
 struct, where it also becomes `--help`'s long output, never in the
-roff. A new tool is wired the same way:
+roff. A new tool must be wired the same way:
 `sandogasa-cli = { workspace = true, features = ["man"] }` under
 `[dev-dependencies]`, plus the test.
 
