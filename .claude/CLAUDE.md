@@ -470,10 +470,13 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
     answer.
   - Background, 2026-11-10: ebranch check-update ran one `koji`
     subprocess per subpackage (59 s for asterisk, 1.8 s batched, #111).
-- **Reusing a helper reuses its cost.** Before calling existing code from a new loop or over a bigger input, check whether it does one remote call per item; if it does, batch it as part of the change
+- **Reusing a helper reuses its cost.** Before calling existing code
+  from a new loop or over a bigger input, check whether it does one
+  remote call per item; if it does, batch it as part of the change.
+  - Background, 2026-11-10: `update-bugs` reused a per-build helper
+    over 39 builds (4 minutes, #114).
 - **Anything slow enough to notice says what it is doing**, in one line without `-v` and per request with it, so a long step never reads as a hang
 - The per-issue `/code-review` looks for these, the same as for correctness: a per-item remote call in a loop is a finding
-- Background, 2026-11-10: ebranch check-update ran one `koji` subprocess per subpackage (59 s for asterisk, 1.8 s batched, #111), and `update-bugs` reused a per-build helper over 39 builds (4 minutes, #114)
 
 ## Testing and coverage
 - Always write corresponding tests when adding or modifying features
