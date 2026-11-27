@@ -380,7 +380,10 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   - State that persists between runs but isn't config, such as
     fesco-chair's saved agenda: `dirs::state_dir()` (`$XDG_STATE_HOME`,
     by default `~/.local/state/<tool>/`).
-- When no base directory can be determined (neither the `$XDG_*` var nor `$HOME`), fail loudly with a message naming both variables — never fall back to a literal `~/...` path (an unexpanded tilde silently creates `./~/...` in the CWD)
+- **When no base directory can be found, neither from the `$XDG_*`
+  variable nor from `$HOME`, fail loudly with a message naming both.**
+  Never fall back to a literal `~/...` path: an unexpanded tilde
+  creates `./~/...` in the current directory, without a warning.
 - Files owned by *external* tools (`~/.gbp.conf`, `~/pbuilder`, `~/.fedora.upn`, bodhi-client's / debusine-client's config) must match wherever that tool actually looks — do not "fix" them to our conventions
 
 ### External tool dependencies
