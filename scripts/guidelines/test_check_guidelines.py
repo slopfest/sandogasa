@@ -74,12 +74,20 @@ class Check(unittest.TestCase):
             (5, "a date outside a Background: bullet"),
         ])
 
+    def test_a_paragraph_after_a_blank_line_in_a_bullet_is_reported(self):
+        text = doc("## S", "- **Rule.**", "  - step", "", "  An afterthought.", "", "Plain text.")
+        self.assertEqual(g.check(text), [(5, "a paragraph after a blank line inside a bullet")])
+
+    def test_fenced_code_inside_a_bullet_may_follow_a_blank_line(self):
+        text = doc("## S", "- **Rule.**", "", "  ```", "  code", "  ```", "", "- **Next.**")
+        self.assertEqual(g.check(text), [])
+
     def test_fenced_code_is_skipped(self):
         text = doc("## S", "```", "- not a rule 2026-11-01", "```", "- **Rule.**")
         self.assertEqual(g.check(text), [])
 
     def test_a_heading_or_blank_line_ends_a_bullet(self):
-        text = doc("## S", "- **Rule.**", "", "  indented paragraph 2026-11-01", "### Sub", "- **Next.**")
+        text = doc("## S", "- **Rule.**", "", "Plain 2026-11-01", "### Sub", "- **Next.**")
         self.assertEqual(g.check(text), [])
 
 

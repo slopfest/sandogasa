@@ -87,9 +87,42 @@ def bold_lead(text):
     return text[2:end] if end > 2 else None
 
 
+def detached(text):
+    """Lines of indented prose that follow a blank line inside a list.
+
+    Markdown renders such a paragraph as part of the bullet above it,
+    but it reads as an afterthought, outside the rule, and `items`
+    leaves it out of the bullet's word count. Fenced code is exempt:
+    a fence inside a bullet needs the blank line.
+    """
+    found = []
+    in_list = False
+    blank = False
+    fenced = False
+    for n, raw in enumerate(text.splitlines(), start=1):
+        if raw.lstrip().startswith("```"):
+            fenced = not fenced
+            blank = False
+            continue
+        if fenced:
+            continue
+        if not raw.strip():
+            blank = True
+            continue
+        if BULLET.match(raw):
+            in_list = True
+        elif raw.startswith(" "):
+            if blank and in_list:
+                found.append(n)
+        else:
+            in_list = False
+        blank = False
+    return sorted(found)
+
+
 def check(text):
     """Findings for one file's text, as `(line, message)` pairs."""
-    found = []
+    found = [(n, "a paragraph after a blank line inside a bullet") for n in detached(text)]
     for section, item in items(text):
         body = item.text
         if DATE.search(body) and not BACKGROUND.match(body):
@@ -106,7 +139,7 @@ def check(text):
         words = len(body.split())
         if words > MAX_BULLET_WORDS:
             found.append((item.line, f"a rule of {words} words (at most {MAX_BULLET_WORDS})"))
-    return found
+    return sorted(found)
 
 
 def main(argv):
