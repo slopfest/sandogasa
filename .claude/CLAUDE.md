@@ -293,14 +293,17 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     the remedy.
 - **A field the tool can derive from evidence it already has is filled
   from that evidence, and an explicit value that disagrees is
-  confirmed.** When no flag sets it, the derived value fills it and the
-  preview names where it came from. An explicit value that disagrees
-  with the evidence is confirmed at a terminal, defaulting to the
-  evidence. Under `--yes` or without a terminal, the explicit value is
-  kept and the mismatch is reported, never silently replaced. Examples:
-  `ebranch check-update --submit` offering `--type security` and the
-  attached CVE trackers' highest severity (#76), and a Jira issue's
-  priority taken from its CVE's severity
+  confirmed.**
+  - When no flag sets it, the derived value fills it and the preview
+    names where it came from.
+  - An explicit value that disagrees with the evidence is confirmed at
+    a terminal, defaulting to the evidence.
+  - Under `--yes` or without a terminal, the explicit value is kept and
+    the mismatch is reported, never silently replaced.
+  - Examples:
+    - `ebranch check-update --submit` offering `--type security` and
+      the attached CVE trackers' highest severity (#76);
+    - a Jira issue's priority taken from its CVE's severity.
 - **Before filing somewhere the author cannot edit afterwards, preview
   the exact payload.** Red Hat's Jira accepts only comments once an
   issue exists, unlike Bugzilla, where the reporter can edit the
