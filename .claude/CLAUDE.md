@@ -364,10 +364,22 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
 ## Files and external tools
 
 ### Per-user directories (XDG)
-- Our own per-user storage follows the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir/latest/), resolved via the `dirs` crate — never hand-roll `$XDG_*` env reading (the spec requires *ignoring relative values*, which `dirs` implements) and never hardcode `~/.config`/`~/.cache`/`~/.local/state`:
-  - config → `sandogasa_config::ConfigFile::for_tool` (`dirs::config_dir()`, i.e. `$XDG_CONFIG_HOME`, default `~/.config/<tool>/config.toml`, perms 700/600). Reads are layered: an optional system-wide `/etc/<tool>/config.toml` is merged beneath the user file (user wins per key, recursively; CLI flags override both); `save` only writes the user file, laying the struct over it so unmodeled tables such as `[defaults]` survive, and a `config` command loads with `load_user` (the user file alone) so shipped `/etc` values are never copied into the user file
-  - cache → `dirs::cache_dir()` (`$XDG_CACHE_HOME`, default `~/.cache/<tool>/`)
-  - state that persists between runs but isn't config (e.g. fesco-chair's saved agenda) → `dirs::state_dir()` (`$XDG_STATE_HOME`, default `~/.local/state/<tool>/`)
+- **Our own per-user files follow the
+  [XDG Base Directory spec](https://specifications.freedesktop.org/basedir/latest/),
+  through the `dirs` crate.** Never read `$XDG_*` by hand (the spec
+  requires ignoring relative values, which `dirs` does), and never
+  hardcode `~/.config`, `~/.cache` or `~/.local/state`.
+  - Config: `sandogasa_config::ConfigFile::for_tool`
+    (`dirs::config_dir()`, so `$XDG_CONFIG_HOME`, by default
+    `~/.config/<tool>/config.toml`, with modes 700 and 600). It is
+    layered over an optional `/etc/<tool>/config.toml`: DEVELOPMENT.md,
+    "Config files layer: /etc, then ~/.config, then the command line",
+    has how, and why a `config` command loads with `load_user`.
+  - Cache: `dirs::cache_dir()` (`$XDG_CACHE_HOME`, by default
+    `~/.cache/<tool>/`).
+  - State that persists between runs but isn't config, such as
+    fesco-chair's saved agenda: `dirs::state_dir()` (`$XDG_STATE_HOME`,
+    by default `~/.local/state/<tool>/`).
 - When no base directory can be determined (neither the `$XDG_*` var nor `$HOME`), fail loudly with a message naming both variables — never fall back to a literal `~/...` path (an unexpanded tilde silently creates `./~/...` in the CWD)
 - Files owned by *external* tools (`~/.gbp.conf`, `~/pbuilder`, `~/.fedora.upn`, bodhi-client's / debusine-client's config) must match wherever that tool actually looks — do not "fix" them to our conventions
 
