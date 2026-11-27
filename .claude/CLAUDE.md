@@ -337,7 +337,12 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     (DEVELOPMENT.md, "Only dbranch ships binaries"). Every other tool
     has no release artifact for binstall to find, so the command would
     send the reader to a 404.
-- **Never hand-edit `.github/workflows/release.yml`** — it is generated from `[workspace.metadata.dist]` in the root `Cargo.toml` by cargo-dist, the way the man pages are generated from clap. After changing any dist config, run `dist generate` and commit the result (cargo-dist installs in seconds with `cargo binstall cargo-dist`, which is also a fair demonstration of what this ships); `dist plan` shows what a release would produce and `dist build --artifacts=local --target=<triple>` builds one for real
+- **Never hand-edit `.github/workflows/release.yml`**: cargo-dist
+  generates it from `[workspace.metadata.dist]` in the root
+  `Cargo.toml`, the way the man pages are generated from clap. After
+  changing any dist config, run `dist generate` and commit the result.
+  DEVELOPMENT.md, "Only dbranch ships binaries", has how to install
+  cargo-dist and check what a release would produce.
 - Symlink the root LICENSE file into each crate subdirectory so it is included when publishing to crates.io
 - All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
 - The root `Makefile` is a discoverable task runner over cargo and `scripts/` — `make help` lists everything, `make check` is the pre-PR gate, `make release-checks` adds audit/semver/coverage. Cargo stays the build system (distro packaging drives it directly), so don't put build logic in the Makefile: a new check belongs in a script or a cargo alias, with a one-line target wrapping it so it shows up in `make help`
