@@ -159,6 +159,7 @@ check: ## Everything a pull request should pass
 	$(MAKE) check-non-exhaustive
 	$(MAKE) spell
 	$(MAKE) check-markdown
+	$(MAKE) check-guidelines
 	$(MAKE) trajectory-test
 	$(MAKE) check-guidelines-test
 	$(MAKE) packaging-test

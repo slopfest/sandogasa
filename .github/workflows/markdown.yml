@@ -23,3 +23,6 @@ jobs:
       # set is small: the default set reports 1127 findings here,
       # nearly all cosmetic or wrong.
       - uses: DavidAnson/markdownlint-cli2-action@v20
+      # The agent guidelines' own format: a bold rule per bullet, short
+      # bullets, history in Background: sub-bullets.
+      - run: make check-guidelines

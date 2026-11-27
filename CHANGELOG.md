@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### `make check` checks the agent guidelines' format
+
+The project's agent guidelines (`.claude/CLAUDE.md`, which `AGENTS.md`
+links to) had grown to bullets of up to 304 words, mixing a rule, how
+to apply it and its history, so the rules could not be reviewed
+without reading everything. The file is rewritten with one rule per
+bullet, each opening with the rule in bold, and how-tos that human
+contributors also need are moved to `DEVELOPMENT.md` and
+`CONTRIBUTING.md`. `make check-guidelines`, now part of `make check`
+and the Markdown workflow, keeps that format.
+
 ### `make check` lints Markdown
 
 A Markdown file that broke the linter's rules, such as a code fence

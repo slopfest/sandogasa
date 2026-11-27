@@ -176,6 +176,11 @@ releases and the tracker to the maintainers. In particular:
   A procedure, design note or reason a contributor also needs goes in
   DEVELOPMENT.md, RELEASING.md or CONTRIBUTING.md, and the rule here
   points to it instead of repeating it, so the two cannot drift apart.
+- **Each rule in this file opens with the rule in bold, in a sentence
+  that stands on its own**, and says how to apply it in at most 80
+  words, with steps in sub-bullets and history, the only place for a
+  date, in a `Background:` sub-bullet. `make check-guidelines`, part
+  of `make check` and the Markdown workflow, checks the format.
 - **Project text uses en-US spelling**: documentation, comments,
   messages, test names, commit messages, CHANGELOG entries and issue
   text (behavior, color, license, organization, summarize).
