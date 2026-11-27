@@ -178,7 +178,18 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   `// SPDX-License-Identifier: Apache-2.0 OR MIT`.**
 - **CLI help text (`-h` and `--help`) stays within 80 characters per
   line.**
-- **A crate's `description` must be 80 characters or fewer.** debcargo turns it into the Debian package synopsis and refuses anything longer (`summary_check_len`: `<= 80`), leaving a FIXME for a packager to override by hand — which is how three of ours were found. Leave a few characters of margin, because the cut is exact and a one-word reword at 79 trips it. Fedora never caught these: the spec carries one hand-written `Summary` for the whole workspace, so per-crate descriptions were only ever seen on crates.io. **For a tool crate the description is also clap's `about`**, so changing one means `make man` and a regenerated page, or `man_page_matches_cli` fails the next gate
+- **A crate's `description` is 80 characters or fewer, with a few to
+  spare.** debcargo turns it into the Debian package synopsis and
+  refuses anything longer (`summary_check_len`: `<= 80`), leaving a
+  FIXME for a packager to override by hand. The cut is exact, so a
+  one-word reword at 79 trips it.
+  - For a tool crate, the description is also clap's `about`, so
+    changing one means `make man` and a regenerated page, or
+    `man_page_matches_cli` fails the next gate.
+  - Background: three of ours were found through that FIXME. Fedora
+    never caught them: the spec carries one hand-written `Summary` for
+    the whole workspace, so per-crate descriptions were only ever seen
+    on crates.io.
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)
 - **Group a subcommand's flags by topic, and sort within a group** (issue #73). A subcommand with more than six options (not counting `-h`) puts each under a `help_heading`, declared group by group and alphabetically by long name within each, so the source reads like `--help`; a group may lead with its one clearly main flag (dbranch's `--stage`). Reuse the shared headings: `Selection` (what to work on), `Writing` (`--apply`, `--dry-run`, `--yes`, `--claim`), `Output` (`--json`, `--quiet`, `--explain`); name others after the tool's own vocabulary (fedora-cve-triage's `Checks`). A flattened shared group (`sandogasa_cli::NotesArgs`) takes its heading with `next_help_heading`. Six options or fewer stay one alphabetical list. Positional arguments keep their typed order, and the global flags on `Cli` (`-v`, `--refresh`) get no heading: `sandogasa_cli::parse_with_defaults` lists them last under `Global options`. `make man` turns each heading into a man page section
 - In each tool's README.md, describe subcommands in the same alphabetical order as the `Command` enum. In the root README.md, list tools alphabetically, then library crates alphabetically
