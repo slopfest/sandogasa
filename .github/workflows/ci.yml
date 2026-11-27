@@ -42,6 +42,7 @@ jobs:
       # with the line counter stubbed; the test that counts a real tree
       # needs tokei, which this runner lacks, and is skipped here.
       - run: make trajectory-test
+      - run: make check-guidelines-test
 
   packaging:
     name: packaging sandbox

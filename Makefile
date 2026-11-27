@@ -17,7 +17,7 @@ MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
 
 .PHONY: help
 help: ## List the available targets
-	@awk 'BEGIN {FS = ":.*## "} /^[a-z][a-z-]*:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-z][a-z-]*:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: build
 build: ## Build the workspace (debug)
@@ -111,6 +111,14 @@ spell: ## Check spelling, en-US (needs typos-cli; see _typos.toml)
 markdown: ## Lint Markdown (needs markdownlint-cli2; see .markdownlint-cli2.jsonc)
 	./scripts/check-markdown.sh
 
+.PHONY: check-guidelines
+check-guidelines: ## Check that the agent guidelines (CLAUDE.md) stay easy to vet
+	python3 -B scripts/guidelines/check_guidelines.py .claude/CLAUDE.md
+
+.PHONY: check-guidelines-test
+check-guidelines-test: ## Test check-guidelines's script
+	python3 -B -m unittest discover -s scripts/guidelines
+
 .PHONY: check-deprecated
 check-deprecated: ## Fail on deprecated API use, with all features on
 	./scripts/check-deprecated.sh
@@ -152,6 +160,7 @@ check: ## Everything a pull request should pass
 	$(MAKE) spell
 	$(MAKE) markdown
 	$(MAKE) trajectory-test
+	$(MAKE) check-guidelines-test
 	$(MAKE) packaging-test
 
 .PHONY: release-checks
