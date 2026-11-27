@@ -505,7 +505,17 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   grows with a little headroom left (DEVELOPMENT.md, "The coverage
   gate, and how it got to 85%"). Binary `src/main.rs` files are
   excluded from the measurement (`.cargo/config.toml`).
-- **Check coverage of the files a change touches when it closes an issue**, in the same sitting as the per-issue `/code-review`: `make cov-diff` lists the line coverage of each changed file against `origin/main` (`BASE=<ref>` for another), marking any under the 85% gate; `make cov-crate CRATE=<name>` gives a whole crate. A file the change leaves below the gate gets the missing tests in that commit, or a stated reason it can't (code that only drives an external tool with no seam to fake it). Reviews check correctness, not coverage: v0.28.0's release gate came up about 950 lines short, all in code that had gone through an issue's commit
+- **Check coverage of the files a change touches when it closes an
+  issue**, in the same sitting as the per-issue `/code-review`. A file
+  the change leaves below the gate gets the missing tests in that
+  commit, or a stated reason it can't (code that only drives an
+  external tool with no seam to fake it).
+  - `make cov-diff` lists the line coverage of each changed file
+    against `origin/main` (`BASE=<ref>` for another), marking any under
+    the 85% gate; `make cov-crate CRATE=<name>` gives a whole crate.
+  - Background: reviews check correctness, not coverage. v0.28.0's
+    release gate came up about 950 lines short, all in code that had
+    gone through an issue's commit.
 
 ## Issues and releases
 - **Label every issue when filing it** (CONTRIBUTING.md, "Issues and labels", is the contributor-facing summary of this and the milestone rule below; keep the two in step): one kind (`bug` or `enhancement`; `documentation` or `dependencies` when that is all it is) and a `tool::<name>` or `crate::<name>` label for each tool or library crate it touches. A new tool or crate gets its label when it lands. The kind matches the closing commit's word, `Fixes #N` for a bug and `Resolves #N` for an enhancement. The issue sweep also looks for unlabeled ones (`gh issue list --state all --json number,labels -q '[.[]|select(.labels|length==0)|.number]'`): on 2026-11-10, 35 issues from #1 to #123 had none
