@@ -43,6 +43,19 @@ releases and the tracker to the maintainers. In particular:
     it. Their only involuntary signal that a commit happened is the GPG
     prompt asking them to unlock a timed-out key, by which point the
     certification has been made in their name.
+- **A long series of commits that each make the same kind of change
+  can be approved in batches, not one by one**, for a mechanical
+  series such as a format pass over a rules file, one commit per rule.
+  - Show each batch: every commit message in it, and each change
+    readable without the diff.
+  - Commit a batch only once the human approves that batch; approving
+    one doesn't approve the next.
+  - Pushing the branch, and landing it, each need the human's
+    go-ahead as usual.
+  - A commit that does more than the series' kind of change (a new
+    rule, a changed meaning) is shown on its own, as usual.
+  - Background: first used for this file's readability rewrite (88
+    commits, PR #284, 2026-11-27).
 - **Commit with `git commit -s` and an `Assisted-by:` trailer, and never
   add a `Signed-off-by:` or `Co-Authored-By:` of your own.**
   - `Assisted-by: <agent>:<model-id>` names the agent and the exact
