@@ -311,9 +311,9 @@ ships keeps its tree pure Rust and the runner free of a C toolchain.
 `.github/workflows/release.yml` is generated: change
 `[workspace.metadata.dist]` and run `dist generate`, never edit the YAML.
 `dist plan` shows what a release would produce and
-`dist build --artifacts=local --target=<triple>` builds one for real. cargo-dist
-installs in seconds with `cargo binstall cargo-dist`, which is also a
-fair demonstration of what this ships.
+`dist build --artifacts=local --target=<triple>` builds one for real.
+cargo-dist itself installs in seconds with `cargo binstall cargo-dist`,
+which is also a fair demonstration of what this ships.
 
 ## Nothing we print ends a line in whitespace
 
