@@ -331,15 +331,16 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     narrating those buries the decisions under transport. There,
     `--verbose` names each request in a line, and anything written is
     previewed in full (the rule above).
-- Any tool that closes bugs must also offer to reassign them
-  (`assigned_to`) to the person running the command — triaging is a
-  benefit in itself, and the person cleaning up stale bugs may want
-  the credit. For Bugzilla tools, use `sandogasa_bugzilla::claim`
-  (`resolve_claim` + `apply_claim`) instead of reimplementing the
-  decision matrix: an explicit `--claim` flag claims without
-  prompting, `-y` without the flag declines (non-interactive runs
-  must not reassign unasked), no configured email skips silently,
-  otherwise prompt interactively
+- **A tool that closes bugs also offers to reassign them
+  (`assigned_to`) to the person running it.** Triaging is a benefit in
+  itself, and whoever cleans up stale bugs may want the credit.
+  - Bugzilla tools use `sandogasa_bugzilla::claim` (`resolve_claim` and
+    `apply_claim`) instead of reimplementing the decision:
+    - an explicit `--claim` flag claims without prompting;
+    - `-y` without the flag declines, since non-interactive runs must
+      not reassign unasked;
+    - no configured email skips it silently;
+    - otherwise it prompts.
 
 ## Workspace layout
 - Library crates go in `crates/`, binary crates go in `tools/`. A tool crate may carry a `src/lib.rs` so its binary and tests share code; that library target is internal to the tool, not a public API (see the versioning rule under Git)
