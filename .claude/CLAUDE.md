@@ -231,49 +231,16 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   instead of human-readable text.
 - **Each tool supports `--version`, and its `--help` header shows its
   name, version and short description** (the `Cargo.toml`
-  `description`).
-  - Declare it in clap with:
-
-    ```rust
-    #[command(version, long_version = sandogasa_cli::version!(), about,
-              long_about = None, max_term_width = 80,
-              before_help = sandogasa_cli::banner!())]
-    ```
-
-  - Add a three-line `build.rs` calling
-    `sandogasa_build::emit_git_describe()`, with
-    `sandogasa-build = { workspace = true }` under
-    `[build-dependencies]`. The build script must never fail: no git,
-    or no checkout, means no describe.
-  - `version!()` is the checkout's `git describe --tags --dirty
-    --always` when built from one (`v0.22.0-74-ge11cff1-dirty`), and
-    the crate version otherwise, so `--version` and the `--help` header
-    say which checkout a dev binary is.
-  - `-V` and the man pages keep the plain crate version
-    (`sandogasa_cli::man` strips the long version), so pages do not
-    churn per commit and tarball builds stay reproducible.
-  - `max_term_width = 80` is what enforces the 80-column help rule. It
-    needs clap's `wrap_help` cargo feature, set in the workspace
-    `Cargo.toml`; without it, clap compiles out all wrapping and the
-    attribute does nothing, without a warning.
-  - Clap never wraps the `Usage:` line itself, so a subcommand with
-    several long positional value names can still exceed 80 columns:
-    keep value names short (`PATH`, not `OUTPUT_FILE_PATH`).
+  `description`). DEVELOPMENT.md, "Every tool's `--version`, help
+  header and man page", has the clap attribute and `build.rs` they
+  need, and why the 80-column limit depends on clap's `wrap_help`
+  feature.
 - **Every tool ships a committed man page generated from its clap
-  definition, and nobody edits a page by hand.** The page is
-  `tools/<tool>/man/<tool>.1`, made by `sandogasa_cli::man`: one page
-  per tool, with each subcommand as a `.SS` subsection.
-  - After changing any flag, subcommand, doc comment or `about` string,
-    run `make man` (`scripts/gen-man.sh`) and commit the result.
-  - A `man_page_matches_cli` test in each tool's `main.rs` fails when a
-    page stops documenting a visible flag or subcommand, so the pages
-    cannot drift from `--help` unnoticed.
-  - Prose that belongs in the man page (a real DESCRIPTION, not the
-    one-line `about`) goes in a doc comment on the tool's `Cli` struct,
-    where it also becomes `--help`'s long output, never in the roff.
-  - A new tool is wired the same way:
-    `sandogasa-cli = { workspace = true, features = ["man"] }` under
-    `[dev-dependencies]`, plus the test.
+  definition, and nobody edits a page by hand.** After changing any
+  flag, subcommand, doc comment or `about` string, run `make man` and
+  commit the result; a `man_page_matches_cli` test fails otherwise.
+  The same DEVELOPMENT.md section has where the page's prose goes and
+  how a new tool is wired.
 - **Don't throw away the result of expensive computation.** When a
   tool detects a fixable problem mid-run (stale metadata, missing
   credentials or session, a transient failure), it offers to fix it on

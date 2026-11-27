@@ -719,6 +719,53 @@ override (`FORGEJO_TOKEN`, `GITLAB_TOKEN`, `GITHUB_TOKEN`,
 `FORGEJO_TOKEN_FORGE_FEDORAPROJECT_ORG`), so under systemd a
 `LoadCredential` drop-in works without any config file at all.
 
+## Every tool's `--version`, help header and man page
+
+Every tool's `--help` header shows its name, version and short
+description (the `Cargo.toml` `description`), and `--version` says
+which checkout a development binary was built from. Each tool's clap
+definition declares:
+
+```rust
+#[command(version, long_version = sandogasa_cli::version!(), about,
+          long_about = None, max_term_width = 80,
+          before_help = sandogasa_cli::banner!())]
+```
+
+with a three-line `build.rs` calling
+`sandogasa_build::emit_git_describe()`, and
+`sandogasa-build = { workspace = true }` under `[build-dependencies]`.
+The build script must never fail: no git, or no checkout, means no
+describe.
+
+`version!()` is the checkout's `git describe --tags --dirty --always`
+when built from one (`v0.22.0-74-ge11cff1-dirty`), and the crate
+version otherwise. `-V` and the man pages keep the plain crate version
+(`sandogasa_cli::man` strips the long version), so pages do not churn
+per commit and tarball builds stay reproducible.
+
+`max_term_width = 80` is what enforces the 80-column help rule. It
+needs clap's `wrap_help` cargo feature, set in the workspace
+`Cargo.toml`; without it, clap compiles out all wrapping and the
+attribute does nothing, without a warning. Clap never wraps the
+`Usage:` line itself, so a subcommand with several long positional
+value names can still exceed 80 columns: keep value names short
+(`PATH`, not `OUTPUT_FILE_PATH`).
+
+Each tool's man page, `tools/<tool>/man/<tool>.1`, is generated from
+its clap definition by `sandogasa_cli::man`: one page per tool, with
+each subcommand as a `.SS` subsection. After changing any flag,
+subcommand, doc comment or `about` string, run `make man`
+(`scripts/gen-man.sh`) and commit the result. A `man_page_matches_cli`
+test in each tool's `main.rs` fails when a page stops documenting a
+visible flag or subcommand, so the pages cannot drift from `--help`
+unnoticed. Prose that belongs in the man page (a real DESCRIPTION, not
+the one-line `about`) goes in a doc comment on the tool's `Cli`
+struct, where it also becomes `--help`'s long output, never in the
+roff. A new tool is wired the same way:
+`sandogasa-cli = { workspace = true, features = ["man"] }` under
+`[dev-dependencies]`, plus the test.
+
 ## A flag name means the same thing in every tool
 
 Someone who has learned `--dry-run` in one tool should be able to rely
