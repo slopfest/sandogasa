@@ -136,13 +136,15 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   - This applies whatever the size of the bump: a pre-1.0 minor bump
     may still be the right vehicle, but consumers shouldn't have to
     read the source diff to find out what they need to update.
-- A README describes the tool **as it is now**. Keep out of it: rationale for
-  recent changes, comparisons to how something used to behave, and arguments for
-  why a default or a number is what it is. Those belong in `CHANGELOG.md` (what
-  changed and why) and the tool's `DEVELOPMENT.md` (design decisions and rules
-  future work must follow). Tells that a README has drifted into justifying
-  rather than describing: "used to", "previously", "which matters because", "is
-  the point", "not something to do"
+- **A README describes the tool as it is now.** Keep out of it:
+  rationale for recent changes, comparisons to how something used to
+  behave, and arguments for why a default or a number is what it is.
+  Those belong in `CHANGELOG.md` (what changed and why) and the tool's
+  `DEVELOPMENT.md` (design decisions and rules future work must
+  follow).
+  - Tells that a README has drifted into justifying rather than
+    describing: "used to", "previously", "which matters because", "is
+    the point", "not something to do".
 - Don't open a README with the one narrow use case that prompted the work.
   Describe the general problem the tool addresses, then let the specific cases
   follow — a tool that handles five kinds of misfiled CVE shouldn't read as if
