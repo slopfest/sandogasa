@@ -27,7 +27,7 @@ sections are in the order they apply.
   - dependencies: `make find-api-use PATTERN='<regex>'` searches every locked crate's source, since lints are capped for dependency code and a dependency calling the API never warns. Matches in the advisory crate's own tests and changelog are expected; anything else needs a look
 
   Record the outcome in the release commit
-- Before tagging, if any workspace dependency uses a version range, re-test both the floor and the ceiling (see the Dependencies section's range policy)
+- Before tagging, if any workspace dependency uses a version range, re-test both the floor and the ceiling (see "Security advisories whose fix isn't packaged in Fedora yet" below)
 - Before a semver-breaking release, check for deps that themselves require a major version bump and consider bundling those upgrades with your own breaking release. Use `cargo update --dry-run --verbose` and look for `Unchanged <crate> (available: <new major>)` lines — do NOT use `cargo outdated`, which doesn't understand `[workspace.dependencies]` inheritance and falsely reports "All dependencies are up to date" for this workspace
 
 - **Security advisories whose fix isn't packaged in Fedora yet** — decide by actual exposure, not the paper severity:
