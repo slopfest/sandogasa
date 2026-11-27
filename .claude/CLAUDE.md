@@ -4,10 +4,11 @@
 Most of this file is the maintainer's procedure: landing, releases,
 publishing, the issue sweep, milestones and labels. If you are an
 agent helping someone send a pull request from their fork, follow
-`CONTRIBUTING.md` at the repository root, and the sections below from
-"Commit messages, CHANGELOG and documentation" through "Testing and
-coverage"; leave landing, releases and the tracker to the maintainers.
-In particular:
+`CONTRIBUTING.md` at the repository root, and these sections below:
+"Commit messages, CHANGELOG and documentation", "Code style", "CLI
+behavior", "Workspace layout", "Files and external tools",
+"Performance" and "Testing and coverage". Leave landing, dependencies,
+releases and the tracker to the maintainers. In particular:
 - **Open an issue first**, or use the existing one, and link it from
   the pull request: `Fixes #N` for a bug, `Resolves #N` for a feature.
   A pull request with no linked issue fails the *Contribution checks*
