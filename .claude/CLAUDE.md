@@ -316,7 +316,12 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   (DEVELOPMENT.md, "A tool crate's library target is internal, not
   semver surface").
 - **Every crate, library or tool, has its own README.md.**
-- **hs-relmon and cpu-sig-tracker do the same job for different SIGs** (Hyperscale and Proposed Updates; converging them is #206). A feature added to one belongs in both: its logic in sandogasa-cbs, each tool a thin caller, as `review`, `notify` and `unbuilt` are; or, when the other can't take it yet, an issue for it there
+- **hs-relmon and cpu-sig-tracker do the same job for different SIGs,
+  so a feature added to one belongs in both.** They serve Hyperscale
+  and Proposed Updates; converging them is #206.
+  - Put the logic in sandogasa-cbs, with each tool a thin caller, as
+    `review`, `notify` and `unbuilt` are.
+  - When the other tool can't take it yet, file an issue for it there.
 - **A public struct that derives `Deserialize` in a library crate is `#[non_exhaustive]`**, so a field the API grows is not a breaking release. `scripts/check-non-exhaustive.sh` (`make check`) enforces it, listing the exemptions (formats the workspace defines itself); test fixtures for a model deserialize `serde_json::json!({…})` instead of using a literal. See DEVELOPMENT.md, "A response model is `#[non_exhaustive]`"
 - Tool README.md files must include an Installation section with `cargo install <crate>` (and any required external tools like `fedrq` or `koji`). Mention `cargo binstall` **only** for a tool that actually ships prebuilt binaries — that is, one carrying `[package.metadata.dist] dist = true`, which is `dbranch` alone today. Every other tool has no release artifact for binstall to find, so offering the command would send the reader to a 404
 - **Never hand-edit `.github/workflows/release.yml`** — it is generated from `[workspace.metadata.dist]` in the root `Cargo.toml` by cargo-dist, the way the man pages are generated from clap. After changing any dist config, run `dist generate` and commit the result (cargo-dist installs in seconds with `cargo binstall cargo-dist`, which is also a fair demonstration of what this ships); `dist plan` shows what a release would produce and `dist build --artifacts=local --target=<triple>` builds one for real
