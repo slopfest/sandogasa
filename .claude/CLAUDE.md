@@ -315,7 +315,7 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   that library target is internal to the tool, not a public API
   (DEVELOPMENT.md, "A tool crate's library target is internal, not
   semver surface").
-- Each crate (library or tool) must have its own README.md
+- **Every crate, library or tool, has its own README.md.**
 - **hs-relmon and cpu-sig-tracker do the same job for different SIGs** (Hyperscale and Proposed Updates; converging them is #206). A feature added to one belongs in both: its logic in sandogasa-cbs, each tool a thin caller, as `review`, `notify` and `unbuilt` are; or, when the other can't take it yet, an issue for it there
 - **A public struct that derives `Deserialize` in a library crate is `#[non_exhaustive]`**, so a field the API grows is not a breaking release. `scripts/check-non-exhaustive.sh` (`make check`) enforces it, listing the exemptions (formats the workspace defines itself); test fixtures for a model deserialize `serde_json::json!({…})` instead of using a literal. See DEVELOPMENT.md, "A response model is `#[non_exhaustive]`"
 - Tool README.md files must include an Installation section with `cargo install <crate>` (and any required external tools like `fedrq` or `koji`). Mention `cargo binstall` **only** for a tool that actually ships prebuilt binaries — that is, one carrying `[package.metadata.dist] dist = true`, which is `dbranch` alone today. Every other tool has no release artifact for binstall to find, so offering the command would send the reader to a 404
