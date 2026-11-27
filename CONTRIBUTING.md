@@ -103,6 +103,14 @@ something, the entry's heading ends with `(breaking)` — or a narrower
 form like `(breaking CLI)` / `(breaking JSON)` — and the body enumerates
 what broke, with a migration hint.
 
+**Leave `rust-version` alone.** The workspace's minimum supported Rust
+is the oldest one the code has to build with in Fedora, RHEL (for
+EPEL) and Debian, so a newer language feature or std API can make a
+package unbuildable there. Raising it is the maintainers' decision:
+ask in the issue first. DEVELOPMENT.md, "The MSRV is 1.95, and EPEL
+waits for RHEL's rust to catch up", explains how it is set, and
+`make msrv-check` builds with it.
+
 Before opening a pull request, please also run:
 
 ```sh

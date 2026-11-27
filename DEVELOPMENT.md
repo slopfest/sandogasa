@@ -228,6 +228,21 @@ a function that might grow options takes an options struct.
 
 ## The MSRV is 1.95, and EPEL waits for RHEL's rust to catch up
 
+The minimum supported Rust is set by where the code has to build, not
+by the developer's toolchain:
+
+- Fedora rawhide: `fedrq pkgs -b rawhide -F nev rust`;
+- the *released* RHEL 9 and RHEL 10 minors, which EPEL builds against:
+  `fedrq pkgs -b ubi9 -F nev rust`, and `-b ubi10`;
+- Debian's rustc, for dbranch: `apt-cache policy rustc` (see "Debian
+  is a ceiling too" below).
+
+Before adopting a language feature or std API, look up the release
+that stabilized it. Raising `rust-version` above any of them is a
+deliberate decision, recorded in CHANGELOG.md and TODO.md. The rest of
+this section is how 1.95 was decided, and how to read each archive,
+including a pre-release EPEL minor's.
+
 `sandogasa-0.24.1` failed to build for EPEL 9 with `` `if let` guards
 are experimental``: fedora-cve-triage's bundled-library matching has a
 match arm guarded by `if let Some(snapshot) = snapshot_date(&version)`,
