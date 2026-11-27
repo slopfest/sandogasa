@@ -541,4 +541,6 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   - An issue closed by a landed commit's own keyword needs no comment:
     the commit and its pull request are already on the issue's
     timeline.
-- **Releases follow `RELEASING.md`** at the repository root: the sweeps, gates, publishing, tagging and release-asset checks. Read it in full before cutting one
+- **Releases follow `RELEASING.md`** at the repository root: the
+  sweeps, gates, publishing, tagging and release-asset checks. Read it
+  in full before cutting one.
