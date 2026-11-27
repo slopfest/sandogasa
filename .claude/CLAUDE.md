@@ -316,19 +316,21 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     exists, unlike Bugzilla, where the reporter can edit the
     description.
 - **Offer dbranch's `--explain` where a person could do the steps by
-  hand.** When a tool's steps map to commands a person could run (`git`,
-  `gbp`, `cbs`, `koji`, `fedpkg`, `mock`), give it an opt-in `--explain`
-  that narrates each step and shows the exact command before running
-  it, pausing so the user can follow along, with `--dry-run` showing the
-  same steps without running anything. A plain run just does the work.
-  Since dbranch, this is the default for such tools: it is how someone
-  learns the workflow, or checks the tool, and the printed commands must
-  be enough to do it by hand (see `tools/dbranch/CLAUDE.md`). Don't add
-  it where the steps are API requests nobody would replay by hand, such
-  as a JQL search or a JSON body sent to Jira or Bodhi: narrating those
-  buries the decisions under transport. There, `--verbose` names each
-  request in a line, and anything written is previewed in full (the
-  rule above)
+  hand.** When a tool's steps map to commands a person could run
+  (`git`, `gbp`, `cbs`, `koji`, `fedpkg`, `mock`), give it an opt-in
+  `--explain` that narrates each step and shows the exact command
+  before running it, pausing so the user can follow along. `--dry-run`
+  shows the same steps without running anything, and a plain run just
+  does the work.
+  - This has been the default for such tools since dbranch: it is how
+    someone learns the workflow, or checks the tool, and the printed
+    commands must be enough to do it by hand (see
+    `tools/dbranch/CLAUDE.md`).
+  - Don't add it where the steps are API requests nobody would replay
+    by hand, such as a JQL search or a JSON body sent to Jira or Bodhi:
+    narrating those buries the decisions under transport. There,
+    `--verbose` names each request in a line, and anything written is
+    previewed in full (the rule above).
 - Any tool that closes bugs must also offer to reassign them
   (`assigned_to`) to the person running the command — triaging is a
   benefit in itself, and the person cleaning up stale bugs may want
