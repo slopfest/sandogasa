@@ -174,7 +174,8 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   rather than scrolling past.
   - Background: before that (2026-10-01), a complex-type warning rode
     along in a commit and was only noticed days later.
-- Every source file must start with `// SPDX-License-Identifier: Apache-2.0 OR MIT`
+- **Every source file starts with
+  `// SPDX-License-Identifier: Apache-2.0 OR MIT`.**
 - CLI help text (`-h` and `--help`) must not exceed 80 characters per line
 - **A crate's `description` must be 80 characters or fewer.** debcargo turns it into the Debian package synopsis and refuses anything longer (`summary_check_len`: `<= 80`), leaving a FIXME for a packager to override by hand — which is how three of ours were found. Leave a few characters of margin, because the cut is exact and a one-word reword at 79 trips it. Fedora never caught these: the spec carries one hand-written `Summary` for the whole workspace, so per-crate descriptions were only ever seen on crates.io. **For a tool crate the description is also clap's `about`**, so changing one means `make man` and a regenerated page, or `man_page_matches_cli` fails the next gate
 - Keep the `Command` enum variants in `main.rs` sorted alphabetically (this determines the order in `--help` output)
