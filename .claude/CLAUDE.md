@@ -426,7 +426,9 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   Debian's rustc, and record the answers in TODO.md. DEVELOPMENT.md,
   "Dependency bumps clear Fedora and Debian first", has how to check
   each.
-- Routine `cargo update` (semver-compatible bumps) should be a separate commit from feature work so it is easy to revert if something regresses
+- **A routine `cargo update` (semver-compatible bumps) is a commit of
+  its own**, separate from feature work, so it is easy to revert if
+  something regresses.
 - After any dependency change, run `cargo clippy --workspace && cargo cov` to verify nothing broke
 - The workspace declares its minimum supported Rust in `[workspace.package] rust-version` (every member inherits it), and `make msrv-check` — part of `make release-checks` — builds the whole workspace, tests included, with exactly that toolchain (`rustup toolchain install <msrv>` once). It is the only check that catches *syntax* newer than the MSRV: clippy's `incompatible_msrv` lint reads `rust-version` and flags std APIs, but a language feature such as an `if let` guard passes every lint and fails only under the old compiler. v0.24.1 shipped with one and failed to build for EPEL 9 that way
 - **The MSRV is set by where the code has to build, not by the developer's toolchain**: Fedora rawhide (`fedrq pkgs -b rawhide -F nev rust`), the *released* RHEL 9 and RHEL 10 minors (`fedrq pkgs -b ubi9 -F nev rust`, `-b ubi10`), and Debian's rustc for dbranch (`apt-cache policy rustc`). Before adopting a language feature or std API, look up the release that stabilized it. Raising `rust-version` above any of them is a deliberate decision, recorded in CHANGELOG.md and TODO.md. DEVELOPMENT.md, "The MSRV is 1.95, and EPEL waits for RHEL's rust to catch up", has how to read each, including a pre-release EPEL minor's
