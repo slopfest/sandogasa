@@ -414,7 +414,12 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   mitigation**, not just the version: a "patched" release may only
   deprecate the vulnerable API. RELEASING.md, "Advisories and
   dependency ranges", says how to check that nothing we ship calls it.
-- **A security advisory whose fix isn't packaged in Fedora yet is decided by actual exposure**, not the paper severity: with real exposure, bump to the fixed version at once and note the missing Fedora package in TODO.md; when it is not exploitable for us, prefer a short-lived version range spanning Fedora's version up to the fix (`quick-xml = ">=0.40, <0.42"`), with both ends tested. The full policy, and the re-test every release owes a range, is in `RELEASING.md`, "Advisories and dependency ranges"
+- **A security advisory whose fix isn't packaged in Fedora yet is
+  decided by actual exposure, not the paper severity.** With real
+  exposure, bump to the fixed version at once; when it is not
+  exploitable for us, prefer a short-lived version range up to the
+  fix. RELEASING.md, "Advisories and dependency ranges", has the full
+  policy, and the re-test every release owes a range.
 - **A dependency bump has to clear Fedora's and Debian's archives** (dbranch is headed for Debian): check that both carry the new version, and that `rust-version` stays at or under Debian's rustc, before taking it, and record the answers in TODO.md. How to check each is in DEVELOPMENT.md, "Dependency bumps clear Fedora and Debian first"
 - Routine `cargo update` (semver-compatible bumps) should be a separate commit from feature work so it is easy to revert if something regresses
 - After any dependency change, run `cargo clippy --workspace && cargo cov` to verify nothing broke
