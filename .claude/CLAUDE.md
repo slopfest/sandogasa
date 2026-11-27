@@ -42,7 +42,11 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   partial is written: check `git log` and the staging state, then retry
   once the human says the prompt is back, or hand them the exact
   `git commit -s -F <file>` to run.
-- Before committing, check `git status` for untracked files that should be staged (e.g. `Cargo.lock` after dependency changes). Use `scratch/` for temporary working files — it is in `.gitignore`
+- **Before committing, check `git status` for untracked files that
+  belong in the commit**, such as `Cargo.lock` after a dependency
+  change.
+- **Keep temporary working files in `scratch/`**, which `.gitignore`
+  leaves out.
 
 ## Landing
 - **A commit lands through a pull request when it closes an issue or changes what other code relies on; other commits are pushed to `main`.** Through a pull request: a commit carrying `Fixes #N` or `Resolves #N`, and one that changes a library crate's behavior, a config or file format, or how a tool keeps credentials, even a `Refs #N` step toward an issue or one with no issue. Once the commit is approved, push it to a branch of this repository (`fix/<N>-<topic>`), open a pull request from the template with the issue linked by the commit's own word (`Refs #N` for a step; with no issue, mark the pull request `no-issue`), and wait for its checks (CI, CodeQL, Spelling, Markdown and the Contribution checks), so a failure is found before it reaches `main`. Each step of an issue gets a pull request of its own, landed before the next step is built, so the human can try it in between. Land it, when the human says to, by fast-forward: `git push origin <branch>:main`. GitHub then marks the pull request merged and closes the issue, and the commit keeps its hash and signature, which none of the merge button's methods do ("Rebase and merge" rewrites the commits too). Delete the branch afterwards. Documentation fixes, tests an earlier commit owed, small fixes within one tool, and release commits still go straight to `main`. Opening the pull request writes to the forge, so ask first, as for a push. First done for #237 (PR #247) on 2026-11-24. Steps toward an issue went straight to `main` until 2026-11-26, when the first step of #259 (d4904590), a new sandogasa-config module and a file every tool reads, landed that way, and the next push cancelled its CI run, so its checks ran only once it was on `main`
