@@ -274,23 +274,23 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   - A new tool is wired the same way:
     `sandogasa-cli = { workspace = true, features = ["man"] }` under
     `[dev-dependencies]`, plus the test.
-- Don't throw away the result of expensive computation. When a tool
-  detects a fixable problem mid-run (stale metadata, missing
-  credentials/session, a transient failure), it should offer to fix
-  it on the user's behalf and continue with the already-computed
-  state — not print "here's how to fix it, then rerun" and discard
-  the work. Corollaries:
-  - Validate preconditions that are cheap to check (external tools,
-    auth sessions, output-path writability) *before* starting
-    expensive work, so failures surface in seconds, not minutes
-  - When a long run does fail partway, persist partial state and
-    support resuming from it (retrying the failed step first),
-    replacing the final output only on success
-  - Interactive fix-it prompts should default to the safe productive
-    choice (e.g. "fix and continue" default yes; "continue with bad
-    data" default no), and must not fire in `--json` mode or when
-    stdin isn't a terminal — non-interactive runs keep the
-    warn-and-continue or fail-with-remedy behavior
+- **Don't throw away the result of expensive computation.** When a
+  tool detects a fixable problem mid-run (stale metadata, missing
+  credentials or session, a transient failure), it offers to fix it on
+  the user's behalf and continues with the state it already computed,
+  rather than printing "here's how to fix it, then rerun" and
+  discarding the work. It follows that:
+  - cheap preconditions (external tools, auth sessions, output-path
+    writability) are checked *before* expensive work starts, so
+    failures surface in seconds, not minutes;
+  - a long run that fails partway persists its partial state and can
+    resume from it, retrying the failed step first, and replaces the
+    final output only on success;
+  - an interactive fix-it prompt defaults to the safe productive choice
+    ("fix and continue" defaults to yes, "continue with bad data" to
+    no), and never fires in `--json` mode or when stdin isn't a
+    terminal, where runs keep warning and continuing, or failing with
+    the remedy.
 - **A field the tool can derive from evidence it already has is filled
   from that evidence, and an explicit value that disagrees is
   confirmed.** When no flag sets it, the derived value fills it and the
