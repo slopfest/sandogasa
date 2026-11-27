@@ -305,14 +305,16 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
       the attached CVE trackers' highest severity (#76);
     - a Jira issue's priority taken from its CVE's severity.
 - **Before filing somewhere the author cannot edit afterwards, preview
-  the exact payload.** Red Hat's Jira accepts only comments once an
-  issue exists, unlike Bugzilla, where the reporter can edit the
-  description. So the preview shows every field and the full
+  the exact payload.** The preview shows every field and the full
   description as they will appear, not a summary, and filing needs a
-  confirmation at a terminal. `--yes` alone does not file into such a
-  place: it also needs its own explicit flag (the same reasoning as
-  `-y` alone not reassigning bugs), so a scripted run files only when
-  it was told to file
+  confirmation at a terminal.
+  - `--yes` alone does not file into such a place: it also needs its
+    own explicit flag, so a scripted run files only when it was told to
+    file. The reasoning is the same as for `-y` alone not reassigning
+    bugs.
+  - Background: Red Hat's Jira accepts only comments once an issue
+    exists, unlike Bugzilla, where the reporter can edit the
+    description.
 - **Offer dbranch's `--explain` where a person could do the steps by
   hand.** When a tool's steps map to commands a person could run (`git`,
   `gbp`, `cbs`, `koji`, `fedpkg`, `mock`), give it an opt-in `--explain`
