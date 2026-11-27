@@ -496,7 +496,9 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   a foreign architecture from the host's, and compare architectures
   only through `sandogasa_cbs::builds::host_rpm_arch`; the same
   DEVELOPMENT.md section has why.
-- Per commit, run `cargo fmt` and `cargo clippy --workspace`; `cargo test` is recommended for code you touched. Fast prototyping commits don't need full coverage checks
+- **Per commit, run `cargo fmt` and `cargo clippy --workspace`**, and
+  `cargo test` for code you touched. Fast prototyping commits don't
+  need full coverage checks.
 - Run `cargo cov` at stability points (before tagging, and when catching a feature up for its README/CHANGELOG entry); line coverage must stay at or above 85%, a gate ratcheted up as coverage grows with a little headroom left. Binary `src/main.rs` files are excluded from the measurement (`.cargo/config.toml`)
 - **Check coverage of the files a change touches when it closes an issue**, in the same sitting as the per-issue `/code-review`: `make cov-diff` lists the line coverage of each changed file against `origin/main` (`BASE=<ref>` for another), marking any under the 85% gate; `make cov-crate CRATE=<name>` gives a whole crate. A file the change leaves below the gate gets the missing tests in that commit, or a stated reason it can't (code that only drives an external tool with no seam to fake it). Reviews check correctness, not coverage: v0.28.0's release gate came up about 950 lines short, all in code that had gone through an issue's commit
 
