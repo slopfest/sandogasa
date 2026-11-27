@@ -145,10 +145,10 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   - Tells that a README has drifted into justifying rather than
     describing: "used to", "previously", "which matters because", "is
     the point", "not something to do".
-- Don't open a README with the one narrow use case that prompted the work.
-  Describe the general problem the tool addresses, then let the specific cases
-  follow — a tool that handles five kinds of misfiled CVE shouldn't read as if
-  it only handles bundled JavaScript
+- **Don't open a README with the one narrow use case that prompted the
+  work.** Describe the general problem the tool addresses, then let
+  the specific cases follow: a tool that handles five kinds of
+  misfiled CVE shouldn't read as if it only handles bundled JavaScript.
 - When a change lands, put the reasoning in the CHANGELOG entry, put any rule
   future work must follow in `DEVELOPMENT.md`, and give the README only the
   resulting behavior. Documentation that survived a behavior change unedited is
