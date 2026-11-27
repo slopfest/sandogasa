@@ -211,7 +211,9 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     `sandogasa_cli::parse_with_defaults` lists them last under
     `Global options`.
   - `make man` turns each heading into a man page section.
-- In each tool's README.md, describe subcommands in the same alphabetical order as the `Command` enum. In the root README.md, list tools alphabetically, then library crates alphabetically
+- **Describe a tool's subcommands in its README.md in the same
+  alphabetical order as the `Command` enum.** In the root README.md,
+  list tools alphabetically, then library crates alphabetically.
 - Order definitions in source files top-down: module docs and imports, public types (structs/enums/traits), public functions, trait impls (grouped by type), private helpers, `#[cfg(test)] mod tests`. Within each group, define callees before callers so a reader encounters helpers before the functions that use them. Review file order before committing
 
 ## CLI behavior
