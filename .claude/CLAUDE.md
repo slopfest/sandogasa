@@ -154,7 +154,17 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   resulting behavior in the README.** Documentation that survived a
   behavior change unedited is worse than none: check whether an
   existing section now describes something that is no longer true.
-- **Project text uses en-US spelling**: documentation, comments, messages, test names, commit messages, CHANGELOG entries and issue text (behavior, color, license, organization, summarize). `make spell` (part of `make check`, and its own CI workflow) runs typos-cli with the en-US locale, which reports en-GB spellings as well as typos. Words that must keep another spelling, such as file names matched literally, a public identifier that waits for a breaking release, or a JSON field name, are listed in `_typos.toml` with the reason. Released CHANGELOG entries are left as they are; the script checks the `Unreleased` section
+- **Project text uses en-US spelling**: documentation, comments,
+  messages, test names, commit messages, CHANGELOG entries and issue
+  text (behavior, color, license, organization, summarize).
+  - `make spell`, part of `make check` and its own CI workflow, runs
+    typos-cli with the en-US locale, which reports en-GB spellings as
+    well as typos.
+  - Words that must keep another spelling, such as file names matched
+    literally, a public identifier that waits for a breaking release,
+    or a JSON field name, are listed in `_typos.toml` with the reason.
+  - Released CHANGELOG entries are left as they are; the script checks
+    the `Unreleased` section.
 
 ## Code style
 - Always run `cargo fmt` before committing
