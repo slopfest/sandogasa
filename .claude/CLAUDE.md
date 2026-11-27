@@ -149,11 +149,11 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   work.** Describe the general problem the tool addresses, then let
   the specific cases follow: a tool that handles five kinds of
   misfiled CVE shouldn't read as if it only handles bundled JavaScript.
-- When a change lands, put the reasoning in the CHANGELOG entry, put any rule
-  future work must follow in `DEVELOPMENT.md`, and give the README only the
-  resulting behavior. Documentation that survived a behavior change unedited is
-  worse than none: check whether an existing section now describes something
-  that is no longer true
+- **When a change lands, its reasoning goes in the CHANGELOG entry,
+  any rule future work must follow in `DEVELOPMENT.md`, and only the
+  resulting behavior in the README.** Documentation that survived a
+  behavior change unedited is worse than none: check whether an
+  existing section now describes something that is no longer true.
 - **Project text uses en-US spelling**: documentation, comments, messages, test names, commit messages, CHANGELOG entries and issue text (behavior, color, license, organization, summarize). `make spell` (part of `make check`, and its own CI workflow) runs typos-cli with the en-US locale, which reports en-GB spellings as well as typos. Words that must keep another spelling, such as file names matched literally, a public identifier that waits for a breaking release, or a JSON field name, are listed in `_typos.toml` with the reason. Released CHANGELOG entries are left as they are; the script checks the `Unreleased` section
 
 ## Code style
