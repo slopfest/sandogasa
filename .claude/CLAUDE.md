@@ -192,7 +192,25 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     on crates.io.
 - **Keep the `Command` enum variants in `main.rs` sorted
   alphabetically**: they set the order of the `--help` output.
-- **Group a subcommand's flags by topic, and sort within a group** (issue #73). A subcommand with more than six options (not counting `-h`) puts each under a `help_heading`, declared group by group and alphabetically by long name within each, so the source reads like `--help`; a group may lead with its one clearly main flag (dbranch's `--stage`). Reuse the shared headings: `Selection` (what to work on), `Writing` (`--apply`, `--dry-run`, `--yes`, `--claim`), `Output` (`--json`, `--quiet`, `--explain`); name others after the tool's own vocabulary (fedora-cve-triage's `Checks`). A flattened shared group (`sandogasa_cli::NotesArgs`) takes its heading with `next_help_heading`. Six options or fewer stay one alphabetical list. Positional arguments keep their typed order, and the global flags on `Cli` (`-v`, `--refresh`) get no heading: `sandogasa_cli::parse_with_defaults` lists them last under `Global options`. `make man` turns each heading into a man page section
+- **Group a subcommand's flags by topic, and sort within a group**
+  (issue #73), once it has more than six options, not counting `-h`.
+  Six options or fewer stay one alphabetical list.
+  - Each option goes under a `help_heading`, declared group by group
+    and alphabetically by long name within each, so the source reads
+    like `--help`. A group may lead with its one clearly main flag
+    (dbranch's `--stage`).
+  - Reuse the shared headings, and name others after the tool's own
+    vocabulary (fedora-cve-triage's `Checks`):
+    - `Selection`: what to work on;
+    - `Writing`: `--apply`, `--dry-run`, `--yes`, `--claim`;
+    - `Output`: `--json`, `--quiet`, `--explain`.
+  - A flattened shared group (`sandogasa_cli::NotesArgs`) takes its
+    heading with `next_help_heading`.
+  - Positional arguments keep their typed order, and the global flags
+    on `Cli` (`-v`, `--refresh`) get no heading:
+    `sandogasa_cli::parse_with_defaults` lists them last under
+    `Global options`.
+  - `make man` turns each heading into a man page section.
 - In each tool's README.md, describe subcommands in the same alphabetical order as the `Command` enum. In the root README.md, list tools alphabetically, then library crates alphabetically
 - Order definitions in source files top-down: module docs and imports, public types (structs/enums/traits), public functions, trait impls (grouped by type), private helpers, `#[cfg(test)] mod tests`. Within each group, define callees before callers so a reader encounters helpers before the functions that use them. Review file order before committing
 
