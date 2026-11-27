@@ -541,6 +541,8 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   crate it touches. CONTRIBUTING.md, "Issues and labels", says what
   each label means; the kind sets the closing commit's word.
   - A new tool or crate gets its label when it lands.
+  - CONTRIBUTING.md's "Issues and labels" summarizes this rule and the
+    milestone rule for contributors: change both together.
   - The issue sweep also looks for unlabeled issues:
     `gh issue list --state all --json number,labels -q '[.[]|select(.labels|length==0)|.number]'`.
   - Background: on 2026-11-10, 35 issues from #1 to #123 had none.
