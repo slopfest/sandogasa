@@ -154,6 +154,10 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   resulting behavior in the README.** Documentation that survived a
   behavior change unedited is worse than none: check whether an
   existing section now describes something that is no longer true.
+- **Keep rules here, and how-tos where human contributors read them.**
+  A procedure, design note or reason a contributor also needs goes in
+  DEVELOPMENT.md, RELEASING.md or CONTRIBUTING.md, and the rule here
+  points to it instead of repeating it, so the two cannot drift apart.
 - **Project text uses en-US spelling**: documentation, comments,
   messages, test names, commit messages, CHANGELOG entries and issue
   text (behavior, color, license, organization, summarize).
