@@ -513,9 +513,9 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   a foreign architecture from the host's, and compare architectures
   only through `sandogasa_cbs::builds::host_rpm_arch`; the same
   DEVELOPMENT.md section has why.
-- **Per commit, run `cargo fmt` and `cargo clippy --workspace`**, and
-  `cargo test` for code you touched. Fast prototyping commits don't
-  need full coverage checks.
+- **Per commit, run `cargo fmt` and `cargo clippy --workspace`**;
+  `cargo test` is recommended for code you touched. Fast prototyping
+  commits don't need full coverage checks.
 - **Run `cargo cov` at stability points: before tagging, and when
   catching a feature up for its README or CHANGELOG entry.** Line
   coverage must stay at or above 85%, a gate ratcheted up as coverage
