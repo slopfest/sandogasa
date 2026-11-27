@@ -482,7 +482,7 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   correctness**: a per-item remote call in a loop is a finding.
 
 ## Testing and coverage
-- Always write corresponding tests when adding or modifying features
+- **Write tests with every feature added or changed.**
 - **Tests must not reach the external network.** `cargo test` has to pass in a distro packaging sandbox (Koji, Debian buildds), where external network is blocked but loopback is up:
   - HTTP clients: a **`wiremock` server on `127.0.0.1`** (see `cpu-sig-tracker`'s `*_end_to_end` tests);
   - pure logic: injectable functions (a fetcher closure, a trait, canned fixtures) tested against recorded data;
