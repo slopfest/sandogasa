@@ -103,8 +103,9 @@ releases and the tracker to the maintainers. In particular:
   failure as a flake to fix or file:
   - `main` got the pull request's head commit: the same full SHA as
     `gh pr view <n> --json headRefOid`;
-  - every check in `gh pr checks <n>` passed, with none skipped and
-    none older than the branch's last push;
+  - every check in `gh pr checks <n>` passed, none older than the
+    branch's last push, and none skipped that should have run (the
+    release jobs skip on a pull request by design);
   - the push to `main` runs the same workflows as the pull request did
     (CI, CodeQL, Spelling and Markdown, with the same path filters),
     and nothing that deploys, publishes or releases.
