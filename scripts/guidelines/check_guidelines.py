@@ -9,6 +9,10 @@ wrong, when) sits in a `Background:` sub-bullet, the only place a date
 appears. So reading the bold text gives every rule, and a reviewer can
 skip the history.
 
+It is also run against guideline files outside this repository, so it
+takes the files to check as arguments, checks only their format, and
+needs nothing beyond the standard library.
+
 Usage: check_guidelines.py FILE...   (exit 1 on any finding)
 """
 
@@ -19,7 +23,8 @@ from pathlib import Path
 
 # A bold lead longer than this is no longer one sentence to read at a
 # glance; a bullet's own text longer than this is a procedure, which
-# belongs in DEVELOPMENT.md or RELEASING.md with the rule pointing there.
+# belongs in the docs human contributors read, with the rule pointing
+# there.
 MAX_LEAD_WORDS = 30
 MAX_BULLET_WORDS = 80
 
