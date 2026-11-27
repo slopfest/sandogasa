@@ -259,7 +259,21 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   - Clap never wraps the `Usage:` line itself, so a subcommand with
     several long positional value names can still exceed 80 columns:
     keep value names short (`PATH`, not `OUTPUT_FILE_PATH`).
-- Every tool ships a committed man page at `tools/<tool>/man/<tool>.1`, generated from its clap definition by `sandogasa_cli::man` — one page per tool, with each subcommand as a `.SS` subsection. **Never hand-edit a page**: after changing any flag, subcommand, doc comment or `about` string, run `make man` (`scripts/gen-man.sh`) and commit the result. A `man_page_matches_cli` test in each tool's `main.rs` fails when a page stops documenting a visible flag or subcommand, so the pages cannot silently drift from `--help`. Prose that belongs in the man page (a real DESCRIPTION, not the one-line `about`) goes in a doc comment on the tool's `Cli` struct, where it also becomes `--help`'s long output — never in the roff. A new tool must be wired the same way: `sandogasa-cli = { workspace = true, features = ["man"] }` under `[dev-dependencies]`, plus the test
+- **Every tool ships a committed man page generated from its clap
+  definition, and nobody edits a page by hand.** The page is
+  `tools/<tool>/man/<tool>.1`, made by `sandogasa_cli::man`: one page
+  per tool, with each subcommand as a `.SS` subsection.
+  - After changing any flag, subcommand, doc comment or `about` string,
+    run `make man` (`scripts/gen-man.sh`) and commit the result.
+  - A `man_page_matches_cli` test in each tool's `main.rs` fails when a
+    page stops documenting a visible flag or subcommand, so the pages
+    cannot drift from `--help` unnoticed.
+  - Prose that belongs in the man page (a real DESCRIPTION, not the
+    one-line `about`) goes in a doc comment on the tool's `Cli` struct,
+    where it also becomes `--help`'s long output, never in the roff.
+  - A new tool is wired the same way:
+    `sandogasa-cli = { workspace = true, features = ["man"] }` under
+    `[dev-dependencies]`, plus the test.
 - Don't throw away the result of expensive computation. When a tool
   detects a fixable problem mid-run (stale metadata, missing
   credentials/session, a transient failure), it should offer to fix
