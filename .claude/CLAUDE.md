@@ -478,7 +478,8 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
 - **Anything slow enough to notice says what it is doing**, in one line
   without `-v` and per request with it, so a long step never reads as
   a hang.
-- The per-issue `/code-review` looks for these, the same as for correctness: a per-item remote call in a loop is a finding
+- **The per-issue `/code-review` looks for these, the same as for
+  correctness**: a per-item remote call in a loop is a finding.
 
 ## Testing and coverage
 - Always write corresponding tests when adding or modifying features
