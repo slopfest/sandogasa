@@ -739,8 +739,9 @@ override (`FORGEJO_TOKEN`, `GITLAB_TOKEN`, `GITHUB_TOKEN`,
 ## Every tool's `--version`, help header and man page
 
 Every tool's `--help` header shows its name, version and short
-description (the `Cargo.toml` `description`), and `--version` says
-which checkout a development binary was built from. Each tool's clap
+description (the `Cargo.toml` `description`), and both `--version`
+and that header say which checkout a development binary was built
+from. Each tool's clap
 definition declares:
 
 ```rust
