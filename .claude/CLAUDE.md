@@ -78,7 +78,7 @@ releases and the tracker to the maintainers. In particular:
     owed, small fixes within one tool, and release commits.
   - Background: first done for #237 (PR #247) on 2026-11-24. Steps
     toward an issue went straight to `main` until 2026-11-26, when the
-    first step of #259 (d4904590), a new sandogasa-config module and a
+    first step of #259 (d4904590), a new `sandogasa-config` module and a
     file every tool reads, landed that way, and the next push cancelled
     its CI run, so its checks ran only once it was on `main`.
 - **Ask before opening a pull request**, as for a push: it writes to
@@ -187,6 +187,11 @@ releases and the tracker to the maintainers. In particular:
     or a JSON field name, are listed in `_typos.toml` with the reason.
   - Released CHANGELOG entries are left as they are; the script checks
     the `Unreleased` section.
+- **Write tool and crate names in backticks, in prose as in code**:
+  `cbspkg`, `sandogasa-config`, `dbranch`'s. They stand out from the
+  words around them, as a command name does in bold in a man page.
+  Headings keep them plain, since backticks change a heading's
+  anchor, and so does a heading quoted as a section name.
 
 ## Code style
 - **Run `cargo fmt` before every commit.**
@@ -220,9 +225,9 @@ releases and the tracker to the maintainers. In particular:
   - Each option goes under a `help_heading`, declared group by group
     and alphabetically by long name within each, so the source reads
     like `--help`. A group may lead with its one clearly main flag
-    (dbranch's `--stage`).
+    (`dbranch`'s `--stage`).
   - Reuse the shared headings, and name others after the tool's own
-    vocabulary (fedora-cve-triage's `Checks`):
+    vocabulary (`fedora-cve-triage`'s `Checks`):
     - `Selection`: what to work on;
     - `Writing`: `--apply`, `--dry-run`, `--yes`, `--claim`;
     - `Output`: `--json`, `--quiet`, `--explain`.
@@ -304,14 +309,14 @@ releases and the tracker to the maintainers. In particular:
   - Background: Red Hat's Jira accepts only comments once an issue
     exists, unlike Bugzilla, where the reporter can edit the
     description.
-- **Offer dbranch's `--explain` where a person could do the steps by
+- **Offer `dbranch`'s `--explain` where a person could do the steps by
   hand.** When a tool's steps map to commands a person could run
   (`git`, `gbp`, `cbs`, `koji`, `fedpkg`, `mock`), give it an opt-in
   `--explain` that narrates each step and shows the exact command
   before running it, pausing so the user can follow along. `--dry-run`
   shows the same steps without running anything, and a plain run just
   does the work.
-  - This has been the default for such tools since dbranch: it is how
+  - This has been the default for such tools since `dbranch`: it is how
     someone learns the workflow, or checks the tool, and the printed
     commands must be enough to do it by hand (see
     `tools/dbranch/CLAUDE.md`).
@@ -338,10 +343,10 @@ releases and the tracker to the maintainers. In particular:
   (DEVELOPMENT.md, "A tool crate's library target is internal, not
   semver surface").
 - **Every crate, library or tool, has its own README.md.**
-- **hs-relmon and cpu-sig-tracker do the same job for different SIGs,
+- **`hs-relmon` and `cpu-sig-tracker` do the same job for different SIGs,
   so a feature added to one belongs in both.** They serve Hyperscale
   and Proposed Updates; converging them is #206.
-  - Put the logic in sandogasa-cbs, with each tool a thin caller, as
+  - Put the logic in `sandogasa-cbs`, with each tool a thin caller, as
     `review`, `notify` and `unbuilt` are.
   - When the other tool can't take it yet, file an issue for it there.
 - **A public struct that derives `Deserialize` in a library crate is
@@ -396,7 +401,7 @@ releases and the tracker to the maintainers. In particular:
   - Cache: `dirs::cache_dir()` (`$XDG_CACHE_HOME`, by default
     `~/.cache/<tool>/`).
   - State that persists between runs but isn't config, such as
-    fesco-chair's saved agenda: `dirs::state_dir()` (`$XDG_STATE_HOME`,
+    `fesco-chair`'s saved agenda: `dirs::state_dir()` (`$XDG_STATE_HOME`,
     by default `~/.local/state/<tool>/`).
 - **When no base directory can be found, neither from the `$XDG_*`
   variable nor from `$HOME`, fail loudly with a message naming both.**
@@ -415,12 +420,12 @@ releases and the tracker to the maintainers. In particular:
 
 ### fedrq in this workspace
 General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--forcearch`, EPEL 10 `@testing`) are in review-prompts, `rpm/dependencies.md`, "fedrq Pitfalls". What is specific to the tools here:
-- **ebranch's resolve command queries `@koji-src:<tag>` for source RPMs
+- **`ebranch`'s resolve command queries `@koji-src:<tag>` for source RPMs
   on its own** when given `--source-repo @koji:<tag>`.
 - **To list a side tag's own binaries without the inherited ones,
   resolve binary RPM names with `koji buildinfo <nvr>`**, not
   `fedrq pkgs -r @koji:<tag> '*'`.
-- **For EPEL 10 and later, ebranch's `@testing` probe fails silently**,
+- **For EPEL 10 and later, `ebranch`'s `@testing` probe fails silently**,
   and falls back to side tag or reverse dependency listing.
 
 ## Dependencies and MSRV
@@ -439,7 +444,7 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   fix. RELEASING.md, "Advisories and dependency ranges", has the full
   policy, and the re-test every release owes a range.
 - **A dependency bump has to clear Fedora's and Debian's archives**
-  (dbranch is headed for Debian). Before taking it, check that both
+  (`dbranch` is headed for Debian). Before taking it, check that both
   carry the new version and that `rust-version` stays at or under
   Debian's rustc, and record the answers in TODO.md. DEVELOPMENT.md,
   "Dependency bumps clear Fedora and Debian first", has how to check
@@ -463,7 +468,7 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
     that way.
 - **The MSRV is set by where the code has to build, not by the
   developer's toolchain**: Fedora rawhide, the released RHEL 9 and
-  RHEL 10 minors, and Debian's rustc for dbranch. Before adopting a
+  RHEL 10 minors, and Debian's rustc for `dbranch`. Before adopting a
   language feature or std API, look up the release that stabilized
   it. Raising `rust-version` above any of them is a deliberate
   decision, recorded in CHANGELOG.md and TODO.md. DEVELOPMENT.md, "The
@@ -486,7 +491,7 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   - A `koji` subprocess costs about a second of Python startup before
     it asks anything, so one per item is the slowest way to get an
     answer.
-  - Background, 2026-11-10: ebranch check-update ran one `koji`
+  - Background, 2026-11-10: `ebranch check-update` ran one `koji`
     subprocess per subpackage (59 s for asterisk, 1.8 s batched, #111).
 - **Reusing a helper reuses its cost.** Before calling existing code
   from a new loop or over a bigger input, check whether it does one

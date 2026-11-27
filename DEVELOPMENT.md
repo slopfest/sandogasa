@@ -85,7 +85,7 @@ turned up in one day:
   sends only what was asked for, as the server does, from a wiremock
   or mockito mock alike.
 - **An identifier that matches nothing is not an empty result.**
-  poi-tracker searched Bugzilla with `version=f43` where Fedora
+  `poi-tracker` searched Bugzilla with `version=f43` where Fedora
   numbers its versions bare (`43`), so every numbered-branch
   retirement reported no open bugs. The fix was as much about
   `product_version_for_branch` returning `Option` as about the
@@ -149,7 +149,7 @@ when `target/debug` is tens of GB.
 
 ## A tool crate's library target is internal, not semver surface
 
-Several tools carry a `src/lib.rs` (dbranch, hs-relmon, koji-lag, …)
+Several tools carry a `src/lib.rs` (`dbranch`, `hs-relmon`, `koji-lag`, …)
 because a clap binary's `main.rs` cannot be unit-tested from the outside
 and the man-page test needs to construct the `Cli` type. The library
 exists to serve that binary and its tests; nothing else links to it,
@@ -163,8 +163,8 @@ gets a `(breaking)` heading in the CHANGELOG. The distinction that
 matters is standalone library crate versus tool: v0.24.0 went minor for
 field additions in `sandogasa-forgejo` and `sandogasa-gitlab`, which
 other crates and other people build against; the same kind of change
-inside dbranch's library at 0.24.1 is a patch. Decided 2026-09-18, when
-the dbranch upstream-git work rewrote a dozen of its `pub fn`
+inside `dbranch`'s library at 0.24.1 is a patch. Decided 2026-09-18, when
+the `dbranch` upstream-git work rewrote a dozen of its `pub fn`
 signatures and the only alternative to this rule was a minor bump that
 would have told consumers something had broken for them when nothing
 had.
@@ -177,7 +177,7 @@ a Repology package. Those APIs grow fields, and sooner or later a tool
 wants one, so the field is added to the model. While the model can be
 built with a struct literal, that addition is a breaking change:
 downstream literals stop compiling, and cargo-semver-checks calls it
-major. On 2026-09-22 a single `updated_at` on sandogasa-forgejo's
+major. On 2026-09-22 a single `updated_at` on `sandogasa-forgejo`'s
 `Issue` turned a patch release into a minor one, and the survey that
 followed found twelve crates in the same state — v0.18.0 had marked
 bodhi, bugzilla and distgit and stopped there.
@@ -189,7 +189,7 @@ costs: outside the crate the struct cannot be built with a literal or
 destructured exhaustively. What it buys: fields arrive as patch
 releases. The one place the attribute is wrong is a format the
 workspace itself defines and the tools build and write —
-sandogasa-closure's graph, sandogasa-inventory's documents — where a
+`sandogasa-closure`'s graph, `sandogasa-inventory`'s documents — where a
 caller constructing the struct is the point; those crates are exempt
 in the script, and a new exemption needs that same reason. Test
 fixtures for a model deserialize the JSON the API would return
@@ -216,7 +216,7 @@ version, so one break anywhere already pays for this in every crate.
 Every crate and tool keeps sharing one version through 1.0 and after,
 and goes to 1.0 together. Fedora and EPEL package the workspace as one
 source and update it as one, so separate version lines would only add
-bookkeeping. (Debian is planned to get dbranch and the crates it needs,
+bookkeeping. (Debian is planned to get `dbranch` and the crates it needs,
 at the same shared version.) The cost is that a break in one crate
 bumps the major version of all of them after 1.0, which is one more
 reason to finish #216 before then.
@@ -234,7 +234,7 @@ by the developer's toolchain:
 - Fedora rawhide: `fedrq pkgs -b rawhide -F nev rust`;
 - the *released* RHEL 9 and RHEL 10 minors, which EPEL builds against:
   `fedrq pkgs -b ubi9 -F nev rust`, and `-b ubi10`;
-- Debian's rustc, for dbranch: `apt-cache policy rustc` (see "Debian
+- Debian's rustc, for `dbranch`: `apt-cache policy rustc` (see "Debian
   is a ceiling too" below).
 
 Before adopting a language feature or std API, look up the release
@@ -244,7 +244,7 @@ this section is how 1.95 was decided, and how to read each archive,
 including a pre-release EPEL minor's.
 
 `sandogasa-0.24.1` failed to build for EPEL 9 with `` `if let` guards
-are experimental``: fedora-cve-triage's bundled-library matching has a
+are experimental``: `fedora-cve-triage`'s bundled-library matching has a
 match arm guarded by `if let Some(snapshot) = snapshot_date(&version)`,
 which Rust 1.95 stabilized, and RHEL 9.8 ships rust 1.92. The
 workspace had declared no `rust-version` at all, so cargo could not
@@ -292,7 +292,7 @@ Decisions, 2026-09-21:
 
 ### Debian is a ceiling too
 
-**Debian is a ceiling too, and a closer one than it looks.** dbranch is headed for Debian, and debcargo turns `rust-version` straight into `rustc:native (>= X)` plus `Breaks: rustc (<< X~)`, so an MSRV above what the archive ships makes the package unbuildable there rather than merely awkward. Read it with `apt-cache policy rustc` on a Debian box (testing had 1.96.1 on 2026-10-13, against our 1.95 — one minor of headroom). Check it alongside Fedora and RHEL before raising `rust-version`, and treat exceeding it as the same deliberate, recorded decision.
+**Debian is a ceiling too, and a closer one than it looks.** `dbranch` is headed for Debian, and debcargo turns `rust-version` straight into `rustc:native (>= X)` plus `Breaks: rustc (<< X~)`, so an MSRV above what the archive ships makes the package unbuildable there rather than merely awkward. Read it with `apt-cache policy rustc` on a Debian box (testing had 1.96.1 on 2026-10-13, against our 1.95 — one minor of headroom). Check it alongside Fedora and RHEL before raising `rust-version`, and treat exceeding it as the same deliberate, recorded decision.
 
 ## Only dbranch ships binaries, and `precise-builds` is why it can
 
@@ -315,7 +315,7 @@ nothing.
 **`precise-builds = true` is load-bearing; do not remove it as an
 optimization.** cargo-dist defaults to `cargo build --workspace`, which
 unifies features across every tool and switches `sandogasa-cli`'s `tls`
-feature back on, linking `ring` into dbranch after all. `ring` compiles
+feature back on, linking `ring` into `dbranch` after all. `ring` compiles
 C, and on a musl target `cc` insists on a compiler named
 `<arch>-linux-musl-gcc` while Debian's `musl-tools` installs only
 `musl-gcc` — and it does not fall back, so the build fails with
@@ -367,15 +367,15 @@ meaning gets a row in this table in the same change.
 
 | Style | Meaning | Where |
 |---|---|---|
-| bold green | something for the user to do: a command to run, a comment to post | `--explain` commands (`sandogasa_cli::explain`), fedora-review-digest's comment heading and the command replacing a deprecated form |
-| green | good: up to date, ahead, unchanged | hs-relmon `retire` (ahead), koji-diff (same) |
-| yellow | look at it: a warning, a compatible change, a rebase to do | dbranch `check` warnings, hs-relmon (rebase), koji-diff (compatible), fedora-review-digest's deprecation warning, specport's FIXMEs |
-| orange (256-color 208) | worse than yellow, short of red | koji-diff (minor breaking) |
-| red, bold for a blocker | broken or blocking | dbranch `check` blockers, hs-relmon (retire), koji-diff (major breaking) |
-| magenta | missing declaration | hs-relmon (declare) |
-| bold | a heading, or the item a list is about | `--explain` step headings, hs-relmon (release) |
-| gray (bright black, SGR 90) | secondary: notes, the `$` prompt, nothing to show | dbranch `check` notes, commands and `see:` citations, `--explain` prompts, hs-relmon (none), specport's notes and the comment block it adds |
-| red and green in a diff | lines taken out and put in, as `git diff` shows them; not good or broken | specport's diff (a FIXME it adds is yellow) |
+| bold green | something for the user to do: a command to run, a comment to post | `--explain` commands (`sandogasa_cli::explain`), `fedora-review-digest`'s comment heading and the command replacing a deprecated form |
+| green | good: up to date, ahead, unchanged | `hs-relmon` `retire` (ahead), `koji-diff` (same) |
+| yellow | look at it: a warning, a compatible change, a rebase to do | `dbranch` `check` warnings, `hs-relmon` (rebase), `koji-diff` (compatible), `fedora-review-digest`'s deprecation warning, `specport`'s FIXMEs |
+| orange (256-color 208) | worse than yellow, short of red | `koji-diff` (minor breaking) |
+| red, bold for a blocker | broken or blocking | `dbranch` `check` blockers, `hs-relmon` (retire), `koji-diff` (major breaking) |
+| magenta | missing declaration | `hs-relmon` (declare) |
+| bold | a heading, or the item a list is about | `--explain` step headings, `hs-relmon` (release) |
+| gray (bright black, SGR 90) | secondary: notes, the `$` prompt, nothing to show | `dbranch` `check` notes, commands and `see:` citations, `--explain` prompts, `hs-relmon` (none), `specport`'s notes and the comment block it adds |
+| red and green in a diff | lines taken out and put in, as `git diff` shows them; not good or broken | `specport`'s diff (a FIXME it adds is yellow) |
 
 A check's results keep the normal text color, even when nothing is
 wrong ("drops no Provides", a version change): they are the answer
@@ -506,7 +506,7 @@ tool's secrets live in the desktop keyring, through
 no keyring can be used.
 
 - **An entry is a service, not a tool:** `SecretRef::for_url` of the
-  API base, so cpu-sig-tracker, cbspkg and hs-relmon read one GitLab
+  API base, so `cpu-sig-tracker`, `cbspkg` and `hs-relmon` read one GitLab
   token for gitlab.com and rotating it is one store. Add
   `.account(…)` only where a service needs one (Jira's token belongs to
   an Atlassian email).
@@ -576,8 +576,8 @@ no keyring can be used.
   else uses an entry. `the_users_table_matches_what_the_tools_keep`
   reads every tool's sources for its `"sandogasa: …"` labels and fails
   until the table says the same, so a tool cannot drift from it
-  unnoticed. A crate dependency is not the signal: hs-meetings depends
-  on sandogasa-gitlab and reads GitLab anonymously.
+  unnoticed. A crate dependency is not the signal: `hs-meetings` depends
+  on `sandogasa-gitlab` and reads GitLab anonymously.
 
 `secret-tool` is shelled out to rather than linked: the `keyring` crate
 is not packaged in Fedora, `secret-service` is missing from EPEL 9, and
@@ -608,7 +608,7 @@ secrets, through `sandogasa_config::identity`:
   it. An own value differing from the shared one is kept too, but with
   a line saying so: it may be an override, or an address from before
   the shared file, and only the person can tell. A value the tool takes from evidence rather than asks for
-  (sandogasa-pkg-acl's dist-git username, from the token) goes straight
+  (`sandogasa-pkg-acl`'s dist-git username, from the token) goes straight
   to `settle`. A field the tool writes back after `settle` is cleared
   first when told `Kept::Shared`, and every such field is
   `skip_serializing_if = "String::is_empty"`, so a later save does not
@@ -623,7 +623,7 @@ secrets, through `sandogasa_config::identity`:
   (`Identity::keys_secrets`) says that tokens kept under the old account
   stay there.
 - **A credential that needs no account takes no shared one.**
-  cpu-sig-tracker's Jira token kept without an account is a self-hosted
+  `cpu-sig-tracker`'s Jira token kept without an account is a self-hosted
   personal access token, sent alone as a bearer, so a shared email for
   that host is not added to it.
 - **A raw merge of the shared file beneath each tool's would not
@@ -637,10 +637,10 @@ secrets, through `sandogasa_config::identity`:
   struct reads that path (`fields_of` and `Field::toml`; each tool's
   `identity_fields_match_the_config`). `choose` and `settle` find other
   tools' copies through it, so a field left out is never offered or
-  tidied away, and a copy kept for another instance (ebranch's email on
+  tidied away, and a copy kept for another instance (`ebranch`'s email on
   RPM Fusion's Bugzilla) is neither offered nor removed for this one.
 - **An identity describing other people stays the tool's.**
-  sandogasa-report's `users.<profile>` tables are about whoever a report
+  `sandogasa-report`'s `users.<profile>` tables are about whoever a report
   is on, so nothing moves out of them; a profile without an email of its
   own takes the shared one only when its FAS username is the shared
   one.
@@ -651,16 +651,16 @@ Every tool's config is read in layers: an optional system-wide
 `/etc/<tool>/config.toml` first, overridden per key (recursively
 for tables) by the per-user `~/.config/<tool>/config.toml`, with
 command-line flags overriding both. `ConfigFile::load` and
-`read_merged` in sandogasa-config implement the merge, so every
+`read_merged` in `sandogasa-config` implement the merge, so every
 tool gets it without extra code; `save` only ever writes the user
 file. The system layer suits org-wide deployments (a distro
 package or ansible dropping shared settings) while each user
 keeps their own credentials and overrides.
 
 Every tool reads the system layer, whether or not it has settings
-of its own: the nine with a `config` subcommand (cpu-sig-tracker,
-ebranch, fedora-cve-triage, fedora-review-digest, fesco-chair,
-hs-relmon, poi-tracker, sandogasa-pkg-acl, sandogasa-report) load
+of its own: the nine with a `config` subcommand (`cpu-sig-tracker`,
+`ebranch`, `fedora-cve-triage`, `fedora-review-digest`, `fesco-chair`,
+`hs-relmon`, `poi-tracker`, `sandogasa-pkg-acl`, `sandogasa-report`) load
 their own keys from it, and the rest reach it through
 `parse_with_defaults`, which reads the same layered files for the
 `[defaults]` table described below.
@@ -714,7 +714,7 @@ Four consequences worth knowing, for packaging in particular:
   drives ignores a malformed file; a new layered file name goes in that
   list (#119). The same holds for the data layer under `/usr/share`:
   a guard moving `XDG_DATA_HOME` or `HOME` points `SANDOGASA_DATADIR`
-  nowhere, and the script poisons ebranch's RPM Fusion files there
+  nowhere, and the script poisons `ebranch`'s RPM Fusion files there
   (#127).
 
 Keeping credentials out of the system layer is a design choice, not
@@ -793,7 +793,7 @@ across the workspace. Where a flag pair recurs, define it once in
 and errors cannot drift: `ConfigArgs` (`config --all`) and
 `NotesArgs` (`--notes`/`--notes-file`) are shared that way, and
 `parse_with_defaults` adds `--no-defaults` to every tool. A rule that
-holds only in one command, such as ebranch's "notes need `--submit`",
+holds only in one command, such as `ebranch`'s "notes need `--submit`",
 is added where the group is flattened, with `mut_arg` on that
 command's struct, so clap still enforces it and reports it:
 
@@ -812,13 +812,13 @@ starts to recur.
 |---|---|---|
 | `--apply` | Make the changes reported; without it, report only | each tool |
 | `--claim` | Reassign the bugs closed to the person running the command | each tool, decided by `sandogasa_cli::claim` |
-| `-C`, `--repo DIR` | Run in this checkout, like `git -C` | cpu-sig-tracker, dbranch |
+| `-C`, `--repo DIR` | Run in this checkout, like `git -C` | `cpu-sig-tracker`, `dbranch` |
 | `--dry-run` | Show what would be done, change nothing | each tool |
 | `--explain` | Narrate each step and show its command, pausing before each | each tool, run through `sandogasa_cli::explain::Ui` |
 | `--json` | Pretty-printed machine-readable output instead of text | each tool |
 | `--no-defaults` | Ignore the config file's `[defaults]` table | `sandogasa_cli::parse_with_defaults` |
 | `--notes TEXT`, `--notes-file PATH` | Free text added to what the command files; one or the other | `sandogasa_cli::NotesArgs` |
-| `-q`, `--quiet` | Suppress tool output, showing it only when a step fails | dbranch |
+| `-q`, `--quiet` | Suppress tool output, showing it only when a step fails | `dbranch` |
 | `--refresh` | Ignore what the cache holds and fetch afresh | each tool |
 | `-v`, `--verbose` | Print progress to stderr, such as each request made | each tool |
 | `-y`, `--yes` | Do it without asking; never also files somewhere uneditable or reassigns bugs (see CLAUDE.md) | each tool |
@@ -833,8 +833,8 @@ The rest of the convention:
   `Output` where they fit (CLAUDE.md, Code Style).
 
 Known exceptions, left alone until those tools are next reworked:
-poi-tracker's `-C` is `--directory`, and its `--repo` is a fedrq repo
-class, not a checkout; cpu-sig-tracker `status --refresh` rewrites the
+`poi-tracker`'s `-C` is `--directory`, and its `--repo` is a fedrq repo
+class, not a checkout; `cpu-sig-tracker` `status --refresh` rewrites the
 tracking issues rather than ignoring a cache.
 
 ## Flag defaults come from the config file — a common pattern
@@ -842,7 +842,7 @@ tracking issues rather than ignoring a cache.
 Every tool supports a `[defaults]` table in its config (the same
 layered `/etc` + `~/.config` files that hold credentials — see
 above) to pin flag defaults, so users don't have to retype the
-flags they always pass — e.g. always narrating dbranch runs:
+flags they always pass — e.g. always narrating `dbranch` runs:
 
 ```toml
 [defaults]          # tool-wide: applies wherever the flag exists
@@ -856,7 +856,7 @@ Keys are the flag's **long name** as typed on the command line
 (dashes included). A top-level key covers global and top-level
 flags, and also applies to any invoked subcommand that has a flag
 of that name — subcommands without it just ignore the default, so
-one `explain = true` line covers every dbranch subcommand with
+one `explain = true` line covers every `dbranch` subcommand with
 `--explain`. Use a `[defaults.<subcommand>]` table to scope a
 default to a single subcommand. `true` turns a boolean flag on;
 strings and numbers become `--key value`; arrays repeat a
@@ -892,7 +892,7 @@ Guarantees the helper enforces (don't reimplement them per tool):
   flag whose whole purpose is to skip a confirmation.
 
 A tool can add a second source of defaults computed from the command
-line itself — poi-tracker's workspace file, named by `-w` or found as
+line itself — `poi-tracker`'s workspace file, named by `-w` or found as
 `./kondo.toml` — through `parse_with_defaults_and`: its table is laid
 over the config file's `[defaults]`, and everything else (command line
 wins, conflicts skipped, `--no-defaults`, unknown keys are errors) is
@@ -939,7 +939,7 @@ Moved from the agent instructions, where they were rules to follow on
 every bump.
 
 - For every candidate major dep bump (whether taken or deferred), check Fedora availability of the new version so we don't get blocked later: `fedrq pkgs -b <branch> -F nev rust-<crate>` across rawhide, the active Fedora branches, and epel9/epel10. Record the result in TODO.md next to the bump entry, and explicitly flag any dep whose new version is not packaged at all or has not reached stable on every branch (e.g. still in Bodhi testing — check `https://bodhi.fedoraproject.org/updates/?packages=rust-<crate>`) so the Fedora packaging work can be done first
-- **Debian is the second archive to check, and dbranch is why.** We aim to ship dbranch in Debian — it is not in the archive yet (ITP pending) — so a dependency bump has to clear Debian's archive as well as Fedora's — and not only on version. Check three things before taking a bump: that Debian has the new version (`apt-cache policy librust-<crate>-dev` on a Debian box, or `rmadison -s unstable rust-<crate>`), that `rust-version` stays at or under Debian's rustc (`apt-cache policy rustc`), since debcargo turns the MSRV straight into `rustc:native (>= X)` plus `Breaks: rustc (<< X~)` and an MSRV above the archive makes the package unbuildable rather than merely awkward, and that the chain still builds — `debcargo package` the tool and its new dependency set, then upload to the Debusine workspace (see TODO.md for the current one). Record the Debian answer in TODO.md beside the Fedora one. A dependency Fedora carries and Debian does not is as blocking as the reverse
+- **Debian is the second archive to check, and `dbranch` is why.** We aim to ship `dbranch` in Debian — it is not in the archive yet (ITP pending) — so a dependency bump has to clear Debian's archive as well as Fedora's — and not only on version. Check three things before taking a bump: that Debian has the new version (`apt-cache policy librust-<crate>-dev` on a Debian box, or `rmadison -s unstable rust-<crate>`), that `rust-version` stays at or under Debian's rustc (`apt-cache policy rustc`), since debcargo turns the MSRV straight into `rustc:native (>= X)` plus `Breaks: rustc (<< X~)` and an MSRV above the archive makes the package unbuildable rather than merely awkward, and that the chain still builds — `debcargo package` the tool and its new dependency set, then upload to the Debusine workspace (see TODO.md for the current one). Record the Debian answer in TODO.md beside the Fedora one. A dependency Fedora carries and Debian does not is as blocking as the reverse
 
 ## Tests run offline, the way a packaging build runs them
 
@@ -949,7 +949,7 @@ So no test reaches the external network, and each kind of dependency
 is faked:
 
 - HTTP clients: a `wiremock` server on `127.0.0.1` (see
-  cpu-sig-tracker's `*_end_to_end` tests);
+  `cpu-sig-tracker`'s `*_end_to_end` tests);
 - pure logic: injectable functions (a fetcher closure, a trait, canned
   fixtures) tested against recorded data;
 - a stand-in for an external CLI: a script the test writes and runs
@@ -959,7 +959,7 @@ is faked:
 
 `git` for a local fixture repo is fine, but a crate whose tests run it
 must declare it as a build dependency where it is packaged
-(`BuildRequires: git-core`; dbranch 0.15.0 failed Koji's `%check`
+(`BuildRequires: git-core`; `dbranch` 0.15.0 failed Koji's `%check`
 without it). Do not depend on domain tools that may be absent there
 (`gbp`, `dput`, `koji`, `fedrq`, `curl`, the distro-info tools); a test
 that truly needs a live service is `#[ignore]`.
@@ -980,11 +980,11 @@ RPM's (see review-prompts `rpm/ecosystem/rust.md`).
 
 The gate is raised as coverage grows, with a little headroom so an
 honest refactor does not fight it: 80% at v0.24.0, 81.5% at v0.25.0,
-82% on 2026-10-01, raised to 82.5% the same day once the ebranch
+82% on 2026-10-01, raised to 82.5% the same day once the `ebranch`
 injection work measured 82.59%, and to 85% on 2026-11-12 once a
 coverage sweep measured 86.94%. v0.28.0's release gate measured
 81.67%, about 950 lines short, all of it in code added over the release
-(cbspkg at 54%, cpu-sig-tracker's jira_issue, mr and sync_updates),
+(`cbspkg` at 54%, `cpu-sig-tracker`'s jira_issue, mr and sync_updates),
 and every line of it had gone through an issue's commit: reviews check
 correctness, not coverage, which is why `make cov-diff` runs with each
 issue's review.
