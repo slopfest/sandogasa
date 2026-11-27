@@ -130,7 +130,7 @@ the whole workspace, as the release does.
 
 Project text uses en-US spelling, checked by `make spell`
 ([typos](https://github.com/crate-ci/typos)).
-Markdown is linted by `make markdown`
+Markdown is linted by `make check-markdown`
 ([markdownlint-cli2](https://github.com/DavidAnson/markdownlint-cli2)),
 with the rules in `.markdownlint-cli2.jsonc`.
 

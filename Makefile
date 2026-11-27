@@ -107,8 +107,8 @@ check-non-exhaustive: ## Fail on a library response model that is not #[non_exha
 spell: ## Check spelling, en-US (needs typos-cli; see _typos.toml)
 	./scripts/check-spelling.sh
 
-.PHONY: markdown
-markdown: ## Lint Markdown (needs markdownlint-cli2; see .markdownlint-cli2.jsonc)
+.PHONY: check-markdown
+check-markdown: ## Lint Markdown (needs markdownlint-cli2; see .markdownlint-cli2.jsonc)
 	./scripts/check-markdown.sh
 
 .PHONY: check-guidelines
@@ -158,7 +158,7 @@ check: ## Everything a pull request should pass
 	$(MAKE) test
 	$(MAKE) check-non-exhaustive
 	$(MAKE) spell
-	$(MAKE) markdown
+	$(MAKE) check-markdown
 	$(MAKE) trajectory-test
 	$(MAKE) check-guidelines-test
 	$(MAKE) packaging-test
