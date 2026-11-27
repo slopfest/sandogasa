@@ -345,7 +345,9 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   cargo-dist and check what a release would produce.
 - **Symlink the root LICENSE file into each crate's directory**, so it
   is included when the crate is published to crates.io.
-- All dependencies (external and internal) are declared in `[workspace.dependencies]` in the root `Cargo.toml`, then referenced as `{ workspace = true }` in member crates
+- **Declare every dependency, external or internal, in
+  `[workspace.dependencies]` in the root `Cargo.toml`**, and reference
+  it as `{ workspace = true }` in member crates.
 - The root `Makefile` is a discoverable task runner over cargo and `scripts/` — `make help` lists everything, `make check` is the pre-PR gate, `make release-checks` adds audit/semver/coverage. Cargo stays the build system (distro packaging drives it directly), so don't put build logic in the Makefile: a new check belongs in a script or a cargo alias, with a one-line target wrapping it so it shows up in `make help`
 
 ## Files and external tools
