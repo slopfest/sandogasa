@@ -107,6 +107,10 @@ check-non-exhaustive: ## Fail on a library response model that is not #[non_exha
 spell: ## Check spelling, en-US (needs typos-cli; see _typos.toml)
 	./scripts/check-spelling.sh
 
+.PHONY: markdown
+markdown: ## Lint Markdown (needs markdownlint-cli2; see .markdownlint-cli2.jsonc)
+	./scripts/check-markdown.sh
+
 .PHONY: check-deprecated
 check-deprecated: ## Fail on deprecated API use, with all features on
 	./scripts/check-deprecated.sh
@@ -146,6 +150,7 @@ check: ## Everything a pull request should pass
 	$(MAKE) test
 	$(MAKE) check-non-exhaustive
 	$(MAKE) spell
+	$(MAKE) markdown
 	$(MAKE) trajectory-test
 	$(MAKE) packaging-test
 

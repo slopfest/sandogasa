@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### `make check` lints Markdown
+
+A Markdown file that broke the linter's rules, such as a code fence
+with no blank line around it, was only found by the Markdown workflow
+after it was pushed: on 2026-11-20 that workflow had failed on three
+pushes in a row. `make markdown` (`scripts/check-markdown.sh`) runs the
+same rules locally with markdownlint-cli2, and `make check` now runs
+it, failing with how to install the tool when it is missing.
+
 ### fedora-review-digest posts with the Bugzilla key it just asked for
 
 `fedora-review-digest --post` with no Bugzilla API key set asked for
