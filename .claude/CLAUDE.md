@@ -310,7 +310,11 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
     - otherwise it prompts.
 
 ## Workspace layout
-- Library crates go in `crates/`, binary crates go in `tools/`. A tool crate may carry a `src/lib.rs` so its binary and tests share code; that library target is internal to the tool, not a public API (see the versioning rule under Git)
+- **Library crates go in `crates/`, and tools in `tools/`.** A tool
+  crate may carry a `src/lib.rs` so its binary and tests share code;
+  that library target is internal to the tool, not a public API
+  (DEVELOPMENT.md, "A tool crate's library target is internal, not
+  semver surface").
 - Each crate (library or tool) must have its own README.md
 - **hs-relmon and cpu-sig-tracker do the same job for different SIGs** (Hyperscale and Proposed Updates; converging them is #206). A feature added to one belongs in both: its logic in sandogasa-cbs, each tool a thin caller, as `review`, `notify` and `unbuilt` are; or, when the other can't take it yet, an issue for it there
 - **A public struct that derives `Deserialize` in a library crate is `#[non_exhaustive]`**, so a field the API grows is not a breaking release. `scripts/check-non-exhaustive.sh` (`make check`) enforces it, listing the exemptions (formats the workspace defines itself); test fixtures for a model deserialize `serde_json::json!({…})` instead of using a literal. See DEVELOPMENT.md, "A response model is `#[non_exhaustive]`"
