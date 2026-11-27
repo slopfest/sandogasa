@@ -390,7 +390,10 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   conventions.
 
 ### External tool dependencies
-- When a crate shells out to an external tool (e.g. `fedrq`, `koji`), it must check that the tool is available at startup (or before first use) and produce a clear error message if not found, rather than silently failing with empty results
+- **A crate that shells out to an external tool (`fedrq`, `koji`)
+  checks that it is available**, at startup or before its first use,
+  and fails with a clear message if it is not, rather than silently
+  returning empty results.
 
 ### fedrq in this workspace
 General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--forcearch`, EPEL 10 `@testing`) are in review-prompts, `rpm/dependencies.md`, "fedrq Pitfalls". What is specific to the tools here:
