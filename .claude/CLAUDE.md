@@ -475,7 +475,9 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
   remote call per item; if it does, batch it as part of the change.
   - Background, 2026-11-10: `update-bugs` reused a per-build helper
     over 39 builds (4 minutes, #114).
-- **Anything slow enough to notice says what it is doing**, in one line without `-v` and per request with it, so a long step never reads as a hang
+- **Anything slow enough to notice says what it is doing**, in one line
+  without `-v` and per request with it, so a long step never reads as
+  a hang.
 - The per-issue `/code-review` looks for these, the same as for correctness: a per-item remote call in a loop is a finding
 
 ## Testing and coverage
