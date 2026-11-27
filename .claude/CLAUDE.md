@@ -1,11 +1,27 @@
 # Project Guidelines
 
 ## Working for an outside contributor
-Most of this file is the maintainer's procedure: releases, publishing, the issue sweep, milestones and labels. If you are an agent helping someone send a pull request from their fork, follow `CONTRIBUTING.md` at the repository root and the code, testing and documentation rules below, and leave the release and tracker steps to the maintainers. In particular:
-- **Open an issue first**, or use the existing one, and link it from the pull request: `Fixes #N` for a bug, `Resolves #N` for a feature. A pull request with no linked issue fails the *Contribution checks* unless a maintainer marks it `no-issue` (typo and broken-link fixes).
-- **Leave "Allow edits by maintainers" on.** Maintainers often add commits to the branch to land it; the same check fails while it is off.
-- **Run `make check` and `make cov-diff`** before opening the pull request, and fill in the template's checklist honestly.
-- **Commits:** `Assisted-by` naming the exact model on each one you helped with, and the human's own `Signed-off-by`, never yours. The rules under Git below on asking before each commit apply to you as well.
+Most of this file is the maintainer's procedure: landing, releases,
+publishing, the issue sweep, milestones and labels. If you are an
+agent helping someone send a pull request from their fork, follow
+`CONTRIBUTING.md` at the repository root, and the sections below from
+"Commit messages, CHANGELOG and documentation" through "Testing and
+coverage"; leave landing, releases and the tracker to the maintainers.
+In particular:
+- **Open an issue first**, or use the existing one, and link it from
+  the pull request: `Fixes #N` for a bug, `Resolves #N` for a feature.
+  A pull request with no linked issue fails the *Contribution checks*
+  unless a maintainer marks it `no-issue` (typo and broken-link
+  fixes).
+- **Leave "Allow edits by maintainers" on.** Maintainers often add
+  commits to the branch to land it; the same check fails while it is
+  off.
+- **Run `make check` and `make cov-diff`** before opening the pull
+  request, and fill in the template's checklist honestly.
+- **Commits:** `Assisted-by` naming the exact model on each one you
+  helped with, and the human's own `Signed-off-by`, never yours. The
+  rules under "Committing" below, on asking before each commit, apply
+  to you as well.
 
 ## Committing
 - **Ask before every commit, and commit only once the human says to.**
