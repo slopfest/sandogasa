@@ -49,12 +49,49 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   leaves out.
 
 ## Landing
-- **A commit lands through a pull request when it closes an issue or changes what other code relies on; other commits are pushed to `main`.** Through a pull request: a commit carrying `Fixes #N` or `Resolves #N`, and one that changes a library crate's behavior, a config or file format, or how a tool keeps credentials, even a `Refs #N` step toward an issue or one with no issue. Once the commit is approved, push it to a branch of this repository (`fix/<N>-<topic>`), open a pull request from the template with the issue linked by the commit's own word (`Refs #N` for a step; with no issue, mark the pull request `no-issue`), and wait for its checks (CI, CodeQL, Spelling, Markdown and the Contribution checks), so a failure is found before it reaches `main`. Each step of an issue gets a pull request of its own, landed before the next step is built, so the human can try it in between. Land it, when the human says to, by fast-forward: `git push origin <branch>:main`. GitHub then marks the pull request merged and closes the issue, and the commit keeps its hash and signature, which none of the merge button's methods do ("Rebase and merge" rewrites the commits too). Delete the branch afterwards. Documentation fixes, tests an earlier commit owed, small fixes within one tool, and release commits still go straight to `main`. Opening the pull request writes to the forge, so ask first, as for a push. First done for #237 (PR #247) on 2026-11-24. Steps toward an issue went straight to `main` until 2026-11-26, when the first step of #259 (d4904590), a new sandogasa-config module and a file every tool reads, landed that way, and the next push cancelled its CI run, so its checks ran only once it was on `main`
-  - **A pull request landed by fast-forward needs no wait for the runs on `main`** before the task is called done, when all of these hold. Look at the runs when starting the next piece of work instead, and treat a failure as a flake to fix or file:
-    - `main` got the pull request's head commit: the same full SHA as `gh pr view <n> --json headRefOid`
-    - every check in `gh pr checks <n>` passed, with none skipped and none older than the branch's last push
-    - the push to `main` runs the same workflows as the pull request did (CI, CodeQL, Spelling and Markdown, with the same path filters), and nothing that deploys, publishes or releases
-  - A commit pushed straight to `main`, and a release push, still get the full wait
+- **A commit lands through a pull request when it closes an issue or
+  changes what other code relies on; other commits are pushed to
+  `main`.**
+  - Through a pull request: a commit carrying `Fixes #N` or
+    `Resolves #N`, and one that changes a library crate's behavior, a
+    config or file format, or how a tool keeps credentials, even a
+    `Refs #N` step toward an issue or one with no issue.
+  - Straight to `main`: documentation fixes, tests an earlier commit
+    owed, small fixes within one tool, and release commits.
+  - Background: first done for #237 (PR #247) on 2026-11-24. Steps
+    toward an issue went straight to `main` until 2026-11-26, when the
+    first step of #259 (d4904590), a new sandogasa-config module and a
+    file every tool reads, landed that way, and the next push cancelled
+    its CI run, so its checks ran only once it was on `main`.
+- **Ask before opening a pull request**, as for a push: it writes to
+  the forge.
+- **Open the pull request from a branch of this repository, and wait
+  for its checks.** Once the commit is approved, push it to
+  `fix/<N>-<topic>` and open a pull request from the template, with the
+  issue linked by the commit's own word (`Refs #N` for a step; with no
+  issue, mark the pull request `no-issue`). Its checks (CI, CodeQL,
+  Spelling, Markdown and the Contribution checks) find a failure before
+  it reaches `main`.
+- **Each step of an issue gets a pull request of its own**, landed
+  before the next step is built, so the human can try it in between.
+- **Land a pull request by fast-forward when the human says to, then
+  delete its branch:** `git push origin <branch>:main`. GitHub then
+  marks the pull request merged and closes the issue, and the commit
+  keeps its hash and signature, which none of the merge button's
+  methods do ("Rebase and merge" rewrites the commits too).
+- **A pull request landed by fast-forward needs no wait for the runs on
+  `main`** before the task is called done, when all of these hold. Look
+  at the runs when starting the next piece of work instead, and treat a
+  failure as a flake to fix or file:
+  - `main` got the pull request's head commit: the same full SHA as
+    `gh pr view <n> --json headRefOid`;
+  - every check in `gh pr checks <n>` passed, with none skipped and
+    none older than the branch's last push;
+  - the push to `main` runs the same workflows as the pull request did
+    (CI, CodeQL, Spelling and Markdown, with the same path filters),
+    and nothing that deploys, publishes or releases.
+- **A commit pushed straight to `main`, and a release push, still get
+  the full wait** for the runs the push starts.
 
 ## Commit messages, CHANGELOG and documentation
 - **A commit subject says what changed. A commit body and a CHANGELOG entry
