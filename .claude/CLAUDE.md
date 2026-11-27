@@ -384,7 +384,10 @@ Most of this file is the maintainer's procedure: releases, publishing, the issue
   variable nor from `$HOME`, fail loudly with a message naming both.**
   Never fall back to a literal `~/...` path: an unexpanded tilde
   creates `./~/...` in the current directory, without a warning.
-- Files owned by *external* tools (`~/.gbp.conf`, `~/pbuilder`, `~/.fedora.upn`, bodhi-client's / debusine-client's config) must match wherever that tool actually looks — do not "fix" them to our conventions
+- **Files that belong to external tools stay where that tool looks for
+  them**, such as `~/.gbp.conf`, `~/pbuilder`, `~/.fedora.upn`, and
+  bodhi-client's and debusine-client's config. Don't "fix" them to our
+  conventions.
 
 ### External tool dependencies
 - When a crate shells out to an external tool (e.g. `fedrq`, `koji`), it must check that the tool is available at startup (or before first use) and produce a clear error message if not found, rather than silently failing with empty results
