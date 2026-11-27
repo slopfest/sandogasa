@@ -940,6 +940,40 @@ every bump.
 - For every candidate major dep bump (whether taken or deferred), check Fedora availability of the new version so we don't get blocked later: `fedrq pkgs -b <branch> -F nev rust-<crate>` across rawhide, the active Fedora branches, and epel9/epel10. Record the result in TODO.md next to the bump entry, and explicitly flag any dep whose new version is not packaged at all or has not reached stable on every branch (e.g. still in Bodhi testing — check `https://bodhi.fedoraproject.org/updates/?packages=rust-<crate>`) so the Fedora packaging work can be done first
 - **Debian is the second archive to check, and dbranch is why.** We aim to ship dbranch in Debian — it is not in the archive yet (ITP pending) — so a dependency bump has to clear Debian's archive as well as Fedora's — and not only on version. Check three things before taking a bump: that Debian has the new version (`apt-cache policy librust-<crate>-dev` on a Debian box, or `rmadison -s unstable rust-<crate>`), that `rust-version` stays at or under Debian's rustc (`apt-cache policy rustc`), since debcargo turns the MSRV straight into `rustc:native (>= X)` plus `Breaks: rustc (<< X~)` and an MSRV above the archive makes the package unbuildable rather than merely awkward, and that the chain still builds — `debcargo package` the tool and its new dependency set, then upload to the Debusine workspace (see TODO.md for the current one). Record the Debian answer in TODO.md beside the Fedora one. A dependency Fedora carries and Debian does not is as blocking as the reverse
 
+## Tests run offline, the way a packaging build runs them
+
+`cargo test` has to pass in a distro packaging sandbox (Koji, Debian
+buildds), where the external network is blocked but loopback is up.
+So no test reaches the external network, and each kind of dependency
+is faked:
+
+- HTTP clients: a `wiremock` server on `127.0.0.1` (see
+  cpu-sig-tracker's `*_end_to_end` tests);
+- pure logic: injectable functions (a fetcher closure, a trait, canned
+  fixtures) tested against recorded data;
+- a stand-in for an external CLI: a script the test writes and runs
+  through `sh`, never executed directly, which fails with "Text file
+  busy" when another test thread starts a process meanwhile.
+
+`git` for a local fixture repo is fine, but a crate whose tests run it
+must declare it as a build dependency where it is packaged
+(`BuildRequires: git-core`; dbranch 0.15.0 failed Koji's `%check`
+without it). Do not depend on domain tools that may be absent there
+(`gbp`, `dput`, `koji`, `fedrq`, `curl`, the distro-info tools); a test
+that truly needs a live service is `#[ignore]`.
+`scripts/packaging-test.sh [-p <crate>]` reruns the tests the way a
+packaging build does: no external network, and the distro tools
+shadowed by failing stubs. A bare `unshare -rn` is not enough: it
+leaves loopback down, which fails wiremock.
+
+Tests must not assume the host's architecture either. Fedora runs
+`%check` on s390x, ppc64le and i686 too, which CI never sees. A test
+that needs an architecture other than the host's derives it from the
+host's: the test that named `s390x` as foreign failed on s390x.
+Compare the host with a package's architecture only through
+`sandogasa_cbs::builds::host_rpm_arch`, since Rust's names are not
+RPM's (see review-prompts `rpm/ecosystem/rust.md`).
+
 ## The coverage gate, and how it got to 85%
 
 The gate is raised as coverage grows, with a little headroom so an

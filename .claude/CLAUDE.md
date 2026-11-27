@@ -483,13 +483,19 @@ General fedrq pitfalls (side tags, `@koji-src:`, `-F source`, `(none)`, `--force
 
 ## Testing and coverage
 - **Write tests with every feature added or changed.**
-- **Tests must not reach the external network.** `cargo test` has to pass in a distro packaging sandbox (Koji, Debian buildds), where external network is blocked but loopback is up:
-  - HTTP clients: a **`wiremock` server on `127.0.0.1`** (see `cpu-sig-tracker`'s `*_end_to_end` tests);
-  - pure logic: injectable functions (a fetcher closure, a trait, canned fixtures) tested against recorded data;
-  - a stand-in for an external CLI: a script the test writes and runs through `sh`, never executed directly ("Text file busy" when another test thread starts a process meanwhile).
-
-  `git` for a local fixture repo is fine, but a crate whose tests run it must declare it as a build dependency where it is packaged (`BuildRequires: git-core`; dbranch 0.15.0 failed Koji's `%check` without it). Do not depend on domain tools that may be absent there (`gbp`, `dput`, `koji`, `fedrq`, `curl`, the distro-info tools); a test that truly needs a live service is `#[ignore]`. `scripts/packaging-test.sh [-p <crate>]` reruns the tests the way a packaging build does: no external network, the distro tools shadowed by failing stubs (a bare `unshare -rn` leaves loopback down and fails wiremock)
-- **Tests must not assume the host's architecture.** Fedora runs `%check` on s390x, ppc64le and i686 too, which CI never sees. A test that needs an architecture other than the host's derives it from the host's (the test that named `s390x` as foreign failed on s390x). Compare the host with a package's architecture only through `sandogasa_cbs::builds::host_rpm_arch`, since Rust's names are not RPM's (see review-prompts `rpm/ecosystem/rust.md`)
+- **Tests must not reach the external network**: `cargo test` has to
+  pass in a distro packaging sandbox (Koji, Debian buildds), where
+  external network is blocked but loopback is up. Use a `wiremock`
+  server on `127.0.0.1` for HTTP clients, and don't depend on domain
+  tools such as `gbp`, `koji` or `fedrq`. DEVELOPMENT.md, "Tests run
+  offline, the way a packaging build runs them", has how to fake each
+  kind of dependency, and `scripts/packaging-test.sh` reruns the tests
+  that way.
+- **Tests must not assume the host's architecture.** Fedora runs
+  `%check` on s390x, ppc64le and i686 too, which CI never sees. Derive
+  a foreign architecture from the host's, and compare architectures
+  only through `sandogasa_cbs::builds::host_rpm_arch`; the same
+  DEVELOPMENT.md section has why.
 - Per commit, run `cargo fmt` and `cargo clippy --workspace`; `cargo test` is recommended for code you touched. Fast prototyping commits don't need full coverage checks
 - Run `cargo cov` at stability points (before tagging, and when catching a feature up for its README/CHANGELOG entry); line coverage must stay at or above 85%, a gate ratcheted up as coverage grows with a little headroom left. Binary `src/main.rs` files are excluded from the measurement (`.cargo/config.toml`)
 - **Check coverage of the files a change touches when it closes an issue**, in the same sitting as the per-issue `/code-review`: `make cov-diff` lists the line coverage of each changed file against `origin/main` (`BASE=<ref>` for another), marking any under the 85% gate; `make cov-crate CRATE=<name>` gives a whole crate. A file the change leaves below the gate gets the missing tests in that commit, or a stated reason it can't (code that only drives an external tool with no seam to fake it). Reviews check correctness, not coverage: v0.28.0's release gate came up about 950 lines short, all in code that had gone through an issue's commit
