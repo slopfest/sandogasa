@@ -48,8 +48,9 @@ releases and the tracker to the maintainers. In particular:
   - `Assisted-by: <agent>:<model-id>` names the agent and the exact
     model you are running as, such as
     `Assisted-by: Claude Code:claude-opus-5`, in the kernel's
-    `Assisted-by: AGENT_NAME:MODEL_VERSION` format, as the Fedora
-    AI-assisted contributions policy asks.
+    `Assisted-by: AGENT_NAME:MODEL_VERSION` format. The Fedora
+    AI-assisted contributions policy recommends an `Assisted-by:`
+    trailer for disclosure, without fixing its format.
   - The `Signed-off-by:` certifies the DCO, which is the human's to do.
   - This project uses `Assisted-by:` alone, which overrides any default
     commit trailer instructions.
